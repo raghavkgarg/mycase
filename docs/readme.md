@@ -35,6 +35,8 @@ graph TD
 
 ## Directory Structure & Package Overview
 
+For a detailed breakdown of runtime data directories, report namespaces, backups, and output file naming conventions, see [filestructure.md](filestructure.md).
+
 ```
 mycase/
 ├── cmd/
@@ -102,6 +104,8 @@ go run cmd/pipeline/main.go -config config/pipeline.yaml -exec-only
 ---
 
 ### Running Individual Tools
+
+For a complete lookup reference mapping individual standalone CLI commands to their Go automated pipeline runner equivalents and parameters, see [CommadTable.md](CommadTable.md).
 
 #### 1. Stock Selection (Stock Picker)
 Run stock picking on a configured index (e.g., `small250`) using a strategy (e.g., `multibagger`):
@@ -181,6 +185,8 @@ Determine correct share allocations, capital routing, and portfolio balance.
     *   *Examines portfolio rebalancing, drift calculations, trade configuration mechanics, and command-line execution interfaces.*
 *   📄 [numberconfig.md](numberconfig.md) `[Parameters Reference]`
     *   *A centralized numerical catalog documenting all system constants, scoring weights, and strategy boundaries.*
+*   📄 [mfs.md](mfs.md) `[Scoring Matrix Reference]`
+    *   *Details the Multi-Factor Scoring (MFS) optimization framework, listing statistical/fundamental factors, normalization math, and strategic profiles.*
 
 ### 📈 Phase 3: Simulation & Monitoring
 Validate strategies historically and track daily portfolio health.
@@ -201,5 +207,9 @@ Automate the entire lifecycle and submit orders live to your broker.
     *   *Historical overview, code design patterns, decoupling approaches, and package mapping structures.*
 *   📄 [productvision.md](productvision.md) `[System Roadmap]`
     *   *Roadmap highlighting future expansions, upcoming milestone phases, and technical directions.*
+*   📄 [CommadTable.md](CommadTable.md) `[Command Reference]`
+    *   *Reference mapping standalone CLI commands to their Go automated pipeline runner equivalents and required parameter alignments.*
+*   📄 [filestructure.md](filestructure.md) `[File & Directory Guide]`
+    *   *Detailed reference describing the workspace directory layout, naming conventions, backups, and strategy-first report namespacing.*
 
 
