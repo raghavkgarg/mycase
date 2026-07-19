@@ -8,12 +8,79 @@
 
 ## Executive Summary
 
-The codebase is functionally complete for Phase 1 (Core Engine & CLI) and has solid modular `pkg/` architecture. The primary structural weaknesses are at the **command layer**: 9 independent `cmd/` binaries with inconsistent argument parsing, no shared CLI framework, and a pipeline that orchestrates them via `os/exec` shell-outs instead of direct Go function calls. This creates fragility, duplicated flag-parsing code, and a poor UX where commands feel disconnected.
+The codebase is functionally complete for Phase 1 (Core Engine & CLI) and has solid modular `pkg/` architecture. The original structural weakness was at the **command layer**: 9 independent `cmd/` binaries with inconsistent argument parsing, no shared CLI framework, and a pipeline that orchestrated them via `os/exec` shell-outs. **This has been resolved in R1** — the codebase now has a single `mycase` binary with 10 subcommands under `urfave/cli/v3`.
 
-The refactor targets three outcomes:
-1. **Unify** all commands under a single binary with a hierarchical `urfave/cli` command tree.
-2. **Modernize** the codebase for Go 1.24 idioms and eliminate technical debt.
-3. **Architect** the foundation so Phases 2–6 of the product vision can be built without structural rewrites.
+The remaining refactor targets:
+1. ~~**Unify** all commands under a single binary~~ ✅ Done in R1.
+2. **Modernize** the codebase for Go 1.26 idioms and eliminate technical debt (R2, R3).
+3. **Architect** the foundation so Phases 2–6 of the product vision can be built without structural rewrites (R-cache → R8).
+
+---
+
+## 0. Progress Summary
+
+### Completed (Session 2026-07-19)
+
+**R1 — CLI Unification** ✅ Complete (commits `aef5489` → `3c51409`)
+
+- **10 new `cmd/*.go` files** (package cmd): `auth`, `basket`, `holdings`, `merge`, `monitor`, `optimize`, `performance`, `pick`, `pipeline`, `report` — each exports a `cli.Command` and an inner `runXWithParams(ctx, ...params) error` for direct pipeline invocation
+- **`pipeline.go`** calls all other commands as direct Go function calls — no `os/exec`, no `bin/` build step, no step-0 build requirement
+- **9 old `cmd/*/main.go` subdirectories** deleted; `scripts/merge.go` deleted
+- **`main.go`** at repo root wires the unified `mycase` app (10 subcommands: pipeline, pick, optimize, report, performance, monitor, basket, holdings, merge, auth)
+- `github.com/urfave/cli/v3 v3.10.1` added as direct dependency
+
+**D1 — Module rename** ✅ Complete (commit `782a663`)
+
+- `module mycase` → `module github.com/raghavkgarg/mycase`
+- All 29 source files, Makefile LDFLAGS, and test files updated
+
+**R3 (partial) — Go 1.26.3 + dependency updates** ✅ Complete (commit `bd3c4c0`)
+
+- `go 1.24.4` → `go 1.26.3` in go.mod
+- `github.com/gocarina/gocsv` updated from 2018 pin to latest
+- Remaining R3 language modernization tasks (R3.1–R3.9) not yet started
+
+**Makefile** ✅ Complete (commit `0ad3a25`, updated in `782a663`)
+
+- Targets: `build`, `install`, `build-linux-arm64`, `build-linux-amd64`, `build-darwin-arm64`, `build-darwin-amd64`, `run`, `test`, `test-verbose`, `test-race`, `test-integration`, `test-coverage`, `cleanup`, `clean`, `help`
+- LDFLAGS inject `Version`/`GitCommit`/`BuildDate` via `-X` into `cmd.Version` etc.
+
+**Section 8 — Comprehensive Testing Plan** ✅ Added to this document
+
+---
+
+### Current Branch State
+
+```
+Branch:    feature/mycase-changes
+Module:    github.com/raghavkgarg/mycase  (github.com/raghavkgarg/mycase)
+Go:        1.26.3
+Tests:     go test ./... passes (4 packages: csvloader, monitoring, optimizer, stockpicker)
+Binary:    mycase (10 subcommands)
+```
+
+### Phase Status
+
+| Phase | Status | Commit(s) |
+|-------|--------|-----------|
+| **R1** — CLI Unification | ✅ Done | `aef5489`, `bd3c4c0`, `3c51409` |
+| **D1** — Module rename | ✅ Done | `aef5489`, `782a663` |
+| **R3** — Go 1.26.3, gocsv update | ✅ Partial (infra only) | `bd3c4c0` |
+| **R3** — Language modernization (R3.1–R3.9) | ⏳ Not started | — |
+| **R2** — Business logic extraction | ⏳ Not started | — |
+| **R-cache** — DuckDB cache | ⏳ Not started | — |
+| **R4** — Broker abstraction | ⏳ Not started | — |
+| **R5** — Drift daemon | ⏳ Not started | — |
+| **R6** — Tax awareness | ⏳ Not started | — |
+| **R7** — Backtesting engine | ⏳ Not started | — |
+| **R8** — Web dashboard | ⏳ Not started | — |
+
+### Recommended Next Steps
+
+1. **Write tests first** (Section 8 plan) — establish coverage baseline before R2 changes logic
+2. **R2** — Extract `PipelineConfig` → `pkg/config/pipeline.go`; mock generator → `pkg/monitoring/mock.go`; performance valuation → `pkg/performance/`
+3. **R3 remaining** — slices/maps/slog/rand-v2/range-N/context-in-HTTP modernizations
+4. **R-cache** — DuckDB `pkg/cache/` (prices + fundamentals, staleness policy)
 
 ---
 
@@ -33,21 +100,27 @@ The refactor targets three outcomes:
 
 ### 1.2 Structural Problems (Must Fix)
 
-#### A. Fragmented CLI — No Unified Entry Point
-**Impact**: High. Every `cmd/*/main.go` is an independent binary. Users must know 9 different commands. Pipeline runs them via `os/exec` shell-out — no type safety, no error propagation, no shared context, shell quoting issues.
+#### A. ~~Fragmented CLI — No Unified Entry Point~~ ✅ Resolved in R1
 
-**Evidence**:
-- `cmd/pipeline/main.go` (495 lines): Calls `./bin/stockpicker`, `./bin/monitoring`, `./bin/performance` etc. via `exec.Command`. Requires `go build` step 0 to populate `bin/`.
-- `scripts/merge.go` is an orphan — not a proper `cmd/`, callable only via `go run scripts/merge.go`.
+~~**Impact**: High.~~ All 9 binaries have been unified into a single `mycase` binary (`main.go` + 10 `cmd/*.go` files). The old `cmd/*/main.go` subdirectories and `scripts/merge.go` have been deleted. `pipeline.go` calls all other commands as direct Go function calls — no `os/exec`, no `bin/` build step.
 
-#### B. Inconsistent Flag Parsing
-**Impact**: Medium. Three different patterns used across the codebase:
+**Was**:
+- `cmd/pipeline/main.go` (495 lines): Called `./bin/stockpicker`, `./bin/monitoring`, etc. via `exec.Command`. Required `go build` step 0.
+- `scripts/merge.go`: orphan, callable only via `go run scripts/merge.go`.
 
-| Style | Commands | Problem |
+**Now**: `mycase pipeline`, `mycase pick`, `mycase monitor`, etc. — all under one binary. Direct Go calls between commands.
+
+#### B. ~~Inconsistent Flag Parsing~~ ✅ Resolved in R1
+
+All commands now use `urfave/cli/v3` for flag parsing. The `--live` bool flag in `basket` and `holdings` uses `&cli.BoolFlag{}`. The manual `os.Args` loops and stdlib `flag` package uses are gone.
+
+~~**Impact**: Medium. Three different patterns used across the codebase:~~
+
+| ~~Style~~ | ~~Commands~~ | ~~Problem~~ |
 |-------|----------|---------|
-| `flag` stdlib | `stockpicker`, `monitoring`, `performance`, `report`, `optimize_weights` | Fine, but no `--help` grouping, no subcommand routing |
-| Manual `os.Args` loop | `basket`, `holdings` | Fragile. `--live` and `-- name` are positional by convention with no validation |
-| Config YAML + flags | `pipeline` | Two-layer config with complex `resolveFirst[T]()` generics to handle both sources |
+| ~~`flag` stdlib~~ | ~~`stockpicker`, `monitoring`, `performance`, `report`, `optimize_weights`~~ | ~~Fine, but no `--help` grouping, no subcommand routing~~ |
+| ~~Manual `os.Args` loop~~ | ~~`basket`, `holdings`~~ | ~~Fragile.~~ |
+| ~~Config YAML + flags~~ | ~~`pipeline`~~ | ~~`resolveFirst[T]()` generics~~ |
 
 #### C. Business Logic in `cmd/` Mains
 **Impact**: Medium. Several `cmd/` mains contain logic that belongs in `pkg/`:
@@ -56,8 +129,9 @@ The refactor targets three outcomes:
 - `cmd/report/main.go` (365 lines): Heuristic text generation logic not separated from I/O.
 - `cmd/optimize_weights/main.go` (388 lines): Rebalancing band logic, golden copy diffing, and CSV writing inline.
 
-#### D. Go Module Naming
-**Impact**: Low but clean-up worthy. Module name is `mycase` (not a full domain path like `github.com/user/mycase`). Acceptable for a private tool but worth noting.
+#### D. ~~Go Module Naming~~ ✅ Resolved
+
+Module is now `github.com/raghavkgarg/mycase`. All 29 source files, Makefile LDFLAGS, and test files updated.
 
 #### E. Missing Broker Abstraction (Product Vision Blocker)
 **Impact**: High for roadmap. `cmd/basket/main.go` and `cmd/holdings/main.go` are tightly coupled to `pkg/kiteclient` (Zerodha). Phase 5 (Multi-Broker) requires a `Broker` interface in `pkg/broker/` before any second broker can be added.
@@ -71,7 +145,7 @@ The refactor targets three outcomes:
 
 ### 2.1 Single Binary with Hierarchical Commands
 
-Replace 9 binaries + `scripts/merge.go` with **one binary** (`mycase`) using `urfave/cli/v2`.
+~~Replace 9 binaries + `scripts/merge.go` with **one binary** (`mycase`) using `urfave/cli/v2`.~~ **Done. Single `mycase` binary implemented with `urfave/cli/v3`.**
 
 ```
 mycase [global flags]
@@ -165,62 +239,48 @@ mycase/
 
 ---
 
-### Phase R1 — CLI Unification (Foundation)
+### Phase R1 — CLI Unification ✅ COMPLETE
 
-**Goal**: Replace the 9-binary pattern with a single `mycase` binary using `urfave/cli/v2`. No business logic changes — pure structural reorganization.
+**Goal**: Replace the 9-binary pattern with a single `mycase` binary using `urfave/cli/v3`. No business logic changes — pure structural reorganization.
 
-**Effort**: Large (3–5 days)  
+**Effort**: Large (3–5 days) — completed  
 **Risk**: Low (no logic changes; existing `pkg/` is untouched)  
 **Dependency**: All subsequent phases depend on this.
 
-#### Tasks
+#### Tasks (all done)
 
-**R1.1 — Add `urfave/cli/v2` dependency**
+**R1.1 — Add `urfave/cli/v3` dependency** ✅
 ```bash
-go get github.com/urfave/cli/v2
+go get github.com/urfave/cli/v3@v3.10.1
 ```
-*Reference*: [urfave/cli v2 docs](https://cli.urfave.org/v2/getting-started/) — supports subcommands, flags, shell completion, `--help` auto-generation, `Before`/`After` hooks for shared setup.
+Note: Used v3 (not v2) — v3 has proper `context.Context` threading through `Action` funcs and cleaner flag definitions.
 
-**R1.2 — Create `main.go` at project root**
-Wire the `cli.App` with all subcommands. Each subcommand's `Action` calls a function in `cmd/[name].go`.
+**R1.2 — Create `main.go` at project root** ✅
+Wires the `cli.Command` app with all subcommands. LDFLAGS inject `Version`, `GitCommit`, `BuildDate` from `cmd` package vars at build time.
 
-**R1.3 — Migrate each `cmd/*/main.go` to `cmd/[name].go`**
-For each command:
-1. Extract the flag definitions into a `cli.Command.Flags` slice.
-2. Move the `main()` body into a function like `runPick(c *cli.Context) error`.
-3. Delete the old `cmd/*/main.go`.
+**R1.3 — Migrate each `cmd/*/main.go` to `cmd/[name].go`** ✅
 
-Migration map:
+| Old binary | New subcommand | New file | Key change |
+|------------|----------------|----------|------------|
+| `cmd/stockpicker/main.go` | `mycase pick` | `cmd/pick.go` | Exports `runPickWithOpts(ctx, *Options)` |
+| `cmd/optimize_weights/main.go` | `mycase optimize` | `cmd/optimize.go` | Exports `runOptimizeWithParams(ctx, ...)` |
+| `cmd/report/main.go` | `mycase report` | `cmd/report.go` | Exports `runReportWithParams(ctx, file, method)` |
+| `cmd/performance/main.go` | `mycase performance` | `cmd/performance.go` | Exports `runPerfWithParams(ctx, ...)` |
+| `cmd/monitoring/main.go` | `mycase monitor` | `cmd/monitor.go` | Exports `runMonitorWithParams(ctx, ...)`; uses `c.IsSet("strategy")` not `flag.Visit` |
+| `cmd/basket/main.go` | `mycase basket` | `cmd/basket.go` | Exports `runBasketWithParams(ctx, live, file)` |
+| `cmd/holdings/main.go` | `mycase holdings` | `cmd/holdings.go` | Uses `&cli.BoolFlag{}` |
+| `cmd/setup_auth/main.go` | `mycase auth` | `cmd/auth.go` | Exports `runAuthCmd(ctx)` |
+| `cmd/pipeline/main.go` | `mycase pipeline` | `cmd/pipeline.go` | Step 0 (build binaries) removed entirely |
+| `scripts/merge.go` | `mycase merge` | `cmd/merge.go` | Subcommands: `combine`, `golden` |
 
-| Old binary | New subcommand | New file |
-|------------|----------------|----------|
-| `cmd/stockpicker/main.go` | `mycase pick` | `cmd/pick.go` |
-| `cmd/optimize_weights/main.go` | `mycase optimize` | `cmd/optimize.go` |
-| `cmd/report/main.go` | `mycase report` | `cmd/report.go` |
-| `cmd/performance/main.go` | `mycase performance` | `cmd/performance.go` |
-| `cmd/monitoring/main.go` | `mycase monitor` | `cmd/monitor.go` |
-| `cmd/basket/main.go` | `mycase basket` | `cmd/basket.go` |
-| `cmd/holdings/main.go` | `mycase holdings` | `cmd/holdings.go` |
-| `cmd/setup_auth/main.go` | `mycase auth` | `cmd/auth.go` |
-| `cmd/pipeline/main.go` | `mycase pipeline` | `cmd/pipeline.go` |
-| `scripts/merge.go` | `mycase merge` | `cmd/merge.go` |
+**R1.4 — Refactor `pipeline.go` to use direct Go calls** ✅
+All `exec.Command("./bin/X", ...)` replaced with `runPickWithOpts`, `runReportWithParams`, `runPerfWithParams`, `runMonitorWithParams`, `runAuthCmd`, `runBasketWithParams` direct calls.
 
-**R1.4 — Refactor `pipeline.go` to use direct Go calls**
-Replace all `exec.Command("./bin/stockpicker", ...)` calls with direct calls to the same functions that `cmd/pick.go` calls. This eliminates the build-first requirement and gives the pipeline proper error propagation.
+**R1.5 — Standardize `basket` and `holdings` flag parsing** ✅
+Both now use `urfave/cli/v3` flags. `basket` accepts `--file` or positional arg via `cleanBasketArg`. `holdings` uses `--live bool`.
 
-**R1.5 — Standardize `basket` and `holdings` flag parsing**
-Convert the manual `os.Args` loop in both to `urfave/cli` flags:
-- `basket`: `--live bool`, positional arg for portfolio name → `cli.StringArg`
-- `holdings`: `--live bool`
-
-**R1.6 — Add Makefile / build target**
-```makefile
-build:
-    go build -o bin/mycase .
-
-install:
-    go install .
-```
+**R1.6 — Makefile** ✅
+Full lifecycle Makefile at repo root. See `make help` for all targets.
 
 ---
 
@@ -233,8 +293,8 @@ install:
 
 #### Tasks
 
-**R2.1 — Extract mock data generator from `cmd/monitoring/main.go`**
-The `generateMockData` function (plus the synchronized `rand.New(rand.NewSource(42))` logic) belongs in `pkg/monitoring/mock.go`. The cmd should just call `monitoring.GenerateMockPortfolio(...)`.
+**R2.1 — Extract mock data generator from `cmd/monitor.go`**
+The `generateMonitorReport` / mock-data logic (plus the synchronized `rand.New(rand.NewSource(42))`) belongs in `pkg/monitoring/mock.go`. The cmd should just call `monitoring.GenerateMockPortfolio(...)`.
 
 **R2.2 — Extract portfolio valuation from `cmd/performance/main.go`**
 The date-matching, price lookup, and P&L calculation logic belongs in `pkg/performance/` (new package). The cmd becomes: parse flags → call `performance.RunBacktest(...)` → print result.
@@ -242,11 +302,11 @@ The date-matching, price lookup, and P&L calculation logic belongs in `pkg/perfo
 **R2.3 — Extract heuristic text from `cmd/report/main.go`**
 The `generateHeuristics()` / narrative text generation belongs in `pkg/report/` (new package). The cmd becomes: parse flags → call `report.Generate(...)` → write file.
 
-**R2.4 — Extract rebalancing band diff logic from `cmd/optimize_weights/main.go`**
+**R2.4 — Extract rebalancing band diff logic from `cmd/optimize.go`**
 The golden copy diffing and exit-weight injection logic belongs in `pkg/optimizer/rebalance.go`. Already partially there — complete the move.
 
 **R2.5 — Consolidate `pkg/config/config.go`**
-Currently `config.go` handles only broker credentials. Move `pipeline.yaml` loading (currently inline in `cmd/pipeline/main.go` as `PipelineConfig` + `rawPipelineConfig` + the `resolveFirst[T]()` generics helper) into `pkg/config/pipeline.go`. The `resolveFirst` generics hack is a workaround for YAML ambiguity — replace with a proper strict YAML struct and explicit defaults.
+Currently `config.go` handles only broker credentials. Move `pipeline.yaml` loading (currently in `cmd/pipeline.go` as `PipelineConfig` + `rawPipelineConfig` + the `resolveFirst[T any]()` generics helper) into `pkg/config/pipeline.go`. The `resolveFirst` generics hack is a workaround for YAML ambiguity — replace with a proper strict YAML struct and explicit defaults.
 
 ---
 
@@ -260,7 +320,7 @@ Currently `config.go` handles only broker credentials. Move `pipeline.yaml` load
 #### Tasks
 
 **R3.1 — Replace `sort.Interface` boilerplate with `slices.SortFunc`**
-`cmd/holdings/main.go` (and others) implement `ByPnLPct` with 3-method sort interface. Go 1.21+ provides `slices.SortFunc` — remove the boilerplate types.
+`cmd/holdings.go` (and others) implement `ByPnLPct` with 3-method sort interface. Go 1.21+ provides `slices.SortFunc` — remove the boilerplate types.
 
 ```go
 // Before
@@ -285,7 +345,7 @@ Go 1.21 added `log/slog`. Replace scattered `fmt.Fprintf(os.Stderr, ...)` and `l
 HTTP calls in `pkg/yfinance/prices.go` and `pkg/yfinance/metrics.go` don't accept `context.Context`. Add `ctx context.Context` as the first parameter so callers can set deadlines (e.g., pipeline timeout). Use `http.NewRequestWithContext`.
 
 **R3.6 — Replace `math/rand` with `math/rand/v2`**
-Go 1.22 introduced `math/rand/v2` with a cleaner API and no global state. Replace `rand.New(rand.NewSource(42))` in `cmd/monitoring/main.go`'s mock generator with `rand/v2`'s `rand.New(rand.NewPCG(42, 0))` — more statistically sound and idiomatic.
+Go 1.22 introduced `math/rand/v2` with a cleaner API and no global state. Replace `rand.New(rand.NewSource(42))` in `cmd/monitor.go`'s mock generator (or `pkg/monitoring/mock.go` after R2.1) with `rand/v2`'s `rand.New(rand.NewPCG(42, 0))` — more statistically sound and idiomatic.
 
 **R3.7 — Apply `range N` where appropriate**
 Go 1.22 allows `for i := range 15 { }` — replace `for i := 0; i < numWorkers; i++` worker-spawn loops in `pkg/yfinance/prices.go` and `pkg/stockpicker/loader.go`.
@@ -293,8 +353,8 @@ Go 1.22 allows `for i := range 15 { }` — replace `for i := 0; i < numWorkers; 
 **R3.8 — Update `gocarina/gocsv` dependency**
 Current version is pinned to `2018-08-09`. Update: `go get github.com/gocarina/gocsv@latest`. See Section 7.3.
 
-**R3.9 — Move all dependencies from `indirect` to `direct`**
-`go.mod` marks all 4 dependencies as `// indirect`. After R1 adds `urfave/cli/v3` and R-cache adds `modernc.org/sqlite`, run `go mod tidy` to properly classify direct vs. indirect deps.
+**R3.9 — Run `go mod tidy` to classify direct vs. indirect deps** ✅ Partial
+`urfave/cli/v3` is now a direct dep. After R-cache adds `github.com/duckdb/duckdb-go/v2`, run `go mod tidy` again to ensure all direct deps are properly classified.
 
 ---
 
@@ -564,20 +624,22 @@ Use `//go:embed static/*` directive to embed the entire `static/` tree into the 
 
 ## 4. Effort & Priority Summary
 
-| Phase | Goal | Effort | Priority | Dependency |
-|-------|------|--------|----------|------------|
-| **R1** | CLI Unification (urfave/cli v3) | Large (3–5d) | P0 — do first | None |
-| **R2** | Code cleanup / logic extraction | Medium (2–3d) | P1 | R1 |
-| **R3** | Go 1.26 modernization + dep updates | Small (1d) | P1 | R1 |
-| **R-cache** | SQLite price/fundamentals cache | Medium (2d) | P1 | R2, R3 |
-| **R4** | Broker abstraction layer | Medium (2d) | P2 | R2 |
-| **R5** | Drift monitoring daemon + launchd | Large (4–6d) | P2 | R2, R4 |
-| **R6** | Tax & transaction cost awareness | Medium (2–3d) | P3 | R2 |
-| **R7** | Historical backtesting engine | XL (8–12d) | P3 | R2, R3, R-cache |
-| **R8** | Web dashboard | XL (10–15d) | P4 | R4, R7 |
+| Phase | Goal | Effort | Priority | Status |
+|-------|------|--------|----------|--------|
+| **R1** | CLI Unification (urfave/cli v3) | Large (3–5d) | P0 | ✅ Done |
+| **D1** | Module rename | Trivial | P0 | ✅ Done |
+| **R3** (infra) | Go 1.26.3 + dep updates | Trivial | P0 | ✅ Done |
+| **R2** | Code cleanup / logic extraction | Medium (2–3d) | P1 | ⏳ Next |
+| **R3** (language) | Go 1.26 modernization (R3.1–R3.9) | Small (1d) | P1 | ⏳ Next |
+| **R-cache** | DuckDB price/fundamentals cache | Medium (2d) | P1 | ⏳ |
+| **R4** | Broker abstraction layer | Medium (2d) | P2 | ⏳ |
+| **R5** | Drift monitoring daemon + launchd | Large (4–6d) | P2 | ⏳ |
+| **R6** | Tax & transaction cost awareness | Medium (2–3d) | P3 | ⏳ |
+| **R7** | Historical backtesting engine | XL (8–12d) | P3 | ⏳ |
+| **R8** | Web dashboard | XL (10–15d) | P4 | ⏳ |
 
-**Total estimated effort**: ~37–54 working days for full roadmap.  
-**Minimum viable refactor (R1–R3 + module rename)**: ~6–9 days — delivers clean unified CLI without any feature loss.
+**Total remaining effort**: ~30–48 working days (R2 through R8).  
+**Completed so far**: R1 + D1 + R3 infrastructure (~3 days of estimated effort).
 
 ---
 
@@ -588,14 +650,17 @@ Use `//go:embed static/*` directive to embed the entire `static/` tree into the 
 - `mfs.json` and `pipeline.yaml` config file formats must stay backward-compatible through R1–R3.
 - Existing `data/*.csv` golden copy files are user data — never touch them programmatically except through the guarded backup → overwrite flow already in place.
 
-### 5.2 urfave/cli v2 Pattern
+### 5.2 urfave/cli v3 Pattern (Implemented)
 
 Each subcommand in `cmd/[name].go` follows this pattern:
 
 ```go
 package cmd
 
-import "github.com/urfave/cli/v2"
+import (
+    "context"
+    "github.com/urfave/cli/v3"
+)
 
 var PickCommand = &cli.Command{
     Name:  "pick",
@@ -603,38 +668,52 @@ var PickCommand = &cli.Command{
     Flags: []cli.Flag{
         &cli.StringFlag{Name: "index", Aliases: []string{"i"}, Usage: "Index name (microcap250, small250...)"},
         &cli.StringFlag{Name: "file",  Aliases: []string{"f"}, Usage: "Custom CSV file path"},
-        &cli.StringFlag{Name: "method", Value: "balanced", Usage: "Scoring strategy"},
-        &cli.IntFlag{   Name: "top",   Value: 20,           Usage: "Number of stocks to select"},
+        &cli.StringFlag{Name: "method", Value: "balanced",     Usage: "Scoring strategy"},
+        &cli.IntFlag{   Name: "top",   Value: 20,              Usage: "Number of stocks to select"},
     },
     Action: runPick,
 }
 
-func runPick(c *cli.Context) error {
+func runPick(ctx context.Context, c *cli.Command) error {
+    return runPickWithOpts(ctx, pickOptsFromCmd(c))
+}
+
+// Inner function called directly by pipeline.go — no exec.Command needed
+func runPickWithOpts(ctx context.Context, opts *stockpicker.Options) error {
     // thin orchestration — delegate to pkg/stockpicker
 }
 ```
 
-`main.go` simply assembles them:
+Key v3 API differences from v2:
+- Action signature: `func(ctx context.Context, cmd *cli.Command) error` (not `*cli.Context`)
+- Float flags: `&cli.FloatFlag{}` + `c.Float("name")` (not `Float64Flag` / `c.Float64`)
+- Detect explicit flag: `c.IsSet("name")` (replaces `flag.Visit`)
+- Positional args: `c.Args().Slice()`, `c.Args().Get(n)`
+
+`main.go` assembles them:
 
 ```go
-app := &cli.App{
-    Name:     "mycase",
-    Usage:    "Portfolio basket & rebalancing engine",
+app := &cli.Command{
+    Name:    "mycase",
+    Usage:   "Portfolio basket & rebalancing engine",
+    Version: fmt.Sprintf("%s (commit: %s, built: %s)", Version, GitCommit, BuildDate),
     Commands: []*cli.Command{
-        cmd.PipelineCommand,
-        cmd.PickCommand,
-        cmd.OptimizeCommand,
-        // ...
+        mycmd.PipelineCommand, mycmd.PickCommand, mycmd.OptimizeCommand,
+        mycmd.ReportCommand, mycmd.PerformanceCommand, mycmd.MonitorCommand,
+        mycmd.BasketCommand, mycmd.HoldingsCommand, mycmd.MergeCommand, mycmd.AuthCommand,
     },
 }
+app.Run(context.Background(), os.Args)
 ```
 
-### 5.3 Phase R1 Migration Safety Net
+### 5.3 Phase R1 Migration Safety Net ✅ Completed
 
-Before deleting any `cmd/*/main.go`, verify the subcommand produces identical output:
-1. Run the old binary: `go run cmd/stockpicker/main.go [flags] > old_output.txt`
-2. Run the new subcommand: `mycase pick [same flags] > new_output.txt`
+The old `cmd/*/main.go` subdirectories have been deleted. The safety net process was:
+1. Run old binary: `go run cmd/stockpicker/main.go [flags] > old_output.txt`
+2. Run new subcommand: `mycase pick [same flags] > new_output.txt`
 3. `diff old_output.txt new_output.txt` — must be empty.
+
+For future structural refactors (R2 logic extraction), verify with `go test ./...` before and after each move — the existing test suite is the regression net.
 
 ### 5.4 Naming Conventions (Existing — Preserve)
 - Dates: `YYYYMMDD`
@@ -680,7 +759,7 @@ All open questions from initial draft are now resolved.
         <string>daemon</string>
         <string>run</string>
         <string>--config</string>
-        <string>/Users/[username]/.mycase/config/pipeline.yaml</string>
+        <string>/Users/raghavkgarg/.mycase/config/pipeline.yaml</string>
     </array>
     <key>StartCalendarInterval</key>
     <dict>
@@ -876,25 +955,24 @@ pkg/cache/
 
 ## 7. Go 1.26.x Modernization — Full Stack Update
 
-Go releases every 6 months with no LTS designation — always run the current stable. Upgrading from 1.24.4 → 1.26.x and updating all dependencies.
+Go releases every 6 months with no LTS designation — always run the current stable. Upgraded from 1.24.4 → 1.26.3 in commit `bd3c4c0`.
 
-### 7.1 `go.mod` Updates
+### 7.1 `go.mod` Status
 
 ```
-go 1.26.3   // confirmed current stable (sanvasify is already on 1.26.3)
+go 1.26.3   // ✅ done (commit bd3c4c0)
+module github.com/raghavkgarg/mycase  // ✅ done (commit 782a663)
 
 require (
-    github.com/urfave/cli/v3                       v3.x.x   // NEW: unified CLI framework
-    github.com/duckdb/duckdb-go/v2                 v2.x.x   // NEW: price/fundamentals cache (same as sanvasify)
-    github.com/zerodha/gokiteconnect/v4            v4.x.x   // update to latest
-    github.com/gocarina/gocsv                      v0.x.x   // update from 2018 pin
-    gopkg.in/yaml.v3                               v3.x.x   // update
+    github.com/urfave/cli/v3        v3.10.1   // ✅ added (R1)
+    github.com/gocarina/gocsv       latest    // ✅ updated from 2018 pin
+    github.com/duckdb/duckdb-go/v2  v2.x.x    // ⏳ add in R-cache
+    github.com/zerodha/gokiteconnect/v4 v4.x.x // ⏳ update when needed
+    gopkg.in/yaml.v3                v3.x.x    // already current
 )
 ```
 
-Note: `github.com/google/go-querystring` is a transitive dep of gokiteconnect — moves to `// indirect` after `go mod tidy`. DuckDB platform bindings (`duckdb-go-bindings/darwin-arm64`, `linux-amd64`, etc.) appear as `// indirect` automatically.
-
-**urfave/cli v3 vs v2**: v3 (stable as of 2025) has cleaner flag definitions, proper `context.Context` threading through `Action` funcs, and better shell completion. Use v3 since we're starting fresh.
+Note: `github.com/google/go-querystring` is a transitive dep of gokiteconnect — stays `// indirect`. DuckDB platform bindings (`duckdb-go-bindings/darwin-arm64`, `linux-amd64`, etc.) appear as `// indirect` automatically when duckdb-go is added.
 
 ### 7.2 Go Language Features to Apply (1.22 → 1.26)
 
@@ -910,14 +988,9 @@ Note: `github.com/google/go-querystring` is a transitive dep of gokiteconnect �
 | `context.Context` in HTTP calls | best practice | Add to all `pkg/yfinance` fetch functions |
 | Generic type aliases | 1.24 | Simplify `resolveFirst[T]()` YAML helper if retained |
 
-### 7.3 `gocarina/gocsv` — Replace or Update
+### 7.3 `gocarina/gocsv` — Updated ✅
 
-The current pin (`v0.0.0-20180809181117`) is from 2018 and is marked `// indirect`. Latest version has significantly improved error handling and struct tag support. Run:
-```bash
-go get github.com/gocarina/gocsv@latest
-go mod tidy
-```
-Verify `pkg/csvloader/loader_test.go` still passes — it's the regression test for this package.
+Updated from the 2018 pin (`v0.0.0-20180809181117`) to latest in commit `bd3c4c0`. `pkg/csvloader/loader_test.go` continues to pass — confirmed no regression.
 
 ---
 
