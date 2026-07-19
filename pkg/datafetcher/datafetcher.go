@@ -3,9 +3,9 @@ package datafetcher
 import (
 	"fmt"
 
-	kiteconnect "github.com/zerodha/gokiteconnect/v4"
 	"github.com/raghavkgarg/mycase/pkg/portfolio"
 	"github.com/raghavkgarg/mycase/pkg/yfinance"
+	kiteconnect "github.com/zerodha/gokiteconnect/v4"
 )
 
 // FetchMarketData retrieves stock price quotes (from yfinance with fallback to Kite) and holdings.
@@ -61,7 +61,6 @@ func FetchMarketData(isMock bool, client *kiteconnect.Client, basketKeys []strin
 			currentHoldings[h.TradingSymbol] = h.Quantity + h.T1Quantity + h.T2Quantity
 		}
 	}
-
 
 	return quoteData, currentHoldings, nil
 }

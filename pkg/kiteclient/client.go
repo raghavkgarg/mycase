@@ -3,16 +3,16 @@ package kiteclient
 import (
 	"fmt"
 
-	kiteconnect "github.com/zerodha/gokiteconnect/v4"
 	"github.com/raghavkgarg/mycase/pkg/config"
+	kiteconnect "github.com/zerodha/gokiteconnect/v4"
 )
 
 // InitKiteClient initializes a Zerodha Kite Connect client.
 // Returns a client pointer and a boolean indicating if we are running in mock/dry mode.
 func InitKiteClient(cfg *config.Config, forceMock bool) (*kiteconnect.Client, bool) {
-	isMock := forceMock || cfg.APIKey == "" || cfg.AccessToken == "" || 
+	isMock := forceMock || cfg.APIKey == "" || cfg.AccessToken == "" ||
 		cfg.APIKey == "your_api_key" || cfg.AccessToken == "your_access_token"
-	
+
 	if isMock {
 		return nil, true
 	}
@@ -34,4 +34,3 @@ func LoadAndInitClient(configPath string, liveMode bool) (*kiteconnect.Client, b
 	}
 	return InitKiteClient(cfg, !liveMode)
 }
-

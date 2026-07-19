@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -63,7 +64,7 @@ func runOptimizeWithParams(ctx context.Context, method, basketPath, removeTicker
 
 	toRemove := make(map[string]bool)
 	if removeTickers != "" {
-		for _, t := range strings.Split(removeTickers, ",") {
+		for t := range strings.SplitSeq(removeTickers, ",") {
 			toRemove[strings.TrimSpace(t)] = true
 		}
 	}
@@ -73,13 +74,7 @@ func runOptimizeWithParams(ctx context.Context, method, basketPath, removeTicker
 		if err == nil {
 			for k, w := range goldenBasket {
 				if w > 0.00001 {
-					found := false
-					for _, bk := range basketKeys {
-						if bk == k {
-							found = true
-							break
-						}
-					}
+					found := slices.Contains(basketKeys, k)
 					if !found && !toRemove[k] {
 						toRemove[k] = true
 						fmt.Printf("Exit detected: Ticker %s was active in golden copy but is not in new selection. Setting weight to 0.0000 to trigger liquidation.\n", k)
@@ -241,8 +236,8 @@ func runOptimizeWithParams(ctx context.Context, method, basketPath, removeTicker
 		base := filepath.Base(basketPath)
 		ext := filepath.Ext(base)
 		nameWithoutExt := strings.TrimSuffix(base, ext)
-		if strings.HasPrefix(strings.ToLower(base), "stockpicker_") {
-			outPath = filepath.Join(dir, "optimized_"+strings.TrimPrefix(strings.ToLower(base), "stockpicker_"))
+		if after, ok := strings.CutPrefix(strings.ToLower(base), "stockpicker_"); ok {
+			outPath = filepath.Join(dir, "optimized_"+after)
 		} else {
 			outPath = filepath.Join(dir, nameWithoutExt+"_optim"+ext)
 		}
@@ -288,4 +283,3 @@ func runOptimizeWithParams(ctx context.Context, method, basketPath, removeTicker
 	fmt.Printf("\nSuccessfully optimized and saved new weights to %s (zero-weighted: %s)\n", outPath, removeTickers)
 	return nil
 }
-

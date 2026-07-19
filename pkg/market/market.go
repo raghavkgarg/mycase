@@ -19,7 +19,7 @@ func IsMarketOpen(t time.Time) bool {
 	hour := istNow.Hour()
 	minute := istNow.Minute()
 
-	currentMinutes := hour * 60 + minute
+	currentMinutes := hour*60 + minute
 	// 9:15 AM = 555 minutes. 3:30 PM = 930 minutes.
 	isWeekDay := weekday >= time.Monday && weekday <= time.Friday
 	return isWeekDay && currentMinutes >= 555 && currentMinutes <= 930
@@ -74,4 +74,3 @@ func CalculateBufferedLimitPrice(ltp float64) float64 {
 	bufferPrice := ltp * 1.03
 	return math.Round(bufferPrice*10.0) / 10.0
 }
-

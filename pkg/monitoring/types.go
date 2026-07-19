@@ -2,13 +2,13 @@ package monitoring
 
 // PolicyParams defines the parameters for the 4-pillar portfolio monitoring policy.
 type PolicyParams struct {
-	ConsecutiveQuartersExit    int     // Pillar 1: Consecutive quarters of TTM growth < 3Y CAGR to trigger exit
-	DSODeteriorationThreshold  float64 // Pillar 2: DSO YoY deterioration (increase) threshold (e.g. 0.15 for 15%)
-	SMADays                    int     // Pillar 4: Consecutive days below 200-day SMA to trigger watch list
-	RebalanceMonths            int     // Pillar 3: Rebalance frequency in months (e.g., 6)
-	MaxWeightDrift             float64 // Pillar 3: Single stock weight drift limit (e.g., 0.15 for 15%)
-	MaxCapExYoYMultiplier      float64 // CapEx YoY growth multiplier threshold (e.g., 2.00)
-	StartDate                  string  // Start date for simulation (YYYY-MM-DD)
+	ConsecutiveQuartersExit   int     // Pillar 1: Consecutive quarters of TTM growth < 3Y CAGR to trigger exit
+	DSODeteriorationThreshold float64 // Pillar 2: DSO YoY deterioration (increase) threshold (e.g. 0.15 for 15%)
+	SMADays                   int     // Pillar 4: Consecutive days below 200-day SMA to trigger watch list
+	RebalanceMonths           int     // Pillar 3: Rebalance frequency in months (e.g., 6)
+	MaxWeightDrift            float64 // Pillar 3: Single stock weight drift limit (e.g., 0.15 for 15%)
+	MaxCapExYoYMultiplier     float64 // CapEx YoY growth multiplier threshold (e.g., 2.00)
+	StartDate                 string  // Start date for simulation (YYYY-MM-DD)
 }
 
 // StockInfo represents the baseline input for a stock in the portfolio.

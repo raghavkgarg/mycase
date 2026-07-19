@@ -30,7 +30,7 @@ func TestIsAbove200DaySMA(t *testing.T) {
 			name: "Exactly 200 days - latest price below average",
 			prices: func() []float64 {
 				p := make([]float64, 200)
-				for i := 0; i < 199; i++ {
+				for i := range 199 {
 					p[i] = 100.0
 				}
 				p[199] = 50.0 // average is around ~99.75. Latest is 50.0.

@@ -7,11 +7,11 @@ import (
 
 // Options holds command line configurations.
 type Options struct {
-	IndexName       string
-	FilePath        string
-	Method          string
-	TopN            int
-	RangeStr        string
+	IndexName          string
+	FilePath           string
+	Method             string
+	TopN               int
+	RangeStr           string
 	SkipScuttlebutt    bool
 	GoldenPath         string
 	RebalanceTolerance float64

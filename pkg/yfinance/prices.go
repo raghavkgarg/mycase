@@ -17,7 +17,7 @@ func getCachePath(prefix, key string) string {
 	return filepath.Join("data", ".cache", fmt.Sprintf("%s_%s_%s.json", prefix, cleanKey, today))
 }
 
-func loadFromCache(prefix, key string, target interface{}) bool {
+func loadFromCache(prefix, key string, target any) bool {
 	path := getCachePath(prefix, key)
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -26,7 +26,7 @@ func loadFromCache(prefix, key string, target interface{}) bool {
 	return json.Unmarshal(data, target) == nil
 }
 
-func saveToCache(prefix, key string, source interface{}) {
+func saveToCache(prefix, key string, source any) {
 	path := getCachePath(prefix, key)
 	_ = os.MkdirAll(filepath.Dir(path), 0755)
 	data, err := json.Marshal(source)

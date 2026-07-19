@@ -105,7 +105,7 @@ func runReportWithParams(ctx context.Context, filePath, method string) error {
 	fmt.Fprintf(writer, "             Portfolio Selection Explanation Report                 \n")
 	fmt.Fprintf(writer, "====================================================================\n")
 	fmt.Fprintf(writer, "File:        %s\n", filePath)
-	fmt.Fprintf(writer, "Strategy:    %s Preset\n", strings.Title(method))
+	fmt.Fprintf(writer, "Strategy:    %s Preset\n", strings.ToUpper(method[:1])+method[1:])
 	fmt.Fprintf(writer, "Stocks:      %d\n", len(tickers))
 	fmt.Fprintf(writer, "Report File: %s\n", outReportPath)
 	fmt.Fprintf(writer, "====================================================================\n\n")

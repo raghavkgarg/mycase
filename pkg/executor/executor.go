@@ -9,9 +9,9 @@ import (
 	"strings"
 	"time"
 
-	kiteconnect "github.com/zerodha/gokiteconnect/v4"
 	"github.com/raghavkgarg/mycase/pkg/market"
 	"github.com/raghavkgarg/mycase/pkg/printer"
+	kiteconnect "github.com/zerodha/gokiteconnect/v4"
 )
 
 type BasketOrder struct {

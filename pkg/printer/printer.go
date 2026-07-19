@@ -161,7 +161,6 @@ func PrintPreviewTable(
 	return sb.String()
 }
 
-
 // FormatPnL formats currency PnL with standard sign indicators
 func FormatPnL(val float64) string {
 	sign := ""
@@ -199,16 +198,13 @@ func renderSection(title string, labelPrefix string, holdings []portfolio.Holdin
 
 	var sb strings.Builder
 	sb.WriteString(header)
-	
+
 	// Dynamic centering of title
 	titleLen := len(title)
-	padding := (119 - titleLen) / 2
-	if padding < 0 {
-		padding = 0
-	}
+	padding := max((119-titleLen)/2, 0)
 	centeredTitle := strings.Repeat(" ", padding) + title
 	sb.WriteString(centeredTitle + strings.Repeat(" ", max(0, 119-len(centeredTitle))) + "\n")
-	
+
 	sb.WriteString(header + cols + sep)
 
 	var invested, current, pnl float64

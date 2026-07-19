@@ -372,7 +372,7 @@ func PrintComparisonReport(src, dst, strategy string) {
 	}
 
 	stdoutWriter := os.Stdout
-	writeLine := func(colorCode, format string, args ...interface{}) {
+	writeLine := func(colorCode, format string, args ...any) {
 		if colorCode != "" {
 			fmt.Fprint(stdoutWriter, colorCode)
 			fmt.Fprintf(stdoutWriter, format, args...)
@@ -388,7 +388,7 @@ func PrintComparisonReport(src, dst, strategy string) {
 	writeLine("", "\n----------------- PORTFOLIO COMPARISON REPORT -----------------\n")
 	writeLine("", "Golden copy had %d active scripts with average weight: %.2f%%\n", goldenActiveCount, avgPrev)
 	writeLine("", "New candidate set has %d active scripts with average weight: %.2f%%\n", newActiveCount, avgNew)
-	
+
 	// Highlight total additions and removals if present
 	summaryColor := ""
 	if newAdditions > 0 || removed > 0 {
@@ -399,7 +399,7 @@ func PrintComparisonReport(src, dst, strategy string) {
 
 	writeLine("", "%-20s | %-15s | %-10s | %s\n", "Symbol", "Previous Weight", "New Weight", "Action")
 	writeLine("", "%s\n", strings.Repeat("-", 68))
-	
+
 	for _, r := range rows {
 		prevStr := fmt.Sprintf("%.2f%%", r.prevW*100)
 		if r.prevW == 0 {

@@ -17,7 +17,7 @@ func FetchCookieAndCrumb(client *http.Client) (string, error) {
 		return "", err
 	}
 	req1.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36")
-	
+
 	resp1, err := client.Do(req1)
 	if err != nil {
 		return "", err
@@ -29,7 +29,7 @@ func FetchCookieAndCrumb(client *http.Client) (string, error) {
 		return "", err
 	}
 	req2.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36")
-	
+
 	resp2, err := client.Do(req2)
 	if err != nil {
 		return "", err
@@ -98,15 +98,10 @@ func FetchFundamentals(tickers []string) (map[string]Fundamentals, error) {
 	var wg sync.WaitGroup
 
 	// Spawning 15 concurrent workers
-	workerCount := 15
-	if len(uncachedTickers) < workerCount {
-		workerCount = len(uncachedTickers)
-	}
+	workerCount := min(len(uncachedTickers), 15)
 
-	for w := 0; w < workerCount; w++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+	for range workerCount {
+		wg.Go(func() {
 			for job := range jobs {
 				ySym := MapTickerToYahoo(job.ticker)
 				url := fmt.Sprintf("https://query2.finance.yahoo.com/v10/finance/quoteSummary/%s?modules=financialData,defaultKeyStatistics,summaryDetail,assetProfile,earnings&crumb=%s", ySym, crumb)
@@ -327,7 +322,7 @@ func FetchFundamentals(tickers []string) (map[string]Fundamentals, error) {
 					AnnualRevenue:            annualRevenue,
 					AnnualGrossProfit:        annualGrossProfit,
 					AnnualNetPPE:             annualNetPPE,
-					AnnualAccountsReceivable:  annualAccountsReceivable,
+					AnnualAccountsReceivable: annualAccountsReceivable,
 					AnnualCapEx:              annualCapEx,
 					DebtToEquity:             fd.DebtToEquity.Raw,
 					TotalDebt:                fd.TotalDebt.Raw,
@@ -339,7 +334,7 @@ func FetchFundamentals(tickers []string) (map[string]Fundamentals, error) {
 
 				results <- fetchResult{ticker: job.ticker, fund: fund}
 			}
-		}()
+		})
 	}
 
 	for _, t := range uncachedTickers {

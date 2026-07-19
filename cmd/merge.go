@@ -20,7 +20,7 @@ var MergeCommand = &cli.Command{
 			Action: func(ctx context.Context, c *cli.Command) error {
 				args := c.Args().Slice()
 				if len(args) < 2 {
-					return fmt.Errorf("usage: mycase merge combine <output_csv> <input_csv1> <input_csv2> ...")
+					return fmt.Errorf("usage: mycase merge combine <output_csv> <input_csv1> <input_csv2>")
 				}
 				outFile := args[0]
 				inputFiles := args[1:]

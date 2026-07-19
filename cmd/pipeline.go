@@ -31,45 +31,45 @@ type PipelineConfig struct {
 }
 
 type rawPipelineConfig struct {
-	Indices               []string    `yaml:"indices"`
-	Strategy              interface{} `yaml:"strategy"`
-	TopN                  interface{} `yaml:"top_n"`
-	GoldenCopyPath        interface{} `yaml:"golden_copy_path"`
-	Capital               interface{} `yaml:"capital"`
-	PurchaseDate          interface{} `yaml:"purchase_date"`
-	RebalanceTolerancePct interface{} `yaml:"rebalance_tolerance_pct"`
-	HysteresisRankBuffer  interface{} `yaml:"hysteresis_rank_buffer"`
+	Indices               []string `yaml:"indices"`
+	Strategy              any      `yaml:"strategy"`
+	TopN                  any      `yaml:"top_n"`
+	GoldenCopyPath        any      `yaml:"golden_copy_path"`
+	Capital               any      `yaml:"capital"`
+	PurchaseDate          any      `yaml:"purchase_date"`
+	RebalanceTolerancePct any      `yaml:"rebalance_tolerance_pct"`
+	HysteresisRankBuffer  any      `yaml:"hysteresis_rank_buffer"`
 }
 
-func resolveFirst[T any](val interface{}, defaultVal T) T {
+func resolveFirst[T any](val any, defaultVal T) T {
 	if val == nil {
 		return defaultVal
 	}
 	if v, ok := val.(T); ok {
 		return v
 	}
-	if slice, ok := val.([]interface{}); ok && len(slice) > 0 {
+	if slice, ok := val.([]any); ok && len(slice) > 0 {
 		if v, ok := slice[0].(T); ok {
 			return v
 		}
-		var temp interface{} = slice[0]
+		var temp any = slice[0]
 		switch any(defaultVal).(type) {
 		case int:
 			if f, ok := temp.(float64); ok {
-				var ret interface{} = int(f)
+				var ret any = int(f)
 				return ret.(T)
 			}
 			if i, ok := temp.(int); ok {
-				var ret interface{} = i
+				var ret any = i
 				return ret.(T)
 			}
 		case float64:
 			if f, ok := temp.(float64); ok {
-				var ret interface{} = f
+				var ret any = f
 				return ret.(T)
 			}
 			if i, ok := temp.(int); ok {
-				var ret interface{} = float64(i)
+				var ret any = float64(i)
 				return ret.(T)
 			}
 		}
@@ -77,12 +77,12 @@ func resolveFirst[T any](val interface{}, defaultVal T) T {
 	switch any(defaultVal).(type) {
 	case int:
 		if f, ok := val.(float64); ok {
-			var ret interface{} = int(f)
+			var ret any = int(f)
 			return ret.(T)
 		}
 	case float64:
 		if i, ok := val.(int); ok {
-			var ret interface{} = float64(i)
+			var ret any = float64(i)
 			return ret.(T)
 		}
 	}

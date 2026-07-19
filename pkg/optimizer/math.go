@@ -64,7 +64,7 @@ func CalculateCovariance(x, y []float64) float64 {
 	meanX := CalculateMean(x)
 	meanY := CalculateMean(y)
 	var sum float64
-	for i := 0; i < n; i++ {
+	for i := range n {
 		sum += (x[i] - meanX) * (y[i] - meanY)
 	}
 	return sum / float64(n-1)

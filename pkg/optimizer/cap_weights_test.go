@@ -102,9 +102,9 @@ func TestCapWeights_SumInvariant(t *testing.T) {
 		weights map[string]float64
 		cap     float64
 	}{
-		{map[string]float64{"A": 0.90, "B": 0.05, "C": 0.05}, 0.40},        // cap > 1/3
-		{map[string]float64{"A": 0.34, "B": 0.33, "C": 0.33}, 0.50},        // cap > 1/3
-		{map[string]float64{"A": 0.50, "B": 0.30, "C": 0.20}, 0.60},        // none over cap
+		{map[string]float64{"A": 0.90, "B": 0.05, "C": 0.05}, 0.40},            // cap > 1/3
+		{map[string]float64{"A": 0.34, "B": 0.33, "C": 0.33}, 0.50},            // cap > 1/3
+		{map[string]float64{"A": 0.50, "B": 0.30, "C": 0.20}, 0.60},            // none over cap
 		{map[string]float64{"A": 0.50, "B": 0.30, "C": 0.10, "D": 0.10}, 0.40}, // cap > 1/4
 	}
 	for _, tc := range cases {
@@ -138,7 +138,7 @@ func TestCapWeights_QuickCheck(t *testing.T) {
 			"B": float64(b) / total,
 			"C": float64(c) / total,
 		}
-		cap := (float64(cap8)+1.0) / 256.0
+		cap := (float64(cap8) + 1.0) / 256.0
 		result := CapWeights(weights, cap)
 
 		// Sum must always be 1.0

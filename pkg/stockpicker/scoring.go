@@ -3,8 +3,10 @@ package stockpicker
 import (
 	"encoding/csv"
 	"fmt"
+	"maps"
 	"math"
 	"os"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -55,18 +57,30 @@ func ScoreMultibagger(
 		// Revenue Acceleration Gap
 		_, ttmGrowth, cagr3y := yfinance.CalculateSalesGrowth(&f)
 		revAccGaps[t] = ttmGrowth - cagr3y
-		if revAccGaps[t] < minRevAcc { minRevAcc = revAccGaps[t] }
-		if revAccGaps[t] > maxRevAcc { maxRevAcc = revAccGaps[t] }
+		if revAccGaps[t] < minRevAcc {
+			minRevAcc = revAccGaps[t]
+		}
+		if revAccGaps[t] > maxRevAcc {
+			maxRevAcc = revAccGaps[t]
+		}
 
 		// Asset Turnover Expansion
-		_, atPrev, atLatest, _, _ := yfinance.CalculateAssetTurnoverCapEx(&f, hardFilters.MaxCapExYoYMultiplier)
+		var maxCapExMultiplier float64
+		if hardFilters != nil {
+			maxCapExMultiplier = hardFilters.MaxCapExYoYMultiplier
+		}
+		_, atPrev, atLatest, _, _ := yfinance.CalculateAssetTurnoverCapEx(&f, maxCapExMultiplier)
 		atExp := 0.0
 		if atPrev > 0 {
 			atExp = (atLatest - atPrev) / atPrev
 		}
 		atExpansions[t] = atExp
-		if atExp < minAtExp { minAtExp = atExp }
-		if atExp > maxAtExp { maxAtExp = atExp }
+		if atExp < minAtExp {
+			minAtExp = atExp
+		}
+		if atExp > maxAtExp {
+			maxAtExp = atExp
+		}
 
 		// PEG Ratio (cap at pegFloor, excluding negative values)
 		pegFloor := 0.1
@@ -78,20 +92,32 @@ func ScoreMultibagger(
 			pegVal = pegFloor
 		}
 		pegs[t] = pegVal
-		if pegVal < minPeg { minPeg = pegVal }
-		if pegVal > maxPeg { maxPeg = pegVal }
+		if pegVal < minPeg {
+			minPeg = pegVal
+		}
+		if pegVal > maxPeg {
+			maxPeg = pegVal
+		}
 
 		// ROCE (latest year)
 		roceVal, _ := getLatestROCE(&f)
 		roces[t] = roceVal
-		if roceVal < minRoce { minRoce = roceVal }
-		if roceVal > maxRoce { maxRoce = roceVal }
+		if roceVal < minRoce {
+			minRoce = roceVal
+		}
+		if roceVal > maxRoce {
+			maxRoce = roceVal
+		}
 
 		// Breakout Volume Intensity
 		volMult := yfinance.GetVolumeBreakoutMultiplier(hist.Closes, hist.Opens, hist.Volumes, hardFilters.VolumeBreakoutLookbackDays)
 		vIntensities[t] = volMult
-		if volMult < minVInt { minVInt = volMult }
-		if volMult > maxVInt { maxVInt = volMult }
+		if volMult < minVInt {
+			minVInt = volMult
+		}
+		if volMult > maxVInt {
+			maxVInt = volMult
+		}
 
 		// 52-Week Relative Strength
 		stock1yReturn := 0.0
@@ -100,8 +126,12 @@ func ScoreMultibagger(
 		}
 		rs52 := stock1yReturn - bench1yReturn
 		rs52ws[t] = rs52
-		if rs52 < minRs52 { minRs52 = rs52 }
-		if rs52 > maxRs52 { maxRs52 = rs52 }
+		if rs52 < minRs52 {
+			minRs52 = rs52
+		}
+		if rs52 > maxRs52 {
+			maxRs52 = rs52
+		}
 	}
 
 	scores := make(map[string]float64)
@@ -184,7 +214,7 @@ func SelectTopNMultibagger(
 		maxPerSector = 3
 	}
 	fmt.Printf("Applying Sector Caps (max %d stocks per sector)...\n", maxPerSector)
-	
+
 	// 1. Filter all activeKeys by sector caps to get valid candidates in ranked order
 	var sectorCapCandidates []string
 	sectorCounts := make(map[string]int)
@@ -397,13 +427,7 @@ func ApplyHysteresisSelection(
 		if len(selected) >= topN {
 			break
 		}
-		alreadySelected := false
-		for _, s := range selected {
-			if s == ticker {
-				alreadySelected = true
-				break
-			}
-		}
+		alreadySelected := slices.Contains(selected, ticker)
 		if alreadySelected {
 			continue
 		}
@@ -459,7 +483,7 @@ func ApplyRebalancingBand(
 	for _, ticker := range selectedKeys {
 		targetW := targetWeights[ticker]
 		if oldW, ok := existingHoldings[ticker]; ok {
-			if math.Abs(targetW - oldW) < toleranceLimit {
+			if math.Abs(targetW-oldW) < toleranceLimit {
 				lockedWeights[ticker] = oldW
 				sumLocked += oldW
 				continue
@@ -495,9 +519,7 @@ func ApplyRebalancingBand(
 	}
 
 	finalWeights := make(map[string]float64)
-	for ticker, w := range lockedWeights {
-		finalWeights[ticker] = w
-	}
+	maps.Copy(finalWeights, lockedWeights)
 	remainingWeight := 1.0 - sumLocked
 	for _, ticker := range nonLockedKeys {
 		finalWeights[ticker] = targetWeights[ticker] * (remainingWeight / sumNonLockedTarget)

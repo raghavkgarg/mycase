@@ -9,15 +9,15 @@ func TestOptimizeFreshBuy(t *testing.T) {
 	basketKeys := []string{"NSE:SWSOLAR", "NSE:ADVAIT"}
 	basket := map[string]float64{
 		"NSE:SWSOLAR": 0.50,
-		"NSE:ADVAIT":   0.50,
+		"NSE:ADVAIT":  0.50,
 	}
 	quoteData := map[string]float64{
 		"NSE:SWSOLAR": 100.0,
-		"NSE:ADVAIT":   100.0,
+		"NSE:ADVAIT":  100.0,
 	}
 	currentHoldings := map[string]int{
 		"SWSOLAR": 0,
-		"ADVAIT":   0,
+		"ADVAIT":  0,
 	}
 
 	// With budget of ₹1100, it should allocate 5 shares of each (accounting for 3% limit buffer)
@@ -171,4 +171,3 @@ func TestOptimizeInverseVolatility_SumsToOne(t *testing.T) {
 		t.Errorf("weights sum to %f, want 1.0", total)
 	}
 }
-

@@ -1,5 +1,7 @@
 package optimizer
 
+import "maps"
+
 // CapWeights enforces a per-stock weight cap, redistributing excess to under-cap stocks
 // proportionally to their current weights.
 // If 1/n >= cap (cap too tight for n stocks), falls back to equal weights.
@@ -17,9 +19,7 @@ func CapWeights(weights map[string]float64, cap float64) map[string]float64 {
 		return result
 	}
 	result := make(map[string]float64)
-	for k, v := range weights {
-		result[k] = v
-	}
+	maps.Copy(result, weights)
 	for {
 		var excess float64
 		var underCapSum float64

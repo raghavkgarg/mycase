@@ -10,7 +10,7 @@ type ChartResponse struct {
 				RegularMarketPrice float64 `json:"regularMarketPrice"`
 			} `json:"meta"`
 		} `json:"result"`
-		Error interface{} `json:"error"`
+		Error any `json:"error"`
 	} `json:"chart"`
 }
 
@@ -21,7 +21,7 @@ type HistoricalChartResponse struct {
 			Meta struct {
 				Symbol string `json:"symbol"`
 			} `json:"meta"`
-			Timestamp []int64 `json:"timestamp"`
+			Timestamp  []int64 `json:"timestamp"`
 			Indicators struct {
 				Quote []struct {
 					Close  []float64 `json:"close"`
@@ -30,7 +30,7 @@ type HistoricalChartResponse struct {
 				} `json:"quote"`
 			} `json:"indicators"`
 		} `json:"result"`
-		Error interface{} `json:"error"`
+		Error any `json:"error"`
 	} `json:"chart"`
 }
 
@@ -38,7 +38,7 @@ type HistoricalChartResponse struct {
 type IntradayChartResponse struct {
 	Chart struct {
 		Result []struct {
-			Timestamp []int64 `json:"timestamp"`
+			Timestamp  []int64 `json:"timestamp"`
 			Indicators struct {
 				Quote []struct {
 					Open  []*float64 `json:"open"`
@@ -46,7 +46,7 @@ type IntradayChartResponse struct {
 				} `json:"quote"`
 			} `json:"indicators"`
 		} `json:"result"`
-		Error interface{} `json:"error"`
+		Error any `json:"error"`
 	} `json:"chart"`
 }
 
@@ -124,8 +124,8 @@ type QuoteSummaryResponse struct {
 			Earnings struct {
 				FinancialsChart struct {
 					Yearly []struct {
-						Date     int `json:"date"`
-						Revenue  struct {
+						Date    int `json:"date"`
+						Revenue struct {
 							Raw float64 `json:"raw"`
 						} `json:"revenue"`
 						Earnings struct {
@@ -135,7 +135,7 @@ type QuoteSummaryResponse struct {
 				} `json:"financialsChart"`
 			} `json:"earnings"`
 		} `json:"result"`
-		Error interface{} `json:"error"`
+		Error any `json:"error"`
 	} `json:"quoteSummary"`
 }
 
@@ -148,35 +148,35 @@ type AnnualFinancial struct {
 
 // Fundamentals represents key fundamental metrics retrieved from Yahoo Finance
 type Fundamentals struct {
-	PEGRatio                float64
-	ROE                     float64
-	ForwardPE               float64
-	OperatingMargins        float64
-	PBRatio                 float64
-	NetDebtEBITDA           float64
-	MarketCap               float64
-	InsidersPercent         float64
-	HeldPercentInstitutions float64
-	TTMRevenue              float64
-	OperatingCashflow       float64
-	FreeCashflow            float64
-	AverageVolume           float64
-	RegularPrice            float64
-	NetIncome               float64
-	Sector                  string
-	EarningsHistory         []AnnualFinancial
-	AnnualRevenue           []AnnualMetric
-	AnnualGrossProfit       []AnnualMetric
-	AnnualNetPPE            []AnnualMetric
+	PEGRatio                 float64
+	ROE                      float64
+	ForwardPE                float64
+	OperatingMargins         float64
+	PBRatio                  float64
+	NetDebtEBITDA            float64
+	MarketCap                float64
+	InsidersPercent          float64
+	HeldPercentInstitutions  float64
+	TTMRevenue               float64
+	OperatingCashflow        float64
+	FreeCashflow             float64
+	AverageVolume            float64
+	RegularPrice             float64
+	NetIncome                float64
+	Sector                   string
+	EarningsHistory          []AnnualFinancial
+	AnnualRevenue            []AnnualMetric
+	AnnualGrossProfit        []AnnualMetric
+	AnnualNetPPE             []AnnualMetric
 	AnnualAccountsReceivable []AnnualMetric
-	AnnualCapEx             []AnnualMetric
-	DebtToEquity            float64
-	TotalDebt               float64
-	PledgedPercent          float64
-	AnnualOperatingIncome   []AnnualMetric
-	AnnualTotalAssets       []AnnualMetric
+	AnnualCapEx              []AnnualMetric
+	DebtToEquity             float64
+	TotalDebt                float64
+	PledgedPercent           float64
+	AnnualOperatingIncome    []AnnualMetric
+	AnnualTotalAssets        []AnnualMetric
 	AnnualCurrentLiabilities []AnnualMetric
-	AnnualInterestExpense   []AnnualMetric
+	AnnualInterestExpense    []AnnualMetric
 }
 
 // AnnualMetric holds historical value with its date
@@ -208,7 +208,7 @@ type TimeseriesResponse struct {
 				Symbol []string `json:"symbol"`
 				Type   []string `json:"type"`
 			} `json:"meta"`
-			Timestamp []int64 `json:"timestamp"`
+			Timestamp                []int64 `json:"timestamp"`
 			AnnualCapitalExpenditure []struct {
 				AsOfDate      string `json:"asOfDate"`
 				ReportedValue struct {
@@ -264,7 +264,7 @@ type TimeseriesResponse struct {
 				} `json:"reportedValue"`
 			} `json:"annualInterestExpense"`
 		} `json:"result"`
-		Error interface{} `json:"error"`
+		Error any `json:"error"`
 	} `json:"timeseries"`
 }
 

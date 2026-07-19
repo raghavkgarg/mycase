@@ -18,11 +18,8 @@ func CalculateRSI(closes []float64) float64 {
 
 	avgGain := 0.0
 	avgLoss := 0.0
-	limit := 14
-	if len(deltas) < limit {
-		limit = len(deltas)
-	}
-	for i := 0; i < limit; i++ {
+	limit := min(len(deltas), 14)
+	for i := range limit {
 		if deltas[i] > 0 {
 			avgGain += deltas[i]
 		} else {

@@ -166,15 +166,13 @@ func FetchHistoricalPrices(rawTickers []string) (map[string]*yfinance.Historical
 
 	// Start workers
 	workerCount := 15
-	for w := 0; w < workerCount; w++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+	for range workerCount {
+		wg.Go(func() {
 			for job := range jobs {
 				hist, err := yfinance.FetchHistoricalDataWithTimestamps(job.ticker, "1y")
 				results <- fetchResult{ticker: job.ticker, hist: hist, err: err}
 			}
-		}()
+		})
 	}
 
 	for _, t := range rawTickers {

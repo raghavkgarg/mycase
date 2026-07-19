@@ -255,16 +255,14 @@ func monitorLoadAllData(tickers []string) (
 	var mu sync.Mutex
 	var wg sync.WaitGroup
 
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		b, err := yfinance.FetchHistoricalDataWithTimestamps("^NSEI", "2y")
 		if err == nil && b != nil && len(b.Closes) >= 200 {
 			mu.Lock()
 			benchData = b
 			mu.Unlock()
 		}
-	}()
+	})
 
 	liveHist := make(map[string]*yfinance.HistoricalData)
 	liveFunds := make(map[string]yfinance.Fundamentals)
@@ -304,7 +302,7 @@ func monitorLoadAllData(tickers []string) (
 		benchVolumes := make([]float64, nDays)
 		benchTimestamps := make([]int64, nDays)
 		currBench := 18500.0
-		for i := 0; i < nDays; i++ {
+		for i := range nDays {
 			currBench += currBench * (0.15/252.0 + (localRand.Float64()-0.5)*0.015)
 			benchCloses[i] = currBench
 			benchOpens[i] = currBench * (1.0 + (localRand.Float64()-0.5)*0.005)
@@ -427,7 +425,7 @@ func generateMonitorReport(res monitoring.SimulationResult, inputPath string, st
 	fmt.Fprintf(writer, "             Portfolio Monitoring Simulation Report                      \n")
 	fmt.Fprintf(writer, "=========================================================================\n")
 	fmt.Fprintf(writer, "File:             %s\n", inputPath)
-	fmt.Fprintf(writer, "Policy Preset:    %s\n", strings.Title(style))
+	fmt.Fprintf(writer, "Policy Preset:    %s\n", strings.ToUpper(style[:1])+style[1:])
 	if params.StartDate != "" {
 		fmt.Fprintf(writer, "Simulated Scope:  From %s to Present\n", params.StartDate)
 	} else {
@@ -497,7 +495,7 @@ func monitorGetPipelinePurchaseDate() string {
 	}
 	defer file.Close()
 	var cfg struct {
-		PurchaseDate interface{} `yaml:"purchase_date"`
+		PurchaseDate any `yaml:"purchase_date"`
 	}
 	if err := yaml.NewDecoder(file).Decode(&cfg); err != nil {
 		return "2026-01-01"
@@ -508,7 +506,7 @@ func monitorGetPipelinePurchaseDate() string {
 	if s, ok := cfg.PurchaseDate.(string); ok {
 		return s
 	}
-	if slice, ok := cfg.PurchaseDate.([]interface{}); ok && len(slice) > 0 {
+	if slice, ok := cfg.PurchaseDate.([]any); ok && len(slice) > 0 {
 		if s, ok := slice[0].(string); ok {
 			return s
 		}
@@ -523,7 +521,7 @@ func monitorGetPipelineStrategy() string {
 	}
 	defer file.Close()
 	var cfg struct {
-		Strategy interface{} `yaml:"strategy"`
+		Strategy any `yaml:"strategy"`
 	}
 	if err := yaml.NewDecoder(file).Decode(&cfg); err != nil {
 		return "balanced"
@@ -534,7 +532,7 @@ func monitorGetPipelineStrategy() string {
 	if s, ok := cfg.Strategy.(string); ok {
 		return s
 	}
-	if slice, ok := cfg.Strategy.([]interface{}); ok && len(slice) > 0 {
+	if slice, ok := cfg.Strategy.([]any); ok && len(slice) > 0 {
 		if s, ok := slice[0].(string); ok {
 			return s
 		}
