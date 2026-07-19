@@ -1,8 +1,8 @@
-package main
+package cmd
 
 import (
 	"bufio"
-	"flag"
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -11,11 +11,14 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gkgarg24/mycase/pkg/csvloader"
-
+	"github.com/urfave/cli/v3"
 	"gopkg.in/yaml.v3"
+
+	"github.com/gkgarg24/mycase/pkg/csvloader"
+	"github.com/gkgarg24/mycase/pkg/stockpicker"
 )
 
+// PipelineConfig holds the resolved pipeline configuration.
 type PipelineConfig struct {
 	Indices               []string `yaml:"indices"`
 	Strategy              string   `yaml:"strategy"`
@@ -98,43 +101,46 @@ func (cfg *PipelineConfig) UnmarshalYAML(value *yaml.Node) error {
 	cfg.GoldenCopyPath = resolveFirst(a.GoldenCopyPath, "data/microsmall.csv")
 	cfg.Capital = resolveFirst(a.Capital, 100000)
 	cfg.PurchaseDate = resolveFirst(a.PurchaseDate, "2026-01-01")
-
 	tol := resolveFirst(a.RebalanceTolerancePct, 0.10)
 	if tol < 0 {
 		tol = 0.10
 	}
 	cfg.RebalanceTolerancePct = tol
-
 	buf := resolveFirst(a.HysteresisRankBuffer, 5)
 	if buf < 0 {
 		buf = 5
 	}
 	cfg.HysteresisRankBuffer = buf
-
 	return nil
 }
 
-func main() {
-	execOnly := flag.Bool("exec-only", false, "Start directly from execution steps (Step 9 & 10)")
-	configPath := flag.String("config", "config/pipeline.yaml", "Path to pipeline YAML configuration file")
-	flag.Parse()
+var PipelineCommand = &cli.Command{
+	Name:  "pipeline",
+	Usage: "Run the automated selection → report → execution pipeline",
+	Flags: []cli.Flag{
+		&cli.BoolFlag{Name: "exec-only", Usage: "Start directly from execution steps (auth + basket)"},
+		&cli.StringFlag{Name: "config", Value: "config/pipeline.yaml", Usage: "Path to pipeline YAML configuration file"},
+	},
+	Action: runPipeline,
+}
+
+func runPipeline(ctx context.Context, c *cli.Command) error {
+	execOnly := c.Bool("exec-only")
+	configPath := c.String("config")
 
 	fmt.Println("====================================================================")
 	fmt.Println("             Go Mycase Automated Pipeline Runner                 ")
 	fmt.Println("====================================================================")
 
-	// Load configuration
-	configFile, err := os.Open(*configPath)
+	configFile, err := os.Open(configPath)
 	if err != nil {
-		fmt.Printf("Error opening config file %s: %v\n", *configPath, err)
-		return
+		return fmt.Errorf("opening config file %s: %w", configPath, err)
 	}
 	defer configFile.Close()
 
 	var cfg PipelineConfig
 	if err := yaml.NewDecoder(configFile).Decode(&cfg); err != nil {
-		fmt.Printf("Error parsing config file %s: %v\n", *configPath, err)
-		return
+		return fmt.Errorf("parsing config file %s: %w", configPath, err)
 	}
 
 	reader := bufio.NewReader(os.Stdin)
@@ -149,8 +155,7 @@ func main() {
 		}
 	}
 
-	// Auto Execution-Only Mode Detection
-	if !*execOnly && cfg.GoldenCopyPath != "" {
+	if !execOnly && cfg.GoldenCopyPath != "" {
 		if info, err := os.Stat(cfg.GoldenCopyPath); err == nil {
 			today := time.Now().Format("2006-01-02")
 			if info.ModTime().Format("2006-01-02") == today {
@@ -159,91 +164,51 @@ func main() {
 				skipChoice, _ := reader.ReadString('\n')
 				skipChoice = strings.ToLower(strings.TrimSpace(skipChoice))
 				if skipChoice == "y" || skipChoice == "yes" {
-					*execOnly = true
+					execOnly = true
 				}
 			}
 		}
 	}
 
-	// Step 0: Build all binaries to bin/ directory
-	fmt.Println("\n[Step 0] Building all CLI tools to bin/ directory...")
-	if err := os.MkdirAll("bin", 0755); err != nil {
-		fmt.Printf("Error creating bin directory: %v\n", err)
-		return
-	}
-
-	var targets []struct {
-		src string
-		dst string
-	}
-
-	if *execOnly {
-		targets = []struct {
-			src string
-			dst string
-		}{
-			{"cmd/setup_auth/main.go", "bin/setup_auth"},
-			{"cmd/basket/main.go", "bin/basket"},
-		}
+	totalSteps := 1
+	if execOnly {
+		totalSteps += 2
 	} else {
-		targets = []struct {
-			src string
-			dst string
-		}{
-			{"cmd/stockpicker/main.go", "bin/stockpicker"},
-			{"cmd/report/main.go", "bin/report"},
-			{"cmd/performance/main.go", "bin/performance"},
-			{"cmd/monitoring/main.go", "bin/monitoring"},
-			{"cmd/setup_auth/main.go", "bin/setup_auth"},
-			{"cmd/basket/main.go", "bin/basket"},
-			{"cmd/optimize_weights/main.go", "bin/optimize_weights"},
-			{"cmd/holdings/main.go", "bin/holdings"},
-		}
-	}
-
-	for _, t := range targets {
-		fmt.Printf("  Building %s...\n", t.dst)
-		if err := runCmd("go", "build", "-o", t.dst, t.src); err != nil {
-			fmt.Printf("Error compiling %s: %v\n", t.dst, err)
-			return
-		}
-	}
-
-	// Calculate total steps dynamically
-	totalSteps := 1 // Step 0 is Building
-	if *execOnly {
-		totalSteps += 2 // Auth, Basket
-	} else {
-		totalSteps += len(cfg.Indices) // Individual Index stock picks
+		totalSteps += len(cfg.Indices)
 		if len(cfg.Indices) > 1 {
-			totalSteps += 3 // Combine, Combined stockpicker (top 25), Weight optimization (top 20)
+			totalSteps += 3
 		}
-		totalSteps += 5 // Update Golden, Report, Perf, Mon, Auth, Basket
+		totalSteps += 5
 	}
 
 	runTimestamp := time.Now().Format("20060102_150405")
 	dateStr := runTimestamp[:8]
 	stepCounter := 1
 
-	if !*execOnly {
+	if !execOnly {
 		if len(cfg.Indices) == 0 {
-			fmt.Println("Error: No indices configured in pipeline.yaml")
-			return
+			return fmt.Errorf("no indices configured in pipeline.yaml")
 		}
 
 		var outputCSVs []string
-		// Running stockpicker selection individually for each configured index.
 		for _, indexName := range cfg.Indices {
 			fmt.Printf("\n[Step %d/%d] Running %s stock selection on %s...\n", stepCounter, totalSteps, cfg.Strategy, indexName)
 			outPath := filepath.Join("data", "candidates", "index_picks", fmt.Sprintf("%s_%s.csv", indexName, cfg.Strategy))
-			args := []string{"-index", indexName, "-method", cfg.Strategy, "-top", strconv.Itoa(cfg.TopN)}
-			if len(cfg.Indices) > 1 {
-				args = append(args, "-skip-scuttlebutt")
+			opts := &stockpicker.Options{
+				IndexName:          indexName,
+				Method:             cfg.Strategy,
+				TopN:               cfg.TopN,
+				RangeStr:           "3mo",
+				GoldenPath:         cfg.GoldenCopyPath,
+				RebalanceTolerance: cfg.RebalanceTolerancePct,
+				HysteresisBuffer:   cfg.HysteresisRankBuffer,
+				OutputFile:         outPath,
 			}
-			args = append(args, "-golden", cfg.GoldenCopyPath, "-rebalance-tolerance", fmt.Sprintf("%.4f", cfg.RebalanceTolerancePct), "-hysteresis-buffer", strconv.Itoa(cfg.HysteresisRankBuffer), "-out", outPath)
-			if err := runCmd("./bin/stockpicker", args...); err != nil {
-				fmt.Printf("Error running Step %d: %v\n", stepCounter, err)
-				return
+			if len(cfg.Indices) > 1 {
+				opts.SkipScuttlebutt = true
+			}
+			if err := runPickWithOpts(ctx, opts); err != nil {
+				return fmt.Errorf("step %d (pick %s): %w", stepCounter, indexName, err)
 			}
 			outputCSVs = append(outputCSVs, outPath)
 			stepCounter++
@@ -254,34 +219,37 @@ func main() {
 		goldenBase := csvloader.GetUniverseName(goldenCSV)
 		combineCSV := filepath.Join("data", "candidates", "temp", fmt.Sprintf("combine_%s.csv", goldenBase))
 
-		// Combine candidate lists if multiple indices are configured
 		if len(cfg.Indices) > 1 {
 			if err := os.MkdirAll(filepath.Dir(combineCSV), 0755); err != nil {
-				fmt.Printf("Warning: Failed to create temp directory for combine: %v\n", err)
+				fmt.Printf("Warning: Failed to create temp directory: %v\n", err)
 			}
 			fmt.Printf("\n[Step %d/%d] Combining stockpicker outputs into %s...\n", stepCounter, totalSteps, combineCSV)
 			if err := csvloader.CombineMultipleCSVs(outputCSVs, combineCSV); err != nil {
-				fmt.Printf("Error combining CSVs: %v\n", err)
-				return
+				return fmt.Errorf("step %d (combine): %w", stepCounter, err)
 			}
 			fmt.Printf("Combined file successfully generated at %s.\n", combineCSV)
 			stepCounter++
 
-			// Run stockpicker on combined candidates to select TopN + 5 (25) candidates
 			proposalTopN := cfg.TopN + 5
 			fmt.Printf("\n[Step %d/%d] Running stockpicker on combined candidates to select top %d candidates...\n", stepCounter, totalSteps, proposalTopN)
 			outPath := filepath.Join("data", "candidates", "proposals", fmt.Sprintf("%s_%s_%s.csv", dateStr, goldenBase, cfg.Strategy))
-			if err := runCmd("./bin/stockpicker", "-file", combineCSV, "-method", cfg.Strategy, "-top", strconv.Itoa(proposalTopN), "-golden", cfg.GoldenCopyPath, "-rebalance-tolerance", fmt.Sprintf("%.4f", cfg.RebalanceTolerancePct), "-hysteresis-buffer", strconv.Itoa(cfg.HysteresisRankBuffer), "-name", goldenBase, "-out", outPath); err != nil {
-				fmt.Printf("Error running Step %d: %v\n", stepCounter, err)
-				return
+			opts := &stockpicker.Options{
+				FilePath:           combineCSV,
+				Method:             cfg.Strategy,
+				TopN:               proposalTopN,
+				RangeStr:           "3mo",
+				GoldenPath:         cfg.GoldenCopyPath,
+				RebalanceTolerance: cfg.RebalanceTolerancePct,
+				HysteresisBuffer:   cfg.HysteresisRankBuffer,
+				DisplayName:        goldenBase,
+				OutputFile:         outPath,
 			}
-
-			if err := os.Remove(combineCSV); err != nil {
-				fmt.Printf("Warning: could not delete temporary file %s: %v\n", combineCSV, err)
+			if err := runPickWithOpts(ctx, opts); err != nil {
+				return fmt.Errorf("step %d (pick combined): %w", stepCounter, err)
 			}
+			_ = os.Remove(combineCSV)
 			stepCounter++
 
-			// Ask if user wants to manually remove shares
 			fmt.Printf("\nWould you like to manually remove shares from the proposal before finalizing? (y/n, default: n): ")
 			choice, _ := reader.ReadString('\n')
 			choice = strings.ToLower(strings.TrimSpace(choice))
@@ -292,14 +260,22 @@ func main() {
 				_, _ = reader.ReadString('\n')
 			}
 
-			// Run stockpicker on manually edited file to select top N and compute weights
 			fmt.Printf("\n[Step %d/%d] Running stockpicker to prune to top %d stocks...\n", stepCounter, totalSteps, cfg.TopN)
 			optimPath := filepath.Join("data", "candidates", "proposals", fmt.Sprintf("%s_%s_%s_optim.csv", dateStr, goldenBase, cfg.Strategy))
-			if err := runCmd("./bin/stockpicker", "-file", outPath, "-method", cfg.Strategy, "-top", strconv.Itoa(cfg.TopN), "-golden", cfg.GoldenCopyPath, "-rebalance-tolerance", fmt.Sprintf("%.4f", cfg.RebalanceTolerancePct), "-hysteresis-buffer", strconv.Itoa(cfg.HysteresisRankBuffer), "-name", goldenBase, "-out", optimPath); err != nil {
-				fmt.Printf("Error running Step %d: %v\n", stepCounter, err)
-				return
+			opts2 := &stockpicker.Options{
+				FilePath:           outPath,
+				Method:             cfg.Strategy,
+				TopN:               cfg.TopN,
+				RangeStr:           "3mo",
+				GoldenPath:         cfg.GoldenCopyPath,
+				RebalanceTolerance: cfg.RebalanceTolerancePct,
+				HysteresisBuffer:   cfg.HysteresisRankBuffer,
+				DisplayName:        goldenBase,
+				OutputFile:         optimPath,
 			}
-
+			if err := runPickWithOpts(ctx, opts2); err != nil {
+				return fmt.Errorf("step %d (pick prune): %w", stepCounter, err)
+			}
 			sourceCSV = optimPath
 			stepCounter++
 		} else {
@@ -309,15 +285,14 @@ func main() {
 		// Update Golden Copy
 		fmt.Printf("\n[Step %d/%d] Updating the %s golden copy...\n", stepCounter, totalSteps, goldenCSV)
 		csvloader.PrintComparisonReport(sourceCSV, goldenCSV, cfg.Strategy)
-		
+
 		comparisonReportPath := filepath.Join("report", fmt.Sprintf("%s_%s", goldenBase, cfg.Strategy), "executions", fmt.Sprintf("%s_02_comparison.txt", dateStr))
-		offerToOpenReport(reader, comparisonReportPath)
+		pipelineOfferToOpenReport(reader, comparisonReportPath)
 
 		fmt.Printf("Would you like to update the golden copy %s with the new candidates? (y/n, default: y): ", goldenCSV)
 		updateChoice, _ := reader.ReadString('\n')
 		updateChoice = strings.ToLower(strings.TrimSpace(updateChoice))
 		if updateChoice == "" || updateChoice == "y" || updateChoice == "yes" {
-			// Create a backup of the golden copy before merging
 			if _, err := os.Stat(goldenCSV); err == nil {
 				backupDir := filepath.Join("data", "backups", goldenBase)
 				if err := os.MkdirAll(backupDir, 0755); err != nil {
@@ -325,16 +300,14 @@ func main() {
 				}
 				backupName := fmt.Sprintf("bk_%s.csv", time.Now().Format("20060102_150405"))
 				backupPath := filepath.Join(backupDir, backupName)
-				if err := copyFile(goldenCSV, backupPath); err != nil {
+				if err := pipelineCopyFile(goldenCSV, backupPath); err != nil {
 					fmt.Printf("Warning: Failed to create backup of golden copy: %v\n", err)
 				} else {
 					fmt.Printf("Created backup of golden copy: %s\n", backupPath)
 				}
 			}
-
 			if err := csvloader.MergeGoldenCopy(sourceCSV, goldenCSV); err != nil {
-				fmt.Printf("Error updating golden copy: %v\n", err)
-				return
+				return fmt.Errorf("updating golden copy: %w", err)
 			}
 			fmt.Printf("Successfully updated %s with new candidates. Exited tickers kept at 0.0000 weight.\n", goldenCSV)
 			fmt.Printf("\n>>> ACTION REQUIRED: If you wish to manually tweak the golden copy (%s), do it now.\n", goldenCSV)
@@ -342,21 +315,20 @@ func main() {
 			_, _ = reader.ReadString('\n')
 		} else {
 			fmt.Println("Skipped golden copy update. Exiting pipeline.")
-			return
+			return nil
 		}
 		stepCounter++
 
 		// Generate portfolio report
 		fmt.Printf("\n[Step %d/%d] Generating the portfolio report...\n", stepCounter, totalSteps)
-		if err := runCmd("./bin/report", "-file", goldenCSV, "-method", cfg.Strategy); err != nil {
-			fmt.Printf("Error running Step %d: %v\n", stepCounter, err)
-			return
+		if err := runReportWithParams(ctx, goldenCSV, cfg.Strategy); err != nil {
+			return fmt.Errorf("step %d (report): %w", stepCounter, err)
 		}
 		portfolioReportPath := filepath.Join("report", fmt.Sprintf("%s_%s", goldenBase, cfg.Strategy), "executions", fmt.Sprintf("%s_03_portfolio_report.txt", dateStr))
-		offerToOpenReport(reader, portfolioReportPath)
+		pipelineOfferToOpenReport(reader, portfolioReportPath)
 		stepCounter++
 
-		// Simulate historical performance
+		// Performance simulation
 		fmt.Printf("\n[Step %d/%d] Running performance simulation...\n", stepCounter, totalSteps)
 		fmt.Printf("Enter capital (default %d): ", cfg.Capital)
 		capInput, _ := reader.ReadString('\n')
@@ -364,21 +336,22 @@ func main() {
 		if capital == "" {
 			capital = strconv.Itoa(cfg.Capital)
 		}
-
 		fmt.Printf("Enter purchase date YYYY-MM-DD (default %s): ", cfg.PurchaseDate)
 		dateInput, _ := reader.ReadString('\n')
 		dateVal := strings.TrimSpace(dateInput)
 		if dateVal == "" {
 			dateVal = cfg.PurchaseDate
 		}
-
-		if err := runCmd("./bin/performance", "-file", goldenCSV, "-capital", capital, "-date", dateVal); err != nil {
-			fmt.Printf("Error running Step %d: %v\n", stepCounter, err)
-			return
+		capFloat, err := strconv.ParseFloat(capital, 64)
+		if err != nil {
+			capFloat = float64(cfg.Capital)
+		}
+		if err := runPerfWithParams(ctx, goldenCSV, capFloat, dateVal, "09:30"); err != nil {
+			return fmt.Errorf("step %d (performance): %w", stepCounter, err)
 		}
 		stepCounter++
 
-		// Run monitoring tool
+		// Monitoring simulation
 		fmt.Printf("\n[Step %d/%d] Running monitoring tool...\n", stepCounter, totalSteps)
 		fmt.Println("Choose Monitoring Simulator timeframe:")
 		fmt.Println("1. 1 Year Historical Backtest [Default]")
@@ -387,52 +360,49 @@ func main() {
 		timeframeChoice, _ := reader.ReadString('\n')
 		timeframeChoice = strings.TrimSpace(timeframeChoice)
 
-		var monArgs []string
-		monArgs = append(monArgs, "-file", goldenCSV, "-interactive", "-strategy", cfg.Strategy, "-timestamp", runTimestamp)
+		monDate := ""
 		if timeframeChoice == "2" {
-			monArgs = append(monArgs, "-date", dateVal)
+			monDate = dateVal
 		}
-
-		if err := runCmd("./bin/monitoring", monArgs...); err != nil {
-			fmt.Printf("Error running Step %d: %v\n", stepCounter, err)
-			return
+		if err := runMonitorWithParams(ctx, goldenCSV, true, "moderate", float64(cfg.Capital), monDate, cfg.Strategy, runTimestamp, true); err != nil {
+			return fmt.Errorf("step %d (monitor): %w", stepCounter, err)
 		}
 		monitoringReportPath := filepath.Join("report", fmt.Sprintf("%s_%s", goldenBase, cfg.Strategy), "simulations", fmt.Sprintf("%s_monitoring.txt", runTimestamp))
-		offerToOpenReport(reader, monitoringReportPath)
+		pipelineOfferToOpenReport(reader, monitoringReportPath)
 		stepCounter++
 	}
 
-	// Step: Establish/renew Zerodha Kite Connect session authentication.
+	// Auth step
 	fmt.Printf("\n[Step %d/%d] Setting up Zerodha authentication...\n", stepCounter, totalSteps)
 	fmt.Print("Would you like to setup authentication now? (y/n, default: y): ")
 	authChoice, _ := reader.ReadString('\n')
 	authChoice = strings.ToLower(strings.TrimSpace(authChoice))
 	if authChoice == "" || authChoice == "y" || authChoice == "yes" {
-		if err := runCmd("./bin/setup_auth"); err != nil {
-			fmt.Printf("Error setting up auth: %v\n", err)
-			return
+		if err := runAuthCmd(ctx); err != nil {
+			return fmt.Errorf("step %d (auth): %w", stepCounter, err)
 		}
 	} else {
 		fmt.Println("Skipping authorization setup.")
 	}
 	stepCounter++
 
-	// Step: Calculate required shares and execute the basket order on Zerodha.
+	// Basket execution
 	fmt.Printf("\n[Step %d/%d] Executing mycase basket orders...\n", stepCounter, totalSteps)
 	fmt.Print("Would you like to execute the basket orders? (y/n, default: y): ")
 	execChoice, _ := reader.ReadString('\n')
 	execChoice = strings.ToLower(strings.TrimSpace(execChoice))
 	if execChoice == "" || execChoice == "y" || execChoice == "yes" {
 		goldenBase := csvloader.GetUniverseName(cfg.GoldenCopyPath)
-		if err := runCmd("./bin/basket", "--live", "--", goldenBase); err != nil {
-			fmt.Printf("Error executing basket: %v\n", err)
-			return
+		basketFile := "data/" + goldenBase + ".csv"
+		if err := runBasketWithParams(ctx, true, basketFile); err != nil {
+			return fmt.Errorf("step %d (basket): %w", stepCounter, err)
 		}
 	} else {
 		fmt.Println("Skipping basket execution.")
 	}
 
-	if !*execOnly {
+	if !execOnly {
+		goldenBase := csvloader.GetUniverseName(cfg.GoldenCopyPath)
 		fmt.Println("\n====================================================================")
 		fmt.Println("               Generated Reports & Files Summary                    ")
 		fmt.Println("====================================================================")
@@ -443,7 +413,6 @@ func main() {
 		}
 		summaryIdx := len(cfg.Indices) + 1
 		if len(cfg.Indices) > 1 {
-			goldenBase := csvloader.GetUniverseName(cfg.GoldenCopyPath)
 			fmt.Printf("%d. Combined Candidates:  data/candidates/temp/combine_%s.csv (temporary, deleted)\n", summaryIdx, goldenBase)
 			summaryIdx++
 			fmt.Printf("%d. Draft Candidates (Top %d): data/candidates/proposals/%s_%s_%s.csv (manually editable)\n", summaryIdx, cfg.TopN+5, dateStr, goldenBase, cfg.Strategy)
@@ -456,7 +425,6 @@ func main() {
 		}
 		fmt.Printf("%d. Golden Copy Portfolio:%s\n", summaryIdx, cfg.GoldenCopyPath)
 		summaryIdx++
-		goldenBase := csvloader.GetUniverseName(cfg.GoldenCopyPath)
 		fmt.Printf("%d. Explanation Report:  report/%s_%s/executions/%s_03_portfolio_report.txt\n", summaryIdx, goldenBase, cfg.Strategy, dateStr)
 		fmt.Println("====================================================================")
 	}
@@ -464,9 +432,10 @@ func main() {
 	fmt.Println("\n====================================================================")
 	fmt.Println("               Pipeline Completed Successfully!                     ")
 	fmt.Println("====================================================================")
+	return nil
 }
 
-func offerToOpenReport(reader *bufio.Reader, filePath string) {
+func pipelineOfferToOpenReport(reader *bufio.Reader, filePath string) {
 	fmt.Printf("Would you like to open the report file %s now? (y/n, default: y): ", filePath)
 	choice, _ := reader.ReadString('\n')
 	choice = strings.ToLower(strings.TrimSpace(choice))
@@ -475,21 +444,10 @@ func offerToOpenReport(reader *bufio.Reader, filePath string) {
 	}
 }
 
-func runCmd(name string, args ...string) error {
-	cmd := exec.Command(name, args...)
-	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	return cmd.Run()
-}
-
-func copyFile(src, dst string) error {
+func pipelineCopyFile(src, dst string) error {
 	data, err := os.ReadFile(src)
 	if err != nil {
 		return err
 	}
 	return os.WriteFile(dst, data, 0644)
 }
-
-
-

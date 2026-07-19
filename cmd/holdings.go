@@ -1,10 +1,13 @@
-package main
+package cmd
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/urfave/cli/v3"
 
 	"github.com/gkgarg24/mycase/pkg/config"
 	"github.com/gkgarg24/mycase/pkg/csvloader"
@@ -13,15 +16,17 @@ import (
 	"github.com/gkgarg24/mycase/pkg/printer"
 )
 
-func main() {
-	// Parse CLI arguments
-	liveMode := false
-	for _, arg := range os.Args[1:] {
-		if arg == "--live" {
-			liveMode = true
-			break
-		}
-	}
+var HoldingsCommand = &cli.Command{
+	Name:  "holdings",
+	Usage: "Snapshot of current Zerodha holdings",
+	Flags: []cli.Flag{
+		&cli.BoolFlag{Name: "live", Usage: "Use live Zerodha API (default: dry-run mock mode)"},
+	},
+	Action: runHoldings,
+}
+
+func runHoldings(ctx context.Context, c *cli.Command) error {
+	liveMode := c.Bool("live")
 
 	fmt.Println("====================================================================")
 	fmt.Println("                 Go Mycase Holdings Snapshot                     ")
@@ -36,17 +41,14 @@ func main() {
 
 	rawHoldings, err := portfolio.FetchAndMergeHoldings(client, isMock)
 	if err != nil {
-		fmt.Printf("Failed to fetch and merge holdings: %v\n", err)
-		return
+		return fmt.Errorf("fetching holdings: %w", err)
 	}
 
-	// Load generic themes config
 	themeConfigs, err := config.LoadThemes("config/themes.json")
 	if err != nil {
 		fmt.Printf("Warning: Failed to load config/themes.json: %v. Using defaults.\n", err)
 	}
 
-	// Load tickers and initialize groups
 	var groups []printer.ThemeGroup
 	for _, tc := range themeConfigs {
 		tickers, err := csvloader.LoadMyAllCSV(tc.CSVPath)
@@ -62,7 +64,6 @@ func main() {
 		})
 	}
 
-	// Classify holdings
 	var uncategorizedHoldings []portfolio.Holding
 	for _, h := range rawHoldings {
 		keyNSE := "NSE:" + h.TradingSymbol
@@ -81,17 +82,9 @@ func main() {
 		}
 	}
 
-	// Format snapshot layout using printer library
-	output := printer.RenderHoldingsSnapshot(
-		rawHoldings,
-		groups,
-		uncategorizedHoldings,
-	)
-
-	// Print to console
+	output := printer.RenderHoldingsSnapshot(rawHoldings, groups, uncategorizedHoldings)
 	fmt.Print(output)
 
-	// Save snapshot to holding/holding_YYYYMMDD.txt
 	folder := "holding"
 	if err := os.MkdirAll(folder, 0755); err == nil {
 		dateStr := time.Now().Format("20060102")
@@ -104,5 +97,5 @@ func main() {
 	} else {
 		fmt.Printf("Failed to create holding directory: %v\n", err)
 	}
+	return nil
 }
-

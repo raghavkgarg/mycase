@@ -1,8 +1,8 @@
-package main
+package cmd
 
 import (
+	"context"
 	"encoding/csv"
-	"flag"
 	"fmt"
 	"io"
 	"os"
@@ -12,50 +12,47 @@ import (
 	"sync"
 	"time"
 
+	"github.com/urfave/cli/v3"
+
 	"github.com/gkgarg24/mycase/pkg/config"
 	"github.com/gkgarg24/mycase/pkg/csvloader"
 	"github.com/gkgarg24/mycase/pkg/stockpicker"
 	"github.com/gkgarg24/mycase/pkg/yfinance"
 )
 
-type stockInfo struct {
-	ticker string
-	weight float64
+var ReportCommand = &cli.Command{
+	Name:  "report",
+	Usage: "Generate portfolio selection explanation report",
+	Flags: []cli.Flag{
+		&cli.StringFlag{Name: "file", Aliases: []string{"f"}, Required: true, Usage: "Path to the stockpicker output CSV file"},
+		&cli.StringFlag{Name: "method", Aliases: []string{"m"}, Value: "balanced", Usage: "Weighting strategy (balanced, aggressive, conservative, multibagger)"},
+	},
+	Action: func(ctx context.Context, c *cli.Command) error {
+		return runReportWithParams(ctx, c.String("file"), c.String("method"))
+	},
 }
 
-func main() {
-	filePath := flag.String("file", "", "Path to the stockpicker output CSV file (required)")
-	method := flag.String("method", "balanced", "Weighting strategy preset (balanced, aggressive, conservative)")
-	flag.Parse()
-
-	if *filePath == "" {
-		fmt.Println("Error: -file parameter is required.")
-		flag.Usage()
-		return
+func runReportWithParams(ctx context.Context, filePath, method string) error {
+	if filePath == "" {
+		return fmt.Errorf("--file parameter is required")
 	}
 
-	// 1. Read portfolio CSV file
-	file, err := os.Open(*filePath)
+	file, err := os.Open(filePath)
 	if err != nil {
-		fmt.Printf("Error opening file %s: %v\n", *filePath, err)
-		return
+		return fmt.Errorf("opening file %s: %w", filePath, err)
 	}
 	defer file.Close()
 
-	reader := csv.NewReader(file)
-	records, err := reader.ReadAll()
+	csvReader := csv.NewReader(file)
+	records, err := csvReader.ReadAll()
 	if err != nil {
-		fmt.Printf("Error reading CSV: %v\n", err)
-		return
+		return fmt.Errorf("reading CSV: %w", err)
 	}
-
 	if len(records) < 2 {
-		fmt.Println("Error: CSV file contains no data rows.")
-		return
+		return fmt.Errorf("CSV file contains no data rows")
 	}
 
-	tickerIdx := -1
-	weightIdx := -1
+	tickerIdx, weightIdx := -1, -1
 	for i, h := range records[0] {
 		hClean := strings.ToLower(strings.TrimSpace(h))
 		switch hClean {
@@ -65,13 +62,16 @@ func main() {
 			weightIdx = i
 		}
 	}
-
 	if tickerIdx == -1 || weightIdx == -1 {
-		fmt.Println("Error: Invalid CSV format. Must contain 'ticker' and 'weight' columns.")
-		return
+		return fmt.Errorf("invalid CSV format. Must contain 'ticker' and 'weight' columns")
 	}
 
-	var portfolio []stockInfo
+	type reportStock struct {
+		ticker string
+		weight float64
+	}
+
+	var portfolio []reportStock
 	var tickers []string
 	for _, record := range records[1:] {
 		if len(record) <= tickerIdx || len(record) <= weightIdx {
@@ -82,14 +82,12 @@ func main() {
 		if err != nil || ticker == "" {
 			continue
 		}
-		portfolio = append(portfolio, stockInfo{ticker: ticker, weight: weightVal})
+		portfolio = append(portfolio, reportStock{ticker: ticker, weight: weightVal})
 		tickers = append(tickers, ticker)
 	}
 
-	// Determine output path: report/report_<indexName>_<YYMMDD>.txt
-	indexName := csvloader.GetUniverseName(*filePath)
-
-	reportDir := filepath.Join("report", fmt.Sprintf("%s_%s", indexName, *method), "executions")
+	indexName := csvloader.GetUniverseName(filePath)
+	reportDir := filepath.Join("report", fmt.Sprintf("%s_%s", indexName, method), "executions")
 	if err := os.MkdirAll(reportDir, 0755); err != nil {
 		fmt.Printf("Warning: Failed to create report directory: %v\n", err)
 	}
@@ -98,8 +96,7 @@ func main() {
 
 	reportFile, err := os.Create(outReportPath)
 	if err != nil {
-		fmt.Printf("Error: Failed to create report file %s: %v\n", outReportPath, err)
-		return
+		return fmt.Errorf("creating report file %s: %w", outReportPath, err)
 	}
 	defer reportFile.Close()
 	var writer io.Writer = reportFile
@@ -107,13 +104,12 @@ func main() {
 	fmt.Fprintf(writer, "====================================================================\n")
 	fmt.Fprintf(writer, "             Portfolio Selection Explanation Report                 \n")
 	fmt.Fprintf(writer, "====================================================================\n")
-	fmt.Fprintf(writer, "File:        %s\n", *filePath)
-	fmt.Fprintf(writer, "Strategy:    %s Preset\n", strings.Title(*method))
+	fmt.Fprintf(writer, "File:        %s\n", filePath)
+	fmt.Fprintf(writer, "Strategy:    %s Preset\n", strings.Title(method))
 	fmt.Fprintf(writer, "Stocks:      %d\n", len(tickers))
 	fmt.Fprintf(writer, "Report File: %s\n", outReportPath)
 	fmt.Fprintf(writer, "====================================================================\n\n")
 
-	// 2. Fetch price history (3mo and 1y) concurrently
 	price3mo := make(map[string][]float64)
 	hist1y := make(map[string]*yfinance.HistoricalData)
 	var mu sync.Mutex
@@ -130,7 +126,6 @@ func main() {
 				mu.Unlock()
 			}
 		}(t)
-
 		go func(ticker string) {
 			defer wg.Done()
 			h, err := yfinance.FetchHistoricalDataWithTimestamps(ticker, "1y")
@@ -143,55 +138,39 @@ func main() {
 	}
 	wg.Wait()
 
-	cfg, cfgErr := stockpicker.LoadStrategyConfig(*method)
+	cfg, cfgErr := stockpicker.LoadStrategyConfig(method)
 	var hardFilters *config.HardFilters
 	if cfgErr == nil && cfg != nil {
 		hardFilters = cfg.HardFilters
 	}
 
-	// 3. Fetch fundamentals
 	fundamentals, err := yfinance.FetchFundamentals(tickers)
 	if err != nil {
 		fmt.Fprintf(writer, "Warning: Failed to fetch fundamentals: %v. Continuing...\n", err)
 	}
 
-	// Print overview summary table
-	if *method == "multibagger" {
+	if method == "multibagger" {
 		fmt.Fprintf(writer, "=========================================================================================\n")
 		fmt.Fprintf(writer, "             Portfolio Overview Table (Multibagger Metrics)                             \n")
 		fmt.Fprintf(writer, "=========================================================================================\n")
 		fmt.Fprintf(writer, "%-16s | %-10s | %-8s | %-10s | %-5s | %-7s | %-12s\n", "Ticker", "TTM Growth", "3Y CAGR", "DSO (L/P)", "RSI", "Inst %", "Final Weight")
 		fmt.Fprintf(writer, "-----------------------------------------------------------------------------------------\n")
-
 		var totalWeight float64
 		for _, s := range portfolio {
 			t := s.ticker
 			weight := s.weight
 			totalWeight += weight
-
 			f := fundamentals[t]
-
-			// TTM / CAGR
 			_, ttmGrowth, cagr3y := yfinance.CalculateSalesGrowth(&f)
-
-			// DSO
 			_, dsoPrev, dsoLatest := yfinance.CalculateDSO(&f)
-
-			// RSI
 			rsiVal := 50.0
-			hData := hist1y[t]
-			if hData != nil {
+			if hData := hist1y[t]; hData != nil {
 				rsiVal = yfinance.CalculateRSI(hData.Closes)
 			}
-
-			// Inst %
-			instPct := f.HeldPercentInstitutions
-
 			fmt.Fprintf(writer, "%-16s | %-10.1f%% | %-8.1f%% | %-10s | %-5.1f | %-7.1f%% | %-12.4f\n",
 				t, ttmGrowth*100.0, cagr3y*100.0,
 				fmt.Sprintf("%.0f/%.0f", dsoLatest, dsoPrev),
-				rsiVal, instPct*100.0, weight,
-			)
+				rsiVal, f.HeldPercentInstitutions*100.0, weight)
 		}
 		fmt.Fprintf(writer, "-----------------------------------------------------------------------------------------\n")
 		fmt.Fprintf(writer, "%-16s | %-10s | %-8s | %-10s | %-5s | %-7s | %-12.4f\n", "Total Weight", "", "", "", "", "", totalWeight)
@@ -202,19 +181,15 @@ func main() {
 		fmt.Fprintf(writer, "=========================================================================\n")
 		fmt.Fprintf(writer, "%-16s | %-12s | %-12s\n", "Ticker", "Final Weight", "1Y Return")
 		fmt.Fprintf(writer, "-------------------------------------------------------------------------\n")
-
 		var totalWeight float64
 		for _, s := range portfolio {
 			t := s.ticker
 			weight := s.weight
 			totalWeight += weight
-
 			ret1y := 0.0
-			hData := hist1y[t]
-			if hData != nil && len(hData.Closes) >= 2 {
+			if hData := hist1y[t]; hData != nil && len(hData.Closes) >= 2 {
 				ret1y = (hData.Closes[len(hData.Closes)-1] - hData.Closes[0]) / hData.Closes[0] * 100.0
 			}
-
 			fmt.Fprintf(writer, "%-16s | %-12.4f | %+.1f%%\n", t, weight, ret1y)
 		}
 		fmt.Fprintf(writer, "-------------------------------------------------------------------------\n")
@@ -222,12 +197,10 @@ func main() {
 		fmt.Fprintf(writer, "=========================================================================\n\n")
 	}
 
-	// 4. Print detailed report for each stock
 	for i, s := range portfolio {
 		t := s.ticker
 		fund := fundamentals[t]
 
-		// Calculate returns
 		ret1y := 0.0
 		var p1y []float64
 		if hist1y[t] != nil {
@@ -236,21 +209,17 @@ func main() {
 		if len(p1y) >= 2 {
 			ret1y = (p1y[len(p1y)-1] - p1y[0]) / p1y[0] * 100.0
 		}
-
 		ret3mo := 0.0
-		p3mo := price3mo[t]
-		if len(p3mo) >= 2 {
+		if p3mo := price3mo[t]; len(p3mo) >= 2 {
 			ret3mo = (p3mo[len(p3mo)-1] - p3mo[0]) / p3mo[0] * 100.0
 		}
 
 		fmt.Fprintf(writer, "%d. %s (Portfolio Weight: %.2f%%)\n", i+1, t, s.weight*100.0)
 		fmt.Fprintf(writer, "-------------------------------------------------------------------------\n")
 
-		// Rationale heuristics
 		var rationale []string
 
-		if *method == "multibagger" {
-			// 1. Sales Growth Accelerator (TTM vs 3Y CAGR)
+		if method == "multibagger" {
 			passedSales, ttmGrowth, cagr3y := yfinance.CalculateSalesGrowth(&fund)
 			if len(fund.AnnualRevenue) >= 3 {
 				yearsDiff := len(fund.AnnualRevenue) - 1
@@ -263,7 +232,6 @@ func main() {
 				rationale = append(rationale, "Sales Growth Accelerator: Unable to verify CAGR acceleration due to insufficient annual revenue history.")
 			}
 
-			// 2. Asset Turnover & CapEx Inflection
 			maxCapEx := 1.15
 			if hardFilters != nil && hardFilters.MaxCapExYoYMultiplier > 0 {
 				maxCapEx = hardFilters.MaxCapExYoYMultiplier
@@ -275,7 +243,6 @@ func main() {
 				rationale = append(rationale, "Asset Turnover & CapEx Inflection: Insufficient matching annual net PPE and CapEx data to determine operating leverage.")
 			}
 
-			// 3. Working Capital DSO
 			_, dsoPrev, dsoLatest := yfinance.CalculateDSO(&fund)
 			if dsoPrev > 0 && dsoLatest > 0 {
 				if dsoLatest < dsoPrev {
@@ -289,12 +256,9 @@ func main() {
 				rationale = append(rationale, "Working Capital Efficiency: Insufficient accounts receivable data to determine DSO collection speed.")
 			}
 
-			// 4. Institutional Sponsorship:
 			rationale = append(rationale, fmt.Sprintf("Institutional Sponsorship: Institutions own %.1f%% of the total equity stake, showing validation from professional smart money.", fund.HeldPercentInstitutions*100.0))
 
-			// 5. Technical Stage (RSI & Volume Breakout)
-			hData, ok := hist1y[t]
-			if ok && len(hData.Closes) >= 200 {
+			if hData, ok := hist1y[t]; ok && len(hData.Closes) >= 200 {
 				rsiVal := yfinance.CalculateRSI(hData.Closes)
 				lookback := 60
 				multiplier := 2.0
@@ -316,7 +280,6 @@ func main() {
 				rationale = append(rationale, "Technical Stage Analysis: Insufficient historical price and volume history to calculate RSI and SMA details.")
 			}
 		} else {
-			// Return / Momentum Analysis
 			if ret1y < 0 && ret3mo > 15.0 {
 				rationale = append(rationale, fmt.Sprintf("Massive 3-Month Momentum: Over the default scoring window (3mo), %s has seen a huge rally of %+.2f%%. This gave it very high scores for the Return, Sharpe, and Sortino factors within the optimized timeframe, despite trailing %+.2f%% on a 1-year basis.", t, ret3mo, ret1y))
 			} else if ret3mo > 25.0 {
@@ -326,8 +289,6 @@ func main() {
 			} else {
 				rationale = append(rationale, fmt.Sprintf("Performance: Trailing 1-year return is %+.2f%% with a 3-month return of %+.2f%%.", ret1y, ret3mo))
 			}
-
-			// Valuation Analysis
 			if fund.ForwardPE > 0 && fund.ForwardPE <= 25.0 {
 				rationale = append(rationale, fmt.Sprintf("Attractive Valuation: Its Forward P/E is %.1f, which is considered very cheap and high-value in the current market segments.", fund.ForwardPE))
 			} else if fund.ForwardPE == 999.0 {
@@ -335,8 +296,6 @@ func main() {
 			} else if fund.ForwardPE > 45.0 {
 				rationale = append(rationale, fmt.Sprintf("Premium Valuation: Trading at a higher Forward P/E of %.1f, reflecting high growth expectations.", fund.ForwardPE))
 			}
-
-			// Debt / Solvency Analysis
 			if fund.NetDebtEBITDA == 99.0 {
 				rationale = append(rationale, "Solvency Warning: The company has high leverage relative to zero/negative EBITDA.")
 			} else if fund.NetDebtEBITDA <= 0 {
@@ -344,8 +303,6 @@ func main() {
 			} else if fund.NetDebtEBITDA < 2.0 {
 				rationale = append(rationale, fmt.Sprintf("Strong Balance Sheet: Healthy solvency with a low Net Debt/EBITDA ratio of %.2f.", fund.NetDebtEBITDA))
 			}
-
-			// Efficiency Analysis
 			if fund.ROE > 0.15 {
 				rationale = append(rationale, fmt.Sprintf("Strong Efficiency: Delivers high capital efficiency with a return on equity (ROE) of %.1f%%.", fund.ROE*100.0))
 			}
@@ -354,7 +311,6 @@ func main() {
 			}
 		}
 
-		// Print rationale paragraphs
 		for _, r := range rationale {
 			fmt.Fprintf(writer, "• %s\n", r)
 		}
@@ -362,4 +318,5 @@ func main() {
 	}
 
 	fmt.Printf("Successfully generated and saved report to %s\n", outReportPath)
+	return nil
 }

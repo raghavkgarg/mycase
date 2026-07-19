@@ -1,4 +1,4 @@
-package main
+package cmd
 
 import (
 	"bufio"
@@ -10,11 +10,21 @@ import (
 	"strings"
 	"time"
 
+	"github.com/urfave/cli/v3"
 	kiteconnect "github.com/zerodha/gokiteconnect/v4"
+
 	"github.com/gkgarg24/mycase/pkg/config"
 )
 
-func main() {
+var AuthCommand = &cli.Command{
+	Name:  "auth",
+	Usage: "Set up Zerodha Kite Connect authentication",
+	Action: func(ctx context.Context, c *cli.Command) error {
+		return runAuthCmd(ctx)
+	},
+}
+
+func runAuthCmd(ctx context.Context) error {
 	fmt.Println("====================================================================")
 	fmt.Println("             Zerodha Kite Connect Auth Setup Utility               ")
 	fmt.Println("====================================================================")
@@ -23,7 +33,6 @@ func main() {
 	var apiKey, apiSecret string
 	var saveCreds bool
 
-	// Try loading existing configuration
 	cfg, err := config.LoadConfig(configFile)
 	if err == nil {
 		apiKey = cfg.APIKey
@@ -32,7 +41,6 @@ func main() {
 
 	reader := bufio.NewReader(os.Stdin)
 
-	// If credentials not loaded, prompt user
 	if apiKey == "" {
 		fmt.Print("Enter your Zerodha Kite API Key: ")
 		apiKey, _ = reader.ReadString('\n')
@@ -52,18 +60,13 @@ func main() {
 	}
 
 	if apiKey == "" || apiSecret == "" {
-		fmt.Println("Error: API Key and API Secret are required.")
-		return
+		return fmt.Errorf("API Key and API Secret are required")
 	}
 
-	// Initialize Kite Connect
 	client := kiteconnect.New(apiKey)
-
-	// Get Login URL
 	loginURL := client.GetLoginURL()
 	fmt.Println("\nInitializing authorization flow...")
 
-	// Channel to signal server shutdown and pass request token
 	tokenChan := make(chan string, 1)
 	errChan := make(chan error, 1)
 
@@ -75,68 +78,25 @@ func main() {
 			fmt.Fprint(w, "Error: request_token parameter is missing.")
 			return
 		}
-
-		// Send a nice premium HTML response to the browser
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.Write([]byte(`<!DOCTYPE html>
 <html>
-<head>
-    <title>Authentication Successful</title>
-    <style>
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-            background-color: #0d1117;
-            color: #c9d1d9;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            height: 100vh;
-            margin: 0;
-        }
-        .container {
-            text-align: center;
-            background: #161b22;
-            padding: 40px;
-            border-radius: 12px;
-            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
-            border: 1px solid #30363d;
-            max-width: 450px;
-        }
-        h1 {
-            color: #2ea44f;
-            margin-bottom: 20px;
-            font-size: 24px;
-        }
-        p {
-            font-size: 16px;
-            line-height: 1.5;
-            margin-bottom: 30px;
-        }
-        .icon {
-            font-size: 48px;
-            color: #2ea44f;
-            margin-bottom: 20px;
-        }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <div class="icon">✓</div>
-        <h1>Authentication Successful</h1>
-        <p>Zerodha Kite has successfully authenticated. You can safely close this browser window and return to the terminal.</p>
-    </div>
-</body>
-</html>`))
-
-		// Send the token back through the channel
+<head><title>Authentication Successful</title>
+<style>
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;background-color:#0d1117;color:#c9d1d9;display:flex;justify-content:center;align-items:center;height:100vh;margin:0}
+.container{text-align:center;background:#161b22;padding:40px;border-radius:12px;box-shadow:0 4px 12px rgba(0,0,0,.3);border:1px solid #30363d;max-width:450px}
+h1{color:#2ea44f;margin-bottom:20px;font-size:24px}
+p{font-size:16px;line-height:1.5;margin-bottom:30px}
+.icon{font-size:48px;color:#2ea44f;margin-bottom:20px}
+</style></head>
+<body><div class="container"><div class="icon">✓</div>
+<h1>Authentication Successful</h1>
+<p>Zerodha Kite has successfully authenticated. You can safely close this browser window and return to the terminal.</p>
+</div></body></html>`))
 		tokenChan <- token
 	})
 
-	srv := &http.Server{
-		Addr:    ":8000",
-		Handler: mux,
-	}
-
+	srv := &http.Server{Addr: ":8000", Handler: mux}
 	go func() {
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			errChan <- err
@@ -144,10 +104,7 @@ func main() {
 	}()
 
 	fmt.Println("Listening for authorization redirect on http://127.0.0.1:8000 ...")
-
-	// Try opening browser automatically on macOS
-	cmd := exec.Command("open", loginURL)
-	_ = cmd.Start()
+	_ = exec.Command("open", loginURL).Start()
 	fmt.Println("Opened the login page in your browser automatically.")
 	fmt.Println("Please log in to Zerodha. If the browser didn't open, visit this URL:")
 	fmt.Println(loginURL)
@@ -157,28 +114,22 @@ func main() {
 	case requestToken = <-tokenChan:
 		fmt.Println("Successfully captured request token automatically!")
 	case err := <-errChan:
-		fmt.Printf("Local server error: %v\n", err)
-		return
+		return fmt.Errorf("local server error: %w", err)
 	case <-time.After(5 * time.Minute):
-		fmt.Println("Timeout: Authorization took too long (exceeded 5 minutes).")
-		return
+		return fmt.Errorf("timeout: authorization took too long (exceeded 5 minutes)")
 	}
 
-	// Gracefully shut down the server
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	_ = srv.Shutdown(ctx)
+	_ = srv.Shutdown(shutdownCtx)
 
 	fmt.Println("\nExchanging request token for an access token...")
 	session, err := client.GenerateSession(requestToken, apiSecret)
 	if err != nil {
-		fmt.Printf("Error generating session: %v\n", err)
-		return
+		return fmt.Errorf("generating session: %w", err)
 	}
-
 	fmt.Println("Success! Generated access token.")
 
-	// Update or create config struct
 	newCfg := &config.Config{
 		APIKey:      apiKey,
 		AccessToken: session.AccessToken,
@@ -192,16 +143,14 @@ func main() {
 			newCfg.APISecret = apiSecret
 		}
 	} else if apiSecret != "" {
-		// Retain the existing secret
 		newCfg.APISecret = apiSecret
 	}
 
-	err = config.SaveConfig(configFile, newCfg)
-	if err != nil {
-		fmt.Printf("Failed to save credentials: %v\n", err)
-		return
+	if err := config.SaveConfig(configFile, newCfg); err != nil {
+		return fmt.Errorf("saving credentials: %w", err)
 	}
 
 	fmt.Println("\nSuccessfully updated 'config/config.json' with your credentials!")
-	fmt.Println("You can now run `./mycase --live` to test with live data.")
+	fmt.Println("You can now run `mycase basket --live` to use live data.")
+	return nil
 }

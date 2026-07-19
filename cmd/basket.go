@@ -1,12 +1,15 @@
-package main
+package cmd
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"math"
 	"os"
 	"strconv"
 	"strings"
+
+	"github.com/urfave/cli/v3"
 
 	"github.com/gkgarg24/mycase/pkg/csvloader"
 	"github.com/gkgarg24/mycase/pkg/datafetcher"
@@ -16,40 +19,31 @@ import (
 	"github.com/gkgarg24/mycase/pkg/printer"
 )
 
-func main() {
-	// 1. Parse CLI arguments
-	liveMode := false
-	basketFilename := "data/basket.csv"
-
-	args := os.Args[1:]
-	for i := 0; i < len(args); i++ {
-		arg := args[i]
-		if arg == "--live" {
-			liveMode = true
-		} else if arg == "--" {
-			if i+1 < len(args) {
-				i++
-				cleaned := cleanArg(args[i])
-				if cleaned != "" {
-					if strings.HasSuffix(cleaned, ".csv") {
-						basketFilename = "data/" + cleaned
-					} else {
-						basketFilename = "data/" + cleaned + ".csv"
-					}
-				}
-			}
-		} else {
-			cleaned := cleanArg(arg)
+var BasketCommand = &cli.Command{
+	Name:  "basket",
+	Usage: "Execute or preview basket orders on Zerodha",
+	Flags: []cli.Flag{
+		&cli.BoolFlag{Name: "live", Usage: "Use live Zerodha API (default: dry-run mock mode)"},
+		&cli.StringFlag{Name: "file", Value: "data/basket.csv", Usage: "Path to basket CSV file"},
+	},
+	Action: func(ctx context.Context, c *cli.Command) error {
+		filename := c.String("file")
+		// Also accept first positional arg as basket name (backward compat)
+		if arg := c.Args().Get(0); arg != "" {
+			cleaned := cleanBasketArg(arg)
 			if cleaned != "" {
 				if strings.HasSuffix(cleaned, ".csv") {
-					basketFilename = "data/" + cleaned
+					filename = "data/" + cleaned
 				} else {
-					basketFilename = "data/" + cleaned + ".csv"
+					filename = "data/" + cleaned + ".csv"
 				}
 			}
 		}
-	}
+		return runBasketWithParams(ctx, c.Bool("live"), filename)
+	},
+}
 
+func runBasketWithParams(ctx context.Context, liveMode bool, basketFilename string) error {
 	fmt.Println("====================================================================")
 	fmt.Println("                 Go Mycase Basket Engine                         ")
 	if liveMode {
@@ -62,14 +56,11 @@ func main() {
 
 	client, isMock := kiteclient.LoadAndInitClient("config/config.json", liveMode)
 
-	// Load target basket weights
 	basket, basketKeys, err := csvloader.LoadBasketCSV(basketFilename)
 	if err != nil {
-		fmt.Printf("Error loading basket config: %v\n", err)
-		return
+		return fmt.Errorf("loading basket config: %w", err)
 	}
 
-	// 2. Present Menu
 	fmt.Println("\nSelect an action:")
 	fmt.Println("1. Fresh Buy (Invest dynamic amount)")
 	fmt.Println("2. Rebalance (Align holdings to target weights)")
@@ -82,14 +73,12 @@ func main() {
 
 	if choice == "3" || choice == "" {
 		fmt.Println("Exiting...")
-		return
+		return nil
 	}
 
-	// 3. Fetch market data (real or mock)
 	quoteData, currentHoldings, err := datafetcher.FetchMarketData(isMock, client, basketKeys)
 	if err != nil {
-		fmt.Printf("Failed to fetch market data: %v\n", err)
-		return
+		return fmt.Errorf("fetching market data: %w", err)
 	}
 
 	var basketOrders []executor.BasketOrder
@@ -98,25 +87,22 @@ func main() {
 	var snapshotText string
 
 	if choice == "1" {
-		// Fresh buy flow
 		fmt.Print("Enter total investment amount in Rupees: ")
 		amtInput, _ := reader.ReadString('\n')
 		amtStr := strings.TrimSpace(amtInput)
 		if amtStr == "" {
 			fmt.Println("No amount entered. Exiting...")
-			return
+			return nil
 		}
 		totalInvestment, err := strconv.ParseFloat(amtStr, 64)
 		if err != nil {
-			fmt.Printf("Invalid amount: %v\n", err)
-			return
+			return fmt.Errorf("invalid amount: %w", err)
 		}
 
 		for {
 			basketOrders = nil
 			rawQuantities := optimizer.OptimizeFreshBuy(basketKeys, basket, quoteData, currentHoldings, totalInvestment)
 
-			// Create final BUY orders for additional shares
 			for i, inst := range basketKeys {
 				parts := strings.Split(inst, ":")
 				symbol := parts[len(parts)-1]
@@ -129,7 +115,6 @@ func main() {
 				if buyQty > 0 {
 					bufferPrice := ltp + 2.0
 					roundedPrice := math.Round(bufferPrice*10.0) / 10.0
-
 					basketOrders = append(basketOrders, executor.BasketOrder{
 						TradingSymbol:   symbol,
 						Exchange:        "NSE",
@@ -162,14 +147,11 @@ func main() {
 		}
 
 	} else if choice == "2" {
-		// Rebalance flow
 		var totalCurrentPortfolioValue float64
 		for _, inst := range basketKeys {
 			parts := strings.Split(inst, ":")
 			symbol := parts[len(parts)-1]
-			ltp := quoteData[inst]
-			qty := currentHoldings[symbol]
-			totalCurrentPortfolioValue += float64(qty) * ltp
+			totalCurrentPortfolioValue += float64(currentHoldings[symbol]) * quoteData[inst]
 		}
 		fmt.Printf("Total Current Basket Portfolio Value: ₹%.2f\n", totalCurrentPortfolioValue)
 
@@ -178,7 +160,6 @@ func main() {
 		freshStr := strings.TrimSpace(freshInput)
 		var freshMoney float64
 		if freshStr != "" {
-			var err error
 			freshMoney, err = strconv.ParseFloat(freshStr, 64)
 			if err != nil {
 				fmt.Printf("Invalid amount: %v. Assuming ₹0.\n", err)
@@ -212,7 +193,6 @@ func main() {
 					bufferPrice = ltp - 2.0
 				}
 				roundedPrice := math.Round(bufferPrice*10.0) / 10.0
-
 				basketOrders = append(basketOrders, executor.BasketOrder{
 					TradingSymbol:   symbol,
 					Exchange:        "NSE",
@@ -227,27 +207,16 @@ func main() {
 		}
 	}
 
-
-	// 4. Confirm and Execute orders
 	executor.ExecuteBasketOrders(
-		basketOrders,
-		quoteData,
-		currentHoldings,
-		finalQuantities,
-		basketKeys,
-		basket,
-		client,
-		isMock,
-		printedPreview,
-		snapshotText,
-		reader,
+		basketOrders, quoteData, currentHoldings, finalQuantities,
+		basketKeys, basket, client, isMock, printedPreview, snapshotText, reader,
 	)
+	return nil
 }
 
-func cleanArg(arg string) string {
+func cleanBasketArg(arg string) string {
 	for strings.HasPrefix(arg, "-") {
 		arg = arg[1:]
 	}
 	return strings.TrimSpace(arg)
 }
-

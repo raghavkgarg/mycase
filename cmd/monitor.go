@@ -1,8 +1,8 @@
-package main
+package cmd
 
 import (
+	"context"
 	"encoding/csv"
-	"flag"
 	"fmt"
 	"io"
 	"math"
@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/urfave/cli/v3"
 	"gopkg.in/yaml.v3"
 
 	"github.com/gkgarg24/mycase/pkg/config"
@@ -22,38 +23,49 @@ import (
 	"github.com/gkgarg24/mycase/pkg/yfinance"
 )
 
-func main() {
-	filePath := flag.String("file", "data/microsmall.csv", "Path to the portfolio CSV file")
-	interactive := flag.Bool("interactive", false, "Run in interactive terminal mode")
-	style := flag.String("style", "moderate", "Monitoring style preset (hyper-aggressive, moderate, passive)")
-	capital := flag.Float64("capital", 100000.0, "Initial capital invested")
-	date := flag.String("date", "", "Start date for simulation (YYYY-MM-DD)")
-	strategy := flag.String("strategy", "balanced", "Weighting strategy preset (balanced, aggressive, conservative, multibagger)")
-	timestamp := flag.String("timestamp", "", "unified run timestamp in YYYYMMDD_HHMMSS format")
-	flag.Parse()
+var MonitorCommand = &cli.Command{
+	Name:  "monitor",
+	Usage: "Run portfolio drift monitoring simulation",
+	Flags: []cli.Flag{
+		&cli.StringFlag{Name: "file", Aliases: []string{"f"}, Value: "data/microsmall.csv", Usage: "Path to the portfolio CSV file"},
+		&cli.BoolFlag{Name: "interactive", Usage: "Run in interactive terminal mode"},
+		&cli.StringFlag{Name: "style", Value: "moderate", Usage: "Monitoring style preset (hyper-aggressive, moderate, passive)"},
+		&cli.FloatFlag{Name: "capital", Value: 100000.0, Usage: "Initial capital invested"},
+		&cli.StringFlag{Name: "date", Usage: "Start date for simulation (YYYY-MM-DD)"},
+		&cli.StringFlag{Name: "strategy", Value: "balanced", Usage: "Weighting strategy preset (balanced, aggressive, conservative, multibagger)"},
+		&cli.StringFlag{Name: "timestamp", Usage: "Unified run timestamp in YYYYMMDD_HHMMSS format"},
+	},
+	Action: func(ctx context.Context, c *cli.Command) error {
+		return runMonitorWithParams(ctx,
+			c.String("file"),
+			c.Bool("interactive"),
+			c.String("style"),
+			c.Float("capital"),
+			c.String("date"),
+			c.String("strategy"),
+			c.String("timestamp"),
+			c.IsSet("strategy"),
+		)
+	},
+}
 
-	// 1. Read portfolio CSV file
-	file, err := os.Open(*filePath)
+func runMonitorWithParams(ctx context.Context, filePath string, interactive bool, style string, capital float64, date, strategy, timestamp string, strategyExplicit bool) error {
+	file, err := os.Open(filePath)
 	if err != nil {
-		fmt.Printf("Error opening file %s: %v\n", *filePath, err)
-		return
+		return fmt.Errorf("opening file %s: %w", filePath, err)
 	}
 	defer file.Close()
 
-	reader := csv.NewReader(file)
-	records, err := reader.ReadAll()
+	csvReader := csv.NewReader(file)
+	records, err := csvReader.ReadAll()
 	if err != nil {
-		fmt.Printf("Error reading CSV: %v\n", err)
-		return
+		return fmt.Errorf("reading CSV: %w", err)
 	}
-
 	if len(records) < 2 {
-		fmt.Println("Error: CSV file contains no data rows.")
-		return
+		return fmt.Errorf("CSV file contains no data rows")
 	}
 
-	tickerIdx := -1
-	weightIdx := -1
+	tickerIdx, weightIdx := -1, -1
 	for i, h := range records[0] {
 		hClean := strings.ToLower(strings.TrimSpace(h))
 		if hClean == "ticker" {
@@ -62,10 +74,8 @@ func main() {
 			weightIdx = i
 		}
 	}
-
 	if tickerIdx == -1 || weightIdx == -1 {
-		fmt.Println("Error: Invalid CSV format. Must contain 'ticker' and 'weight' columns.")
-		return
+		return fmt.Errorf("invalid CSV format. Must contain 'ticker' and 'weight' columns")
 	}
 
 	var portfolio []monitoring.StockInfo
@@ -82,26 +92,22 @@ func main() {
 		portfolio = append(portfolio, monitoring.StockInfo{Ticker: ticker, Weight: weightVal})
 		tickers = append(tickers, ticker)
 	}
-
 	if len(portfolio) == 0 {
-		fmt.Println("Error: No valid stocks found in CSV.")
-		return
+		return fmt.Errorf("no valid stocks found in CSV")
 	}
 
-	// 2. Determine Policy parameters
-	params := getPresetParams(*style)
-	params.StartDate = *date
+	params := monitorPresetParams(style)
+	params.StartDate = date
 
-	if *interactive {
+	if interactive {
 		dateStr := params.StartDate
-		params = runInteractiveMenu(params)
+		params = monitorInteractiveMenu(params)
 		params.StartDate = dateStr
-		if params.StartDate == "" && *timestamp == "" {
-			params.StartDate = promptTimeframeChoice()
+		if params.StartDate == "" && timestamp == "" {
+			params.StartDate = monitorPromptTimeframeChoice()
 		}
 	}
 
-	// Load CapEx growth multiplier from config
 	mfsCfg, err := config.LoadHardFilters("config/mfs.json", "multibagger")
 	maxCapEx := 2.00
 	if err == nil && mfsCfg != nil {
@@ -117,45 +123,35 @@ func main() {
 	fmt.Printf("- Rebalance Frequency: Every %d months\n", params.RebalanceMonths)
 	fmt.Printf("- Max Weight Drift: %.1f%%\n\n", params.MaxWeightDrift*100.0)
 
-	// 3. Fetch data (Benchmark & Stocks)
 	fmt.Println("Fetching financial data and price histories...")
-	histData, benchData, fundamentals, mockedTickers, isMockUsed := loadAllData(tickers)
+	histData, benchData, fundamentals, mockedTickers, isMockUsed := monitorLoadAllData(tickers)
 	if isMockUsed {
 		fmt.Println("⚠️ Yahoo Finance API unavailable or returned incomplete data. Switched to high-fidelity mock fallback.")
 	} else {
 		fmt.Println("✅ Successfully fetched live data from Yahoo Finance.")
 	}
 
-	// Flag mock tickers in portfolio
 	for i := range portfolio {
 		if mockedTickers[portfolio[i].Ticker] {
 			portfolio[i].IsMock = true
 		}
 	}
 
-	// 4. Run simulation
-	simResult, err := monitoring.RunSimulation(portfolio, params, histData, benchData, fundamentals, *capital)
+	simResult, err := monitoring.RunSimulation(portfolio, params, histData, benchData, fundamentals, capital)
 	if err != nil {
-		fmt.Printf("Simulation error: %v\n", err)
-		return
+		return fmt.Errorf("simulation error: %w", err)
 	}
 
-	// 5. Generate report
-	activeStrategy := *strategy
-	strategySet := false
-	flag.Visit(func(f *flag.Flag) {
-		if f.Name == "strategy" {
-			strategySet = true
-		}
-	})
-	if !strategySet {
-		activeStrategy = getPipelineStrategy()
+	activeStrategy := strategy
+	if !strategyExplicit {
+		activeStrategy = monitorGetPipelineStrategy()
 	}
 
-	generateReport(simResult, *filePath, *style, isMockUsed, params, activeStrategy, *timestamp)
+	generateMonitorReport(simResult, filePath, style, isMockUsed, params, activeStrategy, timestamp)
+	return nil
 }
 
-func getPresetParams(style string) monitoring.PolicyParams {
+func monitorPresetParams(style string) monitoring.PolicyParams {
 	switch strings.ToLower(style) {
 	case "hyper-aggressive":
 		return monitoring.PolicyParams{
@@ -173,8 +169,6 @@ func getPresetParams(style string) monitoring.PolicyParams {
 			RebalanceMonths:           12,
 			MaxWeightDrift:            0.20,
 		}
-	case "moderate":
-		fallthrough
 	default:
 		return monitoring.PolicyParams{
 			ConsecutiveQuartersExit:   2,
@@ -186,7 +180,7 @@ func getPresetParams(style string) monitoring.PolicyParams {
 	}
 }
 
-func runInteractiveMenu(defaults monitoring.PolicyParams) monitoring.PolicyParams {
+func monitorInteractiveMenu(defaults monitoring.PolicyParams) monitoring.PolicyParams {
 	fmt.Println("=====================================================")
 	fmt.Println("        PORTFOLIO MONITORING POLICY SIMULATOR        ")
 	fmt.Println("=====================================================")
@@ -203,9 +197,9 @@ func runInteractiveMenu(defaults monitoring.PolicyParams) monitoring.PolicyParam
 
 	switch choice {
 	case 1:
-		return getPresetParams("hyper-aggressive")
+		return monitorPresetParams("hyper-aggressive")
 	case 3:
-		return getPresetParams("passive")
+		return monitorPresetParams("passive")
 	case 4:
 		var quarters, smaDays, rebalanceMonths int
 		var dsoDeterioration, maxDrift float64
@@ -215,31 +209,26 @@ func runInteractiveMenu(defaults monitoring.PolicyParams) monitoring.PolicyParam
 		if quarters <= 0 {
 			quarters = defaults.ConsecutiveQuartersExit
 		}
-
 		fmt.Printf("Enter DSO YoY deterioration %% threshold (e.g. 15 for 15%%) [current: %.1f]: ", defaults.DSODeteriorationThreshold*100.0)
 		fmt.Scanln(&dsoDeterioration)
 		if dsoDeterioration <= 0 {
 			dsoDeterioration = defaults.DSODeteriorationThreshold * 100.0
 		}
-
 		fmt.Printf("Enter consecutive days below 200 SMA to alert [current: %d]: ", defaults.SMADays)
 		fmt.Scanln(&smaDays)
 		if smaDays <= 0 {
 			smaDays = defaults.SMADays
 		}
-
 		fmt.Printf("Enter rebalance frequency in months [current: %d]: ", defaults.RebalanceMonths)
 		fmt.Scanln(&rebalanceMonths)
 		if rebalanceMonths <= 0 {
 			rebalanceMonths = defaults.RebalanceMonths
 		}
-
 		fmt.Printf("Enter dynamic weight drift threshold %% (e.g. 15 for 15%%) [current: %.1f]: ", defaults.MaxWeightDrift*100.0)
 		fmt.Scanln(&maxDrift)
 		if maxDrift <= 0 {
 			maxDrift = defaults.MaxWeightDrift * 100.0
 		}
-
 		return monitoring.PolicyParams{
 			ConsecutiveQuartersExit:   quarters,
 			DSODeteriorationThreshold: dsoDeterioration / 100.0,
@@ -247,14 +236,12 @@ func runInteractiveMenu(defaults monitoring.PolicyParams) monitoring.PolicyParam
 			RebalanceMonths:           rebalanceMonths,
 			MaxWeightDrift:            maxDrift / 100.0,
 		}
-	case 2:
-		fallthrough
 	default:
-		return getPresetParams("moderate")
+		return monitorPresetParams("moderate")
 	}
 }
 
-func loadAllData(tickers []string) (
+func monitorLoadAllData(tickers []string) (
 	map[string]*yfinance.HistoricalData,
 	*yfinance.HistoricalData,
 	map[string]yfinance.Fundamentals,
@@ -268,7 +255,6 @@ func loadAllData(tickers []string) (
 	var mu sync.Mutex
 	var wg sync.WaitGroup
 
-	// Fetch benchmark Nifty 50 (^NSEI)
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
@@ -280,7 +266,6 @@ func loadAllData(tickers []string) (
 		}
 	}()
 
-	// Temporary maps to collect live results per ticker
 	liveHist := make(map[string]*yfinance.HistoricalData)
 	liveFunds := make(map[string]yfinance.Fundamentals)
 
@@ -295,7 +280,6 @@ func loadAllData(tickers []string) (
 				mu.Unlock()
 			}
 		}(t)
-
 		go func(ticker string) {
 			defer wg.Done()
 			funds, err := yfinance.FetchFundamentals([]string{ticker})
@@ -308,22 +292,18 @@ func loadAllData(tickers []string) (
 			}
 		}(t)
 	}
-
 	wg.Wait()
 
-	// Seed a local random generator for 100% reproducible simulated price paths,
-	// isolated from any background runtime/HTTP libraries sharing the global generator.
+	// Seeded local rand for 100% reproducible mock price paths.
 	localRand := rand.New(rand.NewSource(42))
-	nDays := 504 // 2 years of daily data
+	nDays := 504
 
-	// If benchmark failed, generate a mock benchmark
 	if benchData == nil {
 		benchCloses := make([]float64, nDays)
 		benchOpens := make([]float64, nDays)
 		benchVolumes := make([]float64, nDays)
 		benchTimestamps := make([]int64, nDays)
 		currBench := 18500.0
-
 		for i := 0; i < nDays; i++ {
 			currBench += currBench * (0.15/252.0 + (localRand.Float64()-0.5)*0.015)
 			benchCloses[i] = currBench
@@ -331,15 +311,9 @@ func loadAllData(tickers []string) (
 			benchVolumes[i] = 1000000.0 + localRand.Float64()*500000.0
 			benchTimestamps[i] = time.Now().AddDate(0, 0, -(nDays - 1 - i)).Unix()
 		}
-		benchData = &yfinance.HistoricalData{
-			Timestamps: benchTimestamps,
-			Closes:     benchCloses,
-			Opens:      benchOpens,
-			Volumes:    benchVolumes,
-		}
+		benchData = &yfinance.HistoricalData{Timestamps: benchTimestamps, Closes: benchCloses, Opens: benchOpens, Volumes: benchVolumes}
 	}
 
-	// High fidelity metrics representing report_microsmall_260714.txt
 	mockMeta := map[string]struct {
 		sector    string
 		cagr      float64
@@ -368,7 +342,6 @@ func loadAllData(tickers []string) (
 	for _, t := range tickers {
 		h, hasLiveHist := liveHist[t]
 		f, hasLiveFund := liveFunds[t]
-
 		if hasLiveHist && hasLiveFund {
 			histData[t] = h
 			fundamentals[t] = f
@@ -386,8 +359,6 @@ func loadAllData(tickers []string) (
 					retTrend  float64
 				}{sector: "General", cagr: 0.10, ttm: 0.12, dsoPrev: 50.0, dsoLatest: 45.0, retTrend: 0.12}
 			}
-
-			// Generate mock fundamentals
 			fundamentals[t] = yfinance.Fundamentals{
 				Sector:                  meta.sector,
 				HeldPercentInstitutions: 0.15,
@@ -403,7 +374,6 @@ func loadAllData(tickers []string) (
 					{Date: "2024-03-31", Value: (meta.dsoLatest / 365.0) * 100.0},
 				},
 			}
-
 			tickerNDays := nDays
 			if benchData != nil {
 				tickerNDays = len(benchData.Closes)
@@ -413,7 +383,6 @@ func loadAllData(tickers []string) (
 			volumes := make([]float64, tickerNDays)
 			timestamps := make([]int64, tickerNDays)
 			currPrice := 500.0 + localRand.Float64()*1000.0
-
 			for i := 0; i < tickerNDays; i++ {
 				currPrice += currPrice * (meta.retTrend/252.0 + (localRand.Float64()-0.5)*0.02)
 				closes[i] = currPrice
@@ -425,23 +394,14 @@ func loadAllData(tickers []string) (
 					timestamps[i] = time.Now().AddDate(0, 0, -(tickerNDays - 1 - i)).Unix()
 				}
 			}
-
-			histData[t] = &yfinance.HistoricalData{
-				Timestamps: timestamps,
-				Closes:     closes,
-				Opens:      opens,
-				Volumes:    volumes,
-			}
+			histData[t] = &yfinance.HistoricalData{Timestamps: timestamps, Closes: closes, Opens: opens, Volumes: volumes}
 		}
 	}
-
 	return histData, benchData, fundamentals, mockedTickers, mockUsed
 }
 
-func generateReport(res monitoring.SimulationResult, inputPath string, style string, isMockUsed bool, params monitoring.PolicyParams, strategy, timestamp string) {
-	// Determine output path: report/[universe]_[strategy]/simulations/[timestamp]_monitoring.txt
+func generateMonitorReport(res monitoring.SimulationResult, inputPath string, style string, isMockUsed bool, params monitoring.PolicyParams, strategy, timestamp string) {
 	indexName := csvloader.GetUniverseName(inputPath)
-
 	reportDir := filepath.Join("report", fmt.Sprintf("%s_%s", indexName, strategy), "simulations")
 	if err := os.MkdirAll(reportDir, 0755); err != nil {
 		fmt.Printf("Warning: Failed to create report directory: %v\n", err)
@@ -495,21 +455,16 @@ func generateReport(res monitoring.SimulationResult, inputPath string, style str
 	}
 
 	fmt.Fprintf(writer, "-------------------------------------------------------------------------------------------------------------------------------------\n\n")
-
-	fmt.Fprintf(writer, "SIMULATED CHURN RATE\n")
-	fmt.Fprintf(writer, "%.1f%%\n\n", res.ChurnRate)
-
-	fmt.Fprintf(writer, "ALPHA EFFICIENCY\n")
-	fmt.Fprintf(writer, "%.2f\n\n", res.AlphaEfficiency)
-
+	fmt.Fprintf(writer, "SIMULATED CHURN RATE\n%.1f%%\n\n", res.ChurnRate)
+	fmt.Fprintf(writer, "ALPHA EFFICIENCY\n%.2f\n\n", res.AlphaEfficiency)
 	fmt.Fprintf(writer, "PORTFOLIO RETURN:   %+.2f%%\n", res.PortfolioReturn)
 	fmt.Fprintf(writer, "BENCHMARK RETURN:   %+.2f%%\n", res.BenchmarkReturn)
 	fmt.Fprintf(writer, "EXCESS RETURN (α):  %+.2f%%\n", res.ExcessReturn)
 	fmt.Fprintf(writer, "=========================================================================\n")
 }
 
-func promptTimeframeChoice() string {
-	purchaseDate := getPipelinePurchaseDate()
+func monitorPromptTimeframeChoice() string {
+	purchaseDate := monitorGetPipelinePurchaseDate()
 	fmt.Println("-----------------------------------------------------")
 	fmt.Println("Choose Monitoring Simulator timeframe:")
 	fmt.Println("1. 1 Year Historical Backtest [Default]")
@@ -530,27 +485,23 @@ func promptTimeframeChoice() string {
 		var dateStr string
 		fmt.Scanln(&dateStr)
 		return strings.TrimSpace(dateStr)
-	case "1":
-		fallthrough
 	default:
 		return ""
 	}
 }
 
-func getPipelinePurchaseDate() string {
+func monitorGetPipelinePurchaseDate() string {
 	file, err := os.Open("config/pipeline.yaml")
 	if err != nil {
-		return "2026-01-01" // default fallback
+		return "2026-01-01"
 	}
 	defer file.Close()
-
 	var cfg struct {
 		PurchaseDate interface{} `yaml:"purchase_date"`
 	}
 	if err := yaml.NewDecoder(file).Decode(&cfg); err != nil {
-		return "2026-01-01" // default fallback
+		return "2026-01-01"
 	}
-
 	if cfg.PurchaseDate == nil {
 		return "2026-01-01"
 	}
@@ -565,20 +516,18 @@ func getPipelinePurchaseDate() string {
 	return "2026-01-01"
 }
 
-func getPipelineStrategy() string {
+func monitorGetPipelineStrategy() string {
 	file, err := os.Open("config/pipeline.yaml")
 	if err != nil {
-		return "balanced" // default fallback
+		return "balanced"
 	}
 	defer file.Close()
-
 	var cfg struct {
 		Strategy interface{} `yaml:"strategy"`
 	}
 	if err := yaml.NewDecoder(file).Decode(&cfg); err != nil {
-		return "balanced" // default fallback
+		return "balanced"
 	}
-
 	if cfg.Strategy == nil {
 		return "balanced"
 	}

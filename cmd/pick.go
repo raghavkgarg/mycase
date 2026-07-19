@@ -1,72 +1,107 @@
-package main
+package cmd
 
 import (
-	"flag"
+	"context"
 	"fmt"
-	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/urfave/cli/v3"
 
 	"github.com/gkgarg24/mycase/pkg/selectiontracker"
 	"github.com/gkgarg24/mycase/pkg/stockpicker"
 	"github.com/gkgarg24/mycase/pkg/yfinance"
 )
 
-func main() {
-	// 1. CLI flag parsing and validation
-	opts, err := parseFlags()
-	if err != nil {
-		fmt.Printf("Error: %v\n", err)
-		os.Exit(1)
+var PickCommand = &cli.Command{
+	Name:  "pick",
+	Usage: "Select top stocks from an index or file",
+	Flags: []cli.Flag{
+		&cli.StringFlag{Name: "index", Aliases: []string{"i"}, Value: "smallcap250", Usage: "Index to pick stocks from"},
+		&cli.StringFlag{Name: "file", Aliases: []string{"f"}, Usage: "Path to custom CSV file (takes precedence over --index)"},
+		&cli.StringFlag{Name: "method", Aliases: []string{"m"}, Value: "balanced", Usage: "Scoring strategy (balanced, aggressive, conservative, multibagger)"},
+		&cli.IntFlag{Name: "top", Value: 20, Usage: "Number of top stocks to pick"},
+		&cli.StringFlag{Name: "range", Value: "3mo", Usage: "Historical data range (3mo, 6mo, 1y)"},
+		&cli.BoolFlag{Name: "skip-scuttlebutt", Usage: "Skip qualitative scuttlebutt checklist report"},
+		&cli.StringFlag{Name: "golden", Usage: "Path to golden copy CSV for hysteresis and rebalancing band"},
+		&cli.FloatFlag{Name: "rebalance-tolerance", Value: 0.10, Usage: "Rebalancing weight tolerance %% (e.g. 0.10 for 0.10%%)"},
+		&cli.IntFlag{Name: "hysteresis-buffer", Value: 5, Usage: "Extra ranks to allow existing holdings to drift"},
+		&cli.StringFlag{Name: "name", Usage: "Custom display name for output files"},
+		&cli.StringFlag{Name: "out", Usage: "Custom output CSV path"},
+	},
+	Action: runPick,
+}
+
+func runPick(ctx context.Context, c *cli.Command) error {
+	return runPickWithOpts(ctx, pickOptsFromCmd(c))
+}
+
+func pickOptsFromCmd(c *cli.Command) *stockpicker.Options {
+	rangeStr := strings.ToLower(strings.TrimSpace(c.String("range")))
+	if rangeStr == "1yr" || rangeStr == "1year" {
+		rangeStr = "1y"
+	}
+	if rangeStr != "3mo" && rangeStr != "6mo" && rangeStr != "1y" {
+		rangeStr = "3mo"
+	}
+	return &stockpicker.Options{
+		IndexName:          c.String("index"),
+		FilePath:           c.String("file"),
+		Method:             c.String("method"),
+		TopN:               c.Int("top"),
+		RangeStr:           rangeStr,
+		SkipScuttlebutt:    c.Bool("skip-scuttlebutt"),
+		GoldenPath:         c.String("golden"),
+		RebalanceTolerance: c.Float("rebalance-tolerance"),
+		HysteresisBuffer:   c.Int("hysteresis-buffer"),
+		DisplayName:        c.String("name"),
+		OutputFile:         c.String("out"),
+	}
+}
+
+func runPickWithOpts(ctx context.Context, opts *stockpicker.Options) error {
+	rangeStr := opts.RangeStr
+	if rangeStr != "3mo" && rangeStr != "6mo" && rangeStr != "1y" {
+		return fmt.Errorf("unsupported range '%s'. Supported ranges: 3mo, 6mo, 1y", rangeStr)
 	}
 
-	// 2. Load constituents
 	tickersSrc, err := stockpicker.LoadConstituents(opts.FilePath, opts.IndexName)
 	if err != nil {
-		fmt.Printf("Error: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("loading constituents: %w", err)
 	}
 	displayNameVal := tickersSrc.Name
 	if opts.DisplayName != "" {
 		displayNameVal = opts.DisplayName
 	}
-	stockpicker.PrintHeader(displayNameVal, opts.Method, opts.TopN, opts.RangeStr, opts.FilePath)
+	stockpicker.PrintHeader(displayNameVal, opts.Method, opts.TopN, rangeStr, opts.FilePath)
 
-	// 3. Fetch historical prices concurrently
 	fullHistory, activeKeys := stockpicker.FetchHistoricalPrices(tickersSrc.Tickers)
 	if len(activeKeys) == 0 {
 		fmt.Println("No active tickers loaded. Exiting...")
-		return
+		return nil
 	}
 
-	// 4. Fetch benchmark prices and slice price histories
-	slicedPrices, benchmarkPrices, err := stockpicker.GetBenchmarkAndSlicedPrices(activeKeys, fullHistory, opts.RangeStr)
+	slicedPrices, benchmarkPrices, err := stockpicker.GetBenchmarkAndSlicedPrices(activeKeys, fullHistory, rangeStr)
 	if err != nil {
-		fmt.Printf("Error: %v\n", err)
-		return
+		return fmt.Errorf("fetching benchmark prices: %w", err)
 	}
 
-	// 5. Load strategy configs, hard filters, and governance
 	cfg, err := stockpicker.LoadStrategyConfig(opts.Method)
 	if err != nil {
 		fmt.Printf("Warning: Failed to load config/mfs.json: %v. Using defaults.\n", err)
 	}
 
-	// Fetch fundamentals
 	fmt.Printf("Fetching fundamentals from Yahoo Finance...\n")
 	fundamentals, err := yfinance.FetchFundamentals(activeKeys)
 	if err != nil {
 		fmt.Printf("Warning: Failed to fetch fundamentals: %v. Using fallbacks.\n", err)
 	}
 
-	// Inject pledged percentages into fundamentals
 	stockpicker.InjectGovernance(fundamentals, cfg.Governance)
-
 	tracker := selectiontracker.New()
 
-	// 6. Apply Safety/Hard Filters
 	if cfg.HardFilters != nil {
 		activeKeys = stockpicker.ApplySafetyFilters(activeKeys, opts.Method, cfg.HardFilters, fundamentals, fullHistory, tracker)
 	} else {
@@ -75,10 +110,9 @@ func main() {
 
 	if len(activeKeys) == 0 {
 		fmt.Println("No candidate stocks remaining after hard filters. Exiting...")
-		return
+		return nil
 	}
 
-	// 7. Scoring and selection
 	var selectedKeys []string
 	var finalWeights map[string]float64
 	var scores map[string]float64
@@ -94,12 +128,10 @@ func main() {
 		finalWeights = stockpicker.NormalizeStandardWeights(selectedKeys, slicedPrices, benchmarkPrices, fundamentals, cfg.Weights, goldenWeights, opts.RebalanceTolerance)
 	}
 
-	// Sort final selection by weight descending
 	sort.Slice(selectedKeys, func(i, j int) bool {
 		return finalWeights[selectedKeys[i]] > finalWeights[selectedKeys[j]]
 	})
 
-	// 8. Display results
 	if opts.Method == "multibagger" {
 		stockpicker.PrintMultibaggerTable(selectedKeys, finalWeights, scores, fundamentals, fullHistory, displayNameVal)
 		if !opts.SkipScuttlebutt {
@@ -109,7 +141,6 @@ func main() {
 		stockpicker.PrintStandardTable(selectedKeys, finalWeights, fullHistory, displayNameVal, opts.Method)
 	}
 
-	// 8.5 Save selection reason report
 	sectors := make(map[string]string)
 	for ticker, fund := range fundamentals {
 		sectors[ticker] = fund.Sector
@@ -118,7 +149,6 @@ func main() {
 		fmt.Printf("Warning: Failed to save selection reasons report: %v\n", err)
 	}
 
-	// 9. Save output to CSV
 	outPath := opts.OutputFile
 	if outPath == "" {
 		if opts.FilePath != "" {
@@ -129,46 +159,7 @@ func main() {
 		}
 	}
 	if err := stockpicker.SavePortfolioToCSV(selectedKeys, finalWeights, outPath); err != nil {
-		fmt.Printf("Error writing output file: %v\n", err)
-		return
+		return fmt.Errorf("writing output file: %w", err)
 	}
-}
-
-// parseFlags registers flags, parses them, and validates the inputs.
-func parseFlags() (*stockpicker.Options, error) {
-	indexName := flag.String("index", "smallcap250", "Index to pick stocks from (see docs/stockpicker.md for all 21 supported indices)")
-	filePath := flag.String("file", "", "Path to custom CSV file containing tickers (takes precedence over -index)")
-	method := flag.String("method", "balanced", "Weighting method strategy preset (balanced, aggressive, conservative)")
-	topN := flag.Int("top", 20, "Number of top stocks to pick")
-	rangeStr := flag.String("range", "3mo", "Historical data range (3mo, 6mo, 1y)")
-	skipScuttlebutt := flag.Bool("skip-scuttlebutt", false, "Skip generating qualitative scuttlebutt checklist report")
-	golden := flag.String("golden", "", "Path to the existing golden copy CSV file to apply hysteresis buffer and rebalancing band")
-	rebalanceTol := flag.Float64("rebalance-tolerance", 0.10, "Rebalancing weight tolerance percentage (e.g. 0.10 for 0.10%)")
-	hysteresisBuf := flag.Int("hysteresis-buffer", 5, "Number of extra ranks to allow existing holdings to drift (default 5)")
-	displayName := flag.String("name", "", "Custom display name for output files and reports (defaults to index or file base)")
-	outputFile := flag.String("out", "", "Custom path to save the output CSV portfolio file (defaults to data/candidates/... folder)")
-	flag.Parse()
-
-	// Sanitize and validate range
-	rStr := strings.ToLower(strings.TrimSpace(*rangeStr))
-	if rStr == "1yr" || rStr == "1year" {
-		rStr = "1y"
-	}
-	if rStr != "3mo" && rStr != "6mo" && rStr != "1y" {
-		return nil, fmt.Errorf("unsupported range '%s'. Supported ranges: 3mo, 6mo, 1y", rStr)
-	}
-
-	return &stockpicker.Options{
-		IndexName:          *indexName,
-		FilePath:           *filePath,
-		Method:             *method,
-		TopN:               *topN,
-		RangeStr:           rStr,
-		SkipScuttlebutt:    *skipScuttlebutt,
-		GoldenPath:         *golden,
-		RebalanceTolerance: *rebalanceTol,
-		HysteresisBuffer:   *hysteresisBuf,
-		DisplayName:        *displayName,
-		OutputFile:         *outputFile,
-	}, nil
+	return nil
 }
