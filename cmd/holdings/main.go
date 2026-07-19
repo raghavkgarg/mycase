@@ -6,11 +6,11 @@ import (
 	"path/filepath"
 	"time"
 
-	"mycase/pkg/config"
-	"mycase/pkg/csvloader"
-	"mycase/pkg/kiteclient"
-	"mycase/pkg/portfolio"
-	"mycase/pkg/printer"
+	"github.com/gkgarg24/mycase/pkg/config"
+	"github.com/gkgarg24/mycase/pkg/csvloader"
+	"github.com/gkgarg24/mycase/pkg/kiteclient"
+	"github.com/gkgarg24/mycase/pkg/portfolio"
+	"github.com/gkgarg24/mycase/pkg/printer"
 )
 
 func main() {

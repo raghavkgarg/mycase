@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"mycase/pkg/csvloader"
+	"github.com/gkgarg24/mycase/pkg/csvloader"
 
 	"gopkg.in/yaml.v3"
 )

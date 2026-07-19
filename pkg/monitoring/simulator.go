@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"sort"
 	"time"
-	"mycase/pkg/yfinance"
+	"github.com/gkgarg24/mycase/pkg/yfinance"
 )
 
 // GetCapStallSeverity calculates the Cap Stall Severity based on DSO Delta and TTM Growth.

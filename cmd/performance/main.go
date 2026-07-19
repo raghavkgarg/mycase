@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"mycase/pkg/yfinance"
+	"github.com/gkgarg24/mycase/pkg/yfinance"
 )
 
 type stockInfo struct {

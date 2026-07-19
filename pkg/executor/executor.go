@@ -10,8 +10,8 @@ import (
 	"time"
 
 	kiteconnect "github.com/zerodha/gokiteconnect/v4"
-	"mycase/pkg/market"
-	"mycase/pkg/printer"
+	"github.com/gkgarg24/mycase/pkg/market"
+	"github.com/gkgarg24/mycase/pkg/printer"
 )
 
 type BasketOrder struct {

@@ -1,4 +1,4 @@
-module mycase
+module github.com/gkgarg24/mycase
 
 go 1.24.4
 

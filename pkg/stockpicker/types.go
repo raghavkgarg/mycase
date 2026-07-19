@@ -1,8 +1,8 @@
 package stockpicker
 
 import (
-	"mycase/pkg/config"
-	"mycase/pkg/optimizer"
+	"github.com/gkgarg24/mycase/pkg/config"
+	"github.com/gkgarg24/mycase/pkg/optimizer"
 )
 
 // Options holds command line configurations.

@@ -9,10 +9,10 @@ import (
 	"strconv"
 	"strings"
 
-	"mycase/pkg/config"
-	"mycase/pkg/optimizer"
-	"mycase/pkg/selectiontracker"
-	"mycase/pkg/yfinance"
+	"github.com/gkgarg24/mycase/pkg/config"
+	"github.com/gkgarg24/mycase/pkg/optimizer"
+	"github.com/gkgarg24/mycase/pkg/selectiontracker"
+	"github.com/gkgarg24/mycase/pkg/yfinance"
 )
 
 // ScoreMultibagger computes a 100-point relative scoring matrix for multibagger candidates.

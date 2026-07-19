@@ -9,9 +9,9 @@ import (
 	"sync"
 	"time"
 
-	"mycase/pkg/config"
-	"mycase/pkg/csvloader"
-	"mycase/pkg/yfinance"
+	"github.com/gkgarg24/mycase/pkg/config"
+	"github.com/gkgarg24/mycase/pkg/csvloader"
+	"github.com/gkgarg24/mycase/pkg/yfinance"
 )
 
 func loadLocalCSVConstituents(filePath string) ([]string, error) {

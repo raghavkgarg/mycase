@@ -11,10 +11,10 @@ import (
 	"sync"
 	"time"
 
-	"mycase/pkg/config"
-	"mycase/pkg/csvloader"
-	"mycase/pkg/optimizer"
-	"mycase/pkg/yfinance"
+	"github.com/gkgarg24/mycase/pkg/config"
+	"github.com/gkgarg24/mycase/pkg/csvloader"
+	"github.com/gkgarg24/mycase/pkg/optimizer"
+	"github.com/gkgarg24/mycase/pkg/yfinance"
 )
 
 func main() {

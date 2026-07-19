@@ -12,10 +12,10 @@ import (
 	"sync"
 	"time"
 
-	"mycase/pkg/config"
-	"mycase/pkg/csvloader"
-	"mycase/pkg/stockpicker"
-	"mycase/pkg/yfinance"
+	"github.com/gkgarg24/mycase/pkg/config"
+	"github.com/gkgarg24/mycase/pkg/csvloader"
+	"github.com/gkgarg24/mycase/pkg/stockpicker"
+	"github.com/gkgarg24/mycase/pkg/yfinance"
 )
 
 type stockInfo struct {

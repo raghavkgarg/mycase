@@ -3,7 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
-	"mycase/pkg/csvloader"
+	"github.com/gkgarg24/mycase/pkg/csvloader"
 )
 
 func main() {

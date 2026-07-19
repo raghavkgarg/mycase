@@ -9,9 +9,9 @@ import (
 	"strings"
 	"time"
 
-	"mycase/pkg/selectiontracker"
-	"mycase/pkg/stockpicker"
-	"mycase/pkg/yfinance"
+	"github.com/gkgarg24/mycase/pkg/selectiontracker"
+	"github.com/gkgarg24/mycase/pkg/stockpicker"
+	"github.com/gkgarg24/mycase/pkg/yfinance"
 )
 
 func main() {

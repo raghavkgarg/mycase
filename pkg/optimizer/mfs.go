@@ -3,7 +3,7 @@ package optimizer
 import (
 	"math"
 
-	"mycase/pkg/yfinance"
+	"github.com/gkgarg24/mycase/pkg/yfinance"
 )
 
 // OptimizeMultiFactor computes weights based on multi-factor scores including fundamental metrics

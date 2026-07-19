@@ -4,7 +4,7 @@ import (
 	"math"
 	"testing"
 
-	"mycase/pkg/yfinance"
+	"github.com/gkgarg24/mycase/pkg/yfinance"
 )
 
 func TestGetCapStallSeverity(t *testing.T) {

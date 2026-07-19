@@ -11,7 +11,7 @@ import (
 	"time"
 
 	kiteconnect "github.com/zerodha/gokiteconnect/v4"
-	"mycase/pkg/config"
+	"github.com/gkgarg24/mycase/pkg/config"
 )
 
 func main() {

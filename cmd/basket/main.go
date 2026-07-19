@@ -8,12 +8,12 @@ import (
 	"strconv"
 	"strings"
 
-	"mycase/pkg/csvloader"
-	"mycase/pkg/datafetcher"
-	"mycase/pkg/executor"
-	"mycase/pkg/kiteclient"
-	"mycase/pkg/optimizer"
-	"mycase/pkg/printer"
+	"github.com/gkgarg24/mycase/pkg/csvloader"
+	"github.com/gkgarg24/mycase/pkg/datafetcher"
+	"github.com/gkgarg24/mycase/pkg/executor"
+	"github.com/gkgarg24/mycase/pkg/kiteclient"
+	"github.com/gkgarg24/mycase/pkg/optimizer"
+	"github.com/gkgarg24/mycase/pkg/printer"
 )
 
 func main() {

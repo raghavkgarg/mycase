@@ -3,7 +3,7 @@ package optimizer
 import (
 	"strings"
 
-	"mycase/pkg/yfinance"
+	"github.com/gkgarg24/mycase/pkg/yfinance"
 )
 
 type fundamentalAverages struct {

@@ -6,8 +6,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"mycase/pkg/config"
-	"mycase/pkg/yfinance"
+	"github.com/gkgarg24/mycase/pkg/config"
+	"github.com/gkgarg24/mycase/pkg/yfinance"
 )
 
 func TestIsAbove200DaySMA(t *testing.T) {
