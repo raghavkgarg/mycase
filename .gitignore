@@ -1,0 +1,24 @@
+# Compiled binaries
+bin/
+
+# Cached data & Yahoo Finance historical price cache
+data/.cache/
+
+# Credentials containing API keys, API secrets, and access tokens
+config/config.json
+
+# Execution and logs exports
+Error/
+Order/
+holding/
+
+# Generated stock picker output CSVs and temporary combined files
+data/stockpicker_*.csv
+data/*combine.csv
+
+# Generated portfolio reports & explanation files
+report/*.txt
+
+# OS-specific files
+.DS_Store
+Thumbs.db

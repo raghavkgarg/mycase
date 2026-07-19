@@ -1,0 +1,66 @@
+
+====================================================================
+             Stock Selection & Rejection Explanation Report
+====================================================================
+Index/File:       microsmall
+Strategy Preset:  multibagger
+Generated:        2026-07-19 21:28:21 IST
+====================================================================
+
+--- SUMMARY ---
+Initial pool size:              25 constituents
+Passed Safety/Hard Filters:     25 stocks
+Eliminated by Safety Filters:   0 stocks
+Eliminated by Sector Caps:      0 stocks
+Eliminated by Rank Limits:      5 stocks
+Final Selected Stocks:          20 stocks
+
+=============================================================================================================
+                                               SELECTED STOCKS
+=============================================================================================================
+Ticker           | Sector               | Score  | Raw Rank | Weight Decided | Selection Reason
+-------------------------------------------------------------------------------------------------------------
+NSE:NETWEB       | Technology           |  68.1  | 1        | 7.84%          | Retained via hysteresis (Rank 1 <= 22)
+NSE:THANGAMAYL   | Consumer Cyclical    |  66.0  | 2        | 7.60%          | Retained via hysteresis (Rank 2 <= 22)
+NSE:HINDCOPPER   | Basic Materials      |  57.6  | 3        | 6.63%          | Retained via hysteresis (Rank 3 <= 22)
+NSE:MANORAMA     | Consumer Defensive   |  57.0  | 4        | 6.56%          | Retained via hysteresis (Rank 4 <= 22)
+NSE:ATLANTAELE   | Industrials          |  54.1  | 5        | 6.24%          | Retained via hysteresis (Rank 5 <= 22)
+NSE:CCL          | Consumer Defensive   |  47.8  | 6        | 5.51%          | Retained via hysteresis (Rank 6 <= 22)
+NSE:CHALET       | Consumer Cyclical    |  47.3  | 7        | 5.44%          | Retained via hysteresis (Rank 7 <= 22)
+NSE:NAVINFLUOR   | Basic Materials      |  42.9  | 8        | 4.94%          | Retained via hysteresis (Rank 8 <= 22)
+NSE:CHENNPETRO   | Energy               |  41.5  | 9        | 4.86%          | Retained via hysteresis (Rank 9 <= 22)
+NSE:SUMICHEM     | Basic Materials      |  39.4  | 10       | 4.54%          | Retained via hysteresis (Rank 10 <= 22)
+NSE:ENGINERSIN   | Industrials          |  37.2  | 11       | 4.27%          | Retained via hysteresis (Rank 11 <= 22)
+NSE:SMLMAH       | Consumer Cyclical    |  36.8  | 12       | 4.24%          | Retained via hysteresis (Rank 12 <= 22)
+NSE:TANLA        | Technology           |  36.7  | 13       | 4.15%          | Retained via hysteresis (Rank 13 <= 22)
+NSE:THYROCARE    | Healthcare           |  36.5  | 14       | 4.20%          | Retained via hysteresis (Rank 14 <= 22)
+NSE:ECLERX       | Technology           |  35.9  | 15       | 4.14%          | Retained via hysteresis (Rank 15 <= 22)
+NSE:JAMNAAUTO    | Consumer Cyclical    |  34.7  | 16       | 4.00%          | Retained via hysteresis (Rank 16 <= 22)
+NSE:GOKULAGRO    | Consumer Defensive   |  32.7  | 18       | 3.77%          | Retained via hysteresis (Rank 18 <= 22)
+NSE:WABAG        | Industrials          |  32.4  | 19       | 3.73%          | Retained via hysteresis (Rank 19 <= 22)
+NSE:PRIVISCL     | Basic Materials      |  32.4  | 20       | 3.73%          | Retained via hysteresis (Rank 20 <= 22)
+NSE:PARKHOSPS    | Healthcare           |  31.2  | 21       | 3.60%          | Retained via hysteresis (Rank 21 <= 22)
+
+=============================================================================================
+                               REMOVED ACTIVE HOLDINGS (EXITS)
+=============================================================================================
+No existing holdings were removed.
+
+=============================================================================================
+                                  REJECTED NEW CANDIDATES
+=============================================================================================
+Ticker           | Sector               | Score  | Raw Rank | Rejection Reason
+---------------------------------------------------------------------------------------------
+NSE:METROPOLIS   | Healthcare           |  34.3  | 17       | Not added: portfolio full (slots filled by existing holdings retained via hysteresis)
+NSE:EMCURE       | Healthcare           |  31.1  | 22       | Not added: Rank 22 fell below selection cutoff (Top 20)
+NSE:CRAMC        | Financial Services   |  29.1  | 23       | Not added: Rank 23 fell below selection cutoff (Top 20)
+NSE:CERA         | Industrials          |  28.8  | 24       | Not added: Rank 24 fell below selection cutoff (Top 20)
+NSE:ABSLAMC      | Financial Services   |  28.0  | 25       | Not added: Rank 25 fell below selection cutoff (Top 20)
+
+=============================================================================================
+                               SAFETY & FUNDAMENTAL ELIMINATIONS
+=============================================================================================
+No stocks were eliminated by safety/hard filters.
+
+Selection explanation report successfully saved to report/microsmall_multibagger/executions/20260719_01_selection_reasons.txt
+

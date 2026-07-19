@@ -1,0 +1,281 @@
+=========================================================================
+          QUALITATIVE FILTER ('SCUTTLEBUTT' OVERLAY) INSTRUCTIONS
+=========================================================================
+Index/File: microsmall
+For the top selected candidates, perform the following manual checks:
+
+1. NSE:NETWEB
+   [ ] Earnings Call Transcripts (Seeking Alpha / Company IR):
+       * Has management consistently hit their guidance over the last 4 quarters?
+       * What is their forecast for margin expansion next year?
+   [ ] Annual Report (10-K / MD&A section):
+       * Locate Management Discussion & Analysis.
+       * What is the Total Addressable Market (TAM) mentioned? Is it growing > 15%?
+       * Are there any mentions of strategic business pivots or new factory CapEx?
+   [ ] Shareholder Shareholding Trend:
+       * Check if institutional holdings (10.9%) have risen QoQ.
+
+2. NSE:THANGAMAYL
+   [ ] Earnings Call Transcripts (Seeking Alpha / Company IR):
+       * Has management consistently hit their guidance over the last 4 quarters?
+       * What is their forecast for margin expansion next year?
+   [ ] Annual Report (10-K / MD&A section):
+       * Locate Management Discussion & Analysis.
+       * What is the Total Addressable Market (TAM) mentioned? Is it growing > 15%?
+       * Are there any mentions of strategic business pivots or new factory CapEx?
+   [ ] Shareholder Shareholding Trend:
+       * Check if institutional holdings (19.3%) have risen QoQ.
+
+3. NSE:HINDCOPPER
+   [ ] Earnings Call Transcripts (Seeking Alpha / Company IR):
+       * Has management consistently hit their guidance over the last 4 quarters?
+       * What is their forecast for margin expansion next year?
+   [ ] Annual Report (10-K / MD&A section):
+       * Locate Management Discussion & Analysis.
+       * What is the Total Addressable Market (TAM) mentioned? Is it growing > 15%?
+       * Are there any mentions of strategic business pivots or new factory CapEx?
+   [ ] Shareholder Shareholding Trend:
+       * Check if institutional holdings (7.3%) have risen QoQ.
+
+4. NSE:MANORAMA
+   [ ] Earnings Call Transcripts (Seeking Alpha / Company IR):
+       * Has management consistently hit their guidance over the last 4 quarters?
+       * What is their forecast for margin expansion next year?
+   [ ] Annual Report (10-K / MD&A section):
+       * Locate Management Discussion & Analysis.
+       * What is the Total Addressable Market (TAM) mentioned? Is it growing > 15%?
+       * Are there any mentions of strategic business pivots or new factory CapEx?
+   [ ] Shareholder Shareholding Trend:
+       * Check if institutional holdings (4.1%) have risen QoQ.
+
+5. NSE:ATLANTAELE
+   [ ] Earnings Call Transcripts (Seeking Alpha / Company IR):
+       * Has management consistently hit their guidance over the last 4 quarters?
+       * What is their forecast for margin expansion next year?
+   [ ] Annual Report (10-K / MD&A section):
+       * Locate Management Discussion & Analysis.
+       * What is the Total Addressable Market (TAM) mentioned? Is it growing > 15%?
+       * Are there any mentions of strategic business pivots or new factory CapEx?
+   [ ] Shareholder Shareholding Trend:
+       * Check if institutional holdings (5.6%) have risen QoQ.
+
+6. NSE:CCL
+   [ ] Earnings Call Transcripts (Seeking Alpha / Company IR):
+       * Has management consistently hit their guidance over the last 4 quarters?
+       * What is their forecast for margin expansion next year?
+   [ ] Annual Report (10-K / MD&A section):
+       * Locate Management Discussion & Analysis.
+       * What is the Total Addressable Market (TAM) mentioned? Is it growing > 15%?
+       * Are there any mentions of strategic business pivots or new factory CapEx?
+   [ ] Shareholder Shareholding Trend:
+       * Check if institutional holdings (26.0%) have risen QoQ.
+
+7. NSE:CHALET
+   [ ] Earnings Call Transcripts (Seeking Alpha / Company IR):
+       * Has management consistently hit their guidance over the last 4 quarters?
+       * What is their forecast for margin expansion next year?
+   [ ] Annual Report (10-K / MD&A section):
+       * Locate Management Discussion & Analysis.
+       * What is the Total Addressable Market (TAM) mentioned? Is it growing > 15%?
+       * Are there any mentions of strategic business pivots or new factory CapEx?
+   [ ] Shareholder Shareholding Trend:
+       * Check if institutional holdings (24.8%) have risen QoQ.
+
+8. NSE:SUMICHEM
+   [ ] Earnings Call Transcripts (Seeking Alpha / Company IR):
+       * Has management consistently hit their guidance over the last 4 quarters?
+       * What is their forecast for margin expansion next year?
+   [ ] Annual Report (10-K / MD&A section):
+       * Locate Management Discussion & Analysis.
+       * What is the Total Addressable Market (TAM) mentioned? Is it growing > 15%?
+       * Are there any mentions of strategic business pivots or new factory CapEx?
+   [ ] Shareholder Shareholding Trend:
+       * Check if institutional holdings (9.2%) have risen QoQ.
+
+9. NSE:CHENNPETRO
+   [ ] Earnings Call Transcripts (Seeking Alpha / Company IR):
+       * Has management consistently hit their guidance over the last 4 quarters?
+       * What is their forecast for margin expansion next year?
+   [ ] Annual Report (10-K / MD&A section):
+       * Locate Management Discussion & Analysis.
+       * What is the Total Addressable Market (TAM) mentioned? Is it growing > 15%?
+       * Are there any mentions of strategic business pivots or new factory CapEx?
+   [ ] Shareholder Shareholding Trend:
+       * Check if institutional holdings (5.3%) have risen QoQ.
+
+10. NSE:NAVINFLUOR
+   [ ] Earnings Call Transcripts (Seeking Alpha / Company IR):
+       * Has management consistently hit their guidance over the last 4 quarters?
+       * What is their forecast for margin expansion next year?
+   [ ] Annual Report (10-K / MD&A section):
+       * Locate Management Discussion & Analysis.
+       * What is the Total Addressable Market (TAM) mentioned? Is it growing > 15%?
+       * Are there any mentions of strategic business pivots or new factory CapEx?
+   [ ] Shareholder Shareholding Trend:
+       * Check if institutional holdings (41.5%) have risen QoQ.
+
+11. NSE:TANLA
+   [ ] Earnings Call Transcripts (Seeking Alpha / Company IR):
+       * Has management consistently hit their guidance over the last 4 quarters?
+       * What is their forecast for margin expansion next year?
+   [ ] Annual Report (10-K / MD&A section):
+       * Locate Management Discussion & Analysis.
+       * What is the Total Addressable Market (TAM) mentioned? Is it growing > 15%?
+       * Are there any mentions of strategic business pivots or new factory CapEx?
+   [ ] Shareholder Shareholding Trend:
+       * Check if institutional holdings (5.0%) have risen QoQ.
+
+12. NSE:SMLMAH
+   [ ] Earnings Call Transcripts (Seeking Alpha / Company IR):
+       * Has management consistently hit their guidance over the last 4 quarters?
+       * What is their forecast for margin expansion next year?
+   [ ] Annual Report (10-K / MD&A section):
+       * Locate Management Discussion & Analysis.
+       * What is the Total Addressable Market (TAM) mentioned? Is it growing > 15%?
+       * Are there any mentions of strategic business pivots or new factory CapEx?
+   [ ] Shareholder Shareholding Trend:
+       * Check if institutional holdings (0.8%) have risen QoQ.
+
+13. NSE:THYROCARE
+   [ ] Earnings Call Transcripts (Seeking Alpha / Company IR):
+       * Has management consistently hit their guidance over the last 4 quarters?
+       * What is their forecast for margin expansion next year?
+   [ ] Annual Report (10-K / MD&A section):
+       * Locate Management Discussion & Analysis.
+       * What is the Total Addressable Market (TAM) mentioned? Is it growing > 15%?
+       * Are there any mentions of strategic business pivots or new factory CapEx?
+   [ ] Shareholder Shareholding Trend:
+       * Check if institutional holdings (21.5%) have risen QoQ.
+
+14. NSE:ECLERX
+   [ ] Earnings Call Transcripts (Seeking Alpha / Company IR):
+       * Has management consistently hit their guidance over the last 4 quarters?
+       * What is their forecast for margin expansion next year?
+   [ ] Annual Report (10-K / MD&A section):
+       * Locate Management Discussion & Analysis.
+       * What is the Total Addressable Market (TAM) mentioned? Is it growing > 15%?
+       * Are there any mentions of strategic business pivots or new factory CapEx?
+   [ ] Shareholder Shareholding Trend:
+       * Check if institutional holdings (32.2%) have risen QoQ.
+
+15. NSE:ENGINERSIN
+   [ ] Earnings Call Transcripts (Seeking Alpha / Company IR):
+       * Has management consistently hit their guidance over the last 4 quarters?
+       * What is their forecast for margin expansion next year?
+   [ ] Annual Report (10-K / MD&A section):
+       * Locate Management Discussion & Analysis.
+       * What is the Total Addressable Market (TAM) mentioned? Is it growing > 15%?
+       * Are there any mentions of strategic business pivots or new factory CapEx?
+   [ ] Shareholder Shareholding Trend:
+       * Check if institutional holdings (17.5%) have risen QoQ.
+
+16. NSE:JAMNAAUTO
+   [ ] Earnings Call Transcripts (Seeking Alpha / Company IR):
+       * Has management consistently hit their guidance over the last 4 quarters?
+       * What is their forecast for margin expansion next year?
+   [ ] Annual Report (10-K / MD&A section):
+       * Locate Management Discussion & Analysis.
+       * What is the Total Addressable Market (TAM) mentioned? Is it growing > 15%?
+       * Are there any mentions of strategic business pivots or new factory CapEx?
+   [ ] Shareholder Shareholding Trend:
+       * Check if institutional holdings (5.4%) have risen QoQ.
+
+17. NSE:METROPOLIS
+   [ ] Earnings Call Transcripts (Seeking Alpha / Company IR):
+       * Has management consistently hit their guidance over the last 4 quarters?
+       * What is their forecast for margin expansion next year?
+   [ ] Annual Report (10-K / MD&A section):
+       * Locate Management Discussion & Analysis.
+       * What is the Total Addressable Market (TAM) mentioned? Is it growing > 15%?
+       * Are there any mentions of strategic business pivots or new factory CapEx?
+   [ ] Shareholder Shareholding Trend:
+       * Check if institutional holdings (45.0%) have risen QoQ.
+
+18. NSE:GOKULAGRO
+   [ ] Earnings Call Transcripts (Seeking Alpha / Company IR):
+       * Has management consistently hit their guidance over the last 4 quarters?
+       * What is their forecast for margin expansion next year?
+   [ ] Annual Report (10-K / MD&A section):
+       * Locate Management Discussion & Analysis.
+       * What is the Total Addressable Market (TAM) mentioned? Is it growing > 15%?
+       * Are there any mentions of strategic business pivots or new factory CapEx?
+   [ ] Shareholder Shareholding Trend:
+       * Check if institutional holdings (2.7%) have risen QoQ.
+
+19. NSE:PRIVISCL
+   [ ] Earnings Call Transcripts (Seeking Alpha / Company IR):
+       * Has management consistently hit their guidance over the last 4 quarters?
+       * What is their forecast for margin expansion next year?
+   [ ] Annual Report (10-K / MD&A section):
+       * Locate Management Discussion & Analysis.
+       * What is the Total Addressable Market (TAM) mentioned? Is it growing > 15%?
+       * Are there any mentions of strategic business pivots or new factory CapEx?
+   [ ] Shareholder Shareholding Trend:
+       * Check if institutional holdings (10.0%) have risen QoQ.
+
+20. NSE:WABAG
+   [ ] Earnings Call Transcripts (Seeking Alpha / Company IR):
+       * Has management consistently hit their guidance over the last 4 quarters?
+       * What is their forecast for margin expansion next year?
+   [ ] Annual Report (10-K / MD&A section):
+       * Locate Management Discussion & Analysis.
+       * What is the Total Addressable Market (TAM) mentioned? Is it growing > 15%?
+       * Are there any mentions of strategic business pivots or new factory CapEx?
+   [ ] Shareholder Shareholding Trend:
+       * Check if institutional holdings (19.0%) have risen QoQ.
+
+21. NSE:EMCURE
+   [ ] Earnings Call Transcripts (Seeking Alpha / Company IR):
+       * Has management consistently hit their guidance over the last 4 quarters?
+       * What is their forecast for margin expansion next year?
+   [ ] Annual Report (10-K / MD&A section):
+       * Locate Management Discussion & Analysis.
+       * What is the Total Addressable Market (TAM) mentioned? Is it growing > 15%?
+       * Are there any mentions of strategic business pivots or new factory CapEx?
+   [ ] Shareholder Shareholding Trend:
+       * Check if institutional holdings (5.5%) have risen QoQ.
+
+22. NSE:PARKHOSPS
+   [ ] Earnings Call Transcripts (Seeking Alpha / Company IR):
+       * Has management consistently hit their guidance over the last 4 quarters?
+       * What is their forecast for margin expansion next year?
+   [ ] Annual Report (10-K / MD&A section):
+       * Locate Management Discussion & Analysis.
+       * What is the Total Addressable Market (TAM) mentioned? Is it growing > 15%?
+       * Are there any mentions of strategic business pivots or new factory CapEx?
+   [ ] Shareholder Shareholding Trend:
+       * Check if institutional holdings (5.9%) have risen QoQ.
+
+23. NSE:CRAMC
+   [ ] Earnings Call Transcripts (Seeking Alpha / Company IR):
+       * Has management consistently hit their guidance over the last 4 quarters?
+       * What is their forecast for margin expansion next year?
+   [ ] Annual Report (10-K / MD&A section):
+       * Locate Management Discussion & Analysis.
+       * What is the Total Addressable Market (TAM) mentioned? Is it growing > 15%?
+       * Are there any mentions of strategic business pivots or new factory CapEx?
+   [ ] Shareholder Shareholding Trend:
+       * Check if institutional holdings (9.4%) have risen QoQ.
+
+24. NSE:ABSLAMC
+   [ ] Earnings Call Transcripts (Seeking Alpha / Company IR):
+       * Has management consistently hit their guidance over the last 4 quarters?
+       * What is their forecast for margin expansion next year?
+   [ ] Annual Report (10-K / MD&A section):
+       * Locate Management Discussion & Analysis.
+       * What is the Total Addressable Market (TAM) mentioned? Is it growing > 15%?
+       * Are there any mentions of strategic business pivots or new factory CapEx?
+   [ ] Shareholder Shareholding Trend:
+       * Check if institutional holdings (43.4%) have risen QoQ.
+
+25. NSE:CERA
+   [ ] Earnings Call Transcripts (Seeking Alpha / Company IR):
+       * Has management consistently hit their guidance over the last 4 quarters?
+       * What is their forecast for margin expansion next year?
+   [ ] Annual Report (10-K / MD&A section):
+       * Locate Management Discussion & Analysis.
+       * What is the Total Addressable Market (TAM) mentioned? Is it growing > 15%?
+       * Are there any mentions of strategic business pivots or new factory CapEx?
+   [ ] Shareholder Shareholding Trend:
+       * Check if institutional holdings (24.7%) have risen QoQ.
+=========================================================================

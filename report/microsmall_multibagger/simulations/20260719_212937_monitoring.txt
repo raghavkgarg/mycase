@@ -1,0 +1,45 @@
+
+=========================================================================
+             Portfolio Monitoring Simulation Report                      
+=========================================================================
+File:             data/microsmall.csv
+Policy Preset:    Moderate
+Simulated Scope:  From 2026-01-01 to Present
+Output File:      report/microsmall_multibagger/simulations/20260719_212937_monitoring.txt
+Data Mode:        ⚠️ High-Fidelity Mock Fallback
+=========================================================================
+
+Ticker          | Sector        | 3Y CAGR (%)  | TTM Growth (%) | DSO Delta (%) | Cap Stall Severity | Data Source | Policy Verdict
+-------------------------------------------------------------------------------------------------------------------------------------
+NSE:ATLANTAELE  | Industrials   | 28.7         | 48.8           | -19.0         | None               | Mock        | ✅ KEEP HOLD   
+NSE:CCL         | Consumer Defe | 29.1         | 43.8           | -17.5         | None               | Live        | ✅ KEEP HOLD   
+NSE:CHALET      | Consumer Cycl | 34.9         | 61.2           | -34.7         | None               | Live        | ✅ KEEP HOLD   
+NSE:CHENNPETRO  | Energy        | -6.0         | 7.2            | 12.6          | Moderate           | Live        | ✅ KEEP HOLD   
+NSE:ECLERX      | Technology    | 15.8         | 22.3           | 10.0          | Mild               | Live        | ✅ KEEP HOLD   
+NSE:ENGINERSIN  | Industrials   | 5.7          | 27.2           | -15.3         | None               | Live        | ✅ KEEP HOLD   
+NSE:GOKULAGRO   | Consumer Defe | 31.1         | 23.2           | -11.5         | Mild               | Live        | ✅ KEEP HOLD   
+NSE:HINDCOPPER  | Basic Materia | 22.7         | 48.6           | -47.4         | None               | Live        | ✅ KEEP HOLD   
+NSE:JAMNAAUTO   | Consumer Cycl | 4.8          | 15.0           | -56.7         | None               | Live        | ✅ KEEP HOLD   
+NSE:MANORAMA    | Consumer Defe | 57.7         | 77.3           | -65.4         | None               | Live        | ✅ KEEP HOLD   
+NSE:NAVINFLUOR  | Basic Materia | 16.5         | 42.3           | -7.8          | None               | Live        | ✅ KEEP HOLD   
+NSE:NETWEB      | Technology    | 70.4         | 90.0           | -2.8          | None               | Live        | ✅ KEEP HOLD   
+NSE:PARKHOSPS   | General       | 10.0         | 12.0           | -10.0         | None               | Mock        | ✅ KEEP HOLD   
+NSE:PRIVISCL    | Basic Materia | 16.6         | 22.6           | 9.8           | Mild               | Live        | ✅ KEEP HOLD   
+NSE:SMLMAH      | Consumer Cycl | 15.9         | 19.2           | -13.9         | None               | Live        | ✅ KEEP HOLD   
+NSE:SUMICHEM    | Basic Materia | -2.6         | 3.8            | -8.7          | None               | Live        | ✅ KEEP HOLD   
+NSE:TANLA       | Technology    | 9.6          | 9.7            | 7.5           | Mild               | Live        | ✅ KEEP HOLD   
+NSE:THANGAMAYL  | Consumer Cycl | 39.2         | 73.1           | 60.1          | Severe             | Live        | ✅ KEEP HOLD   
+NSE:THYROCARE   | Healthcare    | 16.7         | 21.8           | -16.2         | None               | Live        | ✅ KEEP HOLD   
+NSE:WABAG       | Industrials   | 10.2         | 19.7           | 4.7           | None               | Live        | ✅ KEEP HOLD   
+-------------------------------------------------------------------------------------------------------------------------------------
+
+SIMULATED CHURN RATE
+9.8%
+
+ALPHA EFFICIENCY
+2.87
+
+PORTFOLIO RETURN:   +21.26%
+BENCHMARK RETURN:   -6.93%
+EXCESS RETURN (α):  +28.19%
+=========================================================================

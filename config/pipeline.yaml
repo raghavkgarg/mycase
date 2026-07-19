@@ -1,0 +1,33 @@
+indices:
+   - microcap250
+   - small250
+  # - midcap150
+  # - nifty50
+  # - nifty200
+golden_copy_path:
+  - data/microsmall.csv
+  # - data/smallcap250.csv
+  # - data/midcap150.csv
+  # - data/nifty50.csv
+  # - data/nifty200.csv
+strategy: 
+  - multibagger
+  # - aggresive
+  # - balance
+top_n: 
+  - 20
+  # - 50
+  # - 100
+capital: 
+  - 100000
+  # - 500000
+  # - 1000000
+purchase_date: 
+  - "2026-01-01"
+  # - "2026-02-01"
+
+rebalance_tolerance_pct:
+  - 0.10
+
+hysteresis_rank_buffer:
+  - 2

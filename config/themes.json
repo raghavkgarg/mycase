@@ -1,0 +1,22 @@
+[
+  {
+    "name": "My Managed",
+    "prefix": "My",
+    "csv_path": "data/myall.csv"
+  },
+  {
+    "name": "AI Theme Advice",
+    "prefix": "AI Theme",
+    "csv_path": "data/aitheme.csv"
+  },
+  {
+    "name": "Micro Theme Advice",
+    "prefix": "Micro Theme",
+    "csv_path": "data/modularmicro.csv"
+  },
+  {
+    "name": "Theme My Micro",
+    "prefix": "Theme Capital",
+    "csv_path": "data/mymicro.csv"
+  }
+]
