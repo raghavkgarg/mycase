@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"io"
 	"math"
-	"math/rand"
+	"math/rand/v2"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -295,7 +295,7 @@ func monitorLoadAllData(tickers []string) (
 	wg.Wait()
 
 	// Seeded local rand for 100% reproducible mock price paths.
-	localRand := rand.New(rand.NewSource(42))
+	localRand := rand.New(rand.NewPCG(42, 0))
 	nDays := 504
 
 	if benchData == nil {

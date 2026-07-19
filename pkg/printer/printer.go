@@ -1,9 +1,10 @@
 package printer
 
 import (
+	"cmp"
 	"fmt"
 	"math"
-	"sort"
+	"slices"
 	"strings"
 	"unicode/utf8"
 
@@ -188,7 +189,9 @@ func renderSection(title string, labelPrefix string, holdings []portfolio.Holdin
 		return ""
 	}
 	// Sort by PnL% ascending
-	sort.Sort(portfolio.ByPnLPct(holdings))
+	slices.SortFunc(holdings, func(a, b portfolio.Holding) int {
+		return cmp.Compare(a.PnLPct, b.PnLPct)
+	})
 
 	header := "=======================================================================================================================\n"
 	cols := "Symbol            | Exchange | Quantity | Avg Price  | LTP        | Current Value | Weight | PnL          | PnL %    \n"
@@ -204,7 +207,7 @@ func renderSection(title string, labelPrefix string, holdings []portfolio.Holdin
 		padding = 0
 	}
 	centeredTitle := strings.Repeat(" ", padding) + title
-	sb.WriteString(centeredTitle + strings.Repeat(" ", int(math.Max(0, 119-float64(len(centeredTitle))))) + "\n")
+	sb.WriteString(centeredTitle + strings.Repeat(" ", max(0, 119-len(centeredTitle))) + "\n")
 	
 	sb.WriteString(header + cols + sep)
 
@@ -268,7 +271,7 @@ func findMissingTickers(tickers map[string]bool, holdings []portfolio.Holding) [
 	for t := range tickers {
 		keys = append(keys, t)
 	}
-	sort.Strings(keys)
+	slices.Sort(keys)
 
 	for _, t := range keys {
 		parts := strings.Split(t, ":")

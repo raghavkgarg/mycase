@@ -18,13 +18,6 @@ type Holding struct {
 	PnLPct        float64
 }
 
-// ByPnLPct implements sort.Interface for []Holding based on PnLPct ascending
-type ByPnLPct []Holding
-
-func (a ByPnLPct) Len() int           { return len(a) }
-func (a ByPnLPct) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
-func (a ByPnLPct) Less(i, j int) bool { return a[i].PnLPct < a[j].PnLPct }
-
 // FetchAndMergeHoldings fetches holdings and positions from Zerodha Kite (or mocks them) and merges today's CNC positions into T+2 holdings.
 func FetchAndMergeHoldings(client *kiteconnect.Client, isMock bool) ([]Holding, error) {
 	var rawHoldings []Holding
