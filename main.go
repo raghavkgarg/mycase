@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"os"
 
-	mycmd "github.com/gkgarg24/mycase/cmd"
+	mycmd "github.com/raghavkgarg/mycase/cmd"
 	"github.com/urfave/cli/v3"
 )
 

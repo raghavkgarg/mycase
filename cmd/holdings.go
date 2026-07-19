@@ -9,11 +9,11 @@ import (
 
 	"github.com/urfave/cli/v3"
 
-	"github.com/gkgarg24/mycase/pkg/config"
-	"github.com/gkgarg24/mycase/pkg/csvloader"
-	"github.com/gkgarg24/mycase/pkg/kiteclient"
-	"github.com/gkgarg24/mycase/pkg/portfolio"
-	"github.com/gkgarg24/mycase/pkg/printer"
+	"github.com/raghavkgarg/mycase/pkg/config"
+	"github.com/raghavkgarg/mycase/pkg/csvloader"
+	"github.com/raghavkgarg/mycase/pkg/kiteclient"
+	"github.com/raghavkgarg/mycase/pkg/portfolio"
+	"github.com/raghavkgarg/mycase/pkg/printer"
 )
 
 var HoldingsCommand = &cli.Command{

@@ -4,7 +4,7 @@ import (
 	"math"
 	"strings"
 
-	"github.com/gkgarg24/mycase/pkg/market"
+	"github.com/raghavkgarg/mycase/pkg/market"
 )
 
 // OptimizeFreshBuy runs the greedy allocation algorithm.

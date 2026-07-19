@@ -12,7 +12,7 @@ import (
 
 	"github.com/urfave/cli/v3"
 
-	"github.com/gkgarg24/mycase/pkg/yfinance"
+	"github.com/raghavkgarg/mycase/pkg/yfinance"
 )
 
 var PerformanceCommand = &cli.Command{

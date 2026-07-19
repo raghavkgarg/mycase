@@ -11,12 +11,12 @@ import (
 
 	"github.com/urfave/cli/v3"
 
-	"github.com/gkgarg24/mycase/pkg/csvloader"
-	"github.com/gkgarg24/mycase/pkg/datafetcher"
-	"github.com/gkgarg24/mycase/pkg/executor"
-	"github.com/gkgarg24/mycase/pkg/kiteclient"
-	"github.com/gkgarg24/mycase/pkg/optimizer"
-	"github.com/gkgarg24/mycase/pkg/printer"
+	"github.com/raghavkgarg/mycase/pkg/csvloader"
+	"github.com/raghavkgarg/mycase/pkg/datafetcher"
+	"github.com/raghavkgarg/mycase/pkg/executor"
+	"github.com/raghavkgarg/mycase/pkg/kiteclient"
+	"github.com/raghavkgarg/mycase/pkg/optimizer"
+	"github.com/raghavkgarg/mycase/pkg/printer"
 )
 
 var BasketCommand = &cli.Command{

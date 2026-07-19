@@ -14,8 +14,8 @@ import (
 	"github.com/urfave/cli/v3"
 	"gopkg.in/yaml.v3"
 
-	"github.com/gkgarg24/mycase/pkg/csvloader"
-	"github.com/gkgarg24/mycase/pkg/stockpicker"
+	"github.com/raghavkgarg/mycase/pkg/csvloader"
+	"github.com/raghavkgarg/mycase/pkg/stockpicker"
 )
 
 // PipelineConfig holds the resolved pipeline configuration.

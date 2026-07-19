@@ -4,10 +4,10 @@ import (
 	"fmt"
 	"sort"
 
-	"github.com/gkgarg24/mycase/pkg/config"
-	"github.com/gkgarg24/mycase/pkg/optimizer"
-	"github.com/gkgarg24/mycase/pkg/selectiontracker"
-	"github.com/gkgarg24/mycase/pkg/yfinance"
+	"github.com/raghavkgarg/mycase/pkg/config"
+	"github.com/raghavkgarg/mycase/pkg/optimizer"
+	"github.com/raghavkgarg/mycase/pkg/selectiontracker"
+	"github.com/raghavkgarg/mycase/pkg/yfinance"
 )
 
 // LoadStrategyConfig loads the weights, filters, and governance from external configurations.

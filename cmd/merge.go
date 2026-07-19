@@ -6,7 +6,7 @@ import (
 
 	"github.com/urfave/cli/v3"
 
-	"github.com/gkgarg24/mycase/pkg/csvloader"
+	"github.com/raghavkgarg/mycase/pkg/csvloader"
 )
 
 var MergeCommand = &cli.Command{

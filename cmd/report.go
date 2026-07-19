@@ -14,10 +14,10 @@ import (
 
 	"github.com/urfave/cli/v3"
 
-	"github.com/gkgarg24/mycase/pkg/config"
-	"github.com/gkgarg24/mycase/pkg/csvloader"
-	"github.com/gkgarg24/mycase/pkg/stockpicker"
-	"github.com/gkgarg24/mycase/pkg/yfinance"
+	"github.com/raghavkgarg/mycase/pkg/config"
+	"github.com/raghavkgarg/mycase/pkg/csvloader"
+	"github.com/raghavkgarg/mycase/pkg/stockpicker"
+	"github.com/raghavkgarg/mycase/pkg/yfinance"
 )
 
 var ReportCommand = &cli.Command{

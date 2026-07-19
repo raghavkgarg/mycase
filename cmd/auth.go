@@ -13,7 +13,7 @@ import (
 	"github.com/urfave/cli/v3"
 	kiteconnect "github.com/zerodha/gokiteconnect/v4"
 
-	"github.com/gkgarg24/mycase/pkg/config"
+	"github.com/raghavkgarg/mycase/pkg/config"
 )
 
 var AuthCommand = &cli.Command{

@@ -1,5 +1,5 @@
 .PHONY: build build-linux-arm64 build-linux-amd64 build-darwin-arm64 build-darwin-amd64
-.PHONY: install run test test-verbose test-race cleanup clean help
+.PHONY: install run test test-verbose test-race test-integration test-coverage cleanup clean help
 
 UNAME_S := $(shell uname -s)
 ifeq ($(UNAME_S),Darwin)
@@ -13,9 +13,9 @@ endif
 VERSION    ?= $(shell git describe --tags 2>/dev/null || echo "0.0.0-dev")
 GIT_COMMIT := $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 BUILD_DATE := $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
-LDFLAGS    := -X github.com/gkgarg24/mycase/cmd.Version=$(VERSION) \
-              -X github.com/gkgarg24/mycase/cmd.GitCommit=$(GIT_COMMIT) \
-              -X github.com/gkgarg24/mycase/cmd.BuildDate=$(BUILD_DATE)
+LDFLAGS    := -X github.com/raghavkgarg/mycase/cmd.Version=$(VERSION) \
+              -X github.com/raghavkgarg/mycase/cmd.GitCommit=$(GIT_COMMIT) \
+              -X github.com/raghavkgarg/mycase/cmd.BuildDate=$(BUILD_DATE)
 
 build:
 	@echo "Building mycase..."
@@ -68,6 +68,17 @@ test-race:
 	@echo "Running tests with race detector..."
 	@go test -race -timeout 60s ./...
 
+test-integration:
+	@echo "Running integration tests (requires network)..."
+	@go test -tags=integration -timeout 120s ./...
+
+test-coverage:
+	@echo "Running tests with coverage..."
+	@go test -coverprofile=coverage.out ./...
+	@go tool cover -func=coverage.out | grep -E "^(total|github)" | tail -1
+	@go tool cover -html=coverage.out -o coverage.html
+	@echo "Coverage report: coverage.html"
+
 cleanup:
 	@echo "=== Format ==="
 	@gofmt -w .
@@ -97,5 +108,7 @@ help:
 	@echo "  test               - Run all tests"
 	@echo "  test-verbose       - Run all tests verbosely"
 	@echo "  test-race          - Run tests with race detector"
+	@echo "  test-integration   - Run integration tests (requires network)"
+	@echo "  test-coverage      - Run tests and generate coverage.html"
 	@echo "  cleanup            - gofmt + go fix + go vet + staticcheck + govulncheck"
 	@echo "  clean              - Remove build artifacts"

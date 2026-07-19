@@ -17,10 +17,10 @@ import (
 	"github.com/urfave/cli/v3"
 	"gopkg.in/yaml.v3"
 
-	"github.com/gkgarg24/mycase/pkg/config"
-	"github.com/gkgarg24/mycase/pkg/csvloader"
-	"github.com/gkgarg24/mycase/pkg/monitoring"
-	"github.com/gkgarg24/mycase/pkg/yfinance"
+	"github.com/raghavkgarg/mycase/pkg/config"
+	"github.com/raghavkgarg/mycase/pkg/csvloader"
+	"github.com/raghavkgarg/mycase/pkg/monitoring"
+	"github.com/raghavkgarg/mycase/pkg/yfinance"
 )
 
 var MonitorCommand = &cli.Command{

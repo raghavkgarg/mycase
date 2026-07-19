@@ -652,9 +652,11 @@ All open questions from initial draft are now resolved.
 
 ### D1 — Module Path: Rename to full domain path
 
-**Decision**: Rename `module mycase` → `module github.com/[username]/mycase`.
+**Decision**: Rename `module mycase` → `module github.com/raghavkgarg/mycase`.
 
-**Rationale**: One-time find-replace across all import paths. Makes the module correctly identifiable, importable if ever open-sourced, and aligns with Go module conventions. `go mod edit -module github.com/[username]/mycase` followed by a sed pass on all `"mycase/pkg/..."` imports.
+**Rationale**: One-time find-replace across all import paths. Makes the module correctly identifiable, importable if ever open-sourced, and aligns with Go module conventions. `go mod edit -module github.com/raghavkgarg/mycase` followed by a sed pass on all `"mycase/pkg/..."` imports.
+
+**Status**: Done. Module is `github.com/raghavkgarg/mycase`. Repository at `https://github.com/raghavkgarg/mycase`.
 
 **Task**: Do this as the very first commit of R1 — before any structural changes — so the diff is clean and isolated.
 
@@ -916,3 +918,654 @@ go get github.com/gocarina/gocsv@latest
 go mod tidy
 ```
 Verify `pkg/csvloader/loader_test.go` still passes — it's the regression test for this package.
+
+---
+
+## 8. Comprehensive Testing Plan
+
+### 8.1 Strategy & Principles
+
+Testing a financial CLI tool requires confidence at three distinct levels:
+
+1. **Pure logic correctness** — math functions (RSI, Sharpe, Sortino, normalizeValue, capWeights) must be exact. Table-driven unit tests with ±ε tolerances are the primary tool.
+2. **Behavioral correctness** — command flag parsing, file I/O flows, error paths. Integration tests drive the real `cmd.Run(ctx, args)` without network.
+3. **Invariant correctness** — financial constraints that must hold for any input (weights sum to 1.0, no weight exceeds cap, RSI ∈ [0,100]). Property-based and fuzz tests catch edge cases that hand-crafted examples miss.
+
+**Core rules:**
+- No test may make real HTTP calls to Yahoo Finance or Zerodha. All network-dependent tests are behind `//go:build integration` and run separately (`make test-integration`).
+- Tests in the `cmd` package must not write to the repo's `data/`, `report/`, or `config/` directories. All file I/O in cmd tests uses `t.TempDir()`.
+- `go test -race ./...` must pass clean. Every goroutine that shares state gets a race test.
+- Each test file lives next to its source in the same package (white-box), except `cmd/` integration tests which live in `cmd_test` (black-box, package suffix `_test`).
+
+**Test dependency matrix (current state vs. target):**
+
+| Package | Unit | Table | Property | Fuzz | Integration | Golden | Benchmark |
+|---------|------|-------|----------|------|-------------|--------|-----------|
+| `pkg/csvloader` | ✅ partial | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| `pkg/stockpicker` | ✅ partial | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| `pkg/optimizer` | ✅ partial | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| `pkg/monitoring` | ✅ partial | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| `pkg/yfinance` | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| `pkg/config` | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| `cmd` | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
+
+Target: all cells filled where applicable.
+
+---
+
+### 8.2 Test Tooling
+
+**Stdlib only (no new deps for unit/property/fuzz):**
+- `testing` — all test types
+- `testing/quick` — property-based tests (basic; no shrinking)
+- `go test -fuzz` (Go 1.18+) — native fuzzing
+
+**One new test dependency — `pgregory.net/rapid` v1:**
+```bash
+go get -t pgregory.net/rapid
+```
+Use `rapid` instead of `testing/quick` for financial invariant tests. Its distinguishing feature is **automatic shrinking**: when a failing input is found, it reduces it to the minimal counter-example. For a function like `capWeights`, a failing input with 50 tickers shrinks to the 2-ticker case that reveals the bug. `testing/quick` cannot do this.
+
+**`net/http/httptest`** (stdlib) — mock HTTP server for yfinance tests. No separate mock library needed.
+
+---
+
+### 8.3 `pkg/csvloader` — Tests to Add
+
+**Existing**: `TestGetUniverseName` (9 table cases).
+
+**Add `loader_test.go`:**
+
+```go
+// TestLoadBasketCSV_Valid — header variants, NSE: prefix normalization
+// TestLoadBasketCSV_MissingHeader — returns error, not panic
+// TestLoadBasketCSV_EmptyFile — returns empty map, empty keys, no error  
+// TestLoadBasketCSV_DuplicateTicker — last row wins (or error — define expected behavior)
+// TestLoadBasketCSV_WeightParsing — scientific notation, commas, negative weights
+
+// TestCombineMultipleCSVs_Basic — 3 files, tickers deduplicated, weights summed/replaced
+// TestCombineMultipleCSVs_SingleFile — passthrough case
+// TestCombineMultipleCSVs_EmptyFile — skips silently
+// TestCombineMultipleCSVs_MissingFile — returns error
+
+// TestMergeGoldenCopy_NewTickers — tickers not in golden get added
+// TestMergeGoldenCopy_ExitedTickers — tickers in golden but not in src get weight 0.0000
+// TestMergeGoldenCopy_WeightUpdate — existing tickers get updated weight
+// TestMergeGoldenCopy_NoChangeNeeded — idempotent merge returns no error
+```
+
+**Fuzz target — `FuzzLoadBasketCSV`:**
+```go
+func FuzzLoadBasketCSV(f *testing.F) {
+    f.Add("ticker,weight\nNSE:TCS,0.5\n")
+    f.Add("")
+    f.Add("ticker\nNSE:TCS\n") // missing weight column
+    f.Fuzz(func(t *testing.T, input string) {
+        r := strings.NewReader(input)
+        // must not panic; error is acceptable
+        _, _, _ = loadBasketCSVFromReader(r) // requires extracting reader-based variant
+    })
+}
+```
+*Prerequisite*: extract `loadBasketCSVFromReader(r io.Reader)` from `LoadBasketCSV(path string)` — standard io.Reader refactor for testability. The path-based function becomes a one-liner wrapper.
+
+**Fuzz target — `FuzzGetUniverseName`:**
+```go
+func FuzzGetUniverseName(f *testing.F) {
+    f.Add("data/microsmall.csv")
+    f.Add("")
+    f.Add("/")
+    f.Add("....csv")
+    f.Fuzz(func(t *testing.T, path string) {
+        result := GetUniverseName(path)
+        if result == "" {
+            t.Errorf("GetUniverseName must never return empty string, got %q for input %q", result, path)
+        }
+    })
+}
+```
+
+---
+
+### 8.4 `pkg/stockpicker` — Tests to Add
+
+**Existing**: `TestIsAbove200DaySMA`, `TestNormalizeValue` (7 table cases), `TestLoadLocalCSVConstituents`, `TestIsEligible`.
+
+**Add to `stockpicker_test.go`:**
+
+```go
+// TestNormalizeValue_Boundary — val == minVal, val == maxVal, val outside range
+// TestNormalizeValue_ZeroRange — minVal == maxVal (already covered — verify no div/0)
+// TestNormalizeValue_NaN — val is NaN → returns 0 or maxPoints (define behavior)
+
+// TestCalculateSharpe — known returns series, expected Sharpe ≈ expected within ±0.001
+// TestCalculateSortino — downside-only series, all-positive series, mixed
+// TestCalculateBeta — perfectly correlated with benchmark → beta = 1.0
+// TestCalculateAlpha — same as benchmark → alpha ≈ 0.0
+// TestCalculateUlcer — constant prices → ulcer = 0.0
+
+// TestScoreStock_Balanced — known inputs → deterministic score
+// TestScoreStock_Multibagger — validates each of the 11 safety filter outcomes
+// TestApplyRebalanceTolerance — within-tolerance stocks are retained in same rank order
+// TestApplyHysteresisBuffer — top-21 request with buffer=5 returns at most top-25 candidates
+```
+
+**Property test — `TestNormalizeValue_Invariants`:**
+```go
+func TestNormalizeValue_Invariants(t *testing.T) {
+    f := func(val, lo, hi, max float64) bool {
+        if lo >= hi || max <= 0 || math.IsNaN(val) || math.IsInf(val, 0) {
+            return true // skip degenerate inputs
+        }
+        result := normalizeValue(val, lo, hi, max, true)
+        return result >= 0 && result <= max+1e-9
+    }
+    if err := quick.Check(f, nil); err != nil {
+        t.Error(err)
+    }
+}
+```
+
+**Property test with `rapid` — `TestScoreOrdering_StableSort`:**
+Generates random portfolios of 5–30 stocks with random but valid Fundamentals. After scoring, verifies that re-running `ScoreStocks` with the identical input returns the same ranking (determinism invariant). Any nondeterminism here would cause pipeline to produce different golden copies on repeated runs.
+
+---
+
+### 8.5 `pkg/optimizer` — Tests to Add
+
+**Existing**: `TestOptimizeFreshBuy`, `TestVolatility`, `TestOptimizeInverseVolatility`.
+
+**Gaps**: `capWeights` has no tests despite being a financial-critical function. `OptimizeMultiFactor` has no tests.
+
+**Add `optimizer_test.go`:**
+
+```go
+// TestCapWeights_Basic — single stock over cap → weight clamped, sum remains 1.0
+// TestCapWeights_AllUnderCap — no capping → output equals input
+// TestCapWeights_CapTooTight — cap < 1/N → equal weight fallback triggered
+// TestCapWeights_SingleStock — N=1, any cap → weight = 1.0
+// TestCapWeights_ZeroWeights — some stocks have weight 0.0 → excluded from redistribution
+// TestCapWeights_NegativeWeight — should either error or treat as 0 (define behavior)
+
+// TestOptimizeFreshBuy_ExactBudget — budget exactly covers N shares of each
+// TestOptimizeFreshBuy_InsufficientBudget — returns all zeros, no partial allocations
+// TestOptimizeFreshBuy_SingleStock — 100% weight, full budget
+// TestOptimizeFreshBuy_ZeroPrice — stock with price=0.0 → skipped, no div/0 panic
+
+// TestCalculateDailyReturns_Empty — empty slice → empty returns (not panic)
+// TestCalculateDailyReturns_SinglePrice — one price → empty returns
+// TestCalculateVolatility_ConstantReturns — all same → 0.0
+// TestCalculateVolatility_Empty — empty → 0.0 (no NaN/Inf)
+```
+
+**Property tests with `rapid` — `TestCapWeights_Invariants`:**
+```go
+func TestCapWeights_Invariants(t *testing.T) {
+    rapid.Check(t, func(t *rapid.T) {
+        n := rapid.IntRange(1, 30).Draw(t, "n")
+        cap := rapid.Float64Range(0.01, 1.0).Draw(t, "cap")
+        // Generate n weights that sum to 1.0
+        weights := drawNormalizedWeights(t, n)
+        result := capWeights(weights, cap)
+        var total float64
+        for _, w := range result {
+            if w > cap+1e-9 {
+                t.Fatalf("weight %f exceeds cap %f", w, cap)
+            }
+            total += w
+        }
+        if math.Abs(total-1.0) > 1e-9 {
+            t.Fatalf("weights sum to %f, expected 1.0", total)
+        }
+    })
+}
+```
+
+**Benchmark — `BenchmarkOptimizeMultiFactor`:**
+```go
+func BenchmarkOptimizeMultiFactor(b *testing.B) {
+    // 25-ticker portfolio, 3mo price history (63 days each)
+    // Measures time to run one full MFS optimization pass
+    // Target: < 50ms per run (it runs synchronously in pipeline)
+}
+```
+
+---
+
+### 8.6 `pkg/monitoring` — Tests to Add
+
+**Existing**: `TestGetCapStallSeverity` (4 table cases), `TestRunSimulation` (minimal).
+
+**Gaps**: Mock data generation determinism is untested. The simulator's rebalancing logic has no edge case coverage.
+
+**Add `simulator_test.go`:**
+
+```go
+// TestRunSimulation_SingleStock — portfolio with one stock at weight=1.0
+// TestRunSimulation_ZeroCapital — capital=0 → error or zero returns (define behavior)
+// TestRunSimulation_FlatPrices — all prices constant → return=0, drawdown=0
+// TestRunSimulation_AllDecline — all stocks fall to 0 → drawdown ≈ 100%, no panic
+// TestRunSimulation_ShortHistory — fewer days than SMADays → handles gracefully
+// TestRunSimulation_Determinism — same inputs, same seed → identical SimulationResult (bit-for-bit)
+
+// TestGetCapStallSeverity_Boundary — ttmGrowth == cagr3y exactly (boundary between None/Mild)
+// TestGetCapStallSeverity_NegativeGrowth — both negative → should still classify correctly
+```
+
+**Mock determinism test:**
+```go
+func TestMockDataDeterminism(t *testing.T) {
+    portfolio := []StockInfo{{Ticker: "NSE:TEST", Weight: 1.0}}
+    data1 := GenerateMockPortfolioData(portfolio, 250)
+    data2 := GenerateMockPortfolioData(portfolio, 250)
+    // Seeded with 42 — must produce identical slices every run
+    if !reflect.DeepEqual(data1, data2) {
+        t.Error("mock data generator is not deterministic with fixed seed")
+    }
+}
+```
+This test is a canary for the seed-42 determinism guarantee used across the codebase. If R3.6 (`math/rand/v2` migration) accidentally breaks the seed, this test catches it.
+
+---
+
+### 8.7 `pkg/yfinance` — Tests to Add (No Existing Tests)
+
+This is the largest gap. Every command ultimately calls into yfinance, yet it has zero tests. The primary obstacle is HTTP dependency — solved with `httptest.NewServer`.
+
+**Refactor prerequisite**: Extract a `baseURL string` field (or constructor option) from the package-level `const`. Functions currently hardcode `https://query1.finance.yahoo.com`. Add:
+```go
+var yfinanceBaseURL = "https://query1.finance.yahoo.com" // overrideable in tests
+```
+Then tests set `yfinance.SetBaseURLForTesting(ts.URL)` (unexported via `export_test.go`).
+
+**Pure math tests — no HTTP needed:**
+```go
+// TestCalculateRSI_AllUp — 15 sessions all up 1% → RSI near 100
+// TestCalculateRSI_AllDown — 15 sessions all down 1% → RSI near 0
+// TestCalculateRSI_Alternating — up/down alternating → RSI near 50
+// TestCalculateRSI_Insufficient — fewer than 14 prices → returns 50.0 (neutral)
+// TestCalculateRSI_Bounds — for any 14+ price series, result ∈ [0, 100]
+
+// TestCalculateSalesGrowth_Accelerating — TTM > CAGR → passed=true
+// TestCalculateSalesGrowth_Decelerating — TTM < CAGR → passed=false
+// TestCalculateSalesGrowth_InsufficientHistory — < 3 annual revenue points → passed=false
+// TestCalculateSalesGrowth_NegativeRevenue — revenue turns negative mid-series → no panic
+
+// TestCalculateDSO_Normal — 2 years A/R and revenue data → correct days calculation
+// TestCalculateDSO_MissingAR — empty AnnualAR → passed=false, no panic
+// TestCalculateDSO_ZeroRevenue — division-by-zero guard
+
+// TestCalculateAssetTurnoverCapEx_Improving — asset turnover up YoY, capex flat → passed=true
+// TestCalculateAssetTurnoverCapEx_CapExSpike — capex > 1.15× last year → passed=false
+// TestCalculateAssetTurnoverCapEx_MissingData — empty slices → passed=false, no panic
+
+// TestCheckVolumeBreakout_Clear — strong green day on 3× average volume → true
+// TestCheckVolumeBreakout_Insufficient — lookback > available data → false (no panic)
+// TestCheckVolumeBreakout_NoBreakout — volume always below multiplier × avg → false
+
+// TestMapTickerToYahoo — NSE:TCS → TCS.NS, BSE:500112 → 500112.BO, ^NSEI → ^NSEI
+// TestCleanIntradayNoise — today's after-15:30 IST data is stripped
+```
+
+**HTTP mock tests — use `httptest.NewServer`:**
+```go
+// TestFetchHistoricalPrices_Success — fixture JSON with known price series
+// TestFetchHistoricalPrices_RateLimit — 429 response → returns wrapped error, not panic
+// TestFetchHistoricalPrices_EmptyResult — valid JSON, zero events → returns empty slice
+// TestFetchHistoricalPrices_MalformedJSON — garbage body → returns error
+// TestFetchFundamentals_Success — fixture JSON matching Fundamentals struct fields
+// TestFetchFundamentals_PartialData — missing fields → zero values, no panic
+// TestFetchQuotes_MultiTicker — batch quote response for 5 tickers
+// TestFetchQuotes_UnknownTicker — ticker not in response → value=0.0, no key error
+```
+
+**Fixture JSON files** live in `pkg/yfinance/testdata/`:
+- `testdata/historical_1y_TCS.json` — 252 trading days of TCS.NS
+- `testdata/fundamentals_TCS.json` — full fundamentals response
+- `testdata/quotes_batch.json` — 5-ticker quote response
+- `testdata/historical_empty.json` — valid envelope, zero results array
+
+**Fuzz target — `FuzzParseFundamentalsJSON`:**
+```go
+func FuzzParseFundamentalsJSON(f *testing.F) {
+    b, _ := os.ReadFile("testdata/fundamentals_TCS.json")
+    f.Add(b)
+    f.Add([]byte("{}"))
+    f.Add([]byte("null"))
+    f.Fuzz(func(t *testing.T, data []byte) {
+        // parseFundamentalsResponse is the internal JSON unmarshal helper
+        // must not panic; zero-value Fundamentals is acceptable on bad input
+        _, _ = parseFundamentalsResponse(data)
+    })
+}
+```
+
+**Property test — `TestRSI_AlwaysInBounds`:**
+```go
+func TestRSI_AlwaysInBounds(t *testing.T) {
+    rapid.Check(t, func(t *rapid.T) {
+        n := rapid.IntRange(5, 500).Draw(t, "n")
+        prices := make([]float64, n)
+        for i := range prices {
+            prices[i] = rapid.Float64Range(0.01, 10000.0).Draw(t, "price")
+        }
+        rsi := CalculateRSI(prices)
+        if rsi < 0 || rsi > 100 {
+            t.Fatalf("RSI(%v...) = %f: must be in [0, 100]", prices[:min(3, n)], rsi)
+        }
+    })
+}
+```
+
+---
+
+### 8.8 `pkg/config` — Tests to Add (No Existing Tests)
+
+```go
+// TestLoadMFSConfig_Balanced — loads config/mfs.json "balanced" section, spot-checks weights
+// TestLoadMFSConfig_UnknownMethod — falls back to defaults, no error
+// TestLoadMFSConfig_MissingFile — returns defaults, no error (graceful degradation)
+// TestLoadMFSConfig_MalformedJSON — returns error
+// TestLoadMFSConfig_NegativeWeights — loaded weights are non-negative
+
+// TestPipelineConfig_UnmarshalYAML_Defaults — minimal YAML, all defaults populated
+// TestPipelineConfig_UnmarshalYAML_ListValues — strategy: [balanced, multibagger] → takes first
+// TestPipelineConfig_UnmarshalYAML_NegativeTolerance — negative rebalance_tolerance → clamped to 0.10
+// TestPipelineConfig_UnmarshalYAML_ZeroTopN — top_n=0 → clamped to default (20)
+```
+
+**Fuzz target — `FuzzPipelineConfigYAML`:**
+```go
+func FuzzPipelineConfigYAML(f *testing.F) {
+    f.Add([]byte("indices: [nifty50]\nstrategy: balanced\ntop_n: 20\n"))
+    f.Add([]byte("{}"))
+    f.Add([]byte("strategy: [a, b, c]\ntop_n: [[1,2],[3,4]]\n"))
+    f.Fuzz(func(t *testing.T, data []byte) {
+        var cfg PipelineConfig
+        _ = yaml.Unmarshal(data, &cfg)
+        // must not panic; invalid YAML returns error
+    })
+}
+```
+
+---
+
+### 8.9 `cmd` Package — CLI Integration Tests
+
+The `cmd` package has zero tests today. Each subcommand needs two tiers:
+
+**Tier 1 — Flag parsing (no I/O, no network):** Verify that required flags are enforced, unknown flags return errors, help text renders without panic.
+
+**Tier 2 — File I/O integration (local files, no network):** Run the command with a fixture CSV in `t.TempDir()`. Verify the output file exists and has valid content.
+
+**Test file**: `cmd/cmd_integration_test.go` (package `cmd_test`)
+
+```go
+package cmd_test
+
+import (
+    "context"
+    "os"
+    "path/filepath"
+    "testing"
+
+    mycmd "github.com/raghavkgarg/mycase/cmd"
+    "github.com/urfave/cli/v3"
+)
+
+func newApp() *cli.Command {
+    return &cli.Command{
+        Name: "mycase",
+        Commands: []*cli.Command{
+            mycmd.PickCommand, mycmd.OptimizeCommand,
+            mycmd.ReportCommand, mycmd.PerformanceCommand,
+            mycmd.MergeCommand,
+        },
+    }
+}
+
+// TestPickCommand_Help — mycase pick --help exits 0, output contains "pick"
+// TestPickCommand_MissingArgs — mycase pick (no --index, no --file) → error
+// TestPickCommand_UnknownFlag — mycase pick --notaflag → error
+// TestPickCommand_InvalidMethod — mycase pick --file f.csv --method invalid → error or fallback
+
+// TestOptimizeCommand_InvalidRange — --range 5yr → error
+// TestOptimizeCommand_CapBelowZero — --cap -0.1 → error or clamp to 0
+// TestOptimizeCommand_WithFixture — --file testdata/basket.csv → output CSV in tempdir
+
+// TestReportCommand_MissingFile — mycase report → error (--file required)
+// TestReportCommand_NonExistentFile — --file /nonexistent.csv → error with path in message
+// TestReportCommand_WithFixture — --file testdata/golden.csv → report file written to report/
+
+// TestPerformanceCommand_InvalidDate — --date notadate → error
+// TestPerformanceCommand_InvalidTime — --time 25:99 → error
+// TestPerformanceCommand_InvalidCapital — --capital -1000 → error or clamp
+
+// TestMergeCommand_Combine_TwoFiles — merge combine a.csv b.csv → output contains all tickers
+// TestMergeCommand_Golden_MissingArgs — merge golden (no args) → error
+
+// TestParsePerfDate_Formats — "2026-01-15", "20260115", "" (today), "baddate" → verify
+// TestCleanBasketArg_LeadingDashes — "--MICROSMALL" → "MICROSMALL"
+// TestResolveFirst_Types — int, string, float64, nil, list → expected type extraction
+```
+
+**Fixture files**: `cmd/testdata/`
+- `basket.csv` — 5 tickers with weights
+- `golden.csv` — 10 tickers matching real golden copy structure
+- `pipeline.yaml` — minimal valid config
+
+**Important**: Commands that open `data/` or `report/` relative to CWD need to be run with `os.Chdir(t.TempDir())` or accept a working directory parameter. If the latter refactor is not done, use `t.Chdir()` (Go 1.24+, sets CWD for the test and restores it after).
+
+---
+
+### 8.10 Fuzz Testing Summary
+
+All fuzz targets, their corpus seeds, and expected invariants:
+
+| Target | File | Invariant |
+|--------|------|-----------|
+| `FuzzLoadBasketCSV` | `pkg/csvloader/csvloader_fuzz_test.go` | No panic; error OK |
+| `FuzzGetUniverseName` | `pkg/csvloader/csvloader_fuzz_test.go` | Returns non-empty string |
+| `FuzzParseFundamentalsJSON` | `pkg/yfinance/yfinance_fuzz_test.go` | No panic |
+| `FuzzPipelineConfigYAML` | `pkg/config/config_fuzz_test.go` | No panic |
+| `FuzzParsePerfDate` | `cmd/cmd_fuzz_test.go` | No panic; valid time or error |
+| `FuzzCleanBasketArg` | `cmd/cmd_fuzz_test.go` | No panic; result has no leading dashes |
+| `FuzzResolveFirst_String` | `cmd/cmd_fuzz_test.go` | Never panics for any interface{} |
+
+Run all fuzz targets for 60 seconds each in CI:
+```bash
+go test -fuzz=FuzzLoadBasketCSV -fuzztime=60s ./pkg/csvloader/
+```
+
+Fuzz corpus entries are checked into `testdata/fuzz/<FuzzFuncName>/` alongside each package.
+
+---
+
+### 8.11 Property-Based Testing with `rapid`
+
+Install once:
+```bash
+go get -t pgregory.net/rapid@latest
+```
+
+Key invariants to verify across random inputs:
+
+| Invariant | Package | Test name |
+|-----------|---------|-----------|
+| `∀k: capWeights(w,c)[k] ≤ c+ε` and `Σw ≈ 1.0` | `optimizer` | `TestCapWeights_Invariants` |
+| `OptimizeInverseVolatility`: `Σw ≈ 1.0`, all `w > 0` | `optimizer` | `TestInverseVol_SumsToOne` |
+| `CalculateRSI(prices) ∈ [0, 100]` for any valid prices | `yfinance` | `TestRSI_AlwaysInBounds` |
+| `normalizeValue(v, lo, hi, max, _) ∈ [0, max]` | `stockpicker` | `TestNormalize_Bounded` |
+| `MergeGoldenCopy`: exited tickers have `weight == 0.0000` | `csvloader` | `TestMergeGolden_ExitedWeight` |
+| `CombineMultipleCSVs`: no ticker appears twice in output | `csvloader` | `TestCombine_NoDuplicates` |
+| `OptimizeFreshBuy`: total spend ≤ budget | `optimizer` | `TestFreshBuy_BudgetConstraint` |
+| `ScoreStocks` is deterministic: same input → same order | `stockpicker` | `TestScore_Deterministic` |
+
+**Stateful property test** — `TestPortfolioCycleStability`:
+Simulate a sequence of operations: generate random basket → optimize → merge golden → optimize again. After 3 cycles, verify that weights are stable (the pipeline converges rather than oscillating). This catches feedback-loop bugs in the rebalancing logic.
+
+---
+
+### 8.12 Golden File Tests
+
+Golden file tests capture command output (report text, CSV structure) and detect unintended regressions in output format. Useful for `report`, `monitor`, and `performance` where the output is human-readable text.
+
+**Pattern:**
+```go
+func TestReportOutput_Balanced_Golden(t *testing.T) {
+    // Run report with fixture golden.csv + mocked yfinance HTTP
+    // Compare output file against testdata/golden/report_balanced.txt
+    // On first run (no golden file): write and pass
+    // On subsequent runs: diff; fail if changed
+    // To update: DELETE the golden file and re-run
+}
+```
+
+**Golden files** stored in `testdata/golden/`:
+- `report_balanced.txt` — full report for 5-ticker fixture portfolio
+- `report_multibagger.txt` — multibagger strategy report
+- `monitor_output.txt` — monitor command output for fixture + mock prices
+- `performance_output.txt` — performance simulation tabular output
+
+Update golden files with:
+```bash
+UPDATE_GOLDEN=1 go test ./cmd/...
+```
+
+The test checks `os.Getenv("UPDATE_GOLDEN") != ""` before writing vs. comparing.
+
+---
+
+### 8.13 Benchmark Tests
+
+Focus on functions called in the hot path of `pipeline` (sequential), `pick` (concurrent yfinance fetches), and `optimize` (math-heavy).
+
+| Benchmark | File | Measure |
+|-----------|------|---------|
+| `BenchmarkOptimizeInverseVolatility_25` | `pkg/optimizer/` | 25-stock portfolio, 3mo prices |
+| `BenchmarkOptimizeMultiFactor_25` | `pkg/optimizer/` | 25-stock portfolio with fundamentals |
+| `BenchmarkCapWeights_25` | `pkg/optimizer/` | 25-stock portfolio, cap=0.10 |
+| `BenchmarkCalculateRSI` | `pkg/yfinance/` | 252-day price series |
+| `BenchmarkScoreStocks_25` | `pkg/stockpicker/` | 25-stock scoring pass |
+| `BenchmarkCombineMultipleCSVs_3x25` | `pkg/csvloader/` | 3 files × 25 tickers each |
+
+Run with:
+```bash
+go test -bench=. -benchmem -count=5 ./pkg/optimizer/ ./pkg/yfinance/ ./pkg/stockpicker/
+```
+
+Performance budgets (approximate targets, not hard CI gates initially):
+- `capWeights(25 stocks)` < 1 µs
+- `OptimizeInverseVolatility(25 stocks, 63 days)` < 100 µs
+- `ScoreStocks(25 stocks)` < 500 µs
+
+---
+
+### 8.14 Error Path Coverage Checklist
+
+For each command, verify these error conditions return a wrapped, descriptive error (not panic, not silent swallow):
+
+**`pick`**
+- [ ] Index name not in `pkg/datafetcher` lookup table → `"unknown index: X"`
+- [ ] `--file` path does not exist → OS error with path in message
+- [ ] `--file` CSV has no `ticker` column → format error
+- [ ] `--range` is unsupported → `"unsupported range 'X'"`
+- [ ] `--top` is 0 or negative → error or default
+
+**`optimize`**
+- [ ] `--file` does not exist → error
+- [ ] `--method` is unknown → warning + fallback to `volatility`
+- [ ] `--cap` > 1.0 → clamp to 1.0 with warning
+- [ ] `--remove` contains a ticker not in basket → warning only (not error)
+- [ ] All tickers removed via `--remove` → `"no active tickers remaining"`
+
+**`report`**
+- [ ] `--file` required but missing → urfave/cli required-flag error
+- [ ] CSV exists but has < 2 rows → `"CSV file contains no data rows"`
+- [ ] `report/` directory not writable → OS error with path
+
+**`performance`**
+- [ ] `--date` in wrong format → `"invalid date format: X"`
+- [ ] `--time` in wrong format → `"invalid time format"`
+- [ ] `--capital` = 0 → all allocations = 0, returns = 0 (not div/0)
+- [ ] CSV has no data rows → error
+
+**`basket`**
+- [ ] No portfolio name arg and `--file` not specified → error
+- [ ] `--file` does not exist → error
+- [ ] Zerodha auth token missing/expired → descriptive auth error (not raw JSON)
+
+**`pipeline`**
+- [ ] `--config` file not found → error with path
+- [ ] YAML config has no `indices` → `"no indices configured"`
+- [ ] Individual step failure propagates with step number: `"step 2 (pick nifty50): ..."`
+
+**`merge combine`**
+- [ ] Fewer than 2 file args → usage error
+- [ ] One of the source files does not exist → error with filename
+
+---
+
+### 8.15 Race Condition Tests
+
+The following concurrent patterns in the codebase need `go test -race` verification:
+
+| Pattern | Location | Risk |
+|---------|----------|------|
+| Concurrent `FetchHistoricalPrices` goroutines writing to `priceHistory map` | `cmd/optimize.go`, `cmd/report.go` | data race on map write |
+| Concurrent `FetchFundamentals` goroutines | `cmd/report.go` | same map race |
+| `RunSimulation` internal goroutines writing `holdings` state | `pkg/monitoring/simulator.go` | TBD on inspection |
+| `yfinance.saveToCache` / `loadFromCache` file I/O concurrent calls | `pkg/yfinance/prices.go` | concurrent file writes |
+
+Add `go test -race ./...` to `make test-race` (already in Makefile). Promote to required CI gate. The existing `monitoring` and `optimizer` tests pass under `-race` — verify `csvloader` and `stockpicker` too after adding concurrent tests.
+
+---
+
+### 8.16 Integration Tests (Network, `//go:build integration`)
+
+These tests make real HTTP calls to Yahoo Finance and are excluded from the default `make test` run. They verify the full live data pipeline works end-to-end.
+
+**Build tag**: `//go:build integration`  
+**Run**: `make test-integration` → `go test -tags=integration -timeout=120s ./...`
+
+```go
+//go:build integration
+
+// TestFetchHistoricalPrices_Live_TCS — fetches TCS.NS 3mo data, verifies ≥ 60 prices
+// TestFetchFundamentals_Live_Reliance — fetches RELIANCE.NS fundamentals, spot-checks ForwardPE > 0
+// TestPickCommand_Live_Nifty50 — runs pick --index nifty50 --top 5, verifies 5 tickers returned
+// TestMonitorCommand_Live_Fixture — runs monitor --file testdata/golden.csv with live yfinance data
+```
+
+Integration tests must:
+- Not write to real `data/` or `report/` directories
+- Use `t.TempDir()` for all output
+- Respect `MYCASE_SKIP_INTEGRATION=1` env var for offline environments
+- Have a 30-second per-test timeout
+
+---
+
+### 8.17 Phase-by-Phase Testing Gates
+
+Each refactor phase ships with test coverage as a gate to merge:
+
+| Phase | Gate |
+|-------|------|
+| **R1 (done)** | `go test ./...` passes; `go test -race ./...` passes |
+| **R2** | All new `pkg/` packages have ≥ 80% statement coverage; `cmd/` integration tests pass |
+| **R3** | All fuzz targets added; `make cleanup` (staticcheck + govulncheck) passes |
+| **R-cache** | `pkg/cache/` has schema tests, CRUD round-trip tests, staleness policy tests |
+| **R4** | `pkg/broker/` has interface compliance tests; Zerodha implementation passes mock test |
+| **R5** | `pkg/alert/` has mock Alerter test; daemon state persistence round-trip test |
+| **R7** | `pkg/backtest/` has simulation tests with known CAGR, Sharpe from fixture data |
+| **R8** | `pkg/server/` has HTTP handler tests using `httptest.NewRecorder` |
+
+**Coverage target**: `go tool cover -func=coverage.out` must show ≥ 80% for each package in R1–R3. Not enforced as a hard gate for later phases (R7, R8 are exploratory) but tracked.
+
+```makefile
+test-coverage:
+	@go test -coverprofile=coverage.out ./...
+	@go tool cover -func=coverage.out | grep -E "^(total|github)" | tail -1
+	@go tool cover -html=coverage.out -o coverage.html
+	@echo "Coverage report: coverage.html"
+```

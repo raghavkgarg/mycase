@@ -10,9 +10,9 @@ import (
 
 	"github.com/urfave/cli/v3"
 
-	"github.com/gkgarg24/mycase/pkg/selectiontracker"
-	"github.com/gkgarg24/mycase/pkg/stockpicker"
-	"github.com/gkgarg24/mycase/pkg/yfinance"
+	"github.com/raghavkgarg/mycase/pkg/selectiontracker"
+	"github.com/raghavkgarg/mycase/pkg/stockpicker"
+	"github.com/raghavkgarg/mycase/pkg/yfinance"
 )
 
 var PickCommand = &cli.Command{

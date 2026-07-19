@@ -7,9 +7,9 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/gkgarg24/mycase/pkg/market"
-	"github.com/gkgarg24/mycase/pkg/optimizer"
-	"github.com/gkgarg24/mycase/pkg/portfolio"
+	"github.com/raghavkgarg/mycase/pkg/market"
+	"github.com/raghavkgarg/mycase/pkg/optimizer"
+	"github.com/raghavkgarg/mycase/pkg/portfolio"
 )
 
 // PadString pads a string with spaces on the right to reach the target width in runes

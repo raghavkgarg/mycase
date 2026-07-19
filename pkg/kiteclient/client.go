@@ -4,7 +4,7 @@ import (
 	"fmt"
 
 	kiteconnect "github.com/zerodha/gokiteconnect/v4"
-	"github.com/gkgarg24/mycase/pkg/config"
+	"github.com/raghavkgarg/mycase/pkg/config"
 )
 
 // InitKiteClient initializes a Zerodha Kite Connect client.

@@ -4,8 +4,8 @@ import (
 	"fmt"
 
 	kiteconnect "github.com/zerodha/gokiteconnect/v4"
-	"github.com/gkgarg24/mycase/pkg/portfolio"
-	"github.com/gkgarg24/mycase/pkg/yfinance"
+	"github.com/raghavkgarg/mycase/pkg/portfolio"
+	"github.com/raghavkgarg/mycase/pkg/yfinance"
 )
 
 // FetchMarketData retrieves stock price quotes (from yfinance with fallback to Kite) and holdings.
