@@ -14,6 +14,7 @@ See `docs/architecture.md` for design details, CLI structure, directory layout, 
 | **D1** — Module rename | `module mycase` → `module github.com/raghavkgarg/mycase`. All 29 source files, Makefile, and tests updated. | `aef5489`, `782a663` |
 | **R3 infra** — Go + deps | `go 1.24.4` → `go 1.26.3`; `gocsv` updated from 2018 pin to latest. | `bd3c4c0` |
 | **R3 language** — Go 1.26 idioms | `math/rand/v2` replaces `math/rand` in monitor mock generator; `slices.SortFunc`/`slices.Sort` replace `sort.Interface` boilerplate (`ByPnLPct`) and `sort.Strings`; `max()` builtin replaces `math.Max` cast in printer; `go mod tidy` promotes `urfave/cli/v3` to direct dep. | `d019c9a` |
+| **Tests (partial)** + **R2.4 partial** | `CapWeights` extracted from `cmd/optimize.go` → `pkg/optimizer/cap_weights.go` (exported). 28 new tests across `pkg/optimizer` (capWeights + math edge cases + quick-check property test), `pkg/monitoring` (simulator determinism, empty portfolio, insufficient history, NaN guard, boundary cases), `pkg/config` (MFSConfig, Themes, Config round-trip — all graceful fallback paths). | _current_ |
 | **Makefile** | Targets: build, install, cross-compile (linux/darwin arm64/amd64), run, test, test-verbose, test-race, test-integration, test-coverage, cleanup, clean, help. LDFLAGS inject Version/GitCommit/BuildDate. | `0ad3a25`, `782a663` |
 
 ---
