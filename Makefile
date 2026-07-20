@@ -1,5 +1,5 @@
 .PHONY: build build-linux-arm64 build-linux-amd64 build-darwin-arm64 build-darwin-amd64
-.PHONY: install run test test-verbose test-race test-integration test-coverage cleanup clean help
+.PHONY: install run test test-verbose test-race test-integration test-coverage cleanup clean fetch-echarts help
 
 UNAME_S := $(shell uname -s)
 ifeq ($(UNAME_S),Darwin)
@@ -96,6 +96,12 @@ clean:
 	@rm -f dist/mycase dist/mycase-arm64 dist/mycase-amd64 dist/mycase-darwin-arm64 dist/mycase-darwin-amd64
 	@echo "Cleaned"
 
+fetch-echarts:
+	@echo "Downloading ECharts 5.6.0…"
+	@curl -fsSL "https://cdn.jsdelivr.net/npm/echarts@5.6.0/dist/echarts.min.js" \
+		-o pkg/server/static/vendor/echarts.min.js
+	@echo "ECharts downloaded to pkg/server/static/vendor/echarts.min.js"
+
 help:
 	@echo "Available targets:"
 	@echo "  build              - Build dist/mycase binary"
@@ -112,3 +118,4 @@ help:
 	@echo "  test-coverage      - Run tests and generate coverage.html"
 	@echo "  cleanup            - gofmt + go fix + go vet + staticcheck + govulncheck"
 	@echo "  clean              - Remove build artifacts"
+	@echo "  fetch-echarts      - Download ECharts 5.6.0 into pkg/server/static/vendor/"

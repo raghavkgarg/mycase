@@ -1,0 +1,399 @@
+:root {
+  --color-bg: #0f1117;
+  --color-surface: #1a1d24;
+  --color-border: #2d3139;
+  --color-text: #e2e8f0;
+  --color-muted: #8892a4;
+  --color-primary: #4f8ef7;
+  --color-success: #34c77b;
+  --color-warn: #f5a623;
+  --color-danger: #e05252;
+  --color-sell: #e05252;
+  --color-buy: #34c77b;
+  --font: 'Inter', system-ui, sans-serif;
+  --radius: 8px;
+}
+
+*, *::before, *::after {
+  box-sizing: border-box;
+}
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-family: var(--font);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.app {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+}
+
+/* ── Nav ──────────────────────────────────────────────────────────────── */
+
+nav.top-nav {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 0 24px;
+  height: 52px;
+  background: var(--color-surface);
+  border-bottom: 1px solid var(--color-border);
+  position: sticky;
+  top: 0;
+  z-index: 100;
+}
+
+nav.top-nav .logo {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--color-primary);
+  text-decoration: none;
+  letter-spacing: -0.3px;
+}
+
+nav.top-nav portfolio-header {
+  flex: 0 0 auto;
+}
+
+nav.top-nav .tab-links {
+  display: flex;
+  gap: 4px;
+  margin-left: auto;
+}
+
+nav.top-nav .tab-links a {
+  display: inline-block;
+  padding: 6px 14px;
+  border-radius: var(--radius);
+  color: var(--color-muted);
+  text-decoration: none;
+  font-size: 13px;
+  transition: background 0.15s, color 0.15s;
+}
+
+nav.top-nav .tab-links a:hover {
+  background: rgba(255,255,255,0.06);
+  color: var(--color-text);
+}
+
+nav.top-nav .tab-links a.active {
+  background: rgba(79,142,247,0.15);
+  color: var(--color-primary);
+}
+
+/* ── Views ────────────────────────────────────────────────────────────── */
+
+.view {
+  display: none;
+  padding: 24px;
+  flex: 1;
+}
+
+.view.active {
+  display: block;
+}
+
+.view-grid {
+  display: grid;
+  gap: 20px;
+}
+
+.view-grid-2 {
+  grid-template-columns: 1fr 1fr;
+}
+
+.view-grid-3 {
+  grid-template-columns: repeat(3, 1fr);
+}
+
+/* ── Card ─────────────────────────────────────────────────────────────── */
+
+.card {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  padding: 16px 20px;
+}
+
+.card-title {
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: var(--color-muted);
+  margin: 0 0 12px;
+}
+
+.metric-card {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.metric-card .metric-label {
+  font-size: 11px;
+  color: var(--color-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.metric-card .metric-value {
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--color-text);
+}
+
+.metric-card .metric-value.positive {
+  color: var(--color-success);
+}
+
+.metric-card .metric-value.negative {
+  color: var(--color-danger);
+}
+
+/* ── Tables ───────────────────────────────────────────────────────────── */
+
+.data-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.data-table th {
+  text-align: right;
+  padding: 8px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--color-muted);
+  border-bottom: 1px solid var(--color-border);
+  white-space: nowrap;
+}
+
+.data-table th:first-child {
+  text-align: left;
+}
+
+.data-table td {
+  text-align: right;
+  padding: 8px 10px;
+  border-bottom: 1px solid rgba(255,255,255,0.04);
+  color: var(--color-text);
+  white-space: nowrap;
+}
+
+.data-table td:first-child {
+  text-align: left;
+}
+
+.data-table tbody tr:hover {
+  background: rgba(255,255,255,0.03);
+}
+
+.data-table .cell-buy,
+.cell-positive {
+  color: var(--color-buy);
+}
+
+.data-table .cell-sell,
+.cell-negative {
+  color: var(--color-sell);
+}
+
+/* ── Badges ───────────────────────────────────────────────────────────── */
+
+.badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+
+.badge-buy { background: rgba(52,199,123,0.15); color: var(--color-buy); }
+.badge-sell { background: rgba(224,82,82,0.15); color: var(--color-sell); }
+.badge-hold { background: rgba(79,142,247,0.15); color: var(--color-primary); }
+.badge-exit { background: rgba(224,82,82,0.15); color: var(--color-sell); }
+.badge-alert { background: rgba(245,166,35,0.15); color: var(--color-warn); }
+.badge-stcg { background: rgba(224,82,82,0.12); color: var(--color-sell); }
+.badge-ltcg { background: rgba(79,142,247,0.12); color: var(--color-primary); }
+.badge-unknown { background: rgba(136,146,164,0.12); color: var(--color-muted); }
+
+/* ── Chart container ──────────────────────────────────────────────────── */
+
+.chart-container {
+  width: 100%;
+  height: 300px;
+}
+
+.chart-container.tall {
+  height: 400px;
+}
+
+/* ── Form ─────────────────────────────────────────────────────────────── */
+
+.form-row {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  margin-bottom: 16px;
+}
+
+.form-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.form-group label {
+  font-size: 11px;
+  color: var(--color-muted);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.form-group input,
+.form-group select {
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  color: var(--color-text);
+  padding: 6px 10px;
+  font-size: 13px;
+  font-family: var(--font);
+  outline: none;
+  transition: border-color 0.15s;
+}
+
+.form-group input:focus,
+.form-group select:focus {
+  border-color: var(--color-primary);
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 7px 16px;
+  border-radius: var(--radius);
+  border: none;
+  font-size: 13px;
+  font-weight: 600;
+  font-family: var(--font);
+  cursor: pointer;
+  transition: opacity 0.15s;
+}
+
+.btn:hover { opacity: 0.85; }
+.btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+.btn-primary {
+  background: var(--color-primary);
+  color: #fff;
+}
+
+.btn-danger {
+  background: var(--color-danger);
+  color: #fff;
+}
+
+.btn-ghost {
+  background: rgba(255,255,255,0.06);
+  color: var(--color-text);
+}
+
+/* ── Summary bar ──────────────────────────────────────────────────────── */
+
+.summary-bar {
+  display: flex;
+  gap: 24px;
+  padding: 12px 0;
+  flex-wrap: wrap;
+}
+
+.summary-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.summary-item .s-label {
+  font-size: 11px;
+  color: var(--color-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.summary-item .s-value {
+  font-size: 18px;
+  font-weight: 700;
+}
+
+/* ── Loading / empty states ───────────────────────────────────────────── */
+
+.loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 40px;
+  color: var(--color-muted);
+  font-size: 13px;
+}
+
+.empty-state {
+  padding: 32px;
+  text-align: center;
+  color: var(--color-muted);
+}
+
+/* ── Drift gauge ──────────────────────────────────────────────────────── */
+
+.drift-gauge {
+  height: 6px;
+  border-radius: 3px;
+  background: var(--color-border);
+  overflow: hidden;
+  margin: 4px 0;
+}
+
+.drift-gauge-fill {
+  height: 100%;
+  border-radius: 3px;
+  transition: width 0.4s;
+}
+
+.drift-low .drift-gauge-fill { background: var(--color-success); }
+.drift-mid .drift-gauge-fill { background: var(--color-warn); }
+.drift-high .drift-gauge-fill { background: var(--color-danger); }
+
+/* ── Responsive ───────────────────────────────────────────────────────── */
+
+@media (max-width: 768px) {
+  nav.top-nav {
+    flex-wrap: wrap;
+    height: auto;
+    padding: 8px 16px;
+  }
+  .view {
+    padding: 16px;
+  }
+  .view-grid-2, .view-grid-3 {
+    grid-template-columns: 1fr;
+  }
+}

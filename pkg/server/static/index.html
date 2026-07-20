@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>mycase dashboard</title>
+  <link rel="stylesheet" href="/static/css/app.css" />
+  <link rel="stylesheet" href="/static/css/components.css" />
+  <script src="/static/vendor/echarts.min.js"></script>
+</head>
+<body>
+<div class="app">
+  <nav class="top-nav">
+    <a class="logo" href="#/">mycase</a>
+    <portfolio-header></portfolio-header>
+    <div class="tab-links">
+      <a href="#/" id="tab-dashboard">Dashboard</a>
+      <a href="#/backtest" id="tab-backtest">Backtest</a>
+      <a href="#/rebalance" id="tab-rebalance">Rebalance</a>
+      <a href="#/monitor" id="tab-monitor">Monitor</a>
+      <a href="#/drift" id="tab-drift">Drift</a>
+    </div>
+  </nav>
+
+  <!-- Dashboard -->
+  <div id="view-dashboard" class="view">
+    <div class="view-grid" style="grid-template-columns: 2fr 1fr; gap: 20px;">
+      <holdings-table></holdings-table>
+      <weight-donut></weight-donut>
+    </div>
+  </div>
+
+  <!-- Backtest -->
+  <div id="view-backtest" class="view">
+    <div class="view-grid" style="gap: 20px;">
+      <backtest-form></backtest-form>
+      <metrics-grid></metrics-grid>
+      <equity-curve class="card"></equity-curve>
+      <drawdown-chart class="card"></drawdown-chart>
+    </div>
+  </div>
+
+  <!-- Rebalance -->
+  <div id="view-rebalance" class="view">
+    <div class="view-grid" style="gap: 20px;">
+      <div class="view-grid" style="grid-template-columns: 1fr 1fr; gap: 20px;">
+        <weight-comparison></weight-comparison>
+        <order-preview></order-preview>
+      </div>
+      <tax-warnings></tax-warnings>
+    </div>
+  </div>
+
+  <!-- Monitor -->
+  <div id="view-monitor" class="view">
+    <monitor-table></monitor-table>
+  </div>
+
+  <!-- Drift -->
+  <div id="view-drift" class="view">
+    <drift-timeline></drift-timeline>
+  </div>
+</div>
+
+<script type="module" src="/static/js/app.js"></script>
+</body>
+</html>

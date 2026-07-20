@@ -1,0 +1,140 @@
+/* Component-scoped styles */
+
+/* portfolio-header */
+portfolio-header select {
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  color: var(--color-text);
+  padding: 5px 10px;
+  font-size: 13px;
+  font-family: var(--font);
+  cursor: pointer;
+  outline: none;
+}
+
+portfolio-header select:focus {
+  border-color: var(--color-primary);
+}
+
+/* holdings-table */
+holdings-table {
+  display: block;
+}
+
+holdings-table .holdings-wrap {
+  overflow-x: auto;
+}
+
+/* weight-donut, weight-comparison */
+weight-donut,
+weight-comparison {
+  display: block;
+}
+
+weight-donut .chart-container,
+weight-comparison .chart-container {
+  height: 320px;
+}
+
+/* equity-curve, drawdown-chart */
+equity-curve,
+drawdown-chart {
+  display: block;
+}
+
+equity-curve .chart-container {
+  height: 320px;
+}
+
+drawdown-chart .chart-container {
+  height: 180px;
+}
+
+/* metrics-grid */
+metrics-grid {
+  display: block;
+}
+
+metrics-grid .metrics-grid-inner {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px;
+}
+
+@media (max-width: 900px) {
+  metrics-grid .metrics-grid-inner {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+/* backtest-form */
+backtest-form {
+  display: block;
+}
+
+backtest-form .progress-hint {
+  font-size: 12px;
+  color: var(--color-muted);
+  margin-top: 8px;
+}
+
+/* order-preview */
+order-preview {
+  display: block;
+}
+
+order-preview .execute-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 0;
+}
+
+/* tax-warnings */
+tax-warnings {
+  display: block;
+}
+
+tax-warnings .warn-note {
+  font-size: 12px;
+  color: var(--color-muted);
+  margin-top: 4px;
+}
+
+/* monitor-table */
+monitor-table {
+  display: block;
+}
+
+monitor-table .monitor-controls {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+monitor-table .monitor-summary {
+  display: flex;
+  gap: 20px;
+  padding: 10px 0;
+  font-size: 13px;
+  color: var(--color-muted);
+}
+
+/* drift-timeline */
+drift-timeline {
+  display: block;
+}
+
+drift-timeline .drift-header {
+  display: flex;
+  align-items: baseline;
+  gap: 16px;
+  margin-bottom: 12px;
+}
+
+drift-timeline .drift-index-value {
+  font-size: 32px;
+  font-weight: 700;
+}

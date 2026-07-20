@@ -39,6 +39,8 @@ func main() {
 			mycmd.AuthCommand,
 			mycmd.CacheCommand,
 			mycmd.DaemonCommand,
+			mycmd.BacktestCommand,
+			mycmd.ServeCommand,
 		},
 	}
 	if err := app.Run(context.Background(), os.Args); err != nil {
