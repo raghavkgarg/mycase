@@ -13,7 +13,7 @@ import (
 // ParseBasket reads target weights from an io.Reader
 func ParseBasket(r io.Reader) (map[string]float64, []string, error) {
 	reader := csv.NewReader(r)
-	
+
 	header, err := reader.Read()
 	if err != nil {
 		return nil, nil, err
@@ -148,30 +148,33 @@ func GetUniverseName(filePath string) string {
 
 	// Ignored words
 	ignored := map[string]bool{
-		"stockpicker":       true,
-		"optimize":          true,
-		"optimized":         true,
-		"combine":           true,
-		"bk":                true,
-		"temp":              true,
-		"backup":            true,
-		"report":            true,
-		"portfolio":         true,
-		"basket":            true,
-		"balanced":          true,
-		"aggressive":        true,
-		"conservative":      true,
-		"multibagger":        true,
-		"volatility":        true,
-		"multifactor":        true,
-		"moderate":          true,
-		"passive":           true,
+		"stockpicker":      true,
+		"optimize":         true,
+		"optimized":        true,
+		"combine":          true,
+		"bk":               true,
+		"temp":             true,
+		"backup":           true,
+		"report":           true,
+		"portfolio":        true,
+		"basket":           true,
+		"balanced":         true,
+		"aggressive":       true,
+		"conservative":     true,
+		"multibagger":      true,
+		"volatility":       true,
+		"multifactor":      true,
+		"moderate":         true,
+		"passive":          true,
 		"hyper-aggressive": true,
-		"optim":             true,
+		"optim":            true,
 	}
 
 	var validParts []string
 	for _, part := range parts {
+		if part == "" {
+			continue
+		}
 		partLower := strings.ToLower(part)
 		if ignored[partLower] {
 			continue

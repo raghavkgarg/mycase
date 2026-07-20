@@ -56,7 +56,7 @@ func (t *Tracker) RecordHysteresisDrop(ticker string, rank, topN, bufferLimit in
 		t.HysteresisDrops[ticker] = fmt.Sprintf("Removed: Rank %d fell below hysteresis buffer limit (%d)", rank, bufferLimit)
 	} else {
 		if rank <= topN {
-			t.HysteresisDrops[ticker] = fmt.Sprintf("Not added: portfolio full (slots filled by existing holdings retained via hysteresis)")
+			t.HysteresisDrops[ticker] = "Not added: portfolio full (slots filled by existing holdings retained via hysteresis)"
 		} else {
 			t.HysteresisDrops[ticker] = fmt.Sprintf("Not added: Rank %d fell below selection cutoff (Top %d)", rank, topN)
 		}
@@ -99,7 +99,7 @@ func (t *Tracker) SaveReport(displayName, method string, existingHoldings map[st
 	var writers []io.Writer = []io.Writer{f, os.Stdout}
 	multiW := io.MultiWriter(writers...)
 
-	writeLine := func(format string, args ...interface{}) {
+	writeLine := func(format string, args ...any) {
 		fmt.Fprintf(multiW, format, args...)
 	}
 
@@ -183,7 +183,7 @@ func (t *Tracker) SaveReport(displayName, method string, existingHoldings map[st
 			} else if r, ok := t.HysteresisDrops[ticker]; ok {
 				reason = r
 			}
-			
+
 			score := 0.0
 			rank := 999
 			if s, ok := t.RawScores[ticker]; ok {
@@ -192,7 +192,7 @@ func (t *Tracker) SaveReport(displayName, method string, existingHoldings map[st
 			if r, ok := t.RawRanks[ticker]; ok {
 				rank = r
 			}
-			
+
 			removedRows = append(removedRows, struct {
 				ticker string
 				score  float64

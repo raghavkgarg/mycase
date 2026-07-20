@@ -1,5 +1,6 @@
 # Compiled binaries
 bin/
+dist/
 
 # Cached data & Yahoo Finance historical price cache
 data/.cache/

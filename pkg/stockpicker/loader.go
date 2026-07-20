@@ -1,6 +1,7 @@
 package stockpicker
 
 import (
+	"context"
 	"encoding/csv"
 	"fmt"
 	"net/http"
@@ -9,9 +10,9 @@ import (
 	"sync"
 	"time"
 
-	"mycase/pkg/config"
-	"mycase/pkg/csvloader"
-	"mycase/pkg/yfinance"
+	"github.com/raghavkgarg/mycase/pkg/config"
+	"github.com/raghavkgarg/mycase/pkg/csvloader"
+	"github.com/raghavkgarg/mycase/pkg/yfinance"
 )
 
 func loadLocalCSVConstituents(filePath string) ([]string, error) {
@@ -149,7 +150,7 @@ func LoadConstituents(filePath, indexName string) (*TickersSource, error) {
 }
 
 // FetchHistoricalPrices concurrently retrieves historical price data for the tickers.
-func FetchHistoricalPrices(rawTickers []string) (map[string]*yfinance.HistoricalData, []string) {
+func FetchHistoricalPrices(ctx context.Context, rawTickers []string) (map[string]*yfinance.HistoricalData, []string) {
 	fmt.Printf("\nFetching historical prices (1y) for constituents...\n")
 	type fetchJob struct {
 		ticker string
@@ -166,15 +167,13 @@ func FetchHistoricalPrices(rawTickers []string) (map[string]*yfinance.Historical
 
 	// Start workers
 	workerCount := 15
-	for w := 0; w < workerCount; w++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+	for range workerCount {
+		wg.Go(func() {
 			for job := range jobs {
-				hist, err := yfinance.FetchHistoricalDataWithTimestamps(job.ticker, "1y")
+				hist, err := yfinance.FetchHistoricalDataWithTimestamps(ctx, job.ticker, "1y")
 				results <- fetchResult{ticker: job.ticker, hist: hist, err: err}
 			}
-		}()
+		})
 	}
 
 	for _, t := range rawTickers {
@@ -202,9 +201,9 @@ func FetchHistoricalPrices(rawTickers []string) (map[string]*yfinance.Historical
 }
 
 // GetBenchmarkAndSlicedPrices fetches benchmark prices and aligns stock prices with benchmark range.
-func GetBenchmarkAndSlicedPrices(activeKeys []string, fullHistory map[string]*yfinance.HistoricalData, rangeStr string) (map[string][]float64, []float64, error) {
+func GetBenchmarkAndSlicedPrices(ctx context.Context, activeKeys []string, fullHistory map[string]*yfinance.HistoricalData, rangeStr string) (map[string][]float64, []float64, error) {
 	fmt.Printf("Fetching historical benchmark prices for ^NSEI (%s)...\n", rangeStr)
-	benchmarkPrices, err := yfinance.FetchHistoricalPrices("^NSEI", rangeStr)
+	benchmarkPrices, err := yfinance.FetchHistoricalPrices(ctx, "^NSEI", rangeStr)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to fetch benchmark ^NSEI: %w", err)
 	}

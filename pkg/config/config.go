@@ -98,34 +98,34 @@ type MFSConfig struct {
 
 // HardFilters represents criteria constraints for stock picking pre-selection
 type HardFilters struct {
-	MinMarketCap        float64 `json:"min_market_cap"`
-	MaxMarketCap        float64 `json:"max_market_cap"`
-	MinADV              float64 `json:"min_adv"`
-	MinCFOPAT           float64 `json:"min_cfo_pat"`
-	MinFCF              *float64 `json:"min_fcf"`
-	MinPromoterPercent  float64 `json:"min_promoter_percent"`
-	CheckEarningsTrend  bool    `json:"check_earnings_trend"`
-	Check200DaySMA      bool    `json:"check_200day_sma"`
-	MaxPledgedPercent   float64 `json:"max_pledged_percent"`
-	MinROCE             float64 `json:"min_roce"`
-	MaxDebtToEquity     float64 `json:"max_debt_to_equity"`
-	MinInterestCoverage          float64  `json:"min_interest_coverage"`
-	MaxCapExYoYMultiplier        float64  `json:"max_capex_yoy_multiplier"`
-	VolumeBreakoutLookbackDays   int      `json:"volume_breakout_lookback_days"`
-	VolumeBreakoutMultiplier     float64  `json:"volume_breakout_multiplier"`
-	MaxStocksPerSector           int      `json:"max_stocks_per_sector"`
-	MaxSectorWeightCap           float64  `json:"max_sector_weight_cap"`
-	PEGFloor                     float64  `json:"peg_floor"`
-	MaxPEG                       float64  `json:"max_peg"`
-	CheckGrossMargin             bool     `json:"check_gross_margin"`
-	MinRSPercentile              float64  `json:"min_rs_percentile"`
-	MinCROIC                     float64  `json:"min_croic"`
-	ScoreWeightRevAcc            float64  `json:"score_weight_rev_acc"`
-	ScoreWeightAssetTurnover     float64  `json:"score_weight_asset_turnover"`
-	ScoreWeightPEG               float64  `json:"score_weight_peg"`
-	ScoreWeightROCE              float64  `json:"score_weight_roce"`
-	ScoreWeightVolumeBreakout    float64  `json:"score_weight_volume_breakout"`
-	ScoreWeightRelativeStrength  float64  `json:"score_weight_relative_strength"`
+	MinMarketCap                float64  `json:"min_market_cap"`
+	MaxMarketCap                float64  `json:"max_market_cap"`
+	MinADV                      float64  `json:"min_adv"`
+	MinCFOPAT                   float64  `json:"min_cfo_pat"`
+	MinFCF                      *float64 `json:"min_fcf"`
+	MinPromoterPercent          float64  `json:"min_promoter_percent"`
+	CheckEarningsTrend          bool     `json:"check_earnings_trend"`
+	Check200DaySMA              bool     `json:"check_200day_sma"`
+	MaxPledgedPercent           float64  `json:"max_pledged_percent"`
+	MinROCE                     float64  `json:"min_roce"`
+	MaxDebtToEquity             float64  `json:"max_debt_to_equity"`
+	MinInterestCoverage         float64  `json:"min_interest_coverage"`
+	MaxCapExYoYMultiplier       float64  `json:"max_capex_yoy_multiplier"`
+	VolumeBreakoutLookbackDays  int      `json:"volume_breakout_lookback_days"`
+	VolumeBreakoutMultiplier    float64  `json:"volume_breakout_multiplier"`
+	MaxStocksPerSector          int      `json:"max_stocks_per_sector"`
+	MaxSectorWeightCap          float64  `json:"max_sector_weight_cap"`
+	PEGFloor                    float64  `json:"peg_floor"`
+	MaxPEG                      float64  `json:"max_peg"`
+	CheckGrossMargin            bool     `json:"check_gross_margin"`
+	MinRSPercentile             float64  `json:"min_rs_percentile"`
+	MinCROIC                    float64  `json:"min_croic"`
+	ScoreWeightRevAcc           float64  `json:"score_weight_rev_acc"`
+	ScoreWeightAssetTurnover    float64  `json:"score_weight_asset_turnover"`
+	ScoreWeightPEG              float64  `json:"score_weight_peg"`
+	ScoreWeightROCE             float64  `json:"score_weight_roce"`
+	ScoreWeightVolumeBreakout   float64  `json:"score_weight_volume_breakout"`
+	ScoreWeightRelativeStrength float64  `json:"score_weight_relative_strength"`
 }
 
 // MFSStrategies wrapper containing the mapping of strategies and filters

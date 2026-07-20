@@ -1,6 +1,7 @@
 package yfinance
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -17,7 +18,7 @@ func getCachePath(prefix, key string) string {
 	return filepath.Join("data", ".cache", fmt.Sprintf("%s_%s_%s.json", prefix, cleanKey, today))
 }
 
-func loadFromCache(prefix, key string, target interface{}) bool {
+func loadFromCache(prefix, key string, target any) bool {
 	path := getCachePath(prefix, key)
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -26,7 +27,7 @@ func loadFromCache(prefix, key string, target interface{}) bool {
 	return json.Unmarshal(data, target) == nil
 }
 
-func saveToCache(prefix, key string, source interface{}) {
+func saveToCache(prefix, key string, source any) {
 	path := getCachePath(prefix, key)
 	_ = os.MkdirAll(filepath.Dir(path), 0755)
 	data, err := json.Marshal(source)
@@ -54,7 +55,7 @@ func MapTickerToYahoo(ticker string) string {
 }
 
 // FetchQuotes fetches the latest LTP for the tickers natively in Go.
-func FetchQuotes(tickers []string) (map[string]float64, error) {
+func FetchQuotes(ctx context.Context, tickers []string) (map[string]float64, error) {
 	if len(tickers) == 0 {
 		return make(map[string]float64), nil
 	}
@@ -76,7 +77,7 @@ func FetchQuotes(tickers []string) (map[string]float64, error) {
 			ySym := MapTickerToYahoo(ticker)
 
 			url := fmt.Sprintf("https://query1.finance.yahoo.com/v8/finance/chart/%s?range=1d&interval=1d", ySym)
-			req, err := http.NewRequest("GET", url, nil)
+			req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 			if err != nil {
 				errChan <- fmt.Errorf("failed to create request for %s: %w", ticker, err)
 				return
@@ -136,8 +137,8 @@ func FetchQuotes(tickers []string) (map[string]float64, error) {
 }
 
 // FetchHistoricalPrices fetches daily close prices for a single ticker over a range (e.g. "3mo")
-func FetchHistoricalPrices(ticker string, rangeStr string) ([]float64, error) {
-	data, err := FetchHistoricalDataWithTimestamps(ticker, rangeStr)
+func FetchHistoricalPrices(ctx context.Context, ticker string, rangeStr string) ([]float64, error) {
+	data, err := FetchHistoricalDataWithTimestamps(ctx, ticker, rangeStr)
 	if err != nil {
 		return nil, err
 	}
@@ -145,7 +146,12 @@ func FetchHistoricalPrices(ticker string, rangeStr string) ([]float64, error) {
 }
 
 // FetchHistoricalDataWithTimestamps fetches daily close prices and timestamps for a ticker over a range
-func FetchHistoricalDataWithTimestamps(ticker string, rangeStr string) (*HistoricalData, error) {
+func FetchHistoricalDataWithTimestamps(ctx context.Context, ticker string, rangeStr string) (*HistoricalData, error) {
+	// 1. DuckDB persistent cache (cross-day)
+	if hist, ok := checkPriceCache(ctx, ticker, rangeStr); ok {
+		return hist, nil
+	}
+	// 2. File cache (same-day, no DB required)
 	var cached HistoricalData
 	cacheKey := fmt.Sprintf("%s_%s", ticker, rangeStr)
 	if loadFromCache("prices", cacheKey, &cached) {
@@ -156,7 +162,7 @@ func FetchHistoricalDataWithTimestamps(ticker string, rangeStr string) (*Histori
 	url := fmt.Sprintf("https://query1.finance.yahoo.com/v8/finance/chart/%s?range=%s&interval=1d", ySym, rangeStr)
 
 	client := &http.Client{Timeout: 8 * time.Second}
-	req, err := http.NewRequest("GET", url, nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
@@ -232,18 +238,19 @@ func FetchHistoricalDataWithTimestamps(ticker string, rangeStr string) (*Histori
 	}
 	res.CleanIntradayNoise()
 
+	storePriceCache(ctx, ticker, rangeStr, res)
 	saveToCache("prices", cacheKey, res)
 
 	return res, nil
 }
 
 // FetchIntradayData fetches intraday price data for a ticker for the specified range (e.g. 1d, 5d, 7d) with 1m interval
-func FetchIntradayData(ticker string, rangeStr string) (*IntradayData, error) {
+func FetchIntradayData(ctx context.Context, ticker string, rangeStr string) (*IntradayData, error) {
 	ySym := MapTickerToYahoo(ticker)
 	url := fmt.Sprintf("https://query1.finance.yahoo.com/v8/finance/chart/%s?range=%s&interval=1m", ySym, rangeStr)
 
 	client := &http.Client{Timeout: 8 * time.Second}
-	req, err := http.NewRequest("GET", url, nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}

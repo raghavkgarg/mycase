@@ -6,8 +6,9 @@ import (
 	"path/filepath"
 	"testing"
 
-	"mycase/pkg/config"
-	"mycase/pkg/yfinance"
+	"github.com/raghavkgarg/mycase/pkg/config"
+	"github.com/raghavkgarg/mycase/pkg/selectiontracker"
+	"github.com/raghavkgarg/mycase/pkg/yfinance"
 )
 
 func TestIsAbove200DaySMA(t *testing.T) {
@@ -30,7 +31,7 @@ func TestIsAbove200DaySMA(t *testing.T) {
 			name: "Exactly 200 days - latest price below average",
 			prices: func() []float64 {
 				p := make([]float64, 200)
-				for i := 0; i < 199; i++ {
+				for i := range 199 {
 					p[i] = 100.0
 				}
 				p[199] = 50.0 // average is around ~99.75. Latest is 50.0.
@@ -236,5 +237,80 @@ func TestIsEligible(t *testing.T) {
 	}
 	if stats.EliminatedSize != 1 {
 		t.Errorf("expected EliminatedSize to be 1, got %d", stats.EliminatedSize)
+	}
+}
+
+func TestNormalizeValue_OutsideRange(t *testing.T) {
+	// val < minVal: higherIsBetter → should return 0 (clamped)
+	got := normalizeValue(5.0, 10.0, 20.0, 100.0, true)
+	if got < 0 {
+		t.Errorf("val below minVal with higherIsBetter: expected ≥ 0, got %f", got)
+	}
+	// val > maxVal: higherIsBetter → extrapolates above maxPoints but we just verify no panic
+	_ = normalizeValue(25.0, 10.0, 20.0, 100.0, true)
+}
+
+func TestApplyHysteresisSelection_NoExisting(t *testing.T) {
+	sorted := []string{"A", "B", "C", "D", "E"}
+	existing := map[string]float64{}
+	tracker := selectiontracker.New()
+	selected := ApplyHysteresisSelection(sorted, existing, 3, 5, tracker)
+	if len(selected) != 3 {
+		t.Fatalf("expected 3 selected, got %d: %v", len(selected), selected)
+	}
+	// Must be the top 3
+	for i, want := range []string{"A", "B", "C"} {
+		if selected[i] != want {
+			t.Errorf("position %d: want %s, got %s", i, want, selected[i])
+		}
+	}
+}
+
+func TestApplyHysteresisSelection_AllFit(t *testing.T) {
+	sorted := []string{"A", "B", "C"}
+	existing := map[string]float64{}
+	tracker := selectiontracker.New()
+	selected := ApplyHysteresisSelection(sorted, existing, 5, 7, tracker)
+	// Fewer candidates than topN → all returned
+	if len(selected) != 3 {
+		t.Fatalf("expected all 3 returned when candidates < topN, got %d", len(selected))
+	}
+}
+
+func TestApplyHysteresisSelection_RetainsExisting(t *testing.T) {
+	// "E" is an existing holding at rank 5 (within buffer 6) → should be retained over rank-4 new candidate "D"
+	sorted := []string{"A", "B", "C", "D", "E", "F"}
+	existing := map[string]float64{"E": 0.2}
+	tracker := selectiontracker.New()
+	selected := ApplyHysteresisSelection(sorted, existing, 3, 6, tracker)
+	if len(selected) != 3 {
+		t.Fatalf("expected 3 selected, got %d", len(selected))
+	}
+	found := false
+	for _, s := range selected {
+		if s == "E" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("existing holding E should be retained via hysteresis: got %v", selected)
+	}
+}
+
+func TestApplyRebalancingBand_NoExisting(t *testing.T) {
+	target := map[string]float64{"A": 0.6, "B": 0.4}
+	result := ApplyRebalancingBand([]string{"A", "B"}, target, nil, 0.10)
+	if result["A"] != 0.6 || result["B"] != 0.4 {
+		t.Errorf("no existing holdings: target weights should be returned unchanged: %v", result)
+	}
+}
+
+func TestApplyRebalancingBand_BeyondTolerance(t *testing.T) {
+	// Difference is 0.30, tolerance is 0.10 (→ limit 0.001) → change exceeds tolerance → use target
+	target := map[string]float64{"A": 0.7, "B": 0.3}
+	existing := map[string]float64{"A": 0.4, "B": 0.6}
+	result := ApplyRebalancingBand([]string{"A", "B"}, target, existing, 0.10)
+	if math.Abs(result["A"]-0.7) > 1e-6 {
+		t.Errorf("large diff should use target weight: want 0.7, got %f", result["A"])
 	}
 }

@@ -4,7 +4,7 @@ import (
 	"math"
 	"strings"
 
-	"mycase/pkg/market"
+	"github.com/raghavkgarg/mycase/pkg/market"
 )
 
 // OptimizeFreshBuy runs the greedy allocation algorithm.
@@ -30,7 +30,7 @@ func OptimizeFreshBuy(
 		parts := strings.Split(inst, ":")
 		symbol := parts[len(parts)-1]
 		ltp := quoteData[inst]
-		
+
 		// limit_price in Mojo is buffer of 3% above LTP, rounded to 1 decimal place.
 		limitPrice := market.CalculateBufferedLimitPrice(ltp)
 
@@ -82,7 +82,6 @@ func OptimizeFreshBuy(
 			candidateQtys := make([]int, n)
 			copy(candidateQtys, rawQuantities)
 			candidateQtys[i]++
-
 
 			newSharesCost := 0.0
 			newTotalLTPCost := 0.0
@@ -149,7 +148,6 @@ func CalculateMinimumRequiredOutflow(
 			continue
 		}
 
-
 		// The minimum quantity needed of any asset to exist in the basket is 1 share.
 		// Since we are rebalancing, we can sell down existing holdings.
 		minQty := 1
@@ -190,6 +188,3 @@ func CalculateMinimumRequiredOutflow(
 
 	return minTotalTxnCost
 }
-
-
-

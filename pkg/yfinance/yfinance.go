@@ -1,6 +1,7 @@
 package yfinance
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -11,25 +12,25 @@ import (
 )
 
 // FetchCookieAndCrumb requests fc.yahoo.com for cookie and query2 getcrumb for crumb
-func FetchCookieAndCrumb(client *http.Client) (string, error) {
-	req1, err := http.NewRequest("GET", "https://fc.yahoo.com", nil)
+func FetchCookieAndCrumb(ctx context.Context, client *http.Client) (string, error) {
+	req1, err := http.NewRequestWithContext(ctx, "GET", "https://fc.yahoo.com", nil)
 	if err != nil {
 		return "", err
 	}
 	req1.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36")
-	
+
 	resp1, err := client.Do(req1)
 	if err != nil {
 		return "", err
 	}
 	resp1.Body.Close()
 
-	req2, err := http.NewRequest("GET", "https://query2.finance.yahoo.com/v1/test/getcrumb", nil)
+	req2, err := http.NewRequestWithContext(ctx, "GET", "https://query2.finance.yahoo.com/v1/test/getcrumb", nil)
 	if err != nil {
 		return "", err
 	}
 	req2.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36")
-	
+
 	resp2, err := client.Do(req2)
 	if err != nil {
 		return "", err
@@ -48,7 +49,7 @@ func FetchCookieAndCrumb(client *http.Client) (string, error) {
 }
 
 // FetchFundamentals fetches fundamental metrics for a list of tickers in parallel
-func FetchFundamentals(tickers []string) (map[string]Fundamentals, error) {
+func FetchFundamentals(ctx context.Context, tickers []string) (map[string]Fundamentals, error) {
 	fundamentals := make(map[string]Fundamentals)
 	if len(tickers) == 0 {
 		return fundamentals, nil
@@ -56,6 +57,12 @@ func FetchFundamentals(tickers []string) (map[string]Fundamentals, error) {
 
 	var uncachedTickers []string
 	for _, t := range tickers {
+		// 1. DuckDB persistent cache
+		if f, ok := checkFundamentalsCache(ctx, t); ok {
+			fundamentals[t] = *f
+			continue
+		}
+		// 2. File cache (same-day)
 		var cached Fundamentals
 		if loadFromCache("fundamentals", t, &cached) {
 			fundamentals[t] = cached
@@ -79,7 +86,7 @@ func FetchFundamentals(tickers []string) (map[string]Fundamentals, error) {
 	}
 
 	// Fetch Cookie and Crumb once to reuse
-	crumb, err := FetchCookieAndCrumb(client)
+	crumb, err := FetchCookieAndCrumb(ctx, client)
 	if err != nil {
 		return nil, fmt.Errorf("failed to retrieve cookie and crumb: %w", err)
 	}
@@ -98,20 +105,15 @@ func FetchFundamentals(tickers []string) (map[string]Fundamentals, error) {
 	var wg sync.WaitGroup
 
 	// Spawning 15 concurrent workers
-	workerCount := 15
-	if len(uncachedTickers) < workerCount {
-		workerCount = len(uncachedTickers)
-	}
+	workerCount := min(len(uncachedTickers), 15)
 
-	for w := 0; w < workerCount; w++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+	for range workerCount {
+		wg.Go(func() {
 			for job := range jobs {
 				ySym := MapTickerToYahoo(job.ticker)
 				url := fmt.Sprintf("https://query2.finance.yahoo.com/v10/finance/quoteSummary/%s?modules=financialData,defaultKeyStatistics,summaryDetail,assetProfile,earnings&crumb=%s", ySym, crumb)
 
-				req, err := http.NewRequest("GET", url, nil)
+				req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 				if err != nil {
 					results <- fetchResult{ticker: job.ticker, err: err}
 					continue
@@ -204,7 +206,7 @@ func FetchFundamentals(tickers []string) (map[string]Fundamentals, error) {
 				var annualCurrentLiabilities []AnnualMetric
 				var annualInterestExpense []AnnualMetric
 
-				tsReq, tsErr := http.NewRequest("GET", tsURL, nil)
+				tsReq, tsErr := http.NewRequestWithContext(ctx, "GET", tsURL, nil)
 				if tsErr == nil {
 					tsReq.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36")
 					tsResp, tsRespErr := client.Do(tsReq)
@@ -327,7 +329,7 @@ func FetchFundamentals(tickers []string) (map[string]Fundamentals, error) {
 					AnnualRevenue:            annualRevenue,
 					AnnualGrossProfit:        annualGrossProfit,
 					AnnualNetPPE:             annualNetPPE,
-					AnnualAccountsReceivable:  annualAccountsReceivable,
+					AnnualAccountsReceivable: annualAccountsReceivable,
 					AnnualCapEx:              annualCapEx,
 					DebtToEquity:             fd.DebtToEquity.Raw,
 					TotalDebt:                fd.TotalDebt.Raw,
@@ -339,7 +341,7 @@ func FetchFundamentals(tickers []string) (map[string]Fundamentals, error) {
 
 				results <- fetchResult{ticker: job.ticker, fund: fund}
 			}
-		}()
+		})
 	}
 
 	for _, t := range uncachedTickers {
@@ -353,6 +355,8 @@ func FetchFundamentals(tickers []string) (map[string]Fundamentals, error) {
 	for res := range results {
 		if res.err == nil {
 			fundamentals[res.ticker] = res.fund
+			fund := res.fund
+			storeFundamentalsCache(ctx, res.ticker, &fund)
 			saveToCache("fundamentals", res.ticker, res.fund)
 		} else {
 			// Print warning but don't fail the whole execution

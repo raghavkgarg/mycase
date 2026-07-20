@@ -3,7 +3,7 @@ package optimizer
 import (
 	"strings"
 
-	"mycase/pkg/yfinance"
+	"github.com/raghavkgarg/mycase/pkg/yfinance"
 )
 
 type fundamentalAverages struct {
@@ -105,7 +105,7 @@ func EnforceSectorCaps(tickers []string, weights map[string]float64, fundamental
 	if sectorCap <= 0 {
 		sectorCap = 0.25
 	}
-	for iter := 0; iter < 10; iter++ {
+	for range 10 {
 		sectorWeights := make(map[string]float64)
 		for _, ticker := range tickers {
 			sec := strings.TrimSpace(fundamentals[ticker].Sector)

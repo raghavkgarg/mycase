@@ -1,17 +1,17 @@
 package stockpicker
 
 import (
-	"mycase/pkg/config"
-	"mycase/pkg/optimizer"
+	"github.com/raghavkgarg/mycase/pkg/config"
+	"github.com/raghavkgarg/mycase/pkg/optimizer"
 )
 
 // Options holds command line configurations.
 type Options struct {
-	IndexName       string
-	FilePath        string
-	Method          string
-	TopN            int
-	RangeStr        string
+	IndexName          string
+	FilePath           string
+	Method             string
+	TopN               int
+	RangeStr           string
 	SkipScuttlebutt    bool
 	GoldenPath         string
 	RebalanceTolerance float64

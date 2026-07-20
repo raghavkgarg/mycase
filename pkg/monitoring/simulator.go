@@ -2,9 +2,9 @@ package monitoring
 
 import (
 	"fmt"
+	"github.com/raghavkgarg/mycase/pkg/yfinance"
 	"sort"
 	"time"
-	"mycase/pkg/yfinance"
 )
 
 // GetCapStallSeverity calculates the Cap Stall Severity based on DSO Delta and TTM Growth.
@@ -61,10 +61,7 @@ func RunSimulation(
 
 	// Define simulation window: the last 1 year (typically 252 trading days)
 	// or the remaining history after taking the first 200 days for SMA warmup.
-	simDays := 252
-	if minHistory-200 < simDays {
-		simDays = minHistory - 200
-	}
+	simDays := min(minHistory-200, 252)
 
 	if params.StartDate != "" {
 		if tTarget, err := time.Parse("2006-01-02", params.StartDate); err == nil {

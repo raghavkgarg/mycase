@@ -3,7 +3,7 @@ package optimizer
 import (
 	"math"
 
-	"mycase/pkg/yfinance"
+	"github.com/raghavkgarg/mycase/pkg/yfinance"
 )
 
 // OptimizeMultiFactor computes weights based on multi-factor scores including fundamental metrics
@@ -107,10 +107,7 @@ func OptimizeMultiFactor(
 				alpha = meanRet - beta*benchMean
 			} else if len(returns) > 0 && len(benchReturns) > 0 {
 				// Align lengths if they mismatch slightly due to holidays
-				minLen := len(returns)
-				if len(benchReturns) < minLen {
-					minLen = len(benchReturns)
-				}
+				minLen := min(len(benchReturns), len(returns))
 				cov := CalculateCovariance(returns[len(returns)-minLen:], benchReturns[len(benchReturns)-minLen:])
 				beta = cov / benchVar
 				alpha = meanRet - beta*benchMean
@@ -137,22 +134,54 @@ func OptimizeMultiFactor(
 		ulcers[ticker] = ulcer
 
 		// Min / Max updates for market statistics
-		if totRet < minRet { minRet = totRet }
-		if totRet > maxRet { maxRet = totRet }
-		if vol < minVol { minVol = vol }
-		if vol > maxVol { maxVol = vol }
-		if sharpe < minSharpe { minSharpe = sharpe }
-		if sharpe > maxSharpe { maxSharpe = sharpe }
-		if sortino < minSortino { minSortino = sortino }
-		if sortino > maxSortino { maxSortino = sortino }
-		if beta < minBeta { minBeta = beta }
-		if beta > maxBeta { maxBeta = beta }
-		if alpha < minAlpha { minAlpha = alpha }
-		if alpha > maxAlpha { maxAlpha = alpha }
-		if treynor < minTreynor { minTreynor = treynor }
-		if treynor > maxTreynor { maxTreynor = treynor }
-		if ulcer < minUlcer { minUlcer = ulcer }
-		if ulcer > maxUlcer { maxUlcer = ulcer }
+		if totRet < minRet {
+			minRet = totRet
+		}
+		if totRet > maxRet {
+			maxRet = totRet
+		}
+		if vol < minVol {
+			minVol = vol
+		}
+		if vol > maxVol {
+			maxVol = vol
+		}
+		if sharpe < minSharpe {
+			minSharpe = sharpe
+		}
+		if sharpe > maxSharpe {
+			maxSharpe = sharpe
+		}
+		if sortino < minSortino {
+			minSortino = sortino
+		}
+		if sortino > maxSortino {
+			maxSortino = sortino
+		}
+		if beta < minBeta {
+			minBeta = beta
+		}
+		if beta > maxBeta {
+			maxBeta = beta
+		}
+		if alpha < minAlpha {
+			minAlpha = alpha
+		}
+		if alpha > maxAlpha {
+			maxAlpha = alpha
+		}
+		if treynor < minTreynor {
+			minTreynor = treynor
+		}
+		if treynor > maxTreynor {
+			maxTreynor = treynor
+		}
+		if ulcer < minUlcer {
+			minUlcer = ulcer
+		}
+		if ulcer > maxUlcer {
+			maxUlcer = ulcer
+		}
 
 		// Fundamental metrics extraction and imputation
 		f, hasF := fundamentals[ticker]
@@ -199,22 +228,54 @@ func OptimizeMultiFactor(
 		insidersPercents[ticker] = ip
 
 		// Min / Max updates for fundamental statistics
-		if peg < minPEG { minPEG = peg }
-		if peg > maxPEG { maxPEG = peg }
-		if roe < minROE { minROE = roe }
-		if roe > maxROE { maxROE = roe }
-		if fwdPE < minFwdPE { minFwdPE = fwdPE }
-		if fwdPE > maxFwdPE { maxFwdPE = fwdPE }
-		if opMargin < minOpMargins { minOpMargins = opMargin }
-		if opMargin > maxOpMargins { maxOpMargins = opMargin }
-		if pb < minPB { minPB = pb }
-		if pb > maxPB { maxPB = pb }
-		if nde < minNetDebtEbitda { minNetDebtEbitda = nde }
-		if nde > maxNetDebtEbitda { maxNetDebtEbitda = nde }
-		if mc < minMarketCap { minMarketCap = mc }
-		if mc > maxMarketCap { maxMarketCap = mc }
-		if ip < minInsidersPercent { minInsidersPercent = ip }
-		if ip > maxInsidersPercent { maxInsidersPercent = ip }
+		if peg < minPEG {
+			minPEG = peg
+		}
+		if peg > maxPEG {
+			maxPEG = peg
+		}
+		if roe < minROE {
+			minROE = roe
+		}
+		if roe > maxROE {
+			maxROE = roe
+		}
+		if fwdPE < minFwdPE {
+			minFwdPE = fwdPE
+		}
+		if fwdPE > maxFwdPE {
+			maxFwdPE = fwdPE
+		}
+		if opMargin < minOpMargins {
+			minOpMargins = opMargin
+		}
+		if opMargin > maxOpMargins {
+			maxOpMargins = opMargin
+		}
+		if pb < minPB {
+			minPB = pb
+		}
+		if pb > maxPB {
+			maxPB = pb
+		}
+		if nde < minNetDebtEbitda {
+			minNetDebtEbitda = nde
+		}
+		if nde > maxNetDebtEbitda {
+			maxNetDebtEbitda = nde
+		}
+		if mc < minMarketCap {
+			minMarketCap = mc
+		}
+		if mc > maxMarketCap {
+			maxMarketCap = mc
+		}
+		if ip < minInsidersPercent {
+			minInsidersPercent = ip
+		}
+		if ip > maxInsidersPercent {
+			maxInsidersPercent = ip
+		}
 	}
 
 	// Helper for scaling: returns score between 0 and 1
@@ -230,14 +291,14 @@ func OptimizeMultiFactor(
 	}
 
 	// Weights for each factor
-	wSharpe   := w.Sharpe
-	wSortino  := w.Sortino
-	wReturn   := w.Return
-	wAlpha    := w.Alpha
-	wVol      := w.Volatility
-	wBeta     := w.Beta
-	wTreynor  := w.Treynor
-	wUlcer    := w.Ulcer
+	wSharpe := w.Sharpe
+	wSortino := w.Sortino
+	wReturn := w.Return
+	wAlpha := w.Alpha
+	wVol := w.Volatility
+	wBeta := w.Beta
+	wTreynor := w.Treynor
+	wUlcer := w.Ulcer
 
 	// Calculate overall score for each ticker
 	scores := make(map[string]float64)
@@ -249,24 +310,24 @@ func OptimizeMultiFactor(
 		sReturn := scaleMinMax(totalReturns[ticker], minRet, maxRet, false)
 		sAlpha := scaleMinMax(alphas[ticker], minAlpha, maxAlpha, false)
 		sVol := scaleMinMax(volatilities[ticker], minVol, maxVol, true) // lower volatility is better
-		sBeta := scaleMinMax(betas[ticker], minBeta, maxBeta, true) // lower beta is better
+		sBeta := scaleMinMax(betas[ticker], minBeta, maxBeta, true)     // lower beta is better
 		sTreynor := scaleMinMax(treynors[ticker], minTreynor, maxTreynor, false)
 		sUlcer := scaleMinMax(ulcers[ticker], minUlcer, maxUlcer, true) // lower ulcer index is better (less drawdowns)
 
-		sPEG := scaleMinMax(pegs[ticker], minPEG, maxPEG, true) // lower PEG is better
-		sROE := scaleMinMax(roes[ticker], minROE, maxROE, false) // higher ROE is better
-		sFwdPE := scaleMinMax(fwdPEs[ticker], minFwdPE, maxFwdPE, true) // lower Forward P/E is better
-		sOpMargins := scaleMinMax(opMargins[ticker], minOpMargins, maxOpMargins, false) // higher margins are better
-		sPB := scaleMinMax(pbs[ticker], minPB, maxPB, true) // lower P/B is better
-		sNetDebtEbitda := scaleMinMax(netDebtEbitdas[ticker], minNetDebtEbitda, maxNetDebtEbitda, true) // lower debt is better
-		sMarketCap := scaleMinMax(marketCaps[ticker], minMarketCap, maxMarketCap, true) // lower market cap is better (for multibagger size room)
+		sPEG := scaleMinMax(pegs[ticker], minPEG, maxPEG, true)                                                  // lower PEG is better
+		sROE := scaleMinMax(roes[ticker], minROE, maxROE, false)                                                 // higher ROE is better
+		sFwdPE := scaleMinMax(fwdPEs[ticker], minFwdPE, maxFwdPE, true)                                          // lower Forward P/E is better
+		sOpMargins := scaleMinMax(opMargins[ticker], minOpMargins, maxOpMargins, false)                          // higher margins are better
+		sPB := scaleMinMax(pbs[ticker], minPB, maxPB, true)                                                      // lower P/B is better
+		sNetDebtEbitda := scaleMinMax(netDebtEbitdas[ticker], minNetDebtEbitda, maxNetDebtEbitda, true)          // lower debt is better
+		sMarketCap := scaleMinMax(marketCaps[ticker], minMarketCap, maxMarketCap, true)                          // lower market cap is better (for multibagger size room)
 		sInsidersPercent := scaleMinMax(insidersPercents[ticker], minInsidersPercent, maxInsidersPercent, false) // higher insider ownership is better
 
 		// Combined score
 		combinedScore := wSharpe*sSharpe + wSortino*sSortino + wReturn*sReturn + wAlpha*sAlpha + wVol*sVol + wBeta*sBeta + wTreynor*sTreynor + wUlcer*sUlcer +
 			w.PEGRatio*sPEG + w.ROE*sROE + w.ForwardPE*sFwdPE + w.OperatingMargins*sOpMargins + w.PBRatio*sPB + w.NetDebtEBITDA*sNetDebtEbitda +
 			w.MarketCap*sMarketCap + w.InsidersPercent*sInsidersPercent
-		
+
 		// Add baseline floor
 		if combinedScore < 0.01 {
 			combinedScore = 0.01

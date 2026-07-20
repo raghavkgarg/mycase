@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"mycase/pkg/config"
-	"mycase/pkg/yfinance"
+	"github.com/raghavkgarg/mycase/pkg/config"
+	"github.com/raghavkgarg/mycase/pkg/yfinance"
 )
 
 // PrintHeader displays the header banner of the application.
