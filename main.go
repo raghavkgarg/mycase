@@ -38,6 +38,7 @@ func main() {
 			mycmd.MergeCommand,
 			mycmd.AuthCommand,
 			mycmd.CacheCommand,
+			mycmd.DaemonCommand,
 		},
 	}
 	if err := app.Run(context.Background(), os.Args); err != nil {

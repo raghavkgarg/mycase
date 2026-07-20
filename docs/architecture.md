@@ -27,6 +27,13 @@ mycase [global flags]
 ├── merge
 │   ├── combine    Merge multiple CSVs into one
 │   └── golden     Update golden copy from a proposals CSV
+├── daemon
+│   ├── start      Start blocking drift monitoring loop (use install for system service)
+│   ├── stop       Send SIGTERM to running daemon
+│   ├── status     Show last drift check results
+│   ├── check      One-shot drift check
+│   ├── install    Write launchd plist (macOS) / print systemd unit (Linux)
+│   └── uninstall  Remove installed service
 └── auth           Zerodha session setup
 ```
 
@@ -61,10 +68,12 @@ mycase/
 │   ├── merge.go
 │   └── auth.go
 ├── pkg/                        # All business logic
+│   ├── alert/                  # Alerter interface; TelegramAlerter, DiscordAlerter, EmailAlerter (stub)
 │   ├── broker/                 # Broker interface (broker.go), MockBroker (mock.go); zerodha/ = ZerodhaBroker + New factory
 │   ├── cache/                  # DuckDB persistent cache: prices, fundamentals, cache_meta tables
 │   ├── config/                 # Broker credentials (config.go); themes; PipelineConfig (pipeline.go)
 │   ├── csvloader/              # basket CSV I/O, golden copy merge, pipeline CSV helpers
+│   ├── daemon/                 # Drift daemon: CalculateDrift, RunCheck, RunLoop, State persistence
 │   ├── datafetcher/            # Live/mock market data fetch (FetchMarketData via Kite or mock quotes)
 │   ├── executor/               # Order execution logic
 │   ├── kiteclient/             # Zerodha Kite Connect client wrapper
@@ -94,8 +103,6 @@ mycase/
 **Planned additions** (not yet implemented):
 ```
 pkg/
-├── alert/        # R5: Alerter interface, Telegram, Discord
-├── daemon/       # R5: Background drift monitor
 └── backtest/     # R7: Historical backtesting engine
 ```
 
@@ -258,6 +265,11 @@ Schema: `prices(ticker, date, ts BIGINT, close, open, volume)`, `fundamentals(ti
 `fetched_at` columns are `BIGINT` (Unix epoch seconds), not `TIMESTAMP`. DuckDB v1.5.3 does not reliably round-trip `time.Time` through `TIMESTAMP` columns via `database/sql` Scan — values come back as zero. BIGINT is reliable and timezone-unambiguous; convert with `time.Unix(n, 0)` on read.
 
 Staleness policy: prices are fresh if fetched on the same calendar day in IST (`isFreshToday` compares `YearDay`); fundamentals stale after 24h.
+
+### D7 — Drift Daemon Design (R5)
+**Decision**: `mycase daemon start` is a blocking loop; process lifecycle is managed by launchd (macOS) or systemd (Linux) via `daemon install`. No self-daemonization in Go.
+
+`daemon install` writes `~/Library/LaunchAgents/com.mycase.daemon.plist` with `KeepAlive=true` and `RunAtLoad=true`. The daemon runs in the working directory where `mycase` is installed. Alert credentials live in `config/pipeline.yaml` under the `alerts:` key; `MYCASE_TELEGRAM_TOKEN` and `MYCASE_DISCORD_WEBHOOK` env vars override the YAML values. State is persisted to `data/daemon_state.json` (survives restarts). Email alerter is a stub (`errors.New("not yet implemented")`).
 
 ### D6 — Broker Abstraction (R4)
 **Decision**: Define `pkg/broker/broker.go` interface (`GetHoldings`, `PlaceOrders`, `GetPositions`, `IsAuthenticated`). Move Kite logic to `pkg/broker/zerodha/`. Candidate second brokers: Fyers, AngelOne SmartAPI, Upstox.
