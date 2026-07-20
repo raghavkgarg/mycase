@@ -6,6 +6,8 @@ import (
 	"os"
 
 	mycmd "github.com/raghavkgarg/mycase/cmd"
+	"github.com/raghavkgarg/mycase/pkg/cache"
+	"github.com/raghavkgarg/mycase/pkg/yfinance"
 	"github.com/urfave/cli/v3"
 )
 
@@ -14,6 +16,12 @@ var GitCommit = "unknown"
 var BuildDate = "unknown"
 
 func main() {
+	// Open DuckDB cache (best-effort; non-fatal if data/ doesn't exist yet).
+	if c, err := cache.Open("data/cache.db"); err == nil {
+		yfinance.SetCache(c)
+		defer c.Close()
+	}
+
 	app := &cli.Command{
 		Name:    "mycase",
 		Usage:   "Portfolio basket & rebalancing engine",
@@ -29,6 +37,7 @@ func main() {
 			mycmd.HoldingsCommand,
 			mycmd.MergeCommand,
 			mycmd.AuthCommand,
+			mycmd.CacheCommand,
 		},
 	}
 	if err := app.Run(context.Background(), os.Args); err != nil {

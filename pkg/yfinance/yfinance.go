@@ -57,6 +57,12 @@ func FetchFundamentals(ctx context.Context, tickers []string) (map[string]Fundam
 
 	var uncachedTickers []string
 	for _, t := range tickers {
+		// 1. DuckDB persistent cache
+		if f, ok := checkFundamentalsCache(ctx, t); ok {
+			fundamentals[t] = *f
+			continue
+		}
+		// 2. File cache (same-day)
 		var cached Fundamentals
 		if loadFromCache("fundamentals", t, &cached) {
 			fundamentals[t] = cached
@@ -349,6 +355,8 @@ func FetchFundamentals(ctx context.Context, tickers []string) (map[string]Fundam
 	for res := range results {
 		if res.err == nil {
 			fundamentals[res.ticker] = res.fund
+			fund := res.fund
+			storeFundamentalsCache(ctx, res.ticker, &fund)
 			saveToCache("fundamentals", res.ticker, res.fund)
 		} else {
 			// Print warning but don't fail the whole execution

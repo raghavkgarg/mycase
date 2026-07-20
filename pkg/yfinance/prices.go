@@ -147,6 +147,11 @@ func FetchHistoricalPrices(ctx context.Context, ticker string, rangeStr string) 
 
 // FetchHistoricalDataWithTimestamps fetches daily close prices and timestamps for a ticker over a range
 func FetchHistoricalDataWithTimestamps(ctx context.Context, ticker string, rangeStr string) (*HistoricalData, error) {
+	// 1. DuckDB persistent cache (cross-day)
+	if hist, ok := checkPriceCache(ctx, ticker, rangeStr); ok {
+		return hist, nil
+	}
+	// 2. File cache (same-day, no DB required)
 	var cached HistoricalData
 	cacheKey := fmt.Sprintf("%s_%s", ticker, rangeStr)
 	if loadFromCache("prices", cacheKey, &cached) {
@@ -233,6 +238,7 @@ func FetchHistoricalDataWithTimestamps(ctx context.Context, ticker string, range
 	}
 	res.CleanIntradayNoise()
 
+	storePriceCache(ctx, ticker, rangeStr, res)
 	saveToCache("prices", cacheKey, res)
 
 	return res, nil
