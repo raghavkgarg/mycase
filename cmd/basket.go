@@ -11,10 +11,11 @@ import (
 
 	"github.com/urfave/cli/v3"
 
+	"github.com/raghavkgarg/mycase/pkg/broker"
+	"github.com/raghavkgarg/mycase/pkg/broker/zerodha"
 	"github.com/raghavkgarg/mycase/pkg/csvloader"
 	"github.com/raghavkgarg/mycase/pkg/datafetcher"
 	"github.com/raghavkgarg/mycase/pkg/executor"
-	"github.com/raghavkgarg/mycase/pkg/kiteclient"
 	"github.com/raghavkgarg/mycase/pkg/optimizer"
 	"github.com/raghavkgarg/mycase/pkg/printer"
 )
@@ -54,7 +55,7 @@ func runBasketWithParams(ctx context.Context, liveMode bool, basketFilename stri
 	fmt.Println("====================================================================")
 	fmt.Printf("Loading basket configuration: %s\n", basketFilename)
 
-	client, isMock := kiteclient.LoadAndInitClient("config/config.json", liveMode)
+	b := zerodha.New(liveMode, "config/config.json")
 
 	basket, basketKeys, err := csvloader.LoadBasketCSV(basketFilename)
 	if err != nil {
@@ -76,12 +77,12 @@ func runBasketWithParams(ctx context.Context, liveMode bool, basketFilename stri
 		return nil
 	}
 
-	quoteData, currentHoldings, err := datafetcher.FetchMarketData(ctx, isMock, client, basketKeys)
+	quoteData, currentHoldings, err := datafetcher.FetchMarketData(ctx, b, basketKeys)
 	if err != nil {
 		return fmt.Errorf("fetching market data: %w", err)
 	}
 
-	var basketOrders []executor.BasketOrder
+	var basketOrders []broker.Order
 	var finalQuantities []int
 	var printedPreview bool
 	var snapshotText string
@@ -115,7 +116,7 @@ func runBasketWithParams(ctx context.Context, liveMode bool, basketFilename stri
 				if buyQty > 0 {
 					bufferPrice := ltp + 2.0
 					roundedPrice := math.Round(bufferPrice*10.0) / 10.0
-					basketOrders = append(basketOrders, executor.BasketOrder{
+					basketOrders = append(basketOrders, broker.Order{
 						TradingSymbol:   symbol,
 						Exchange:        "NSE",
 						TransactionType: "BUY",
@@ -193,7 +194,7 @@ func runBasketWithParams(ctx context.Context, liveMode bool, basketFilename stri
 					bufferPrice = ltp - 2.0
 				}
 				roundedPrice := math.Round(bufferPrice*10.0) / 10.0
-				basketOrders = append(basketOrders, executor.BasketOrder{
+				basketOrders = append(basketOrders, broker.Order{
 					TradingSymbol:   symbol,
 					Exchange:        "NSE",
 					TransactionType: txType,
@@ -209,7 +210,7 @@ func runBasketWithParams(ctx context.Context, liveMode bool, basketFilename stri
 
 	executor.ExecuteBasketOrders(
 		basketOrders, quoteData, currentHoldings, finalQuantities,
-		basketKeys, basket, client, isMock, printedPreview, snapshotText, reader,
+		basketKeys, basket, b, printedPreview, snapshotText, reader,
 	)
 	return nil
 }

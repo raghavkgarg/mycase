@@ -9,9 +9,9 @@ import (
 
 	"github.com/urfave/cli/v3"
 
+	"github.com/raghavkgarg/mycase/pkg/broker/zerodha"
 	"github.com/raghavkgarg/mycase/pkg/config"
 	"github.com/raghavkgarg/mycase/pkg/csvloader"
-	"github.com/raghavkgarg/mycase/pkg/kiteclient"
 	"github.com/raghavkgarg/mycase/pkg/portfolio"
 	"github.com/raghavkgarg/mycase/pkg/printer"
 )
@@ -37,9 +37,9 @@ func runHoldings(ctx context.Context, c *cli.Command) error {
 	}
 	fmt.Println("====================================================================")
 
-	client, isMock := kiteclient.LoadAndInitClient("config/config.json", liveMode)
+	b := zerodha.New(liveMode, "config/config.json")
 
-	rawHoldings, err := portfolio.FetchAndMergeHoldings(client, isMock)
+	rawHoldings, err := b.GetHoldings()
 	if err != nil {
 		return fmt.Errorf("fetching holdings: %w", err)
 	}
