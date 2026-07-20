@@ -20,6 +20,7 @@ See `docs/architecture.md` for design details, CLI structure, directory layout, 
 | **R2** | Code cleanup & logic extraction complete. R2.1: mock data gen (`monitorLoadAllData` 250-line mock block) → `pkg/monitoring/mock.go` (`FillWithMockData`). R2.2: per-stock P&L calculation → `pkg/performance/valuation.go` (`ValuatePortfolio`). R2.3: selection rationale text → `pkg/report/heuristics.go` (`BuildRationale`). R2.4: exit detection → `pkg/optimizer/rebalance.go` (`DetectExits`). R2.5: `PipelineConfig`/`rawPipelineConfig`/`resolveFirst[T]` → `pkg/config/pipeline.go`. `cmd/` files reduced to flag-parsing + orchestration. `cmd/cmd_test.go` updated to `config.PipelineConfig`. `make cleanup` + `go test -race ./...` clean. | `444e750` |
 | **R3.5** — context.Context | `ctx context.Context` added as first param to all `pkg/yfinance` fetch functions (`FetchHistoricalDataWithTimestamps`, `FetchHistoricalPrices`, `FetchIntradayData`, `FetchQuotes`, `FetchFundamentals`, `FetchCookieAndCrumb`). `http.NewRequestWithContext(ctx, ...)` replaces `http.NewRequest` throughout. Context threaded through all intermediate callers: `pkg/stockpicker/loader.go`, `pkg/stockpicker/scoring.go`, `pkg/stockpicker/filters.go`, `pkg/performance/valuation.go`, `pkg/datafetcher/datafetcher.go`. All `cmd/` entry points pass their `cli` context down. `go build ./...`, `go test -race ./...`, `make cleanup` all clean. | `84ffab6` |
 | **R-cache** | DuckDB persistent cache (`pkg/cache/`). Schema: `prices(ticker,date,ts,close,open,volume)`, `fundamentals(ticker,fetched_at,raw_json)`, `cache_meta(ticker,range_key,fetched_at)`. Staleness: prices fresh today IST; fundamentals 24h. `pkg/yfinance` checks DuckDB → file cache → Yahoo; stores back on miss. `mycase cache status/clear` subcommand added. Cache init in `main.go` is best-effort (non-fatal if `data/` missing). | `f8a5ff1` |
+| **R-cache tests** | 21 tests in `pkg/cache/cache_test.go` covering upsert/ON CONFLICT, primary key constraints, int64/float64 round-trip accuracy, staleness (IST same-day + 24h fundamentals), range filtering, clear-ticker/clear-all, and schema idempotency. Two production bugs caught: (1) DuckDB v1.5.3 treats `CURRENT_TIMESTAMP` as a column name in `VALUES(...)` — fixed by binding `time.Now().Unix()` via `?`; (2) `TIMESTAMP` columns don't scan reliably into `time.Time` via database/sql — fixed by switching `fetched_at` to `BIGINT` (Unix epoch seconds) throughout. | `4c46376` |
 | **Makefile** | Targets: build, install, cross-compile (linux/darwin arm64/amd64), run, test, test-verbose, test-race, test-integration, test-coverage, cleanup, clean, help. LDFLAGS inject Version/GitCommit/BuildDate. | `0ad3a25`, `782a663` |
 
 ---
@@ -413,31 +414,30 @@ Schema (`data/cache.db`):
 CREATE TABLE IF NOT EXISTS prices (
     ticker  VARCHAR NOT NULL,
     date    DATE    NOT NULL,
+    ts      BIGINT  NOT NULL,
     close   DOUBLE  NOT NULL,
     open    DOUBLE,
     volume  DOUBLE,
     PRIMARY KEY (ticker, date)
 );
 CREATE TABLE IF NOT EXISTS fundamentals (
-    ticker       VARCHAR PRIMARY KEY,
-    fetched_at   TIMESTAMP NOT NULL,
-    -- scalar fields: sector, market_cap, roe, forward_pe, peg_ratio, pb_ratio, ...
-    -- annual time-series stored as JSON arrays
-    annual_revenue JSON, annual_capex JSON, annual_net_ppe JSON,
-    annual_ar JSON, annual_op_income JSON,
-    raw_json JSON  -- full Fundamentals struct as escape hatch
+    ticker     VARCHAR PRIMARY KEY,
+    fetched_at BIGINT  NOT NULL,
+    raw_json   VARCHAR NOT NULL
 );
 CREATE TABLE IF NOT EXISTS cache_meta (
     ticker     VARCHAR NOT NULL,
     range_key  VARCHAR NOT NULL,
-    fetched_at TIMESTAMP NOT NULL,
+    fetched_at BIGINT  NOT NULL,
     PRIMARY KEY (ticker, range_key)
 );
 ```
 
+`fetched_at` is BIGINT (Unix epoch seconds). DuckDB v1.5.3 doesn't reliably scan TIMESTAMP → `time.Time` via database/sql; BIGINT is reliable. Convert on read with `time.Unix(n, 0)`.
+
 Staleness policy:
 - Past trading day prices: permanent
-- Current-day prices: stale before 15:30 IST
+- Current-day prices: stale if `fetched_at` is from a previous calendar day (IST)
 - Fundamentals: stale after 24 hours
 
 **R-cache.3 — Wire cache into yfinance fetch functions**  

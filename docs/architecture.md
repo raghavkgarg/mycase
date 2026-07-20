@@ -253,9 +253,11 @@ Stack rationale: dashboard is a local tool. `//go:embed static/*` keeps it self-
 
 DuckDB is already in production across this org (sanvasify, eia-api-explorer, patscape). For R7 backtesting workloads (rolling windows, multi-ticker correlations across 250+ tickers), DuckDB's columnar execution is the right fit. Same `database/sql` interface; `ON CONFLICT DO UPDATE` upsert syntax already in use.
 
-Schema: `prices(ticker, date, close, open, volume)`, `fundamentals(ticker, fetched_at, ...)`, `cache_meta(ticker, range_key, fetched_at)`.
+Schema: `prices(ticker, date, ts BIGINT, close, open, volume)`, `fundamentals(ticker, fetched_at BIGINT, raw_json)`, `cache_meta(ticker, range_key, fetched_at BIGINT)`.
 
-Staleness policy: past trading day prices are permanent; current-day prices stale before 15:30 IST; fundamentals stale after 24h.
+`fetched_at` columns are `BIGINT` (Unix epoch seconds), not `TIMESTAMP`. DuckDB v1.5.3 does not reliably round-trip `time.Time` through `TIMESTAMP` columns via `database/sql` Scan — values come back as zero. BIGINT is reliable and timezone-unambiguous; convert with `time.Unix(n, 0)` on read.
+
+Staleness policy: prices are fresh if fetched on the same calendar day in IST (`isFreshToday` compares `YearDay`); fundamentals stale after 24h.
 
 ### D6 — Broker Abstraction (R4)
 **Decision**: Define `pkg/broker/broker.go` interface (`GetHoldings`, `PlaceOrders`, `GetPositions`, `IsAuthenticated`). Move Kite logic to `pkg/broker/zerodha/`. Candidate second brokers: Fyers, AngelOne SmartAPI, Upstox.
