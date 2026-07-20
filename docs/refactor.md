@@ -21,6 +21,7 @@ See `docs/architecture.md` for design details, CLI structure, directory layout, 
 | **R3.5** — context.Context | `ctx context.Context` added as first param to all `pkg/yfinance` fetch functions (`FetchHistoricalDataWithTimestamps`, `FetchHistoricalPrices`, `FetchIntradayData`, `FetchQuotes`, `FetchFundamentals`, `FetchCookieAndCrumb`). `http.NewRequestWithContext(ctx, ...)` replaces `http.NewRequest` throughout. Context threaded through all intermediate callers: `pkg/stockpicker/loader.go`, `pkg/stockpicker/scoring.go`, `pkg/stockpicker/filters.go`, `pkg/performance/valuation.go`, `pkg/datafetcher/datafetcher.go`. All `cmd/` entry points pass their `cli` context down. `go build ./...`, `go test -race ./...`, `make cleanup` all clean. | `84ffab6` |
 | **R-cache** | DuckDB persistent cache (`pkg/cache/`). Schema: `prices(ticker,date,ts,close,open,volume)`, `fundamentals(ticker,fetched_at,raw_json)`, `cache_meta(ticker,range_key,fetched_at)`. Staleness: prices fresh today IST; fundamentals 24h. `pkg/yfinance` checks DuckDB → file cache → Yahoo; stores back on miss. `mycase cache status/clear` subcommand added. Cache init in `main.go` is best-effort (non-fatal if `data/` missing). | `f8a5ff1` |
 | **R-cache tests** | 21 tests in `pkg/cache/cache_test.go` covering upsert/ON CONFLICT, primary key constraints, int64/float64 round-trip accuracy, staleness (IST same-day + 24h fundamentals), range filtering, clear-ticker/clear-all, and schema idempotency. Two production bugs caught: (1) DuckDB v1.5.3 treats `CURRENT_TIMESTAMP` as a column name in `VALUES(...)` — fixed by binding `time.Now().Unix()` via `?`; (2) `TIMESTAMP` columns don't scan reliably into `time.Time` via database/sql — fixed by switching `fetched_at` to `BIGINT` (Unix epoch seconds) throughout. | `4c46376` |
+| **R4** | `pkg/broker/broker.go`: `Broker` interface + `Holding`, `Order`, `OrderResult` types. `pkg/broker/mock.go`: `MockBroker` (static sample data, no network). `pkg/broker/zerodha/zerodha.go`: `ZerodhaBroker` + `New` factory (falls back to MockBroker on missing credentials). `pkg/portfolio/portfolio.go`: reduced to `type Holding = broker.Holding` alias. `pkg/executor`: uses `broker.Broker` + `broker.Order`. `pkg/datafetcher`: uses `broker.Broker`; ctx threading preserved. `cmd/basket` + `cmd/holdings`: use `zerodha.New` instead of `kiteclient`. `cmd/auth.go` untouched. | `20aaa5f` |
 | **Makefile** | Targets: build, install, cross-compile (linux/darwin arm64/amd64), run, test, test-verbose, test-race, test-integration, test-coverage, cleanup, clean, help. LDFLAGS inject Version/GitCommit/BuildDate. | `0ad3a25`, `782a663` |
 
 ---
@@ -33,7 +34,7 @@ See `docs/architecture.md` for design details, CLI structure, directory layout, 
 | **R2** | Code cleanup / logic extraction | Medium (2–3d) | P1 | ✅ `444e750` |
 | **R3.5** | `context.Context` in HTTP calls | Small | P1 | ✅ `84ffab6` |
 | **R-cache** | DuckDB price/fundamentals cache | Medium (2d) | P1 | ✅ `f8a5ff1` |
-| **R4** | Broker abstraction layer | Medium (2d) | P2 | ⏳ |
+| **R4** | Broker abstraction layer | Medium (2d) | P2 | ✅ `20aaa5f` |
 | **R5** | Drift monitoring daemon | Large (4–6d) | P2 | ⏳ |
 | **R6** | Tax & transaction cost awareness | Medium (2–3d) | P3 | ⏳ |
 | **R7** | Historical backtesting engine | XL (8–12d) | P3 | ⏳ |

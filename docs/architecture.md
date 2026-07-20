@@ -61,6 +61,7 @@ mycase/
 │   ├── merge.go
 │   └── auth.go
 ├── pkg/                        # All business logic
+│   ├── broker/                 # Broker interface (broker.go), MockBroker (mock.go); zerodha/ = ZerodhaBroker + New factory
 │   ├── cache/                  # DuckDB persistent cache: prices, fundamentals, cache_meta tables
 │   ├── config/                 # Broker credentials (config.go); themes; PipelineConfig (pipeline.go)
 │   ├── csvloader/              # basket CSV I/O, golden copy merge, pipeline CSV helpers
@@ -93,7 +94,6 @@ mycase/
 **Planned additions** (not yet implemented):
 ```
 pkg/
-├── broker/       # R4: Broker interface + pkg/broker/zerodha/
 ├── alert/        # R5: Alerter interface, Telegram, Discord
 ├── daemon/       # R5: Background drift monitor
 └── backtest/     # R7: Historical backtesting engine
