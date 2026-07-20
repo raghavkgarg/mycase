@@ -23,6 +23,7 @@ See `docs/architecture.md` for design details, CLI structure, directory layout, 
 | **R-cache tests** | 21 tests in `pkg/cache/cache_test.go` covering upsert/ON CONFLICT, primary key constraints, int64/float64 round-trip accuracy, staleness (IST same-day + 24h fundamentals), range filtering, clear-ticker/clear-all, and schema idempotency. Two production bugs caught: (1) DuckDB v1.5.3 treats `CURRENT_TIMESTAMP` as a column name in `VALUES(...)` — fixed by binding `time.Now().Unix()` via `?`; (2) `TIMESTAMP` columns don't scan reliably into `time.Time` via database/sql — fixed by switching `fetched_at` to `BIGINT` (Unix epoch seconds) throughout. | `4c46376` |
 | **R4** | `pkg/broker/broker.go`: `Broker` interface + `Holding`, `Order`, `OrderResult` types. `pkg/broker/mock.go`: `MockBroker` (static sample data, no network). `pkg/broker/zerodha/zerodha.go`: `ZerodhaBroker` + `New` factory (falls back to MockBroker on missing credentials). `pkg/portfolio/portfolio.go`: reduced to `type Holding = broker.Holding` alias. `pkg/executor`: uses `broker.Broker` + `broker.Order`. `pkg/datafetcher`: uses `broker.Broker`; ctx threading preserved. `cmd/basket` + `cmd/holdings`: use `zerodha.New` instead of `kiteclient`. `cmd/auth.go` untouched. | `20aaa5f` |
 | **R5** | `pkg/alert/`: `Alerter` interface; `TelegramAlerter` (HTTP POST, no SDK), `DiscordAlerter` (webhook), `EmailAlerter` (stub). `pkg/config/alerts.go`: `AlertConfig` + `LoadAlertConfig` reads `alerts:` section from pipeline.yaml. `pkg/daemon/drift.go`: `CalculateDrift` (½ Σ\|w_actual−w_target\|) using `broker.Broker`. `pkg/daemon/daemon.go`: `RunCheck` (one-shot), `RunLoop` (blocking, fires at 15:45 IST daily), `State` persisted to `data/daemon_state.json`. `cmd/daemon.go`: `start`/`stop`/`status`/`check`/`install`/`uninstall` subcommands; launchd plist on macOS, systemd unit print on Linux. Credentials in pipeline.yaml or env (`MYCASE_TELEGRAM_TOKEN`, `MYCASE_DISCORD_WEBHOOK`). | `10f6d56` |
+| **R6** | `pkg/costs/costs.go`: `CostModel`, `CostBreakdown`, `Calculate` for Indian equity delivery (STT, stamp duty, DP ₹15.93/ISIN/sell, SEBI). `pkg/costs/tax.go`: `ClassifySell` with Finance Act 2024 rates (STCG 20%, LTCG 12.5% above ₹1.25L); handles zero purchase date (not available from broker API). `pkg/optimizer/rebalance.go`: `FilterMicroTransactions` drops orders where cost/value > threshold. `cmd/basket.go`: micro-tx filter + STCG/LTCG warning banner wired in before execution. | |
 | **Makefile** | Targets: build, install, cross-compile (linux/darwin arm64/amd64), run, test, test-verbose, test-race, test-integration, test-coverage, cleanup, clean, help. LDFLAGS inject Version/GitCommit/BuildDate. | `0ad3a25`, `782a663` |
 
 ---
@@ -37,7 +38,7 @@ See `docs/architecture.md` for design details, CLI structure, directory layout, 
 | **R-cache** | DuckDB price/fundamentals cache | Medium (2d) | P1 | ✅ `f8a5ff1` |
 | **R4** | Broker abstraction layer | Medium (2d) | P2 | ✅ `20aaa5f` |
 | **R5** | Drift monitoring daemon | Large (4–6d) | P2 | ✅ `10f6d56` |
-| **R6** | Tax & transaction cost awareness | Medium (2–3d) | P3 | ⏳ |
+| **R6** | Tax & transaction cost awareness | Medium (2–3d) | P3 | ✅ |
 | **R7** | Historical backtesting engine | XL (8–12d) | P3 | ⏳ |
 | **R8** | Web dashboard | XL (10–15d) | P4 | ⏳ |
 

@@ -72,6 +72,7 @@ mycase/
 │   ├── broker/                 # Broker interface (broker.go), MockBroker (mock.go); zerodha/ = ZerodhaBroker + New factory
 │   ├── cache/                  # DuckDB persistent cache: prices, fundamentals, cache_meta tables
 │   ├── config/                 # Broker credentials (config.go); themes; PipelineConfig (pipeline.go)
+│   ├── costs/                  # Indian equity transaction costs (STT, stamp duty, DP, SEBI); STCG/LTCG classification (Finance Act 2024)
 │   ├── csvloader/              # basket CSV I/O, golden copy merge, pipeline CSV helpers
 │   ├── daemon/                 # Drift daemon: CalculateDrift, RunCheck, RunLoop, State persistence
 │   ├── datafetcher/            # Live/mock market data fetch (FetchMarketData via Kite or mock quotes)

@@ -8,11 +8,13 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/urfave/cli/v3"
 
 	"github.com/raghavkgarg/mycase/pkg/broker"
 	"github.com/raghavkgarg/mycase/pkg/broker/zerodha"
+	"github.com/raghavkgarg/mycase/pkg/costs"
 	"github.com/raghavkgarg/mycase/pkg/csvloader"
 	"github.com/raghavkgarg/mycase/pkg/datafetcher"
 	"github.com/raghavkgarg/mycase/pkg/executor"
@@ -208,11 +210,105 @@ func runBasketWithParams(ctx context.Context, liveMode bool, basketFilename stri
 		}
 	}
 
+	basketOrders = applyTransactionFilters(basketOrders, quoteData, b)
+
 	executor.ExecuteBasketOrders(
 		basketOrders, quoteData, currentHoldings, finalQuantities,
 		basketKeys, basket, b, printedPreview, snapshotText, reader,
 	)
 	return nil
+}
+
+// applyTransactionFilters runs the micro-transaction cost filter and prints
+// STCG/LTCG tax warnings for any SELL orders. Returns the filtered order list.
+func applyTransactionFilters(
+	orders []broker.Order,
+	quotes map[string]float64,
+	b broker.Broker,
+) []broker.Order {
+	if len(orders) == 0 {
+		return orders
+	}
+
+	const microTxThreshold = 0.005 // 0.5% cost-to-value threshold
+
+	kept, filtered := optimizer.FilterMicroTransactions(orders, quotes, costs.DefaultZerodha, microTxThreshold)
+
+	if len(filtered) > 0 {
+		fmt.Printf("\n--- Micro-Transaction Filter (cost > %.1f%% of trade value) ---\n", microTxThreshold*100)
+		for _, o := range filtered {
+			price := o.Price
+			if price <= 0 {
+				price = quotes["NSE:"+o.TradingSymbol]
+			}
+			bd := costs.DefaultZerodha.Calculate(o.TransactionType, o.Quantity, price)
+			fmt.Printf("  SKIPPED %s %s × %d  trade=₹%.0f  costs=₹%.2f (%.2f%%)\n",
+				o.TransactionType, o.TradingSymbol, o.Quantity,
+				bd.TradeValue, bd.Total, bd.CostRatio*100)
+		}
+	}
+
+	printCostSummary(kept, quotes)
+	printTaxWarnings(kept, b)
+
+	return kept
+}
+
+// printCostSummary shows estimated transaction costs for the orders that will execute.
+func printCostSummary(orders []broker.Order, quotes map[string]float64) {
+	if len(orders) == 0 {
+		return
+	}
+	var totalCosts, totalValue float64
+	for _, o := range orders {
+		price := o.Price
+		if price <= 0 {
+			price = quotes["NSE:"+o.TradingSymbol]
+		}
+		bd := costs.DefaultZerodha.Calculate(o.TransactionType, o.Quantity, price)
+		totalCosts += bd.Total
+		totalValue += bd.TradeValue
+	}
+	fmt.Printf("\nEstimated transaction costs: ₹%.2f on ₹%.0f traded (%.3f%%)\n",
+		totalCosts, totalValue, (totalCosts/totalValue)*100)
+}
+
+// printTaxWarnings fetches holdings and prints STCG/LTCG warnings for SELL orders.
+func printTaxWarnings(orders []broker.Order, b broker.Broker) {
+	var sells []broker.Order
+	for _, o := range orders {
+		if o.TransactionType == "SELL" {
+			sells = append(sells, o)
+		}
+	}
+	if len(sells) == 0 {
+		return
+	}
+
+	holdings, err := b.GetHoldings()
+	holdingMap := make(map[string]broker.Holding, len(holdings))
+	if err == nil {
+		for _, h := range holdings {
+			holdingMap[h.TradingSymbol] = h
+		}
+	}
+
+	fmt.Println("\n--- Tax Warning (Finance Act 2024) ---")
+	for _, o := range sells {
+		h := holdingMap[o.TradingSymbol]
+		price := o.Price
+		if price <= 0 {
+			price = o.Ltp
+		}
+		// PurchaseDate is not available from broker API; ClassifySell handles zero time.
+		w := costs.ClassifySell(o.TradingSymbol, o.Quantity, price, h.AveragePrice, time.Time{})
+		fmt.Println(" ", w.Note)
+		if w.EstimatedGain > 0 && w.EstimatedTax > 0 {
+			fmt.Printf("    Estimated gain: ₹%.0f  |  Estimated tax: ₹%.0f\n", w.EstimatedGain, w.EstimatedTax)
+		} else if w.EstimatedGain > 0 {
+			fmt.Printf("    Estimated gain: ₹%.0f\n", w.EstimatedGain)
+		}
+	}
 }
 
 func cleanBasketArg(arg string) string {

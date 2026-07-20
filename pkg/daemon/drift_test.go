@@ -148,27 +148,27 @@ func TestCalculateDrift_Bounded(t *testing.T) {
 	}{
 		{
 			// One stock overweight, one underweight → intermediate drift.
-			quotes:     map[string]float64{"NSE:X": 100, "NSE:Y": 50},
-			holdings:   []broker.Holding{{Exchange: "NSE", TradingSymbol: "X", Quantity: 5}},
-			target:     map[string]float64{"NSE:X": 0.7, "NSE:Y": 0.3},
-			keys:       []string{"NSE:X", "NSE:Y"},
+			quotes:      map[string]float64{"NSE:X": 100, "NSE:Y": 50},
+			holdings:    []broker.Holding{{Exchange: "NSE", TradingSymbol: "X", Quantity: 5}},
+			target:      map[string]float64{"NSE:X": 0.7, "NSE:Y": 0.3},
+			keys:        []string{"NSE:X", "NSE:Y"},
 			wantAtLeast: 0, wantAtMost: 1.0,
 		},
 		{
 			// No holdings → actual all-zero, drift exactly 0.5.
-			quotes:     map[string]float64{"NSE:X": 100},
-			holdings:   nil,
-			target:     map[string]float64{"NSE:X": 1.0},
-			keys:       []string{"NSE:X"},
+			quotes:      map[string]float64{"NSE:X": 100},
+			holdings:    nil,
+			target:      map[string]float64{"NSE:X": 1.0},
+			keys:        []string{"NSE:X"},
 			wantAtLeast: 0.5 - 1e-9, wantAtMost: 0.5 + 1e-9,
 		},
 		{
 			// All weight in Z (target 20%), none in X/Y (target 40% each) → drift 0.8.
 			// Verifies the formula is not artificially capped at 0.5.
-			quotes:     map[string]float64{"NSE:X": 100, "NSE:Y": 100, "NSE:Z": 100},
-			holdings:   []broker.Holding{{Exchange: "NSE", TradingSymbol: "Z", Quantity: 100}},
-			target:     map[string]float64{"NSE:X": 0.4, "NSE:Y": 0.4, "NSE:Z": 0.2},
-			keys:       []string{"NSE:X", "NSE:Y", "NSE:Z"},
+			quotes:      map[string]float64{"NSE:X": 100, "NSE:Y": 100, "NSE:Z": 100},
+			holdings:    []broker.Holding{{Exchange: "NSE", TradingSymbol: "Z", Quantity: 100}},
+			target:      map[string]float64{"NSE:X": 0.4, "NSE:Y": 0.4, "NSE:Z": 0.2},
+			keys:        []string{"NSE:X", "NSE:Y", "NSE:Z"},
 			wantAtLeast: 0.8 - 1e-9, wantAtMost: 0.8 + 1e-9,
 		},
 	}
