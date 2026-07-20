@@ -18,18 +18,18 @@ type PriceRecord struct {
 // is still fresh (fetched today IST). Returns (nil, false, nil) on a cache
 // miss or stale entry.
 func (c *Cache) GetPrices(ctx context.Context, ticker, rangeKey string) ([]PriceRecord, bool, error) {
-	var fetchedAt time.Time
+	var fetchedAtUnix int64
 	err := c.db.QueryRowContext(ctx,
 		`SELECT fetched_at FROM cache_meta WHERE ticker = ? AND range_key = ?`,
 		ticker, rangeKey,
-	).Scan(&fetchedAt)
+	).Scan(&fetchedAtUnix)
 	if err == sql.ErrNoRows {
 		return nil, false, nil
 	}
 	if err != nil {
 		return nil, false, err
 	}
-	if !isFreshToday(fetchedAt) {
+	if !isFreshToday(time.Unix(fetchedAtUnix, 0)) {
 		return nil, false, nil
 	}
 
@@ -87,9 +87,9 @@ func (c *Cache) StorePrices(ctx context.Context, ticker, rangeKey string, record
 	}
 
 	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO cache_meta (ticker, range_key, fetched_at) VALUES (?, ?, CURRENT_TIMESTAMP)
-		ON CONFLICT (ticker, range_key) DO UPDATE SET fetched_at = CURRENT_TIMESTAMP`,
-		ticker, rangeKey,
+		INSERT INTO cache_meta (ticker, range_key, fetched_at) VALUES (?, ?, ?)
+		ON CONFLICT (ticker, range_key) DO UPDATE SET fetched_at = EXCLUDED.fetched_at`,
+		ticker, rangeKey, time.Now().Unix(),
 	); err != nil {
 		return err
 	}

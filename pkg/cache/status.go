@@ -20,7 +20,7 @@ func (c *Cache) Status(ctx context.Context) ([]StatusEntry, error) {
 		SELECT m.ticker, m.range_key, m.fetched_at,
 		       (SELECT COUNT(*) FROM prices p
 		        WHERE p.ticker = m.ticker
-		          AND p.date >= ?::DATE) AS row_count
+		          AND p.date >= CAST(? AS DATE)) AS row_count
 		FROM cache_meta m
 		ORDER BY m.ticker, m.range_key`,
 		time.Now().AddDate(-5, 0, 0).Format("2006-01-02"),
@@ -33,10 +33,12 @@ func (c *Cache) Status(ctx context.Context) ([]StatusEntry, error) {
 	var entries []StatusEntry
 	for rows.Next() {
 		var e StatusEntry
+		var fetchedAtUnix int64
 		e.Kind = "prices"
-		if err := rows.Scan(&e.Ticker, &e.RangeKey, &e.FetchedAt, &e.Rows); err != nil {
+		if err := rows.Scan(&e.Ticker, &e.RangeKey, &fetchedAtUnix, &e.Rows); err != nil {
 			return nil, err
 		}
+		e.FetchedAt = time.Unix(fetchedAtUnix, 0)
 		entries = append(entries, e)
 	}
 	if err := rows.Err(); err != nil {
@@ -52,12 +54,14 @@ func (c *Cache) Status(ctx context.Context) ([]StatusEntry, error) {
 	defer frows.Close()
 	for frows.Next() {
 		var e StatusEntry
+		var fetchedAtUnix int64
 		e.Kind = "fundamentals"
 		e.RangeKey = "—"
 		e.Rows = 1
-		if err := frows.Scan(&e.Ticker, &e.FetchedAt); err != nil {
+		if err := frows.Scan(&e.Ticker, &fetchedAtUnix); err != nil {
 			return nil, err
 		}
+		e.FetchedAt = time.Unix(fetchedAtUnix, 0)
 		entries = append(entries, e)
 	}
 	return entries, frows.Err()

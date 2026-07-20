@@ -52,13 +52,13 @@ CREATE TABLE IF NOT EXISTS prices (
 );
 CREATE TABLE IF NOT EXISTS fundamentals (
     ticker     VARCHAR PRIMARY KEY,
-    fetched_at TIMESTAMP NOT NULL,
-    raw_json   VARCHAR   NOT NULL
+    fetched_at BIGINT  NOT NULL,
+    raw_json   VARCHAR NOT NULL
 );
 CREATE TABLE IF NOT EXISTS cache_meta (
     ticker     VARCHAR NOT NULL,
     range_key  VARCHAR NOT NULL,
-    fetched_at TIMESTAMP NOT NULL,
+    fetched_at BIGINT  NOT NULL,
     PRIMARY KEY (ticker, range_key)
 );
 `
