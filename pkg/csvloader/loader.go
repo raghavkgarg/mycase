@@ -172,6 +172,9 @@ func GetUniverseName(filePath string) string {
 
 	var validParts []string
 	for _, part := range parts {
+		if part == "" {
+			continue
+		}
 		partLower := strings.ToLower(part)
 		if ignored[partLower] {
 			continue

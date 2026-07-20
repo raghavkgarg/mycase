@@ -192,10 +192,19 @@ func normalizeValue(val, minVal, maxVal, maxPoints float64, higherIsBetter bool)
 	if maxVal == minVal {
 		return maxPoints
 	}
+	var score float64
 	if higherIsBetter {
-		return ((val - minVal) / (maxVal - minVal)) * maxPoints
+		score = ((val - minVal) / (maxVal - minVal)) * maxPoints
+	} else {
+		score = ((maxVal - val) / (maxVal - minVal)) * maxPoints
 	}
-	return ((maxVal - val) / (maxVal - minVal)) * maxPoints
+	if score < 0 {
+		return 0
+	}
+	if score > maxPoints {
+		return maxPoints
+	}
+	return score
 }
 
 // SelectTopNMultibagger filters top N constituents applying sector caps and hysteresis buffer.

@@ -15,7 +15,8 @@ See `docs/architecture.md` for design details, CLI structure, directory layout, 
 | **R3 infra** — Go + deps | `go 1.24.4` → `go 1.26.3`; `gocsv` updated from 2018 pin to latest. | `bd3c4c0` |
 | **R3 language** — Go 1.26 idioms | `math/rand/v2` replaces `math/rand` in monitor mock generator; `slices.SortFunc`/`slices.Sort` replace `sort.Interface` boilerplate (`ByPnLPct`) and `sort.Strings`; `max()` builtin replaces `math.Max` cast in printer; `go mod tidy` promotes `urfave/cli/v3` to direct dep. | `d019c9a` |
 | **Tests (partial)** + **R2.4 partial** | `CapWeights` extracted from `cmd/optimize.go` → `pkg/optimizer/cap_weights.go` (exported). 28 new tests across `pkg/optimizer` (capWeights + math edge cases + quick-check property test), `pkg/monitoring` (simulator determinism, empty portfolio, insufficient history, NaN guard, boundary cases), `pkg/config` (MFSConfig, Themes, Config round-trip — all graceful fallback paths). | `6a74e2d` |
-| **Cleanup** | `make cleanup` now passes clean. Fixed: ST1005 error-string punctuation (`cmd/merge.go`), SA1019 deprecated `strings.Title` → inline `ToUpper` (`cmd/monitor.go`, `cmd/report.go`), S1039 unnecessary `fmt.Sprintf` (`pkg/selectiontracker/tracker.go`), SA5011 nil-pointer guard on `hardFilters` (`pkg/stockpicker/scoring.go`). Go toolchain bumped 1.26.3 → 1.26.5 (3 stdlib CVEs resolved: GO-2026-5856, GO-2026-5039, GO-2026-5037). Full `gofmt`+`go fix` pass across all 32 source files. | _current_ |
+| **Cleanup** | `make cleanup` now passes clean. Fixed: ST1005 error-string punctuation (`cmd/merge.go`), SA1019 deprecated `strings.Title` → inline `ToUpper` (`cmd/monitor.go`, `cmd/report.go`), S1039 unnecessary `fmt.Sprintf` (`pkg/selectiontracker/tracker.go`), SA5011 nil-pointer guard on `hardFilters` (`pkg/stockpicker/scoring.go`). Go toolchain bumped 1.26.3 → 1.26.5 (3 stdlib CVEs resolved: GO-2026-5856, GO-2026-5039, GO-2026-5037). Full `gofmt`+`go fix` pass across all 32 source files. | `ef20714` |
+| **Tests** | Coverage baseline established. 35 → 96 top-level passing tests (110 incl. subtests). New test files: `pkg/yfinance/metrics_test.go` (RSI bounds/extremes, SalesGrowth, DSO, VolumeBreakout), `pkg/yfinance/prices_test.go` (MapTickerToYahoo, CleanIntradayNoise), `pkg/optimizer/math_test.go` (CalculateMean, Covariance, DownsideDeviation, TotalReturn edge cases), `cmd/cmd_test.go` (parsePerfDate, cleanBasketArg, PipelineConfig.UnmarshalYAML). Extended: `pkg/csvloader/loader_test.go` (ParseBasket validity/header/duplicate/invalid; GetUniverseName quick-check property), `pkg/stockpicker/stockpicker_test.go` (normalizeValue out-of-range; ApplyHysteresisSelection; ApplyRebalancingBand). Two production fixes found by tests: (1) `GetUniverseName("")` returned `""` — skip empty parts from split; (2) `normalizeValue` extrapolated negative scores for out-of-range vals — clamp to [0, maxPoints]. `go test -race ./...` passes clean. | _current_ |
 | **Makefile** | Targets: build, install, cross-compile (linux/darwin arm64/amd64), run, test, test-verbose, test-race, test-integration, test-coverage, cleanup, clean, help. LDFLAGS inject Version/GitCommit/BuildDate. | `0ad3a25`, `782a663` |
 
 ---
@@ -68,13 +69,13 @@ See `docs/architecture.md` for design details, CLI structure, directory layout, 
 
 | Package | Unit | Table | Property | Fuzz | Integration | Benchmark |
 |---------|------|-------|----------|------|-------------|-----------|
-| `pkg/csvloader` | ✅ partial | ✅ | ❌ | ❌ | ❌ | ❌ |
-| `pkg/stockpicker` | ✅ partial | ✅ | ❌ | ❌ | ❌ | ❌ |
-| `pkg/optimizer` | ✅ partial | ✅ | ❌ | ❌ | ❌ | ❌ |
-| `pkg/monitoring` | ✅ partial | ✅ | ❌ | ❌ | ❌ | ❌ |
-| `pkg/yfinance` | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
-| `pkg/config` | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
-| `cmd` | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| `pkg/csvloader` | ✅ | ✅ | ✅ quick | ❌ | ❌ | ❌ |
+| `pkg/stockpicker` | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ |
+| `pkg/optimizer` | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ |
+| `pkg/monitoring` | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ |
+| `pkg/yfinance` | ✅ math | ✅ | ❌ | ❌ | ❌ | ❌ |
+| `pkg/config` | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ |
+| `cmd` | ✅ helpers | ✅ | ❌ | ❌ | ❌ | ❌ |
 
 ---
 
