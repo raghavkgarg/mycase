@@ -171,3 +171,32 @@ func TestOptimizeInverseVolatility_SumsToOne(t *testing.T) {
 		t.Errorf("weights sum to %f, want 1.0", total)
 	}
 }
+
+func TestOptimizeFreshBuy_ProportionalAllocation(t *testing.T) {
+	// Tests expensive vs cheap stock allocation under budget
+	basketKeys := []string{"NSE:EXPENSIVE", "NSE:CHEAP"}
+	basket := map[string]float64{
+		"NSE:EXPENSIVE": 0.50,
+		"NSE:CHEAP":     0.50,
+	}
+	quoteData := map[string]float64{
+		"NSE:EXPENSIVE": 1700.0,
+		"NSE:CHEAP":     100.0,
+	}
+	currentHoldings := map[string]int{
+		"EXPENSIVE": 0,
+		"CHEAP":     0,
+	}
+
+	// With budget of ₹2000:
+	// Expensive (limit ~1751): 1 share
+	// Cheap (limit ~103): ~2 shares
+	// Both stocks must receive non-zero allocations proportional to target weights
+	finalQtys := OptimizeFreshBuy(basketKeys, basket, quoteData, currentHoldings, 2000.0)
+	if finalQtys[0] < 1 {
+		t.Errorf("expensive stock should receive at least 1 share, got %d", finalQtys[0])
+	}
+	if finalQtys[1] < 1 {
+		t.Errorf("cheap stock should receive at least 1 share, got %d", finalQtys[1])
+	}
+}

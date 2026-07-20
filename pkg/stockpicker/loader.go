@@ -15,6 +15,24 @@ import (
 	"github.com/raghavkgarg/mycase/pkg/yfinance"
 )
 
+// IsUSIndex returns true if the index name or path refers to a US index.
+func IsUSIndex(name string) bool {
+	clean := strings.ToLower(name)
+	return strings.Contains(clean, "sp500") || strings.Contains(clean, "nasdaq") || strings.Contains(clean, "nyse") || strings.Contains(clean, "us_") || strings.HasPrefix(clean, "us")
+}
+
+// GetBenchmarkSymbolForIndex determines the appropriate benchmark ticker for an index or active tickers.
+func GetBenchmarkSymbolForIndex(indexName string, tickers []string) string {
+	cleanIndex := strings.ToLower(indexName)
+	if strings.Contains(cleanIndex, "nasdaq") {
+		return "^IXIC"
+	}
+	if IsUSIndex(indexName) {
+		return "^GSPC"
+	}
+	return yfinance.GetBenchmarkSymbol(tickers)
+}
+
 func loadLocalCSVConstituents(filePath string) ([]string, error) {
 	file, err := os.Open(filePath)
 	if err != nil {
@@ -43,13 +61,18 @@ func loadLocalCSVConstituents(filePath string) ([]string, error) {
 		return nil, fmt.Errorf("could not find 'ticker' or 'symbol' column in the CSV")
 	}
 
+	isUSFile := IsUSIndex(filePath)
 	var tickers []string
 	for _, record := range records[1:] {
 		if len(record) > tickerIdx {
 			ticker := strings.TrimSpace(record[tickerIdx])
 			if ticker != "" {
-				if !strings.HasPrefix(ticker, "NSE:") && !strings.HasPrefix(ticker, "BSE:") {
-					ticker = "NSE:" + ticker
+				if !strings.HasPrefix(ticker, "NSE:") && !strings.HasPrefix(ticker, "BSE:") && !strings.HasPrefix(ticker, "US:") && !strings.HasPrefix(ticker, "NASDAQ:") && !strings.HasPrefix(ticker, "NYSE:") {
+					if isUSFile {
+						ticker = "US:" + ticker
+					} else {
+						ticker = "NSE:" + ticker
+					}
 				}
 				tickers = append(tickers, ticker)
 			}
@@ -59,7 +82,7 @@ func loadLocalCSVConstituents(filePath string) ([]string, error) {
 	return tickers, nil
 }
 
-func downloadNSEConstituents(url string) ([]string, error) {
+func downloadConstituents(indexName, url string) ([]string, error) {
 	client := &http.Client{Timeout: 15 * time.Second}
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
@@ -86,7 +109,8 @@ func downloadNSEConstituents(url string) ([]string, error) {
 	symbolIdx := -1
 	if len(records) > 0 {
 		for i, h := range records[0] {
-			if strings.ToLower(strings.TrimSpace(h)) == "symbol" {
+			hClean := strings.ToLower(strings.TrimSpace(h))
+			if hClean == "symbol" || hClean == "ticker" {
 				symbolIdx = i
 				break
 			}
@@ -94,15 +118,20 @@ func downloadNSEConstituents(url string) ([]string, error) {
 	}
 
 	if symbolIdx == -1 {
-		return nil, fmt.Errorf("could not find 'Symbol' column in the CSV")
+		return nil, fmt.Errorf("could not find 'Symbol' or 'Ticker' column in the CSV")
 	}
 
+	isUS := IsUSIndex(indexName) || IsUSIndex(url)
 	var tickers []string
 	for _, record := range records[1:] {
 		if len(record) > symbolIdx {
 			sym := strings.TrimSpace(record[symbolIdx])
 			if sym != "" {
-				tickers = append(tickers, "NSE:"+sym)
+				if isUS {
+					tickers = append(tickers, "US:"+sym)
+				} else {
+					tickers = append(tickers, "NSE:"+sym)
+				}
 			}
 		}
 	}
@@ -110,7 +139,7 @@ func downloadNSEConstituents(url string) ([]string, error) {
 	return tickers, nil
 }
 
-// LoadConstituents loads constituent tickers from local file path or downloads them from NSE.
+// LoadConstituents loads constituent tickers from local file path or downloads them from web.
 func LoadConstituents(filePath, indexName string) (*TickersSource, error) {
 	if filePath != "" {
 		fmt.Printf("\nLoading constituents from custom file %s...\n", filePath)
@@ -133,11 +162,11 @@ func LoadConstituents(filePath, indexName string) (*TickersSource, error) {
 	cleanIndex := strings.ToLower(strings.ReplaceAll(indexName, " ", ""))
 	url, ok := csvLinks[cleanIndex]
 	if !ok {
-		return nil, fmt.Errorf("unsupported index '%s'. Please check docs/stockpicker.md for the list of 21 supported indices", indexName)
+		return nil, fmt.Errorf("unsupported index '%s'. Please check docs/stockpicker.md for the list of supported indices", indexName)
 	}
 
-	fmt.Printf("\nDownloading index constituents from NSE...\n")
-	tickers, err := downloadNSEConstituents(url)
+	fmt.Printf("\nDownloading index constituents for %s...\n", indexName)
+	tickers, err := downloadConstituents(cleanIndex, url)
 	if err != nil {
 		return nil, fmt.Errorf("failed to download index: %w", err)
 	}
@@ -201,11 +230,12 @@ func FetchHistoricalPrices(ctx context.Context, rawTickers []string) (map[string
 }
 
 // GetBenchmarkAndSlicedPrices fetches benchmark prices and aligns stock prices with benchmark range.
-func GetBenchmarkAndSlicedPrices(ctx context.Context, activeKeys []string, fullHistory map[string]*yfinance.HistoricalData, rangeStr string) (map[string][]float64, []float64, error) {
-	fmt.Printf("Fetching historical benchmark prices for ^NSEI (%s)...\n", rangeStr)
-	benchmarkPrices, err := yfinance.FetchHistoricalPrices(ctx, "^NSEI", rangeStr)
+func GetBenchmarkAndSlicedPrices(ctx context.Context, indexName string, activeKeys []string, fullHistory map[string]*yfinance.HistoricalData, rangeStr string) (map[string][]float64, []float64, error) {
+	benchSym := GetBenchmarkSymbolForIndex(indexName, activeKeys)
+	fmt.Printf("Fetching historical benchmark prices for %s (%s)...\n", benchSym, rangeStr)
+	benchmarkPrices, err := yfinance.FetchHistoricalPrices(ctx, benchSym, rangeStr)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to fetch benchmark ^NSEI: %w", err)
+		return nil, nil, fmt.Errorf("failed to fetch benchmark %s: %w", benchSym, err)
 	}
 
 	slicedPriceHistory := make(map[string][]float64)

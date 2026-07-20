@@ -252,7 +252,7 @@ func monitorLoadAllData(ctx context.Context, tickers []string) (
 
 	wg.Go(func() {
 		b, err := yfinance.FetchHistoricalDataWithTimestamps(ctx, "^NSEI", "2y")
-		if err == nil && b != nil && len(b.Closes) >= 200 {
+		if err == nil && b != nil && len(b.Closes) > 200 {
 			mu.Lock()
 			benchData = b
 			mu.Unlock()
@@ -267,7 +267,7 @@ func monitorLoadAllData(ctx context.Context, tickers []string) (
 		go func(ticker string) {
 			defer wg.Done()
 			h, err := yfinance.FetchHistoricalDataWithTimestamps(ctx, ticker, "2y")
-			if err == nil && h != nil && len(h.Closes) >= 200 {
+			if err == nil && h != nil && len(h.Closes) > 200 {
 				mu.Lock()
 				liveHist[ticker] = h
 				mu.Unlock()

@@ -62,6 +62,9 @@ func RunSimulation(
 	// Define simulation window: the last 1 year (typically 252 trading days)
 	// or the remaining history after taking the first 200 days for SMA warmup.
 	simDays := min(minHistory-200, 252)
+	if simDays < 1 {
+		simDays = 1
+	}
 
 	if params.StartDate != "" {
 		if tTarget, err := time.Parse("2006-01-02", params.StartDate); err == nil {
@@ -82,8 +85,11 @@ func RunSimulation(
 					foundIdx = j
 				}
 			}
-			if foundIdx >= 200 && foundIdx < len(benchData.Closes) {
+			if foundIdx >= 0 && foundIdx < len(benchData.Closes) {
 				simDays = len(benchData.Closes) - foundIdx
+				if len(benchData.Closes)-simDays < 200 {
+					simDays = max(1, len(benchData.Closes)-200)
+				}
 			}
 		}
 	}

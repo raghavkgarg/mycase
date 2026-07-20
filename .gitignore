@@ -4,6 +4,9 @@ dist/
 
 # Cached data & Yahoo Finance historical price cache
 data/.cache/
+data/cache.db
+data/broker.db
+data/
 
 # Credentials containing API keys, API secrets, and access tokens
 config/config.json
@@ -19,6 +22,7 @@ data/*combine.csv
 
 # Generated portfolio reports & explanation files
 report/*.txt
+report/
 
 # OS-specific files
 .DS_Store
