@@ -7,12 +7,11 @@ import (
 	"os"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/urfave/cli/v3"
 
-	"github.com/raghavkgarg/mycase/pkg/yfinance"
+	"github.com/raghavkgarg/mycase/pkg/performance"
 )
 
 var PerformanceCommand = &cli.Command{
@@ -113,23 +112,7 @@ func runPerfWithParams(ctx context.Context, filePath string, capital float64, ta
 		return fmt.Errorf("invalid CSV format. Must contain 'ticker' and 'weight' columns")
 	}
 
-	type perfStock struct {
-		ticker string
-		weight float64
-	}
-	type perfResult struct {
-		ticker     string
-		weight     float64
-		allocated  float64
-		buyPrice   float64
-		buyTime    string
-		closePrice float64
-		finalVal   float64
-		pctReturn  float64
-		err        error
-	}
-
-	var portfolio []perfStock
+	var portfolio []performance.StockEntry
 	for _, record := range records[1:] {
 		if len(record) <= tickerIdx || len(record) <= weightIdx {
 			continue
@@ -139,7 +122,7 @@ func runPerfWithParams(ctx context.Context, filePath string, capital float64, ta
 		if err != nil || ticker == "" {
 			continue
 		}
-		portfolio = append(portfolio, perfStock{ticker: ticker, weight: weightVal})
+		portfolio = append(portfolio, performance.StockEntry{Ticker: ticker, Weight: weightVal})
 	}
 	if len(portfolio) == 0 {
 		return fmt.Errorf("no valid stocks found in CSV")
@@ -151,131 +134,21 @@ func runPerfWithParams(ctx context.Context, filePath string, capital float64, ta
 		fmt.Printf("Analyzing portfolio performance: Bought on %s at %s IST till latest Close...\n\n", targetTime.Format("2006-01-02"), targetTime.Format("15:04"))
 	}
 
-	var wg sync.WaitGroup
-	results := make([]perfResult, len(portfolio))
-
-	for i, s := range portfolio {
-		wg.Add(1)
-		go func(idx int, info perfStock) {
-			defer wg.Done()
-			res := perfResult{
-				ticker:    info.ticker,
-				weight:    info.weight,
-				allocated: capital * info.weight,
-			}
-
-			if useDailyClose {
-				data, err := yfinance.FetchHistoricalDataWithTimestamps(info.ticker, rangeStr)
-				if err != nil {
-					res.err = err
-					results[idx] = res
-					return
-				}
-				var priceAtBuy float64
-				var actualBuyDate time.Time
-				for j, ts := range data.Timestamps {
-					tLocal := time.Unix(ts, 0).In(istLoc)
-					if tLocal.Year() == targetTime.Year() && tLocal.YearDay() == targetTime.YearDay() {
-						priceAtBuy = data.Closes[j]
-						actualBuyDate = tLocal
-						break
-					}
-				}
-				if priceAtBuy == 0 {
-					var minDiff int64 = 99999999
-					for j, ts := range data.Timestamps {
-						tLocal := time.Unix(ts, 0).In(istLoc)
-						diff := targetTime.Unix() - tLocal.Unix()
-						if diff >= 0 && diff < minDiff {
-							minDiff = diff
-							priceAtBuy = data.Closes[j]
-							actualBuyDate = tLocal
-						}
-					}
-				}
-				if priceAtBuy == 0 {
-					res.err = fmt.Errorf("no daily price data available around %s", targetTime.Format("2006-01-02"))
-					results[idx] = res
-					return
-				}
-				priceClose := priceAtBuy
-				if len(data.Closes) > 0 {
-					priceClose = data.Closes[len(data.Closes)-1]
-				}
-				shares := res.allocated / priceAtBuy
-				res.buyPrice = priceAtBuy
-				res.buyTime = actualBuyDate.Format("2006-01-02 (Close)")
-				res.closePrice = priceClose
-				res.finalVal = shares * priceClose
-				res.pctReturn = ((priceClose - priceAtBuy) / priceAtBuy) * 100.0
-			} else {
-				data, err := yfinance.FetchIntradayData(info.ticker, rangeStr)
-				if err != nil {
-					res.err = err
-					results[idx] = res
-					return
-				}
-				var priceAtBuy float64
-				var closestTimeDiff int64 = 99999999
-				var actualBuyTime time.Time
-				for j, ts := range data.Timestamps {
-					tLocal := time.Unix(ts, 0).In(istLoc)
-					diff := targetTime.Unix() - tLocal.Unix()
-					if diff < 0 {
-						diff = -diff
-					}
-					if tLocal.Year() == targetTime.Year() && tLocal.YearDay() == targetTime.YearDay() {
-						if diff < closestTimeDiff && diff <= 300 {
-							closestTimeDiff = diff
-							priceAtBuy = data.Opens[j]
-							actualBuyTime = tLocal
-						}
-					}
-				}
-				if priceAtBuy == 0 {
-					for j, ts := range data.Timestamps {
-						tLocal := time.Unix(ts, 0).In(istLoc)
-						if tLocal.Year() == targetTime.Year() && tLocal.YearDay() == targetTime.YearDay() {
-							priceAtBuy = data.Opens[j]
-							actualBuyTime = tLocal
-							break
-						}
-					}
-				}
-				if priceAtBuy == 0 {
-					res.err = fmt.Errorf("no price data available for target date %s", targetTime.Format("2006-01-02"))
-					results[idx] = res
-					return
-				}
-				priceClose := priceAtBuy
-				if len(data.Closes) > 0 {
-					priceClose = data.Closes[len(data.Closes)-1]
-				}
-				shares := res.allocated / priceAtBuy
-				res.buyPrice = priceAtBuy
-				res.buyTime = actualBuyTime.Format("2006-01-02 15:04:05")
-				res.closePrice = priceClose
-				res.finalVal = shares * priceClose
-				res.pctReturn = ((priceClose - priceAtBuy) / priceAtBuy) * 100.0
-			}
-			results[idx] = res
-		}(i, s)
-	}
-	wg.Wait()
+	results := performance.ValuatePortfolio(portfolio, capital, targetTime, useDailyClose, rangeStr, istLoc)
 
 	fmt.Printf("%-15s %-8s %-12s %-12s %-22s %-12s %-12s %-10s\n", "Ticker", "Weight", "Allocated", "Buy Price", "Buy Time/Date (IST)", "Close Price", "Final Value", "Return")
 	fmt.Println(strings.Repeat("-", 112))
 
 	var totalInitial, totalFinal float64
 	for _, res := range results {
-		if res.err != nil {
-			fmt.Printf("%-15s ERROR: %v\n", res.ticker, res.err)
+		if res.Err != nil {
+			fmt.Printf("%-15s ERROR: %v\n", res.Ticker, res.Err)
 			continue
 		}
 		fmt.Printf("%-15s %-8.4f Rs. %-8.2f Rs. %-8.2f %-22s Rs. %-8.2f Rs. %-8.2f %+.2f%%\n",
-			res.ticker, res.weight, res.allocated, res.buyPrice, res.buyTime, res.closePrice, res.finalVal, res.pctReturn)
-		totalInitial += res.allocated
-		totalFinal += res.finalVal
+			res.Ticker, res.Weight, res.Allocated, res.BuyPrice, res.BuyTime, res.ClosePrice, res.FinalValue, res.PctReturn)
+		totalInitial += res.Allocated
+		totalFinal += res.FinalValue
 	}
 
 	fmt.Println(strings.Repeat("-", 112))

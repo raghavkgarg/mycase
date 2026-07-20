@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -72,13 +71,10 @@ func runOptimizeWithParams(ctx context.Context, method, basketPath, removeTicker
 	if goldenPath != "" {
 		goldenBasket, _, err := csvloader.LoadBasketCSV(goldenPath)
 		if err == nil {
-			for k, w := range goldenBasket {
-				if w > 0.00001 {
-					found := slices.Contains(basketKeys, k)
-					if !found && !toRemove[k] {
-						toRemove[k] = true
-						fmt.Printf("Exit detected: Ticker %s was active in golden copy but is not in new selection. Setting weight to 0.0000 to trigger liquidation.\n", k)
-					}
+			for _, k := range optimizer.DetectExits(goldenBasket, basketKeys) {
+				if !toRemove[k] {
+					toRemove[k] = true
+					fmt.Printf("Exit detected: Ticker %s was active in golden copy but is not in new selection. Setting weight to 0.0000 to trigger liquidation.\n", k)
 				}
 			}
 		} else {

@@ -1,7 +1,6 @@
 package yfinance
 
 import (
-	"math"
 	"testing"
 )
 
@@ -143,9 +142,9 @@ func TestCalculateDSO_Improving(t *testing.T) {
 			{Date: "2026-12-31", Value: 1200},
 		},
 		AnnualAccountsReceivable: []AnnualMetric{
-			{Date: "2024-12-31", Value: 200},  // DSO = 73 days
-			{Date: "2025-12-31", Value: 198},  // DSO = 66 days
-			{Date: "2026-12-31", Value: 180},  // DSO = 55 days
+			{Date: "2024-12-31", Value: 200}, // DSO = 73 days
+			{Date: "2025-12-31", Value: 198}, // DSO = 66 days
+			{Date: "2026-12-31", Value: 180}, // DSO = 55 days
 		},
 	}
 	passed, dsoPrev, dsoLatest := CalculateDSO(&f)
@@ -205,8 +204,4 @@ func TestCalculateRSI_ExactlyFifteen(t *testing.T) {
 	if rsi < 0 || rsi > 100 {
 		t.Errorf("RSI out of [0,100]: %f", rsi)
 	}
-}
-
-func absF(x float64) float64 {
-	return math.Abs(x)
 }

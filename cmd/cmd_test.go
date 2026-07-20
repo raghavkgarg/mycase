@@ -5,6 +5,8 @@ import (
 	"time"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/raghavkgarg/mycase/pkg/config"
 )
 
 func TestParsePerfDate_Empty(t *testing.T) {
@@ -73,8 +75,8 @@ func TestCleanBasketArg_LeadingDashes(t *testing.T) {
 	}
 }
 
-func unmarshalPipelineConfig(data []byte) (*PipelineConfig, error) {
-	var cfg PipelineConfig
+func unmarshalPipelineConfig(data []byte) (*config.PipelineConfig, error) {
+	var cfg config.PipelineConfig
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		return nil, err
 	}
