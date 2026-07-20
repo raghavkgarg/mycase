@@ -122,7 +122,7 @@ func runMonitorWithParams(ctx context.Context, filePath string, interactive bool
 	fmt.Printf("- Max Weight Drift: %.1f%%\n\n", params.MaxWeightDrift*100.0)
 
 	fmt.Println("Fetching financial data and price histories...")
-	histData, benchData, fundamentals, mockedTickers, isMockUsed := monitorLoadAllData(tickers)
+	histData, benchData, fundamentals, mockedTickers, isMockUsed := monitorLoadAllData(ctx, tickers)
 	if isMockUsed {
 		fmt.Println("⚠️ Yahoo Finance API unavailable or returned incomplete data. Switched to high-fidelity mock fallback.")
 	} else {
@@ -239,7 +239,7 @@ func monitorInteractiveMenu(defaults monitoring.PolicyParams) monitoring.PolicyP
 	}
 }
 
-func monitorLoadAllData(tickers []string) (
+func monitorLoadAllData(ctx context.Context, tickers []string) (
 	map[string]*yfinance.HistoricalData,
 	*yfinance.HistoricalData,
 	map[string]yfinance.Fundamentals,
@@ -251,7 +251,7 @@ func monitorLoadAllData(tickers []string) (
 	var wg sync.WaitGroup
 
 	wg.Go(func() {
-		b, err := yfinance.FetchHistoricalDataWithTimestamps("^NSEI", "2y")
+		b, err := yfinance.FetchHistoricalDataWithTimestamps(ctx, "^NSEI", "2y")
 		if err == nil && b != nil && len(b.Closes) >= 200 {
 			mu.Lock()
 			benchData = b
@@ -266,7 +266,7 @@ func monitorLoadAllData(tickers []string) (
 		wg.Add(2)
 		go func(ticker string) {
 			defer wg.Done()
-			h, err := yfinance.FetchHistoricalDataWithTimestamps(ticker, "2y")
+			h, err := yfinance.FetchHistoricalDataWithTimestamps(ctx, ticker, "2y")
 			if err == nil && h != nil && len(h.Closes) >= 200 {
 				mu.Lock()
 				liveHist[ticker] = h
@@ -275,7 +275,7 @@ func monitorLoadAllData(tickers []string) (
 		}(t)
 		go func(ticker string) {
 			defer wg.Done()
-			funds, err := yfinance.FetchFundamentals([]string{ticker})
+			funds, err := yfinance.FetchFundamentals(ctx, []string{ticker})
 			if err == nil && len(funds) > 0 {
 				mu.Lock()
 				if val, ok := funds[ticker]; ok {

@@ -1,6 +1,7 @@
 package stockpicker
 
 import (
+	"context"
 	"fmt"
 	"sort"
 
@@ -339,6 +340,7 @@ func isEligible(
 
 // ApplySafetyFilters filters out companies based on safety/fundamental thresholds.
 func ApplySafetyFilters(
+	ctx context.Context,
 	activeKeys []string,
 	method string,
 	hardFilters *config.HardFilters,
@@ -354,7 +356,7 @@ func ApplySafetyFilters(
 	// Pre-calculate 52-Week Relative Strength percentiles if requested
 	rsPercentiles := make(map[string]float64)
 	if hardFilters.MinRSPercentile > 0 {
-		benchmark1y, bErr := yfinance.FetchHistoricalPrices("^NSEI", "1y")
+		benchmark1y, bErr := yfinance.FetchHistoricalPrices(ctx, "^NSEI", "1y")
 		bench1yReturn := 0.0
 		if bErr == nil && len(benchmark1y) >= 2 {
 			bench1yReturn = (benchmark1y[len(benchmark1y)-1] - benchmark1y[0]) / benchmark1y[0]

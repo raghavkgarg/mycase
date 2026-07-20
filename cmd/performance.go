@@ -134,7 +134,7 @@ func runPerfWithParams(ctx context.Context, filePath string, capital float64, ta
 		fmt.Printf("Analyzing portfolio performance: Bought on %s at %s IST till latest Close...\n\n", targetTime.Format("2006-01-02"), targetTime.Format("15:04"))
 	}
 
-	results := performance.ValuatePortfolio(portfolio, capital, targetTime, useDailyClose, rangeStr, istLoc)
+	results := performance.ValuatePortfolio(ctx, portfolio, capital, targetTime, useDailyClose, rangeStr, istLoc)
 
 	fmt.Printf("%-15s %-8s %-12s %-12s %-22s %-12s %-12s %-10s\n", "Ticker", "Weight", "Allocated", "Buy Price", "Buy Time/Date (IST)", "Close Price", "Final Value", "Return")
 	fmt.Println(strings.Repeat("-", 112))

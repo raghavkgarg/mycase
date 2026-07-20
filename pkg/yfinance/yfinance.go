@@ -1,6 +1,7 @@
 package yfinance
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -11,8 +12,8 @@ import (
 )
 
 // FetchCookieAndCrumb requests fc.yahoo.com for cookie and query2 getcrumb for crumb
-func FetchCookieAndCrumb(client *http.Client) (string, error) {
-	req1, err := http.NewRequest("GET", "https://fc.yahoo.com", nil)
+func FetchCookieAndCrumb(ctx context.Context, client *http.Client) (string, error) {
+	req1, err := http.NewRequestWithContext(ctx, "GET", "https://fc.yahoo.com", nil)
 	if err != nil {
 		return "", err
 	}
@@ -24,7 +25,7 @@ func FetchCookieAndCrumb(client *http.Client) (string, error) {
 	}
 	resp1.Body.Close()
 
-	req2, err := http.NewRequest("GET", "https://query2.finance.yahoo.com/v1/test/getcrumb", nil)
+	req2, err := http.NewRequestWithContext(ctx, "GET", "https://query2.finance.yahoo.com/v1/test/getcrumb", nil)
 	if err != nil {
 		return "", err
 	}
@@ -48,7 +49,7 @@ func FetchCookieAndCrumb(client *http.Client) (string, error) {
 }
 
 // FetchFundamentals fetches fundamental metrics for a list of tickers in parallel
-func FetchFundamentals(tickers []string) (map[string]Fundamentals, error) {
+func FetchFundamentals(ctx context.Context, tickers []string) (map[string]Fundamentals, error) {
 	fundamentals := make(map[string]Fundamentals)
 	if len(tickers) == 0 {
 		return fundamentals, nil
@@ -79,7 +80,7 @@ func FetchFundamentals(tickers []string) (map[string]Fundamentals, error) {
 	}
 
 	// Fetch Cookie and Crumb once to reuse
-	crumb, err := FetchCookieAndCrumb(client)
+	crumb, err := FetchCookieAndCrumb(ctx, client)
 	if err != nil {
 		return nil, fmt.Errorf("failed to retrieve cookie and crumb: %w", err)
 	}
@@ -106,7 +107,7 @@ func FetchFundamentals(tickers []string) (map[string]Fundamentals, error) {
 				ySym := MapTickerToYahoo(job.ticker)
 				url := fmt.Sprintf("https://query2.finance.yahoo.com/v10/finance/quoteSummary/%s?modules=financialData,defaultKeyStatistics,summaryDetail,assetProfile,earnings&crumb=%s", ySym, crumb)
 
-				req, err := http.NewRequest("GET", url, nil)
+				req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 				if err != nil {
 					results <- fetchResult{ticker: job.ticker, err: err}
 					continue
@@ -199,7 +200,7 @@ func FetchFundamentals(tickers []string) (map[string]Fundamentals, error) {
 				var annualCurrentLiabilities []AnnualMetric
 				var annualInterestExpense []AnnualMetric
 
-				tsReq, tsErr := http.NewRequest("GET", tsURL, nil)
+				tsReq, tsErr := http.NewRequestWithContext(ctx, "GET", tsURL, nil)
 				if tsErr == nil {
 					tsReq.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36")
 					tsResp, tsRespErr := client.Do(tsReq)

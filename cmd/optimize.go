@@ -105,7 +105,7 @@ func runOptimizeWithParams(ctx context.Context, method, basketPath, removeTicker
 		wg.Add(1)
 		go func(t string) {
 			defer wg.Done()
-			prices, err := yfinance.FetchHistoricalPrices(t, rangeStr)
+			prices, err := yfinance.FetchHistoricalPrices(ctx, t, rangeStr)
 			if err != nil {
 				fmt.Printf("Warning: Failed to fetch historical prices for %s: %v. Using fallback.\n", t, err)
 				return
@@ -120,7 +120,7 @@ func runOptimizeWithParams(ctx context.Context, method, basketPath, removeTicker
 	var benchmarkPrices []float64
 	if method != "volatility" {
 		fmt.Printf("Fetching historical benchmark prices for ^NSEI (%s)...\n", rangeStr)
-		benchmarkPrices, err = yfinance.FetchHistoricalPrices("^NSEI", rangeStr)
+		benchmarkPrices, err = yfinance.FetchHistoricalPrices(ctx, "^NSEI", rangeStr)
 		if err != nil {
 			fmt.Printf("Warning: Failed to fetch benchmark ^NSEI: %v. Falling back to volatility method.\n", err)
 			method = "volatility"
@@ -153,7 +153,7 @@ func runOptimizeWithParams(ctx context.Context, method, basketPath, removeTicker
 			InsidersPercent:  mfsCfg.InsidersPercent,
 		}
 		fmt.Printf("Fetching fundamentals from Yahoo Finance...\n")
-		fundamentals, err = yfinance.FetchFundamentals(activeKeys)
+		fundamentals, err = yfinance.FetchFundamentals(ctx, activeKeys)
 		if err != nil {
 			fmt.Printf("Warning: Failed to fetch fundamentals: %v. Using fallbacks.\n", err)
 		}

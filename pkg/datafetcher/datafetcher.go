@@ -1,6 +1,7 @@
 package datafetcher
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/raghavkgarg/mycase/pkg/portfolio"
@@ -9,7 +10,7 @@ import (
 )
 
 // FetchMarketData retrieves stock price quotes (from yfinance with fallback to Kite) and holdings.
-func FetchMarketData(isMock bool, client *kiteconnect.Client, basketKeys []string) (map[string]float64, map[string]int, error) {
+func FetchMarketData(ctx context.Context, isMock bool, client *kiteconnect.Client, basketKeys []string) (map[string]float64, map[string]int, error) {
 	quoteData := make(map[string]float64)
 
 	if isMock {
@@ -25,7 +26,7 @@ func FetchMarketData(isMock bool, client *kiteconnect.Client, basketKeys []strin
 		}
 	} else {
 		fmt.Println("\nFetching real-time quotes via yfinance...")
-		yfQuotes, err := yfinance.FetchQuotes(basketKeys)
+		yfQuotes, err := yfinance.FetchQuotes(ctx, basketKeys)
 		if err == nil {
 			quoteData = yfQuotes
 			for _, inst := range basketKeys {

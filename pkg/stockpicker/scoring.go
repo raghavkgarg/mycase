@@ -1,6 +1,7 @@
 package stockpicker
 
 import (
+	"context"
 	"encoding/csv"
 	"fmt"
 	"maps"
@@ -19,6 +20,7 @@ import (
 
 // ScoreMultibagger computes a 100-point relative scoring matrix for multibagger candidates.
 func ScoreMultibagger(
+	ctx context.Context,
 	activeKeys []string,
 	fundamentals map[string]yfinance.Fundamentals,
 	fullHistory map[string]*yfinance.HistoricalData,
@@ -27,7 +29,7 @@ func ScoreMultibagger(
 	fmt.Printf("Calculating 100-Point Multibagger Relative Scoring Matrix for %d candidates...\n", len(activeKeys))
 
 	// Fetch 1-year benchmark prices for Relative Strength calculation
-	benchmark1y, bErr := yfinance.FetchHistoricalPrices("^NSEI", "1y")
+	benchmark1y, bErr := yfinance.FetchHistoricalPrices(ctx, "^NSEI", "1y")
 	bench1yReturn := 0.0
 	if bErr == nil && len(benchmark1y) >= 2 {
 		bench1yReturn = (benchmark1y[len(benchmark1y)-1] - benchmark1y[0]) / benchmark1y[0]

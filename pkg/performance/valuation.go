@@ -1,6 +1,7 @@
 package performance
 
 import (
+	"context"
 	"fmt"
 	"sync"
 	"time"
@@ -31,6 +32,7 @@ type StockResult struct {
 // latest available close. Daily-close mode is used when the purchase was more than
 // 7 days ago; intraday mode is used otherwise.
 func ValuatePortfolio(
+	ctx context.Context,
 	portfolio []StockEntry,
 	capital float64,
 	targetTime time.Time,
@@ -52,7 +54,7 @@ func ValuatePortfolio(
 			}
 
 			if useDailyClose {
-				data, err := yfinance.FetchHistoricalDataWithTimestamps(info.Ticker, rangeStr)
+				data, err := yfinance.FetchHistoricalDataWithTimestamps(ctx, info.Ticker, rangeStr)
 				if err != nil {
 					res.Err = err
 					results[idx] = res
@@ -96,7 +98,7 @@ func ValuatePortfolio(
 				res.FinalValue = shares * priceClose
 				res.PctReturn = ((priceClose - priceAtBuy) / priceAtBuy) * 100.0
 			} else {
-				data, err := yfinance.FetchIntradayData(info.Ticker, rangeStr)
+				data, err := yfinance.FetchIntradayData(ctx, info.Ticker, rangeStr)
 				if err != nil {
 					res.Err = err
 					results[idx] = res

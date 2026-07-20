@@ -77,13 +77,13 @@ func runPickWithOpts(ctx context.Context, opts *stockpicker.Options) error {
 	}
 	stockpicker.PrintHeader(displayNameVal, opts.Method, opts.TopN, rangeStr, opts.FilePath)
 
-	fullHistory, activeKeys := stockpicker.FetchHistoricalPrices(tickersSrc.Tickers)
+	fullHistory, activeKeys := stockpicker.FetchHistoricalPrices(ctx, tickersSrc.Tickers)
 	if len(activeKeys) == 0 {
 		fmt.Println("No active tickers loaded. Exiting...")
 		return nil
 	}
 
-	slicedPrices, benchmarkPrices, err := stockpicker.GetBenchmarkAndSlicedPrices(activeKeys, fullHistory, rangeStr)
+	slicedPrices, benchmarkPrices, err := stockpicker.GetBenchmarkAndSlicedPrices(ctx, activeKeys, fullHistory, rangeStr)
 	if err != nil {
 		return fmt.Errorf("fetching benchmark prices: %w", err)
 	}
@@ -94,7 +94,7 @@ func runPickWithOpts(ctx context.Context, opts *stockpicker.Options) error {
 	}
 
 	fmt.Printf("Fetching fundamentals from Yahoo Finance...\n")
-	fundamentals, err := yfinance.FetchFundamentals(activeKeys)
+	fundamentals, err := yfinance.FetchFundamentals(ctx, activeKeys)
 	if err != nil {
 		fmt.Printf("Warning: Failed to fetch fundamentals: %v. Using fallbacks.\n", err)
 	}
@@ -103,7 +103,7 @@ func runPickWithOpts(ctx context.Context, opts *stockpicker.Options) error {
 	tracker := selectiontracker.New()
 
 	if cfg.HardFilters != nil {
-		activeKeys = stockpicker.ApplySafetyFilters(activeKeys, opts.Method, cfg.HardFilters, fundamentals, fullHistory, tracker)
+		activeKeys = stockpicker.ApplySafetyFilters(ctx, activeKeys, opts.Method, cfg.HardFilters, fundamentals, fullHistory, tracker)
 	} else {
 		tracker.InitialCount = len(activeKeys)
 	}
@@ -120,7 +120,7 @@ func runPickWithOpts(ctx context.Context, opts *stockpicker.Options) error {
 	goldenWeights := stockpicker.LoadGoldenWeights(opts.GoldenPath)
 
 	if opts.Method == "multibagger" {
-		scores = stockpicker.ScoreMultibagger(activeKeys, fundamentals, fullHistory, cfg.HardFilters)
+		scores = stockpicker.ScoreMultibagger(ctx, activeKeys, fundamentals, fullHistory, cfg.HardFilters)
 		selectedKeys = stockpicker.SelectTopNMultibagger(activeKeys, scores, fundamentals, cfg.HardFilters, opts.TopN, goldenWeights, opts.HysteresisBuffer, tracker)
 		finalWeights = stockpicker.NormalizeMultibaggerWeights(selectedKeys, scores, fundamentals, cfg.HardFilters, goldenWeights, opts.RebalanceTolerance)
 	} else {
