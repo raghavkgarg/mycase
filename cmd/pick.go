@@ -83,7 +83,7 @@ func runPickWithOpts(ctx context.Context, opts *stockpicker.Options) error {
 		return nil
 	}
 
-	slicedPrices, benchmarkPrices, err := stockpicker.GetBenchmarkAndSlicedPrices(ctx, activeKeys, fullHistory, rangeStr)
+	slicedPrices, benchmarkPrices, err := stockpicker.GetBenchmarkAndSlicedPrices(ctx, tickersSrc.Name, activeKeys, fullHistory, rangeStr)
 	if err != nil {
 		return fmt.Errorf("fetching benchmark prices: %w", err)
 	}

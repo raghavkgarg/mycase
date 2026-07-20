@@ -125,16 +125,16 @@ The portfolio weight optimizer supports multiple flags to cap allocation risk an
 ### Basic Optimization Examples
 ```bash
 # Run Multi-Factor optimization (MFS) with balanced strategy preset (Default)
-go run ./cmd/optimize_weights -file data/modularmicro.csv -method balanced
+./dist/mycase optimize -file data/modularmicro.csv -method balanced
 
 # Run MFS with aggressive strategy preset
-go run ./cmd/optimize_weights -file data/modularmicro.csv -method aggressive
+./dist/mycase optimize -file data/modularmicro.csv -method aggressive
 
 # Run traditional Inverse-Volatility optimization
-go run ./cmd/optimize_weights -file data/modularmicro.csv -method volatility
+./dist/mycase optimize -file data/modularmicro.csv -method volatility
 
 # Optimize with custom duration range (e.g. 6 months)
-go run ./cmd/optimize_weights -file data/modularmicro.csv -range 6mo
+./dist/mycase optimize -file data/modularmicro.csv -range 6mo
 ```
 
 ### Advanced Optimization Examples
@@ -143,17 +143,17 @@ go run ./cmd/optimize_weights -file data/modularmicro.csv -range 6mo
 To avoid single-stock concentration risk, you can cap the maximum allocation for any individual asset (e.g., maximum 12% or 15%):
 ```bash
 # Optimize using balanced method, capping any single asset at 12% weight
-go run ./cmd/optimize_weights -file data/microsmallcombine.csv -method balanced -cap 0.12
+./dist/mycase optimize -file data/microsmallcombine.csv -method balanced -cap 0.12
 
 # Optimize using multibagger strategy, capping single asset weight at 15%
-go run ./cmd/optimize_weights -file data/microsmallcombine.csv -method multibagger -cap 0.15
+./dist/mycase optimize -file data/microsmallcombine.csv -method multibagger -cap 0.15
 ```
 
 #### B. Golden Copy Liquidation Alignment (`-golden`)
 Compare your new optimized selections with a live portfolio (the "Golden Copy"). Any ticker present in the golden copy that is not in the new selection is automatically given a weight of `0.0000` to trigger full liquidation:
 ```bash
 # Optimize weights while flagging exited stocks from data/microsmall.csv as liquidation targets
-go run ./cmd/optimize_weights -file data/microsmallcombine.csv \
+./dist/mycase optimize -file data/microsmallcombine.csv \
   -method balanced \
   -cap 0.12 \
   -golden data/microsmall.csv
@@ -163,7 +163,7 @@ go run ./cmd/optimize_weights -file data/microsmallcombine.csv \
 Explicitly exclude specific assets and assign them a `0.0` weight:
 ```bash
 # Exclude specific cash or hedge assets
-go run ./cmd/optimize_weights -file data/modularmicro.csv -remove NSE:LIQUIDCASE,NSE:GOLDBEES
+./dist/mycase optimize -file data/modularmicro.csv -remove NSE:LIQUIDCASE,NSE:GOLDBEES
 ```
 
 ---
@@ -179,9 +179,9 @@ go run ./cmd/optimize_weights -file data/modularmicro.csv -remove NSE:LIQUIDCASE
 
 ---
 
-## 4. Index Stock Picker Tool (`cmd/stockpicker`)
+## 4. Index Stock Picker Tool (`mycase pick`)
 
-The **Stock Picker** tool (`cmd/stockpicker/main.go`) is a separate CLI tool that fetches constituent companies of a major index, ranks them using the Multi-Factor Scoring (MFS) model, selects the top $N$ stocks, and formats a basket CSV portfolio.
+The **Stock Picker** subcommand (`mycase pick`, implemented in [cmd/pick.go](file:///Users/raghavgarg/Projects/myGo/mycase/cmd/pick.go)) fetches constituent companies of a major index, ranks them using the Multi-Factor Scoring (MFS) model, selects the top $N$ stocks, and formats a basket CSV portfolio.
 
 ### Features
 * **Auto constituent fetch**: Downloads index constituent lists (Nifty 50, Nifty Next 50, Nifty Midcap 150, Nifty Smallcap 250) directly from `niftyindices.com`.
@@ -191,11 +191,11 @@ The **Stock Picker** tool (`cmd/stockpicker/main.go`) is a separate CLI tool tha
 ### Usage Examples
 ```bash
 # Pick the top 20 stocks from Nifty Smallcap 250 using the balanced strategy
-go run ./cmd/stockpicker -index smallcap250 -method balanced -top 20
+./dist/mycase pick -index smallcap250 -method balanced -top 20
 
 # Pick the top 15 stocks from Nifty Midcap 150 using the aggressive strategy
-go run ./cmd/stockpicker -index midcap150 -method aggressive -top 15
+./dist/mycase pick -index midcap150 -method aggressive -top 15
 
 # Pick the top 30 stocks from Nifty Next 50 using the conservative strategy
-go run ./cmd/stockpicker -index niftynext50 -method conservative -top 30
+./dist/mycase pick -index niftynext50 -method conservative -top 30
 ```

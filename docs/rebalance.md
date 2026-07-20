@@ -17,7 +17,7 @@ We created a CLI tool to automate and normalize target weight allocation using *
 ### Running the Optimizer
 To optimize weights in your basket and remove/sell specific tickers:
 ```bash
-go run ./cmd/optimize_weights -file data/basket.csv -remove "NSE:FCL,NSE:PARACABLES"
+./dist/mycase optimize --file data/basket.csv --remove "NSE:FCL,NSE:PARACABLES"
 ```
 This updates [basket.csv](file:///Users/raghavgarg/Projects/myGo/mycase/data/basket.csv) directly with normalized weights summing to `1.0000`.
 
@@ -27,7 +27,7 @@ This updates [basket.csv](file:///Users/raghavgarg/Projects/myGo/mycase/data/bas
 
 Run the main rebalancer with:
 ```bash
-go run ./cmd/basket --live
+./dist/mycase basket --live
 ```
 
 ### Action 1: Fresh Buy (Invest Dynamic Amount)

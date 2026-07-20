@@ -111,6 +111,7 @@ type HardFilters struct {
 	MaxDebtToEquity             float64  `json:"max_debt_to_equity"`
 	MinInterestCoverage         float64  `json:"min_interest_coverage"`
 	MaxCapExYoYMultiplier       float64  `json:"max_capex_yoy_multiplier"`
+	MaxDSODeteriorationPct      float64  `json:"max_dso_deterioration_pct"`
 	VolumeBreakoutLookbackDays  int      `json:"volume_breakout_lookback_days"`
 	VolumeBreakoutMultiplier    float64  `json:"volume_breakout_multiplier"`
 	MaxStocksPerSector          int      `json:"max_stocks_per_sector"`

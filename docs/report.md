@@ -3,17 +3,18 @@
 The Report Generator is a CLI tool that parses a stockpicker output CSV, fetches financial fundamentals and price histories, calculates key metrics, and generates a structured explanation report for the portfolio's contents.
 
 ## Location
-- CLI entrypoint: [cmd/report/main.go](file:///Users/raghavgarg/Projects/myGo/mycase/cmd/report/main.go)
-- Output location: Reports are saved under the `report/` directory as `report_<indexName>_<YYMMDD>.txt`
+- CLI entrypoint: [cmd/report.go](file:///Users/raghavgarg/Projects/myGo/mycase/cmd/report.go)
+- Heuristics generator: [heuristics.go](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/report/heuristics.go)
+- Output location: Reports are saved under `report/[universe]_[strategy]/executions/`
 
 ---
 
 ## Usage
 
-Run the report generator using the Go toolchain:
+Run the report generator subcommand:
 
 ```bash
-go run cmd/report/main.go -file <path_to_csv> -method <strategy_preset>
+./dist/mycase report -file <path_to_csv> -method <strategy_preset>
 ```
 
 ### CLI Parameters

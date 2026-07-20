@@ -1,15 +1,18 @@
 indices:
-   - microcap250
-   - small250
+  # - microcap250
+  # - small250
   # - midcap150
   # - nifty50
   # - nifty200
+   - sp500
 golden_copy_path:
-  - data/microsmall.csv
+  #  - data/microsmall.csv
   # - data/smallcap250.csv
   # - data/midcap150.csv
+  # - data/midsmallmicro.csv
   # - data/nifty50.csv
   # - data/nifty200.csv
+   -  data/sp500.csv
 strategy: 
   - multibagger
   # - aggresive

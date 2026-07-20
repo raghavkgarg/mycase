@@ -1,7 +1,6 @@
 package optimizer
 
 import (
-	"math"
 	"strings"
 
 	"github.com/raghavkgarg/mycase/pkg/market"
@@ -52,71 +51,42 @@ func OptimizeFreshBuy(
 		}
 	}
 
-	// Greedy allocation loop
+	// Greedy allocation loop: allocate 1 share at a time to the asset that is currently least-funded relative to its target weight
 	for {
 		bestIdx := -1
-		maxEfficiency := -999.0
+		minAllocRatio := 999999999999999.0
 
-		// Current deviation
-		currentTotalCost := 0.0
-		for j, inst := range basketKeys {
-			currentTotalCost += float64(rawQuantities[j]) * quoteData[inst]
-		}
-
-		currentDev := 0.0
-		if currentTotalCost > 0 {
-			for j, inst := range basketKeys {
-				targetWeight := basket[inst]
-				actWt := (float64(rawQuantities[j]) * quoteData[inst]) / currentTotalCost
-				currentDev += math.Abs(actWt - targetWeight)
-			}
-		} else {
-			currentDev = 999.0
-		}
-
-		// Evaluate candidate additions (adding 1 share to each asset in turn)
+		// Evaluate candidate additions (adding 1 share to each eligible asset in turn)
 		for i, inst := range basketKeys {
-			if basket[inst] <= 0.0 {
+			targetWeight := basket[inst]
+			if targetWeight <= 0.0 {
 				continue // Skip assets that are marked to be removed/sold completely
 			}
+
 			candidateQtys := make([]int, n)
 			copy(candidateQtys, rawQuantities)
 			candidateQtys[i]++
 
 			newSharesCost := 0.0
-			newTotalLTPCost := 0.0
-			targetLimitPrice := 0.0
-
 			for j, instJ := range basketKeys {
 				partsJ := strings.Split(instJ, ":")
 				symbolJ := partsJ[len(partsJ)-1]
 				ltpJ := quoteData[instJ]
 				limitPriceJ := market.CalculateBufferedLimitPrice(ltpJ)
 
-				qtyJ := candidateQtys[j]
-				if j == i {
-					targetLimitPrice = limitPriceJ
-				}
-
 				currentQtyJ := currentHoldings[symbolJ]
-				addedQtyJ := qtyJ - currentQtyJ
+				addedQtyJ := candidateQtys[j] - currentQtyJ
 				if addedQtyJ > 0 {
 					newSharesCost += float64(addedQtyJ) * limitPriceJ
 				}
-				newTotalLTPCost += float64(qtyJ) * ltpJ
 			}
 
 			if newSharesCost <= totalInvestment {
-				dev := 0.0
-				for j, instJ := range basketKeys {
-					targetWeight := basket[instJ]
-					actWt := (float64(candidateQtys[j]) * quoteData[instJ]) / newTotalLTPCost
-					dev += math.Abs(actWt - targetWeight)
-				}
-				devRed := currentDev - dev
-				efficiency := devRed / targetLimitPrice
-				if efficiency > maxEfficiency {
-					maxEfficiency = efficiency
+				ltpI := quoteData[inst]
+				// Allocation ratio: current allocated value divided by target weight
+				allocRatio := (float64(rawQuantities[i]) * ltpI) / targetWeight
+				if allocRatio < minAllocRatio {
+					minAllocRatio = allocRatio
 					bestIdx = i
 				}
 			}
@@ -132,7 +102,8 @@ func OptimizeFreshBuy(
 	return rawQuantities
 }
 
-// CalculateMinimumRequiredOutflow calculates the minimum portfolio outflow required to match the proposed basket weights.
+// CalculateMinimumRequiredOutflow calculates the minimum portfolio outflow required to match the proposed basket weights,
+// taking into account existing holdings that are not being sold down.
 func CalculateMinimumRequiredOutflow(
 	basketKeys []string,
 	basket map[string]float64,
@@ -141,6 +112,8 @@ func CalculateMinimumRequiredOutflow(
 ) float64 {
 	tMax := 0.0
 	for _, inst := range basketKeys {
+		parts := strings.Split(inst, ":")
+		symbol := parts[len(parts)-1]
 		ltp := quoteData[inst]
 		targetWeight := basket[inst]
 
@@ -148,9 +121,11 @@ func CalculateMinimumRequiredOutflow(
 			continue
 		}
 
-		// The minimum quantity needed of any asset to exist in the basket is 1 share.
-		// Since we are rebalancing, we can sell down existing holdings.
-		minQty := 1
+		currentQty := currentHoldings[symbol]
+		minQty := currentQty
+		if minQty < 1 {
+			minQty = 1
+		}
 
 		tI := (float64(minQty) * ltp) / targetWeight
 		if tI > tMax {
@@ -170,12 +145,13 @@ func CalculateMinimumRequiredOutflow(
 		}
 
 		limitPrice := market.CalculateBufferedLimitPrice(ltp)
-
 		currentQty := currentHoldings[symbol]
 
 		targetQty := int((tMax*targetWeight)/ltp + 0.5)
-		// For minimum required portfolio size calculation, the minimum target qty is 1 share
-		minRequired := 1
+		minRequired := currentQty
+		if minRequired < 1 {
+			minRequired = 1
+		}
 		if targetQty < minRequired {
 			targetQty = minRequired
 		}

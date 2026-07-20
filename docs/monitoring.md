@@ -64,22 +64,19 @@ The simulator supports three default presets:
 ## How to Run
 
 ### Basic Execution (Standard Preset)
-Compile the module and run with a specific style preset:
+Run the monitoring subcommand with a specific style preset:
 ```bash
-# Build the binary
-go build -o bin/monitoring cmd/monitoring/main.go
-
 # Run using the moderate style (Default)
-./bin/monitoring -file data/microsmall.csv -style moderate
+./dist/mycase monitor -file data/microsmall.csv -style moderate
 
 # Run using the hyper-aggressive style
-./bin/monitoring -file data/microsmall.csv -style hyper-aggressive
+./dist/mycase monitor -file data/microsmall.csv -style hyper-aggressive
 ```
 
 ### Interactive Simulator (Tuning Parameters)
 Run the CLI in interactive mode to test custom rules:
 ```bash
-./bin/monitoring -file data/microsmall.csv -interactive
+./dist/mycase monitor -file data/microsmall.csv -interactive
 ```
 
 The terminal will prompt you to pick a style or specify custom thresholds:

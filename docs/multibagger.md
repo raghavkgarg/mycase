@@ -35,6 +35,7 @@ The following table summarizes the **current safety configuration** applied to t
 | **I** | **Debt-to-Equity (D/E)** | < **1.5** | Keeps leverage manageable during credit tightness. |
 | **J** | **Interest Coverage Ratio** | > 3.0 | Operating profits (EBIT) must comfortably service debt. |
 | **K** | **CROIC (FCF Return)** | $\ge$ **6%** | FCF / (Equity + Debt) must be $\ge$ 6% to ensure cash efficiency. |
+| **L** | **DSO Deterioration Gate** | $\le$ **15%** | Limits YoY Days Sales Outstanding deterioration to prevent Day-1 monitoring exits. |
 
 ---
 
@@ -289,25 +290,25 @@ The stock picker supports index-based screening and custom file-based portfolio 
 Use this to filter and score a custom basket of watchlisted stocks:
 ```bash
 # Run on the microsmall portfolio select top 5
-go run cmd/stockpicker/main.go -file data/microsmall.csv -method multibagger -top 5
+./dist/mycase pick --file data/microsmall.csv --method multibagger --top 5
 
 # Run on the managed portfolio (myall) select top 10
-go run cmd/stockpicker/main.go -file data/myall.csv -method multibagger -top 10
+./dist/mycase pick --file data/myall.csv --method multibagger --top 10
 ```
 
 ### B. Run on Index Baskets
 Use this to screen an entire index (like Nifty Smallcap 250 or Microcap 250) against the multibagger requirements:
 ```bash
 # Screen the entire Smallcap 250 index, select the top 15 candidates
-go run cmd/stockpicker/main.go -index smallcap250 -method multibagger -top 15
+./dist/mycase pick --index smallcap250 --method multibagger --top 15
 
 # Screen the Microcap 250 index, select the top 10 candidates
-go run cmd/stockpicker/main.go -index microcap250 -method multibagger -top 10
+./dist/mycase pick --index microcap250 --method multibagger --top 10
 ```
 
 ### C. Run with Custom Parameters
 Adjust the lookback range (e.g. 6 months or 1 year) for benchmark tracking:
 ```bash
 # Screen Microcap 250 with a 6-month historical lookback
-go run cmd/stockpicker/main.go -index microcap250 -method multibagger -range 6mo -top 10
+./dist/mycase pick --index microcap250 --method multibagger --range 6mo --top 10
 ```

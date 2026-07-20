@@ -55,7 +55,7 @@ func FillWithMockData(
 	mockedTickers = make(map[string]bool)
 	outBenchData = benchData
 
-	if outBenchData == nil {
+	if outBenchData == nil || len(outBenchData.Closes) <= 200 {
 		outBenchData = generateMockBench(nDays, localRand)
 	}
 
@@ -66,7 +66,7 @@ func FillWithMockData(
 	for _, t := range tickers {
 		h, hasLiveHist := liveHist[t]
 		f, hasLiveFund := liveFunds[t]
-		if hasLiveHist && hasLiveFund {
+		if hasLiveHist && hasLiveFund && len(h.Closes) > 200 {
 			histData[t] = h
 			fundamentals[t] = f
 			continue

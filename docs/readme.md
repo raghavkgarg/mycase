@@ -1,85 +1,105 @@
 # Go Mycase Basket & Rebalancing Engine
 
-This project is portfolio engine in Go (Golang). It communicates with the Zerodha Kite Connect API using the official SDK (`gokiteconnect/v4`), utilizes a native concurrent Yahoo Finance client to fetch real-time price quotes, and features a fully automated strategy-to-execution pipeline.
+This project is a high-performance portfolio engine written in Go (Golang). It communicates with the Zerodha Kite Connect API using a decoupled broker layer (`pkg/broker`), utilizes a native concurrent Yahoo Finance client with a DuckDB persistent quote cache (`pkg/cache`), features an automated strategy-to-execution pipeline, and includes a background drift monitoring daemon with Telegram/Discord alerts (`pkg/daemon`).
 
 ---
 
 ## Architectural Highlights
 
-The project has been refactored into a highly modular, decoupled design where CLI tools only act as program entry points/orchestrators, and all business, representation, parsing, and execution operations are cleanly isolated into individual packages:
+The project is structured around a single, unified CLI entrypoint (`main.go`) built with `urfave/cli/v3`. All subcommands (`cmd/*.go`) serve as thin flag-parsing and orchestration layers that delegate directly to domain packages inside `pkg/`:
 
 ```mermaid
 graph TD
-    A[cmd/pipeline] --> B[cmd/stockpicker]
-    A --> C[cmd/report]
-    A --> D[cmd/performance]
-    A --> E[cmd/monitoring]
-    A --> F[cmd/setup_auth]
-    A --> G[cmd/basket]
-    
-    G --> H[pkg/kiteclient]
-    G --> I[pkg/csvloader]
-    G --> J[pkg/datafetcher]
-    G --> K[pkg/optimizer]
-    G --> L[pkg/executor]
-    
-    B --> I
-    B --> J
-    
-    C --> I
-    D --> I
-    E --> I
+    Main[main.go / dist/mycase] --> SubCmds[cmd/ Subcommands]
+
+    SubCmds --> P1[cmd/pipeline.go]
+    SubCmds --> P2[cmd/pick.go]
+    SubCmds --> P3[cmd/optimize.go]
+    SubCmds --> P4[cmd/report.go]
+    SubCmds --> P5[cmd/performance.go]
+    SubCmds --> P6[cmd/monitor.go]
+    SubCmds --> P7[cmd/basket.go]
+    SubCmds --> P8[cmd/holdings.go]
+    SubCmds --> P9[cmd/cache.go]
+    SubCmds --> P10[cmd/daemon.go]
+    SubCmds --> P11[cmd/auth.go]
+    SubCmds --> P12[cmd/merge.go]
+
+    SubCmds --> Broker[pkg/broker Zerodha & Mock]
+    SubCmds --> Cache[pkg/cache DuckDB Storage]
+    SubCmds --> Daemon[pkg/daemon & pkg/alert]
+    SubCmds --> Costs[pkg/costs STT, Tax, Micro-Tx]
+    SubCmds --> Picker[pkg/stockpicker & pkg/optimizer]
+    SubCmds --> Perf[pkg/performance & pkg/monitoring]
 ```
 
 ---
 
 ## Directory Structure & Package Overview
 
-For a detailed breakdown of runtime data directories, report namespaces, backups, and output file naming conventions, see [filestructure.md](filestructure.md).
+For a detailed breakdown of runtime data directories, report namespaces, backups, and output file naming conventions, see [filestructure.md](filestructure.md). For system architecture details, see [architecture.md](architecture.md).
 
 ```
 mycase/
-├── cmd/
-│   ├── pipeline/          # Automated pipeline runner orchestrating the entire strategy cycle
-│   ├── stockpicker/       # Stock selection CLI based on financial strategies (e.g. multibagger)
-│   ├── report/            # Portfolio explanation report generator
-│   ├── performance/       # Historical performance simulator (backtesting)
-│   ├── monitoring/        # Interactive portfolio monitoring tool
-│   ├── holdings/          # CLI tool presenting segment-wise holdings snapshots
-│   ├── optimize_weights/  # Weight optimization utility
-│   ├── setup_auth/        # OAuth web callback to capture request tokens and generate credentials
-│   └── basket/            # Main basket engine CLI (handling Fresh Buys and Rebalancing menu options)
-├── pkg/
-│   ├── config/            # Config parser structure definitions
-│   ├── csvloader/         # Stream-based CSV parser and comparison/merging utilities
-│   ├── datafetcher/       # Service orchestrator mapping quotes and holdings from live or mock streams
-│   ├── executor/          # Order execution layer handling GTT, AMO, and Regular placements
-│   ├── kiteclient/        # Unified Client loader and mockup instantiators
-│   ├── market/            # Pure market-hour scheduling checks and limit-order slippage math
-│   ├── monitoring/        # Domain logic for portfolio simulators and tracking
-│   ├── optimizer/         # Capital optimization algorithms matching target allocations
-│   ├── portfolio/         # Common domain entities (e.g. Holdings structures and sorting implementations)
-│   ├── printer/           # Pure visual table output generator (PrintPreview, HoldingsSnapshots)
-│   ├── stockpicker/       # Core stock selection rules, indices, and criteria
-│   └── yfinance/          # Parallel quote query downloader handling NSE (.NS) and BSE (.BO) mapping
-├── config/                # Configuration files (config.json, pipeline.yaml, etc.)
-└── data/                  # Target CSV portfolios and cache (microsmall.csv, .cache/ NSE prices)
+├── main.go                     # Single CLI entrypoint initializing DuckDB cache & registering subcommands
+├── Makefile                    # Targets for building, testing, cross-compiling, and linting
+├── cmd/                        # CLI Subcommands (thin orchestration layer)
+│   ├── auth.go                 # Zerodha Kite OAuth authentication launcher
+│   ├── basket.go               # Order generator & execution CLI (with friction/cost filters)
+│   ├── cache.go                # DuckDB price & fundamental cache management
+│   ├── daemon.go               # Background drift monitoring daemon runner & installer
+│   ├── holdings.go             # Active broker holdings snapshot printer
+│   ├── merge.go                # CSV constituent merger tool
+│   ├── monitor.go              # Interactive drift simulation & alert tool
+│   ├── optimize.go             # Weight optimization & rebalancing CLI
+│   ├── performance.go          # Historical portfolio valuation simulator
+│   ├── pick.go                 # Fundamental & technical stock selection CLI
+│   ├── pipeline.go             # Automated end-to-end pipeline runner
+│   └── report.go               # Portfolio rationale & metrics report generator
+├── pkg/                        # Core Domain & Business Logic
+│   ├── alert/                  # Telegram bot, Discord webhook, and email alerters
+│   ├── broker/                 # Unified Broker interface with Zerodha and Mock implementations
+│   ├── cache/                  # DuckDB persistent price and fundamentals storage
+│   ├── config/                 # YAML and JSON configuration parser structures
+│   ├── costs/                  # Transaction cost calculation (STT, DP charges) & STCG/LTCG tax rules
+│   ├── csvloader/              # Stream-based CSV parser and comparison/merging utilities
+│   ├── daemon/                 # Drift monitoring background daemon loop
+│   ├── datafetcher/            # Market data fetcher mapping live and mock quotes
+│   ├── executor/               # Order placement coordinator
+│   ├── kiteclient/             # Zerodha Kite client SDK wrapper
+│   ├── market/                 # Market hours, IST schedule, and limit-order slippage utilities
+│   ├── monitoring/             # Portfolio drift math & historical simulation engine
+│   ├── optimizer/              # MFS, mean-variance, and cap-weights algorithms
+│   ├── performance/            # Valuation engine & portfolio return analytics
+│   ├── portfolio/              # Common domain entities (Holdings, Positions)
+│   ├── printer/                # Visual console table generator
+│   ├── report/                 # Portfolio heuristics and report generation
+│   ├── selectiontracker/       # Candidate selection tracking
+│   ├── stockpicker/            # Core stock selection rules, indices, and criteria
+│   └── yfinance/               # Yahoo Finance client with DuckDB cache integration
+├── config/                     # Configuration files (pipeline.yaml, mfs.json, themes.json, csvlinks.json)
+├── data/                       # Target CSV portfolios, DuckDB cache (cache.db), and candidate picks
+└── docs/                       # Comprehensive architectural & operational documentation
 ```
 
 ---
 
 ## Installation & Setup
 
-1. **Install Dependencies**:
-   Ensure you have Go installed on your system, then clean the module dependencies:
+1. **Install Dependencies & Build**:
+   Ensure you have Go (1.26+) installed, then build the binary:
    ```bash
-   go mod tidy
+   make build
+   ```
+   This creates the single `dist/mycase` executable. You can also install it to `$GOPATH/bin` with:
+   ```bash
+   make install
    ```
 
-2. **Setup Credentials**:
+2. **Setup Broker Credentials**:
    Run the interactive authentication tool to register your API Key, API Secret, and retrieve your dynamic `access_token` from Zerodha:
    ```bash
-   go run ./cmd/setup_auth
+   ./dist/mycase auth
    ```
    This will automatically update `config/config.json`.
 
@@ -88,71 +108,89 @@ mycase/
 ## How to Run
 
 ### The Automated Pipeline (Recommended)
-You can run the entire workflow—from fetching stock recommendations for multiple indices, combining them, updating the golden copy, validating performance, simulating monitoring, and executing live orders—using the pipeline tool:
+You can run the entire workflow—from scanning indices, scoring stocks, optimizing allocations, generating comparison reports, simulating performance, and submitting live orders—using the pipeline command:
 
-1. **Configure parameters** in `config/pipeline.yaml` (e.g., indices, strategy, target golden copy, capital, tolerance, and buffer).
+1. **Configure parameters** in `config/pipeline.yaml` (e.g., indices, strategy, target golden copy, capital, tolerance, and alert channels).
 2. **Execute the pipeline**:
    ```bash
-   go run cmd/pipeline/main.go -config config/pipeline.yaml
+   ./dist/mycase pipeline --config config/pipeline.yaml
    ```
 
-To skip the analysis/backtest steps and jump straight to authentication and live basket execution (useful if already run today):
+To skip analysis and jump straight to live order execution:
 ```bash
-go run cmd/pipeline/main.go -config config/pipeline.yaml -exec-only
+./dist/mycase pipeline --config config/pipeline.yaml --exec-only
 ```
 
 ---
 
-### Running Individual Tools
+### Running Individual Subcommands
 
-For a complete lookup reference mapping individual standalone CLI commands to their Go automated pipeline runner equivalents and parameters, see [CommadTable.md](CommadTable.md).
+For a complete reference mapping CLI subcommands to pipeline configuration options, see [CommadTable.md](CommadTable.md).
 
 #### 1. Stock Selection (Stock Picker)
-Run stock picking on a configured index (e.g., `small250`) using a strategy (e.g., `multibagger`):
+Run stock selection on an index (e.g., `small250`) using a strategy (e.g., `balanced`):
 ```bash
-go run cmd/stockpicker/main.go -index small250 -method multibagger -top 20
+./dist/mycase pick --index small250 --method balanced --top 20
 ```
 
-#### 2. Portfolio Performance Simulation (Backtesting)
+#### 2. Weight Optimization
+Optimize portfolio weights using Multi-Factor Scoring (MFS) or weight capping:
+```bash
+./dist/mycase optimize --file data/microsmall.csv --strategy aggressive
+```
+
+#### 3. Portfolio Performance Simulation
 Simulate historical performance of your target CSV portfolio:
 ```bash
-go run cmd/performance/main.go -file data/microsmall.csv -capital 100000 -date 2026-05-15
+./dist/mycase performance --file data/microsmall.csv --capital 100000 --date 2026-01-01
 ```
 
-#### 3. Interactive Monitoring
+#### 4. Interactive Monitoring
 Track and simulate daily portfolio behavior interactively:
 ```bash
-go run cmd/monitoring/main.go -file data/microsmall.csv -interactive
+./dist/mycase monitor --file data/microsmall.csv --interactive
 ```
 
-#### 4. Holdings snapshot
-View mock or live holdings:
+#### 5. Holdings Snapshot
+View mock or live broker holdings:
 ```bash
-go run ./cmd/holdings --live
+./dist/mycase holdings --live
 ```
 
-#### 5. Live Basket Orders
-Execute orders against your target portfolio:
+#### 6. Live Basket Orders
+Generate and execute orders against your target portfolio:
 ```bash
-go run ./cmd/basket --live -- microsmall
+./dist/mycase basket --live -- microsmall
+```
+
+#### 7. DuckDB Price Cache Management
+Inspect row counts or clear cached data:
+```bash
+./dist/mycase cache status
+./dist/mycase cache clear --all
+```
+
+#### 8. Background Drift Monitoring Daemon
+Check portfolio drift once or start background daemon:
+```bash
+./dist/mycase daemon check
+./dist/mycase daemon start
 ```
 
 ---
 
-## Compilation
+## Compilation & Maintenance
 
-Build all standalone binaries inside the `bin/` folder at once:
+Use the [`Makefile`](file:///Users/raghavgarg/Projects/myGo/mycase/Makefile) for standard tasks:
+
 ```bash
-# This is also run automatically by the pipeline tool
-go build -o bin/pipeline ./cmd/pipeline
-go build -o bin/stockpicker ./cmd/stockpicker
-go build -o bin/report ./cmd/report
-go build -o bin/performance ./cmd/performance
-go build -o bin/monitoring ./cmd/monitoring
-go build -o bin/holdings ./cmd/holdings
-go build -o bin/setup_auth ./cmd/setup_auth
-go build -o bin/basket ./cmd/basket
-go build -o bin/optimize_weights ./cmd/optimize_weights
+make build              # Build dist/mycase binary
+make install            # Install to $GOPATH/bin
+make test               # Run all unit tests across all packages
+make test-race          # Run tests with race detector enabled
+make test-coverage      # Run tests and generate interactive coverage.html report
+make cleanup            # Run gofmt, go fix, go vet, staticcheck, and govulncheck
+make clean              # Remove build artifacts
 ```
 
 ---
@@ -193,14 +231,18 @@ Validate strategies historically and track daily portfolio health.
 *   📄 [performance.md](performance.md) `[Performance Simulator]`
     *   *Details the historical backtester engine used to calculate intraday and trailing portfolio gains starting from any customized date.*
 *   📄 [monitoring.md](monitoring.md) `[Portfolio Monitoring]`
-    *   *Covers the 4-Pillar monitoring policy for cutting declining stocks, keeping top performers, and running interactive monitoring simulators.*
+    *   *Covers the 4-Pillar monitoring policy for cutting declining stocks, keeping top performers, running interactive monitoring simulators, and configuring the drift daemon.*
 *   📄 [report.md](report.md) `[Metrics Generator]`
     *   *Outlines how the explanation report generator fetches stock fundamentals and builds easy-to-read markdown metrics portfolios.*
 
 ### 🚀 Phase 4: Pipeline & Execution
 Automate the entire lifecycle and submit orders live to your broker.
+*   📄 [architecture.md](architecture.md) `[System Architecture]`
+    *   *Deep dive into system package design, CLI subcommands, DuckDB cache schema, broker layer, and design decisions (D1–D7).*
+*   📄 [refactor.md](refactor.md) `[Refactoring Roadmap & Progress]`
+    *   *Complete record of refactoring phases R1–R6, commit history, test coverage expansion, and upcoming milestones (R7–R8).*
 *   📄 [pipeline.md](pipeline.md) `[Orchestrator]`
-    *   *Explains the automated pipeline system (`cmd/pipeline/main.go`) that links individual modules into a unified workflow.*
+    *   *Explains the automated pipeline subcommand (`mycase pipeline`) linking individual modules into a unified workflow.*
 *   📄 [workflow_guide.md](workflow_guide.md) `[Operational Guide]`
     *   *Detailed execution protocol outlining the safe way to go from raw index selection up to live Zerodha Kite orders.*
 *   📄 [MyCaseInGo.md](MyCaseInGo.md) `[Architecture Blueprint]`
@@ -208,8 +250,7 @@ Automate the entire lifecycle and submit orders live to your broker.
 *   📄 [productvision.md](productvision.md) `[System Roadmap]`
     *   *Roadmap highlighting future expansions, upcoming milestone phases, and technical directions.*
 *   📄 [CommadTable.md](CommadTable.md) `[Command Reference]`
-    *   *Reference mapping standalone CLI commands to their Go automated pipeline runner equivalents and required parameter alignments.*
+    *   *Reference mapping CLI subcommands to their automated pipeline runner equivalents and required parameter alignments.*
 *   📄 [filestructure.md](filestructure.md) `[File & Directory Guide]`
-    *   *Detailed reference describing the workspace directory layout, naming conventions, backups, and strategy-first report namespacing.*
-
+    *   *Detailed reference describing workspace directory layout, naming conventions, backups, and strategy-first report namespacing.*
 

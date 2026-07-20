@@ -24,7 +24,7 @@ graph TD
 
 To run the entire integrated workflow, execute the pipeline runner:
 ```bash
-go run cmd/pipeline/main.go -config config/pipeline.yaml
+./dist/mycase pipeline --config config/pipeline.yaml
 ```
 
 #### Step 1: Combining Constituents & Selection
@@ -44,7 +44,7 @@ Would you like to manually remove shares from the proposal before finalizing? (y
   1. Press **Enter** in the terminal to proceed directly.
 
 #### Step 3: Automated Stockpicker Selection & Pruning
-The pipeline runs `stockpicker` on the curated file to:
+The pipeline runs `pick` on the curated file to:
 * Re-run strategy scoring on the remaining candidates.
 * Select the **top 20** highest-scoring stocks (applying sector caps and hysteresis buffer zone checks).
 * Re-optimize weights for the top 20 assets and apply rebalancing bands.
@@ -63,7 +63,7 @@ The pipeline prompts you to authenticate your Zerodha session and execute the ba
 #### Step 6: Verify and Check Holdings
 Run the holdings command to monitor live status:
 ```bash
-go run cmd/holdings/main.go
+./dist/mycase holdings --live
 ```
 
 ---
@@ -78,7 +78,7 @@ Here is the exact step-by-step mapping of the pipeline to individual CLI command
 Fetch and score index constituents individually (the `-out` flag is optional; by default, output paths will automatically fall back to the correct pipeline folders):
 ```bash
 # Run stockpicker on microcap250
-go run cmd/stockpicker/main.go \
+./dist/mycase pick \
   -index microcap250 \
   -method balanced \
   -top 20 \
@@ -86,7 +86,7 @@ go run cmd/stockpicker/main.go \
   -golden data/microsmall.csv
 
 # Run stockpicker on small250
-go run cmd/stockpicker/main.go \
+./dist/mycase pick \
   -index small250 \
   -method balanced \
   -top 20 \
@@ -101,18 +101,18 @@ go run cmd/stockpicker/main.go \
   * `-out`: Custom path to save the output CSV portfolio file (optional; defaults to `data/candidates/index_picks/[index]_[method].csv`)
 
 ### Step 2: Combine Candidates (For Multi-Index portfolios)
-If using multiple indices, combine their CSV candidate selections to merge unique tickers using the merge utility:
+If using multiple indices, combine their CSV candidate selections to merge unique tickers using the merge subcommand:
 ```bash
-go run scripts/merge.go combine \
+./dist/mycase merge combine \
   data/candidates/temp/combine_microsmall.csv \
   data/candidates/index_picks/microcap250_balanced.csv \
   data/candidates/index_picks/small250_balanced.csv
 ```
 
 ### Step 3: Combined Selection (Generates Top 25 Proposal)
-Run `stockpicker` on the combined candidate list to generate the initial proposal of $N+5$ candidates:
+Run `pick` on the combined candidate list to generate the initial proposal of $N+5$ candidates:
 ```bash
-go run cmd/stockpicker/main.go \
+./dist/mycase pick \
   -file data/candidates/temp/combine_microsmall.csv \
   -method balanced \
   -top 25 \
@@ -125,9 +125,9 @@ go run cmd/stockpicker/main.go \
 Open the generated file (e.g., `data/candidates/proposals/YYYYMMDD_microsmall_balanced.csv`) in an editor and delete the rows of any unwanted tickers, saving the file.
 
 ### Step 5: Final Selection & Weight Optimization
-Run `stockpicker` on the curated file to prune to the top 20 assets, compute optimal weights, and output to the optimized path:
+Run `pick` on the curated file to prune to the top 20 assets, compute optimal weights, and output to the optimized path:
 ```bash
-go run cmd/stockpicker/main.go \
+./dist/mycase pick \
   -file data/candidates/proposals/YYYYMMDD_microsmall_balanced.csv \
   -method balanced \
   -top 20 \
@@ -138,23 +138,23 @@ go run cmd/stockpicker/main.go \
 
 ### Step 6: Update Golden Copy (With Exit Logic)
 To overwrite the active golden copy (`data/microsmall.csv`) with the new optimized selection while keeping exited stocks at `0.0000` weight (crucial to trigger Zerodha sell orders):
-* Option A (Recommended): Use the standalone merge utility to perform the sync with automatic exit detection:
+* Option A (Recommended): Use the standalone merge subcommand to perform the sync with automatic exit detection:
   ```bash
-  go run scripts/merge.go \
+  ./dist/mycase merge \
     data/candidates/proposals/YYYYMMDD_microsmall_balanced_optim.csv \
     data/microsmall.csv
   ```
-* Option B: Run the normal pipeline (`go run cmd/pipeline/main.go`), which automatically handles comparison reports, backups, and file merges interactively.
+* Option B: Run the normal pipeline (`./dist/mycase pipeline`), which automatically handles comparison reports, backups, and file merges interactively.
 
 ### Step 7: Generate Selection Explanation Reports
 ```bash
-go run cmd/report/main.go -file data/microsmall.csv -method balanced
+./dist/mycase report -file data/microsmall.csv -method balanced
 ```
 * **Output Path**: `report/microsmall_balanced/executions/YYYYMMDD_03_portfolio_report.txt`
 
 ### Step 8: Simulate Historical Backtest
 ```bash
-go run cmd/performance/main.go \
+./dist/mycase performance \
   -file data/microsmall.csv \
   -capital 100000 \
   -date 2026-01-01 \
@@ -167,7 +167,7 @@ go run cmd/performance/main.go \
 
 ### Step 9: Simulate Portfolio Monitoring & Alerts
 ```bash
-go run cmd/monitoring/main.go -file data/microsmall.csv -interactive -strategy balanced -date 2026-01-01
+./dist/mycase monitor -file data/microsmall.csv -interactive -strategy balanced -date 2026-01-01
 ```
 * **Advanced Command Customization**:
   * `-style`: Policy preset (`moderate` [default], `hyper-aggressive`, `passive`)
@@ -177,22 +177,22 @@ go run cmd/monitoring/main.go -file data/microsmall.csv -interactive -strategy b
 ### Step 10: Zerodha Authentication
 Run the authentication service to renew your Zerodha session:
 ```bash
-go run cmd/setup_auth/main.go
+./dist/mycase auth
 ```
 
 ### Step 11: Execute Orders in Zerodha
 Compute buy/sell shares and execute order basket in Zerodha Kite:
 ```bash
 # Dry Run / Mock Mode:
-go run cmd/basket/main.go -- microsmall
+./dist/mycase basket -- microsmall
 
 # Live Execution Mode:
-go run cmd/basket/main.go --live -- microsmall
+./dist/mycase basket --live -- microsmall
 ```
 
 ### Step 12: View Live Holdings
 View live holdings categorized by portfolio groups:
 ```bash
-go run cmd/holdings/main.go --live
+./dist/mycase holdings --live
 ```
 

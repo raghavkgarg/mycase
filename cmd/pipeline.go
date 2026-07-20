@@ -277,33 +277,45 @@ func runPipeline(ctx context.Context, c *cli.Command) error {
 		stepCounter++
 	}
 
-	// Auth step
-	fmt.Printf("\n[Step %d/%d] Setting up Zerodha authentication...\n", stepCounter, totalSteps)
-	fmt.Print("Would you like to setup authentication now? (y/n, default: y): ")
-	authChoice, _ := reader.ReadString('\n')
-	authChoice = strings.ToLower(strings.TrimSpace(authChoice))
-	if authChoice == "" || authChoice == "y" || authChoice == "yes" {
-		if err := runAuthCmd(ctx); err != nil {
-			return fmt.Errorf("step %d (auth): %w", stepCounter, err)
+	isUSPortfolio := stockpicker.IsUSIndex(cfg.GoldenCopyPath)
+	for _, idx := range cfg.Indices {
+		if stockpicker.IsUSIndex(idx) {
+			isUSPortfolio = true
+			break
 		}
-	} else {
-		fmt.Println("Skipping authorization setup.")
 	}
-	stepCounter++
 
-	// Basket execution
-	fmt.Printf("\n[Step %d/%d] Executing mycase basket orders...\n", stepCounter, totalSteps)
-	fmt.Print("Would you like to execute the basket orders? (y/n, default: y): ")
-	execChoice, _ := reader.ReadString('\n')
-	execChoice = strings.ToLower(strings.TrimSpace(execChoice))
-	if execChoice == "" || execChoice == "y" || execChoice == "yes" {
-		goldenBase := csvloader.GetUniverseName(cfg.GoldenCopyPath)
-		basketFile := "data/" + goldenBase + ".csv"
-		if err := runBasketWithParams(ctx, true, basketFile); err != nil {
-			return fmt.Errorf("step %d (basket): %w", stepCounter, err)
-		}
+	if isUSPortfolio {
+		fmt.Printf("\n[Step %d/%d] US market portfolio detected (%v). Skipping Zerodha Indian broker authentication & basket execution.\n", stepCounter, totalSteps, cfg.Indices)
 	} else {
-		fmt.Println("Skipping basket execution.")
+		// Auth step
+		fmt.Printf("\n[Step %d/%d] Setting up Zerodha authentication...\n", stepCounter, totalSteps)
+		fmt.Print("Would you like to setup authentication now? (y/n, default: y): ")
+		authChoice, _ := reader.ReadString('\n')
+		authChoice = strings.ToLower(strings.TrimSpace(authChoice))
+		if authChoice == "" || authChoice == "y" || authChoice == "yes" {
+			if err := runAuthCmd(ctx); err != nil {
+				return fmt.Errorf("step %d (auth): %w", stepCounter, err)
+			}
+		} else {
+			fmt.Println("Skipping authorization setup.")
+		}
+		stepCounter++
+
+		// Basket execution
+		fmt.Printf("\n[Step %d/%d] Executing mycase basket orders...\n", stepCounter, totalSteps)
+		fmt.Print("Would you like to execute the basket orders? (y/n, default: y): ")
+		execChoice, _ := reader.ReadString('\n')
+		execChoice = strings.ToLower(strings.TrimSpace(execChoice))
+		if execChoice == "" || execChoice == "y" || execChoice == "yes" {
+			goldenBase := csvloader.GetUniverseName(cfg.GoldenCopyPath)
+			basketFile := "data/" + goldenBase + ".csv"
+			if err := runBasketWithParams(ctx, true, basketFile); err != nil {
+				return fmt.Errorf("step %d (basket): %w", stepCounter, err)
+			}
+		} else {
+			fmt.Println("Skipping basket execution.")
+		}
 	}
 
 	if !execOnly {

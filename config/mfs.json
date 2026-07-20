@@ -13,6 +13,7 @@
       "max_debt_to_equity": 1.5,
       "min_interest_coverage": 3.0,
       "max_capex_yoy_multiplier": 2.00,
+      "max_dso_deterioration_pct": 15.0,
       "volume_breakout_lookback_days": 60,
       "volume_breakout_multiplier": 1.5,
       "max_stocks_per_sector": 4,

@@ -88,7 +88,7 @@ report/[universe]_[strategy]/
 
 When you run the automated pipeline runner:
 ```bash
-go run cmd/pipeline/main.go -config config/pipeline.yaml
+./dist/mycase pipeline --config config/pipeline.yaml
 ```
 
 The runner generates a synchronized `runTimestamp` (e.g., `20260718_162729`) and follows this exact folder workflow:

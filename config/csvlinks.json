@@ -39,5 +39,6 @@
   "midsmall400_5050": "https://www.niftyindices.com/IndexConstituent/ind_niftyMidSmallcap4005050_list.csv",
   "niftyindiafpi150": "https://www.niftyindices.com/IndexConstituent/ind_niftyindiafpi150_list.csv",
   "indiafpi150": "https://www.niftyindices.com/IndexConstituent/ind_niftyindiafpi150_list.csv",
-  "fpi150": "https://www.niftyindices.com/IndexConstituent/ind_niftyindiafpi150_list.csv"
+  "fpi150": "https://www.niftyindices.com/IndexConstituent/ind_niftyindiafpi150_list.csv",
+  "sp500": "https://raw.githubusercontent.com/datasets/s-and-p-500-companies/master/data/constituents.csv"
 }

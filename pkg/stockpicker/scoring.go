@@ -29,7 +29,8 @@ func ScoreMultibagger(
 	fmt.Printf("Calculating 100-Point Multibagger Relative Scoring Matrix for %d candidates...\n", len(activeKeys))
 
 	// Fetch 1-year benchmark prices for Relative Strength calculation
-	benchmark1y, bErr := yfinance.FetchHistoricalPrices(ctx, "^NSEI", "1y")
+	benchSym := GetBenchmarkSymbolForIndex("", activeKeys)
+	benchmark1y, bErr := yfinance.FetchHistoricalPrices(ctx, benchSym, "1y")
 	bench1yReturn := 0.0
 	if bErr == nil && len(benchmark1y) >= 2 {
 		bench1yReturn = (benchmark1y[len(benchmark1y)-1] - benchmark1y[0]) / benchmark1y[0]

@@ -167,17 +167,17 @@ Once the quantitative screener selects the top multibagger candidates, the tool 
 
 ## 4. How to Run
 
-Compile and run using `go run`:
+Run the stockpicker subcommand (`mycase pick`):
 
 ```bash
 # Pick the top 10 stocks from Nifty Microcap 250 using the aggressive strategy preset
-go run ./cmd/stockpicker -index microcap250 -method aggressive -top 10
+./dist/mycase pick -index microcap250 -method aggressive -top 10
 
 # Pick the top 20 stocks from a custom list of tickers using the balanced strategy preset
-go run ./cmd/stockpicker -file data/microsmall.csv -method balanced -top 20
+./dist/mycase pick -file data/microsmall.csv -method balanced -top 20
 
 # Pick the top 30 stocks from Nifty Next 50 using the conservative strategy preset
-go run ./cmd/stockpicker -index niftynext50 -method conservative -top 30
+./dist/mycase pick -index niftynext50 -method conservative -top 30
 ```
 
 ### Supported Flags:

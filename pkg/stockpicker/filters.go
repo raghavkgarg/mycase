@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/raghavkgarg/mycase/pkg/config"
 	"github.com/raghavkgarg/mycase/pkg/optimizer"
@@ -173,10 +174,12 @@ func isEligible(
 		}
 	}
 
-	// 5. Promoter Stake check
-	if hardFilters.MinPromoterPercent > 0 && f.InsidersPercent < hardFilters.MinPromoterPercent {
-		stats.EliminatedPromoter++
-		return false, fmt.Sprintf("Low promoter stake (%.1f%% < %.1f%% limit)", f.InsidersPercent*100.0, hardFilters.MinPromoterPercent*100.0)
+	// 5. Promoter Stake check (Skip for US stocks as US equities are institutionally held)
+	if !strings.HasPrefix(t, "US:") && !strings.HasPrefix(t, "NASDAQ:") && !strings.HasPrefix(t, "NYSE:") {
+		if hardFilters.MinPromoterPercent > 0 && f.InsidersPercent < hardFilters.MinPromoterPercent {
+			stats.EliminatedPromoter++
+			return false, fmt.Sprintf("Low promoter stake (%.1f%% < %.1f%% limit)", f.InsidersPercent*100.0, hardFilters.MinPromoterPercent*100.0)
+		}
 	}
 
 	// 6. 200-Day SMA Trend Check
@@ -308,8 +311,19 @@ func isEligible(
 		}
 		passedAT := atLatest > atPrev
 
-		// 3. Working Capital Efficiency (DSO)
-		passedWC, _, _ := yfinance.CalculateDSO(&f)
+		// 3. Working Capital Efficiency & Deterioration Sentry (DSO)
+		passedWC, dsoPrev, dsoLatest := yfinance.CalculateDSO(&f)
+		if dsoPrev > 0 {
+			dsoDeltaPct := ((dsoLatest - dsoPrev) / dsoPrev) * 100.0
+			maxDSOPct := 15.0
+			if hardFilters != nil && hardFilters.MaxDSODeteriorationPct > 0 {
+				maxDSOPct = hardFilters.MaxDSODeteriorationPct
+			}
+			if dsoDeltaPct > maxDSOPct {
+				stats.EliminatedWorkingCapital++
+				return false, fmt.Sprintf("DSO Deterioration limit exceeded (+%.1f%% > %.1f%% threshold)", dsoDeltaPct, maxDSOPct)
+			}
+		}
 
 		// Require at least 2 out of 3 operational criteria to pass
 		passCount := 0
@@ -356,7 +370,8 @@ func ApplySafetyFilters(
 	// Pre-calculate 52-Week Relative Strength percentiles if requested
 	rsPercentiles := make(map[string]float64)
 	if hardFilters.MinRSPercentile > 0 {
-		benchmark1y, bErr := yfinance.FetchHistoricalPrices(ctx, "^NSEI", "1y")
+		benchSym := GetBenchmarkSymbolForIndex("", activeKeys)
+		benchmark1y, bErr := yfinance.FetchHistoricalPrices(ctx, benchSym, "1y")
 		bench1yReturn := 0.0
 		if bErr == nil && len(benchmark1y) >= 2 {
 			bench1yReturn = (benchmark1y[len(benchmark1y)-1] - benchmark1y[0]) / benchmark1y[0]

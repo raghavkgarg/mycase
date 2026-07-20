@@ -36,7 +36,7 @@ func saveToCache(prefix, key string, source any) {
 	}
 }
 
-// MapTickerToYahoo converts an exchange-specific ticker like "BSE:LT" or "NSE:RELIANCE" to a Yahoo suffix symbol.
+// MapTickerToYahoo converts an exchange-specific ticker like "BSE:LT", "NSE:RELIANCE", or "US:AAPL" to a Yahoo symbol.
 func MapTickerToYahoo(ticker string) string {
 	if strings.HasPrefix(ticker, "^") {
 		return ticker
@@ -48,10 +48,25 @@ func MapTickerToYahoo(ticker string) string {
 		if exchange == "BSE" {
 			return symbol + ".BO"
 		}
-		return symbol + ".NS"
+		if exchange == "NSE" {
+			return symbol + ".NS"
+		}
+		if exchange == "NASDAQ" || exchange == "NYSE" || exchange == "US" {
+			return strings.ReplaceAll(symbol, ".", "-")
+		}
 	}
 	// Default fallback
 	return strings.TrimSpace(ticker) + ".NS"
+}
+
+// GetBenchmarkSymbol determines the benchmark symbol for a list of tickers (e.g. ^GSPC for US stocks, ^NSEI for Indian stocks).
+func GetBenchmarkSymbol(tickers []string) string {
+	for _, t := range tickers {
+		if strings.HasPrefix(t, "US:") || strings.HasPrefix(t, "NASDAQ:") || strings.HasPrefix(t, "NYSE:") {
+			return "^GSPC"
+		}
+	}
+	return "^NSEI"
 }
 
 // FetchQuotes fetches the latest LTP for the tickers natively in Go.
