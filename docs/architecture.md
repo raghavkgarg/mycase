@@ -1,7 +1,7 @@
 # Mycase — Architecture & Design Reference
 
 **Module**: `github.com/raghavkgarg/mycase`  
-**Go version**: 1.26.3  
+**Go version**: 1.26.5  
 **Binary**: `mycase` (single binary, 10 subcommands)
 
 ---
@@ -61,19 +61,21 @@ mycase/
 │   ├── merge.go
 │   └── auth.go
 ├── pkg/                        # All business logic
-│   ├── config/                 # Broker credentials (config.go); themes (themes.json loader)
+│   ├── config/                 # Broker credentials (config.go); themes; PipelineConfig (pipeline.go)
 │   ├── csvloader/              # basket CSV I/O, golden copy merge, pipeline CSV helpers
-│   ├── datafetcher/            # Index constituent lookup (maps index name → ticker list)
+│   ├── datafetcher/            # Live/mock market data fetch (FetchMarketData via Kite or mock quotes)
 │   ├── executor/               # Order execution logic
 │   ├── kiteclient/             # Zerodha Kite Connect client wrapper
 │   ├── market/                 # Market hours, holiday calendar helpers
-│   ├── monitoring/             # Portfolio simulator (types, simulator); drift scoring
-│   ├── optimizer/              # Weight optimization: volatility, MFS multi-factor, fresh-buy
+│   ├── monitoring/             # Portfolio simulator (types, simulator, mock data); drift scoring
+│   ├── optimizer/              # Weight optimization: volatility, MFS multi-factor, fresh-buy, exit detection
+│   ├── performance/            # Portfolio valuation: ValuatePortfolio (daily-close + intraday modes)
 │   ├── portfolio/              # Holdings type, Zerodha holdings fetch
 │   ├── printer/                # Terminal output rendering (tables, holdings snapshot)
+│   ├── report/                 # Selection rationale text: BuildRationale (multibagger + standard paths)
 │   ├── selectiontracker/       # Records why each stock was kept/removed during pick
 │   ├── stockpicker/            # Stock selection: loaders, filters, scoring, I/O
-│   └── yfinance/               # Yahoo Finance client: prices, fundamentals, quotes, RSI
+│   └── yfinance/               # Yahoo Finance client: prices, fundamentals, quotes, RSI (all ctx-aware)
 ├── config/
 │   ├── mfs.json                # Scoring weights per strategy (balanced, aggressive, multibagger…)
 │   ├── pipeline.yaml           # Pipeline run config (indices, strategy, top-N, tolerances)
@@ -226,8 +228,8 @@ Add a `baseURL` override for tests: `var yfinanceBaseURL = "https://query1.finan
 | `range N` (integer range) | 1.22 | n/a | No pure-counter loops found in codebase |
 | `maps.Keys`, `maps.Values` | 1.21 | n/a | No manual key-extraction loops found |
 | `log/slog` | 1.21 | n/a | No `fmt.Fprintf(stderr)` or `log.Printf` calls |
-| `context.Context` in HTTP | best practice | ⏳ R3.5 | `pkg/yfinance/prices.go`, `pkg/yfinance/metrics.go` |
-| Generic type aliases | 1.24 | ⏳ R2 | `cmd/pipeline.go` `resolveFirst[T]()` |
+| `context.Context` in HTTP | best practice | ✅ Done (R3.5) | all `pkg/yfinance` fetch functions + callers |
+| Generic type aliases | 1.24 | ✅ Done (R2.5) | `resolveFirst[T]()` in `pkg/config/pipeline.go` |
 
 ---
 
