@@ -23,6 +23,8 @@ type DriftResult struct {
 // CalculateDrift computes ½ Σ|w_actual_i − w_target_i| for the given portfolio.
 // basketKeys are instrument keys (e.g. "NSE:TCS") in CSV order.
 // When there are no holdings the actual weights are all zero, yielding drift = 0.5.
+// The formula is bounded by 1.0 (total variation distance); drift > 0.5 occurs when
+// actual weight is concentrated in instruments that have low target weight.
 func CalculateDrift(_ context.Context, b broker.Broker, targetWeights map[string]float64, basketKeys []string) (DriftResult, error) {
 	quotes, err := b.GetQuotes(basketKeys)
 	if err != nil {
