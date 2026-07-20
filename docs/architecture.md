@@ -1,273 +1,204 @@
-# Mycase — Architecture & Design Reference
+# Mycase — Architecture Reference
 
-**Module**: `github.com/raghavkgarg/mycase`  
-**Go version**: 1.26.5  
-**Binary**: `mycase` (single binary, 10 subcommands)
+**Module**: `github.com/raghavkgarg/mycase` | **Go**: 1.26.5 | **Binary**: `mycase`
 
 ---
 
-## 1. What It Does
+## 1. System Overview
 
-`mycase` is a portfolio basket and rebalancing engine for Indian equity markets (NSE/BSE). It covers the full workflow: stock selection → weight optimization → order generation → performance monitoring. Data is sourced from Yahoo Finance (no vendor lock-in for market data) and orders are placed via Zerodha Kite Connect.
+`mycase` is an Indian equity portfolio engine covering the full lifecycle:
+
+```
+Index/CSV → pick (rank + filter) → optimize (weights) → basket (execute orders)
+                                         ↓
+                              backtest (historical P&L)
+                                         ↓
+                               daemon (drift alerts)
+```
+
+All steps are direct Go function calls within one process. `pipeline` orchestrates them sequentially from `config/pipeline.yaml`. Zerodha Kite Connect is used for live execution; `MockBroker` handles everything else.
 
 ---
 
-## 2. CLI Command Hierarchy
+## 2. Key Algorithms
+
+### 2.1 Inverse-Volatility Weighting (`pkg/optimizer/volatility.go`)
 
 ```
-mycase [global flags]
-├── pipeline       Orchestrate full workflow (pick → optimize → report → performance → monitor)
-├── pick           Stock selection from an index or CSV file
-├── optimize       Weight optimizer (volatility, MFS multi-factor, equal-weight)
-├── report         Generate portfolio explanation report
-├── performance    Historical backtest simulation
-├── monitor        Interactive drift simulator
-├── basket         Order execution via Zerodha Kite
-├── backtest       Historical backtest: CAGR, Sharpe, Max Drawdown, Alpha/Beta vs benchmark
-├── holdings       Live/mock holdings snapshot
-├── merge
-│   ├── combine    Merge multiple CSVs into one
-│   └── golden     Update golden copy from a proposals CSV
-├── daemon
-│   ├── start      Start blocking drift monitoring loop (use install for system service)
-│   ├── stop       Send SIGTERM to running daemon
-│   ├── status     Show last drift check results
-│   ├── check      One-shot drift check
-│   ├── install    Write launchd plist (macOS) / print systemd unit (Linux)
-│   └── uninstall  Remove installed service
-└── auth           Zerodha session setup
+w_i = (1/σ_i) / Σ(1/σ_j)
 ```
 
-Key flags per command:
+`σ_i` is the **population standard deviation of daily log returns** over the price window (typically 3 months). A 5% floor on `σ_i` prevents any single low-volatility stock from dominating when it has a short history or flat price.
 
-| Command | Key flags |
-|---------|-----------|
-| `pick` | `--index`, `--file`, `--method`, `--top`, `--range`, `--golden`, `--rebalance-tolerance`, `--hysteresis-buffer` |
-| `optimize` | `--file`, `--method`, `--cap`, `--golden`, `--remove` |
-| `report` | `--file`, `--method` |
-| `performance` | `--file`, `--capital`, `--date`, `--time` |
-| `monitor` | `--file`, `--style`, `--strategy`, `--date`, `--interactive` |
-| `basket` | `--live`, `[portfolio-name]` |
-| `backtest` | `--file`, `--capital`, `--from`, `--to`, `--rebalance`, `--slippage`, `--benchmark`, `--drift-threshold` |
-| `holdings` | `--live` |
+Volatility is computed from price closes only — no bid/ask spread or intraday data. This means two stocks with the same daily close movement get identical weight regardless of intraday swings.
+
+### 2.2 MFS Multi-Factor Scoring (`pkg/optimizer/mfs.go`, `pkg/stockpicker/scoring.go`)
+
+The MFS pipeline:
+
+1. **Fetch** 3-month daily prices + fundamentals for each candidate
+2. **Score** each stock across 16 factors (Sharpe, Sortino, Beta, Alpha, Ulcer Index, PEG, ROE, FCF Yield, Operating Margin, P/B, Debt/EBITDA, Revenue CAGR, Insider %, Institutional %, Forward P/E, Market Cap tier)
+3. **Normalize** each factor to [0, maxPoints] via `normalizeValue(v, lo, hi, maxPoints)` — values outside [lo, hi] are clamped (no extrapolation beyond 0 or maxPoints)
+4. **Weight** normalized scores by strategy (balanced / aggressive / conservative / multibagger) from `config/mfs.json`
+5. **Cap weights** iteratively: if any stock exceeds `--cap`, redistribute the excess proportionally across all uncapped stocks until convergence
+
+The cap redistribution is iterative (not a single pass) because redistributing excess to other stocks may push them over the cap too.
+
+### 2.3 Backtest Engine (`pkg/backtest/engine.go`)
+
+**Date alignment**: builds a common trading calendar by intersecting the date sets of all tickers AND the benchmark. Days where any ticker is missing data are excluded. This prevents survivorship-bias skew from stocks with incomplete history.
+
+**Initial buy**: at the first common day's close price, with slippage applied: `effectivePrice = close * (1 + slippage)`. The TotalReturn is measured from `InitialCapital`, not from the first NAV snapshot, so slippage cost is reflected in the return figure.
+
+**Rebalance execution**: sells happen first (freeing cash), then buys. Targets are computed from the pre-rebalance portfolio value. Slippage applies on both sides: sells receive `close * (1 - slippage)`, buys pay `close * (1 + slippage)`. Cash from sells is bounded to what's available before buying.
+
+**Drift-triggered rebalance**: fires when any stock's actual weight deviates more than `DriftThreshold` from its target. Checks daily.
+
+**Metrics** (all in `pkg/backtest/metrics.go`):
+- CAGR: `(final/initial)^(365/calendarDays) - 1`
+- Max Drawdown: running peak-to-trough; `peak` updates continuously
+- Sharpe/Sortino: annualized (`× √252`), excess over 6% India risk-free rate
+- Sortino downside deviation uses the full `n` in denominator (not just down-day count)
+- Beta: `cov(port, bench) / var(bench)` from daily returns — the `(n-1)` cancels
+- Jensen's Alpha: `portCAGR - (0.06 + β × (benchCAGR - 0.06))`
+
+### 2.4 Drift Monitoring (`pkg/daemon/drift.go`)
+
+```
+DriftIndex = ½ × Σ|w_actual_i - w_target_i|
+```
+
+This is the **total variation distance** between actual and target weight vectors, bounded [0, 1]. A drift of 0.1 means 10% of the portfolio is "in the wrong place." Alerts fire when `DriftIndex > threshold` (default 5%).
+
+Actual weights are computed from live quotes × held quantities from the broker. T1/T2 unsettled quantities are included in the position count.
+
+### 2.5 Hard Filters in Stock Picker (`pkg/stockpicker/scoring.go`)
+
+The multibagger strategy applies hard filters before scoring:
+- Min market cap threshold (configurable)
+- EBITDA positive (profit constraint)
+- Debt/EBITDA ≤ 2× (leverage constraint)
+- Insider holding ≥ minimum % (alignment)
+- Pledged shares ≤ maximum %
+- Forward P/E within range
+- Revenue 3Y CAGR ≥ minimum
+
+Stocks that fail any hard filter are **removed before scoring** (they don't get a low score — they're excluded entirely). This prevents them from entering the portfolio at any weight via low contribution.
 
 ---
 
-## 3. Directory Structure
+## 3. Non-Obvious Implementation Details
+
+### 3.1 DuckDB BIGINT vs TIMESTAMP
+
+DuckDB v1.5.3 does not reliably scan `TIMESTAMP` columns into `time.Time` via `database/sql` — values come back as zero. All time columns (`fetched_at`, `ts`) are stored as `BIGINT` (Unix epoch seconds). Convert with `time.Unix(n, 0)` on read. This is a hard bug in the driver, not something that can be detected at schema design time.
+
+The symptom: staleness checks always fail (everything appears fresh or stale) because `time.Unix(0, 0)` compares wrong against `time.Now()`.
+
+### 3.2 IST Timezone Throughout
+
+All date operations (price staleness, CleanIntradayNoise, backtest calendar) use IST (`Asia/Kolkata`, UTC+5:30). Yahoo Finance timestamps for Indian stocks are midnight IST which appears as 18:30 UTC the previous day. Converting with `time.Unix(ts, 0).In(istLoc)` gives the correct trading date.
+
+Using `time.UTC` instead causes price dates to shift by one day for Indian stocks, corrupting the backtest calendar alignment.
+
+### 3.3 CleanIntradayNoise
+
+`HistoricalData.CleanIntradayNoise()` discards the last data point if it represents today's date AND the current IST time is before 15:30 (market close). This prevents a partial trading day from being treated as a full day's close, which would understate volatility and overstate returns for strategies that check today's price.
+
+### 3.4 Purchase Date Unavailability
+
+Neither Zerodha Kite API nor `MockBroker` exposes the purchase date in `broker.Holding`. `pkg/costs/tax.go:ClassifySell` accepts `time.Time{}` (zero value) as "unknown" and returns `TaxUnknown` with a "check manually" note rather than crashing or defaulting to a wrong classification.
+
+### 3.5 DP Charge Dominates Micro-Transactions
+
+The CDSL DP charge (₹15.93 flat per ISIN per sell day) makes small sell orders uneconomical at any price. Example: 1 share × ₹50 sell → cost ratio ≈ 32%, far above the 0.5% micro-transaction threshold. The DP charge is flat, not percentage-based, so it disproportionately impacts small positions. This is the primary reason `FilterMicroTransactions` exists.
+
+### 3.6 Yahoo Finance Cookie/Crumb Auth
+
+Yahoo Finance requires a valid `crumb` parameter for some API endpoints. `pkg/yfinance/yfinance.go:FetchCookieAndCrumb` fetches a session cookie and then extracts the crumb from the response. This is session-based and must be re-fetched if the session expires. The chart API endpoints used for price data (`/v8/finance/chart/`) do not require a crumb — only the quoteSummary endpoint does.
+
+### 3.7 Cache Key for Date-Range Queries
+
+`FetchHistoricalByDateRange` uses Yahoo's `period1`/`period2` Unix timestamp params instead of `range`. The DuckDB cache key is `"dr_YYYYMMDD_YYYYMMDD"`. Historical ranges (where `to < today`) never expire — once fetched, past prices are immutable. Only ranges ending on today use `isFreshToday` staleness.
+
+### 3.8 Broker Abstraction Fallback
+
+`pkg/broker/zerodha.New()` falls back to `MockBroker` when Kite API credentials are absent or invalid. This means `mycase basket` and `mycase holdings` work without credentials (dry-run mode) without any special flag — the fallback is transparent from the user's perspective.
+
+---
+
+## 4. Data Flow Details
+
+### Price Data Path
 
 ```
-mycase/
-├── main.go                     # Wires urfave/cli app; injects Version/GitCommit/BuildDate via LDFLAGS
-├── cmd/                        # One file per subcommand — thin flag parsing + orchestration only
-│   ├── pipeline.go             # Calls other cmds as direct Go function calls
-│   ├── pick.go
-│   ├── optimize.go
-│   ├── report.go
-│   ├── performance.go
-│   ├── monitor.go
-│   ├── basket.go
-│   ├── holdings.go
-│   ├── merge.go
-│   └── auth.go
-├── pkg/                        # All business logic
-│   ├── alert/                  # Alerter interface; TelegramAlerter, DiscordAlerter, EmailAlerter (stub)
-│   ├── broker/                 # Broker interface (broker.go), MockBroker (mock.go); zerodha/ = ZerodhaBroker + New factory
-│   ├── cache/                  # DuckDB persistent cache: prices, fundamentals, cache_meta tables
-│   ├── config/                 # Broker credentials (config.go); themes; PipelineConfig (pipeline.go)
-│   ├── backtest/               # Historical backtest engine: SimConfig, Run, CAGR/Sharpe/Sortino/Calmar/Alpha/Beta metrics
-│   ├── costs/                  # Indian equity transaction costs (STT, stamp duty, DP, SEBI); STCG/LTCG classification (Finance Act 2024)
-│   ├── csvloader/              # basket CSV I/O, golden copy merge, pipeline CSV helpers
-│   ├── daemon/                 # Drift daemon: CalculateDrift, RunCheck, RunLoop, State persistence
-│   ├── datafetcher/            # Live/mock market data fetch (FetchMarketData via Kite or mock quotes)
-│   ├── executor/               # Order execution logic
-│   ├── kiteclient/             # Zerodha Kite Connect client wrapper
-│   ├── market/                 # Market hours, holiday calendar helpers
-│   ├── monitoring/             # Portfolio simulator (types, simulator, mock data); drift scoring
-│   ├── optimizer/              # Weight optimization: volatility, MFS multi-factor, fresh-buy, exit detection
-│   ├── performance/            # Portfolio valuation: ValuatePortfolio (daily-close + intraday modes)
-│   ├── portfolio/              # Holdings type, Zerodha holdings fetch
-│   ├── printer/                # Terminal output rendering (tables, holdings snapshot)
-│   ├── report/                 # Selection rationale text: BuildRationale (multibagger + standard paths)
-│   ├── selectiontracker/       # Records why each stock was kept/removed during pick
-│   ├── stockpicker/            # Stock selection: loaders, filters, scoring, I/O
-│   └── yfinance/               # Yahoo Finance client: prices, fundamentals, quotes, RSI (all ctx-aware)
-├── config/
-│   ├── mfs.json                # Scoring weights per strategy (balanced, aggressive, multibagger…)
-│   ├── pipeline.yaml           # Pipeline run config (indices, strategy, top-N, tolerances)
-│   ├── themes.json             # Portfolio theme → CSV path mapping
-│   ├── csvlinks.json           # Index name → URL mapping for datafetcher
-│   └── governance.json         # Per-sector governance overrides
-└── data/
-    ├── *.csv                   # Golden copy files (user data — never touch programmatically)
-    ├── backups/                # Auto-backups before golden copy overwrites
-    ├── candidates/             # Pick output CSVs
-    └── .cache/                 # Yahoo Finance JSON cache (date-stamped, auto-created)
+FetchHistoricalByDateRange(ticker, from, to)
+  → DuckDB cache: GetPricesByDateRange     (historical ranges: permanent)
+  → File cache: ~/.../data/.cache/         (same-day, no DuckDB required)
+  → Yahoo Finance chart API: period1/period2
+  → Store to DuckDB + file cache
+```
+
+### Fundamental Data Path
+
+```
+FetchFundamentals(ticker)
+  → DuckDB cache: GetFundamentalsJSON      (24h TTL)
+  → Yahoo Finance quoteSummary + timeseries APIs
+  → Unmarshal into Fundamentals struct
+  → Store to DuckDB
+```
+
+### Order Execution Path
+
+```
+LoadBasketCSV → FetchMarketData → OptimizeFreshBuy
+  → FilterMicroTransactions (costs check)
+  → printCostSummary + printTaxWarnings
+  → executor.ExecuteBasketOrders (mock or Zerodha)
 ```
 
 ---
 
-## 4. cmd/ Pattern (urfave/cli v3)
+## 5. Config Files
 
-Each subcommand follows a two-function pattern:
+| File | Purpose | Hot-reload? |
+|------|---------|-------------|
+| `config/pipeline.yaml` | Run parameters: indices, strategy, top-N, tolerances, alert credentials | No — read at startup |
+| `config/mfs.json` | Scoring strategy weights per factor (balanced, aggressive, conservative, multibagger) | No |
+| `config/themes.json` | Portfolio name → CSV path mapping for `holdings` | No |
+| `config/csvlinks.json` | Index name → NSE/BSE constituent CSV URL for `pick --index` | No |
+| `config/governance.json` | Per-sector governance score overrides | No |
 
-```go
-// Public command exported for main.go
-var PickCommand = &cli.Command{
-    Name:  "pick",
-    Flags: []cli.Flag{ /* ... */ },
-    Action: runPick,
-}
+---
 
-// Action: parses flags → delegates to inner function
-func runPick(ctx context.Context, c *cli.Command) error {
-    return runPickWithOpts(ctx, pickOptsFromCmd(c))
-}
+## 6. CLI Invocation Signatures (urfave/cli v3)
 
-// Inner function: called directly by pipeline.go — no exec.Command
-func runPickWithOpts(ctx context.Context, opts *stockpicker.Options) error {
-    // thin orchestration — delegates to pkg/
-}
-```
-
-`pipeline.go` calls the inner functions directly — no subprocess spawning.
-
-### urfave/cli v3 API notes (v3 differs from v2)
-- Action signature: `func(ctx context.Context, cmd *cli.Command) error`
-- Float flags: `&cli.FloatFlag{}` + `c.Float("name")` (not `Float64Flag`)
-- Explicit flag detection: `c.IsSet("name")`
+Every action has signature `func(ctx context.Context, cmd *cli.Command) error`. Key v3 differences from v2:
+- `Float64Flag` → `FloatFlag`; `c.Float64("name")` → `c.Float("name")`
+- Explicit flag detection: `c.IsSet("name")` (not checking zero-value)
 - Positional args: `c.Args().Slice()`, `c.Args().Get(n)`
 
----
-
-## 5. Data Flow
-
-```
-pipeline.yaml
-     │
-     ▼
-pipeline ──► pick ──► optimize ──► report
-                           │
-                           ▼
-                       performance
-                           │
-                           ▼
-                        monitor
-                           │
-                           ▼
-                      basket (--live)
-```
-
-All steps are direct Go function calls within the same process. `pipeline.go` reads `pipeline.yaml`, resolves config precedence (CLI flag > YAML > default), and calls each step sequentially.
+`pipeline.go` calls the inner `runXxxWithOpts` functions directly — no `exec.Command` subprocess. This is what allows the pipeline to share a single process's DuckDB connection and avoid re-auth overhead.
 
 ---
 
-## 6. Config Files
-
-| File | Purpose |
-|------|---------|
-| `config/pipeline.yaml` | Run parameters: indices, strategy, top-N, ranges, tolerances |
-| `config/mfs.json` | Scoring strategy weights (balanced, aggressive, conservative, multibagger) |
-| `config/themes.json` | Portfolio themes for holdings grouping |
-| `config/csvlinks.json` | Index name → NSE/BSE constituent CSV URL |
-| `config/governance.json` | Sector-level governance score overrides |
-
-Config format is backward-compatible through R3 — never break existing `pipeline.yaml` or `mfs.json` files.
-
----
-
-## 7. Naming Conventions
-
-- Dates: `YYYYMMDD`
-- Timestamps: `YYYYMMDD_HHMMSS`
-- Report/output files: `lowercase_snake_case`
-- Step prefixes in pipeline execution output: `01_`, `02_`, `03_`
-- Yahoo Finance ticker mapping: `NSE:TCS` → `TCS.NS`, `BSE:500112` → `500112.BO`, `^NSEI` → `^NSEI`
-
----
-
-## 8. Testing Strategy
-
-### Principles
-- No test may make real HTTP calls to Yahoo Finance or Zerodha. All network-dependent tests use `//go:build integration`.
-- cmd tests use `t.TempDir()` for all file I/O — never write to repo's `data/`, `report/`, or `config/`.
-- `go test -race ./...` must pass clean.
-- White-box unit tests live next to source in the same package; cmd integration tests use `cmd_test` package suffix.
-
-### Test types per package
-
-| Package | Target coverage | Key gaps today |
-|---------|----------------|---------------|
-| `pkg/csvloader` | 80%+ | fuzz targets, merge/combine tests |
-| `pkg/stockpicker` | 80%+ | Sharpe/Sortino/Beta math, scoring invariants |
-| `pkg/optimizer` | 80%+ | `capWeights` has no tests |
-| `pkg/monitoring` | 80%+ | mock determinism, simulator edge cases |
-| `pkg/yfinance` | 80%+ | zero tests today — needs httptest mock server |
-| `pkg/config` | 80%+ | zero tests today |
-| `cmd/` | integration | zero tests today |
-
-### Test tooling
-- `testing/quick` — basic property tests (no shrinking)
-- `pgregory.net/rapid` — property tests with automatic shrinking (to add)
-- `net/http/httptest` — mock HTTP server for yfinance tests (stdlib)
-- `go test -fuzz` — native fuzzing (Go 1.18+)
-
-### Key financial invariants to verify
-- `capWeights(w, c)[k] ≤ c+ε` and `Σw ≈ 1.0` for any input
-- `CalculateRSI(prices) ∈ [0, 100]` for any valid price series
-- `normalizeValue(v, lo, hi, max, _) ∈ [0, max]`
-- `ScoreStocks` is deterministic: same input → same ranking
-- `OptimizeFreshBuy`: total spend ≤ budget
-
-### yfinance test prerequisite
-Add a `baseURL` override for tests: `var yfinanceBaseURL = "https://query1.finance.yahoo.com"` with `SetBaseURLForTesting(url)` exported via `export_test.go`. Functions currently hardcode the URL.
-
----
-
-## 9. Go 1.26 Modernization Targets
-
-| Feature | Go version | Status | Location |
-|---------|-----------|--------|---------|
-| `math/rand/v2` | 1.22 | ✅ Done (R3) | `cmd/monitor.go` |
-| `slices.SortFunc`, `slices.Sort` | 1.21 | ✅ Done (R3) | `pkg/portfolio/`, `pkg/printer/` |
-| `max()` builtin | 1.21 | ✅ Done (R3) | `pkg/printer/printer.go` |
-| `range N` (integer range) | 1.22 | n/a | No pure-counter loops found in codebase |
-| `maps.Keys`, `maps.Values` | 1.21 | n/a | No manual key-extraction loops found |
-| `log/slog` | 1.21 | n/a | No `fmt.Fprintf(stderr)` or `log.Printf` calls |
-| `context.Context` in HTTP | best practice | ✅ Done (R3.5) | all `pkg/yfinance` fetch functions + callers |
-| Generic type aliases | 1.24 | ✅ Done (R2.5) | `resolveFirst[T]()` in `pkg/config/pipeline.go` |
-
----
-
-## 10. Design Decisions
+## 7. Design Decisions
 
 ### D2 — Daemon Process Model
-**Decision**: macOS launchd as primary deployment target; systemd unit file documented for Linux.
+macOS launchd is the primary deployment target. `mycase daemon install` writes `~/Library/LaunchAgents/com.mycase.daemon.plist` (KeepAlive=true, RunAtLoad=true, 15:45 IST daily). No self-daemonization in Go — lifecycle is fully managed by the OS service layer. State persists to `data/daemon_state.json` across restarts.
 
-`mycase daemon install` / `mycase daemon uninstall` will write/load the launchd plist at `~/Library/LaunchAgents/com.mycase.daemon.plist`. Scheduled at 15:45 IST (post-market close) daily. On Linux, prints systemd unit instructions.
-
-### D3 — Web Dashboard Frontend
-**Decision**: Plain HTML5 + modern CSS + vanilla JS (ES2022+) + Web Components + Apache ECharts. No framework, no build pipeline.
-
-Stack rationale: dashboard is a local tool. `//go:embed static/*` keeps it self-contained in the Go binary. ECharts for portfolio donut, drift timeline, backtest equity curve. Web Components for `<portfolio-summary>`, `<weight-slider>`, `<holdings-table>`, `<drift-alert>`. SSE for live quote streaming (no polling).
+### D3 — Web Dashboard Frontend (R8, not yet implemented)
+Plain HTML5 + vanilla JS ES2022 + Web Components + Apache ECharts (vendored). No framework, no build pipeline. `//go:embed static/*` keeps everything in the binary. SSE for live quote streaming.
 
 ### D4 — Alert Channels
-**Decision**: Telegram bot and Discord webhook in R5. Email (SMTP) deferred — stub `EmailAlerter` with `errors.New("not yet implemented")`.
+Telegram (HTTP POST to bot API, no SDK) and Discord webhook. Email (`EmailAlerter`) is a stub returning `errors.New("not yet implemented")`. Credentials in `config/pipeline.yaml` under `alerts:`, overridable via `MYCASE_TELEGRAM_TOKEN` and `MYCASE_DISCORD_WEBHOOK`.
 
-### D5 — Price Cache Backend
-**Decision**: DuckDB via `github.com/duckdb/duckdb-go/v2` at `data/cache.db`.
+### D5 — DuckDB Cache Backend
+DuckDB via `duckdb-go/v2` at `data/cache.db`. Chosen for R7 backtesting workloads: rolling windows, multi-ticker correlations, range queries across 250+ tickers in columnar storage. Uses `database/sql` interface with `ON CONFLICT DO UPDATE` upsert. Schema uses `BIGINT` timestamps (see §3.1).
 
-DuckDB is already in production across this org (sanvasify, eia-api-explorer, patscape). For R7 backtesting workloads (rolling windows, multi-ticker correlations across 250+ tickers), DuckDB's columnar execution is the right fit. Same `database/sql` interface; `ON CONFLICT DO UPDATE` upsert syntax already in use.
+### D6 — Broker Abstraction
+`pkg/broker/broker.go` interface: `GetHoldings`, `PlaceOrders`, `GetPositions`, `IsAuthenticated`, `GetQuotes`. ZerodhaBroker lives in `pkg/broker/zerodha/`. Candidate second brokers: Fyers, AngelOne SmartAPI, Upstox — all need custom HTTP clients (no official Go SDKs for Fyers/Angel).
 
-Schema: `prices(ticker, date, ts BIGINT, close, open, volume)`, `fundamentals(ticker, fetched_at BIGINT, raw_json)`, `cache_meta(ticker, range_key, fetched_at BIGINT)`.
-
-`fetched_at` columns are `BIGINT` (Unix epoch seconds), not `TIMESTAMP`. DuckDB v1.5.3 does not reliably round-trip `time.Time` through `TIMESTAMP` columns via `database/sql` Scan — values come back as zero. BIGINT is reliable and timezone-unambiguous; convert with `time.Unix(n, 0)` on read.
-
-Staleness policy: prices are fresh if fetched on the same calendar day in IST (`isFreshToday` compares `YearDay`); fundamentals stale after 24h.
-
-### D7 — Drift Daemon Design (R5)
-**Decision**: `mycase daemon start` is a blocking loop; process lifecycle is managed by launchd (macOS) or systemd (Linux) via `daemon install`. No self-daemonization in Go.
-
-`daemon install` writes `~/Library/LaunchAgents/com.mycase.daemon.plist` with `KeepAlive=true` and `RunAtLoad=true`. The daemon runs in the working directory where `mycase` is installed. Alert credentials live in `config/pipeline.yaml` under the `alerts:` key; `MYCASE_TELEGRAM_TOKEN` and `MYCASE_DISCORD_WEBHOOK` env vars override the YAML values. State is persisted to `data/daemon_state.json` (survives restarts). Email alerter is a stub (`errors.New("not yet implemented")`).
-
-### D6 — Broker Abstraction (R4)
-**Decision**: Define `pkg/broker/broker.go` interface (`GetHoldings`, `PlaceOrders`, `GetPositions`, `IsAuthenticated`). Move Kite logic to `pkg/broker/zerodha/`. Candidate second brokers: Fyers, AngelOne SmartAPI, Upstox.
+### D7 — Finance Act 2024 Rates
+The refactor.md spec listed pre-Budget 2024 rates (STCG 15%, LTCG 10% above ₹1L). Actual current rates: STCG 20%, LTCG 12.5% above ₹1.25L. The code uses current rates with a comment noting the discrepancy. NSE exchange transaction charges (0.00297%) are excluded from the cost model — out of scope per spec.
