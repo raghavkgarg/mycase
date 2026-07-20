@@ -584,29 +584,246 @@ Reference: existing `pkg/monitoring/simulator.go` has partial Sharpe/Sortino imp
 
 ## Phase R8 — Web Dashboard
 
-**Goal**: Local web UI to visualize portfolio, adjust weights interactively, trigger rebalance.  
-**Effort**: XL (10–15d) | **Risk**: High (frontend stack decision, new tech surface)
+**Goal**: Local web UI to visualize portfolio, run backtests, adjust weights interactively, and trigger rebalance.  
+**Effort**: XL (10–15d) | **Risk**: Medium | **Status**: ⏳
 
-**R8.1 — Go HTTP server (`pkg/server/`)**
-```
-GET  /api/portfolio/:name     → Current holdings + target weights
-GET  /api/quotes/:name        → Live prices
-POST /api/rebalance/:name     → Trigger basket order (requires auth)
-GET  /api/performance/:name   → Backtest results
-```
-Lightweight `net/http` stdlib — no Gin needed for this scope.
+### Design Principles
 
-**R8.2 — Frontend: Plain HTML/CSS/JS + Web Components + Apache ECharts**  
-No framework, no build pipeline. ECharts for: weight donut, drift timeline, backtest equity curve. Web Components for: `<portfolio-summary>`, `<weight-slider>`, `<holdings-table>`, `<drift-alert>`. SSE for live quote streaming (not polling).
+- Standard-based, not shortcut-based: native Web Components, CSS custom properties, ECharts, ES2022 modules — no framework, no build pipeline, no npm
+- Single responsibility per component: each Web Component owns its data fetching and rendering; zero shared mutable state
+- SSE not polling: live price updates stream from server; components subscribe to relevant tickers only
+- Progressive rendering: backtest equity curve streams as JSON lines; chart updates incrementally
+- Go 1.22 `net/http` route patterns (`{name}` params): no Gin, no chi, no external router
+
+---
+
+### R8.1 — Go HTTP server (`pkg/server/`)
+
+**File layout:**
+```
+pkg/server/
+├── server.go      # Server struct, New(broker, cfg), ListenAndServe(addr)
+├── routes.go      # registerRoutes() — all mux.HandleFunc calls
+├── handlers.go    # one handler per route group
+├── sse.go         # SSEBroadcaster: fan-out quote updates to connected clients
+└── embed.go       # //go:embed static/* var staticFiles embed.FS
+```
+
+**API routes:**
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/portfolios` | List portfolio names from `data/*.csv` |
+| GET | `/api/portfolio/{name}/weights` | Target weights from golden copy CSV |
+| GET | `/api/portfolio/{name}/holdings` | Live holdings + LTP + unrealized P&L |
+| GET | `/api/portfolio/{name}/drift` | Current drift index + per-ticker actual vs target |
+| GET | `/api/portfolio/{name}/orders` | Rebalance order preview (FilterMicroTransactions applied) |
+| GET | `/api/portfolio/{name}/monitor` | 4-pillar monitoring verdicts per stock |
+| POST | `/api/portfolio/{name}/backtest` | Run backtest; streams `application/x-ndjson` result lines |
+| POST | `/api/portfolio/{name}/execute` | Place basket orders (requires live broker) |
+| GET | `/api/quotes` | SSE stream: `data: {"NSE:TCS": 4312.5, ...}\n\n` every 5s |
+| GET | `/api/cache/status` | Cache row counts and last-fetch timestamps |
+| GET | `/` | Serves embedded `static/index.html` |
+| GET | `/static/*` | Serves embedded static assets |
+
+**Backtest streaming** (`POST /api/portfolio/{name}/backtest`):
+
+Request body: `{"from":"2022-01-01","to":"2026-07-01","rebalance":"quarterly","capital":500000,"slippage":0.001,"benchmark":"^NSEI"}`
+
+Response is `application/x-ndjson` (newline-delimited JSON). Each line is one of:
+- `{"type":"snapshot","date":"2022-01-03","portfolio":103200,"benchmark":101500}` (emitted per day)
+- `{"type":"result","cagr":0.318,"maxDrawdown":-0.221,"sharpe":1.82,...}` (final line)
+
+This lets the equity curve render progressively instead of waiting 5–10 seconds.
+
+**SSE broadcaster** (`pkg/server/sse.go`):
+
+```go
+type SSEBroadcaster struct {
+    clients  map[chan string]struct{}
+    mu       sync.RWMutex
+    ticker   []string  // tickers to stream
+}
+func (b *SSEBroadcaster) Subscribe() (chan string, func())
+func (b *SSEBroadcaster) BroadcastLoop(ctx context.Context, broker broker.Broker, interval time.Duration)
+```
+
+The broadcaster fetches quotes every `interval` and pushes JSON to all connected clients. `Subscribe()` returns the channel and a cleanup function (called on client disconnect via SSE handler's `r.Context().Done()`).
+
+---
+
+### R8.2 — Frontend Architecture (`static/`)
 
 ```
 static/
-├── index.html
-├── css/app.css
-├── js/app.js
-├── js/components/portfolio-summary.js, weight-slider.js, holdings-table.js
-└── vendor/echarts.min.js   # vendored, no CDN
+├── index.html                        # Shell page: nav + view containers
+├── css/
+│   ├── app.css                       # CSS custom properties, layout, typography
+│   └── components.css                # Component-level styles (scoped with :host)
+├── js/
+│   ├── app.js                        # Router, SSE singleton, global init
+│   ├── api.js                        # Typed fetch wrappers for all API routes
+│   └── components/
+│       ├── portfolio-header.js       # Nav bar + portfolio selector dropdown
+│       ├── holdings-table.js         # Sortable holdings table with live LTP
+│       ├── weight-donut.js           # ECharts donut: current weights
+│       ├── weight-comparison.js      # ECharts bar: current vs target weights
+│       ├── equity-curve.js           # ECharts line: portfolio NAV vs benchmark
+│       ├── drawdown-chart.js         # ECharts area: drawdown over time
+│       ├── metrics-grid.js           # Performance metrics cards (CAGR, Sharpe, etc.)
+│       ├── backtest-form.js          # Backtest parameter form
+│       ├── order-preview.js          # Table of pending orders + cost summary
+│       ├── tax-warnings.js           # STCG/LTCG warning list
+│       ├── monitor-table.js          # 4-pillar health verdict table
+│       └── drift-timeline.js        # ECharts line: historical drift index
+└── vendor/
+    └── echarts.min.js                # Vendored ECharts (no CDN, air-gap safe)
 ```
 
-**R8.3 — Embed static assets**  
-`//go:embed static/*` embeds entire `static/` tree into the binary. `mycase serve --port 8080` starts the dashboard.
+**Web Component conventions:**
+
+Each component in `components/` follows this pattern:
+
+```js
+class HoldingsTable extends HTMLElement {
+  static observedAttributes = ['portfolio']
+
+  connectedCallback() {
+    this.#render()
+    this.#subscribe()
+  }
+
+  attributeChangedCallback(name, _old, next) {
+    if (name === 'portfolio') this.#reload(next)
+  }
+
+  async #reload(portfolio) { /* fetch from /api/portfolio/{portfolio}/holdings */ }
+  #subscribe() { /* listen to 'quote-update' CustomEvent from app.js SSE singleton */ }
+  #render() { /* build shadow DOM table */ }
+}
+customElements.define('holdings-table', HoldingsTable)
+```
+
+Components communicate via `CustomEvent` dispatched on `document`:
+- `portfolio-changed` — user picked a different portfolio in nav
+- `quote-update` — SSE frame received, contains delta map of prices
+- `backtest-done` — backtest stream completed
+
+**Routing** (hash-based, no history API needed):
+
+```js
+const routes = {
+  '#/':         () => activate(['holdings-summary', 'weight-donut', 'holdings-table']),
+  '#/backtest': () => activate(['backtest-form', 'equity-curve', 'drawdown-chart', 'metrics-grid']),
+  '#/rebalance':() => activate(['weight-comparison', 'order-preview', 'tax-warnings']),
+  '#/monitor':  () => activate(['monitor-table']),
+  '#/drift':    () => activate(['drift-timeline']),
+}
+window.addEventListener('hashchange', () => routes[location.hash]?.())
+```
+
+**ECharts usage rules** to avoid common performance pitfalls:
+- Initialize once per component: `this.#chart = echarts.init(this.#canvas)`
+- Update via `this.#chart.setOption(option, { notMerge: false })` — partial updates
+- Large datasets (> 500 points): `series[].sampling = 'lttb'` (Largest-Triangle-Three-Buckets)
+- Backtest streaming: append new data points incrementally; do NOT call `dispose()` + `init()` on each chunk
+- Resize observer on the component's container so charts reflow on window resize
+
+---
+
+### R8.3 — Views and Their Reports
+
+**View 1: Holdings Dashboard (`#/`)**
+
+Components: `<portfolio-header>`, `<holdings-summary>`, `<weight-donut>`, `<holdings-table>`
+
+Data: live holdings (LTP from SSE), target weights from CSV
+
+Reports:
+- Stats row: Total Portfolio Value, Day P&L (₹ and %), Drift Index, Active Positions count
+- Weight donut: each stock as a segment, actual weight (by current market value)
+- Holdings table columns: Ticker | Sector | Qty | Avg Cost | LTP (live) | Current Value | Unrealized P&L | Actual Weight % | Target Weight % | Deviation
+
+The deviation column (actual - target) is color-coded: red = over-weight, blue = under-weight, grey = within ±1%.
+
+**View 2: Backtest (`#/backtest`)**
+
+Components: `<backtest-form>`, `<equity-curve>`, `<drawdown-chart>`, `<metrics-grid>`
+
+Data: streaming from `POST /api/portfolio/{name}/backtest`
+
+Reports:
+- Equity curve: two lines — portfolio NAV and benchmark NAV — both normalized to 100 at start. X-axis: dates. Tooltip shows both values + excess return.
+- Drawdown chart: area chart (filled to 0), shows portfolio drawdown % over time. Peak-to-trough periods are clearly visible.
+- Metrics grid: cards for CAGR, Benchmark CAGR, Sharpe, Sortino, Calmar, Max Drawdown, Alpha, Beta. Each card shows the metric name, value, and a small indicator (green/red vs benchmark).
+- Year-by-year table: Year | Portfolio | Benchmark | Excess (color-coded by outperformance)
+
+Backtest form fields: From date, To date, Rebalance frequency (dropdown), Slippage %, Benchmark (dropdown: ^NSEI, ^CNXSC, ^CNXMID), Capital.
+
+**View 3: Rebalance Preview (`#/rebalance`)**
+
+Components: `<weight-comparison>`, `<order-preview>`, `<tax-warnings>`
+
+Data: `GET /api/portfolio/{name}/orders`
+
+Reports:
+- Weight comparison bar chart: horizontal grouped bars — actual weight (blue) vs target weight (grey) per ticker. Sorted by absolute deviation descending.
+- Order preview table: Ticker | Action (BUY/SELL badge) | Qty | Est. Price | Est. Value | Cost Ratio | Status (micro-tx = filtered)
+- Cost summary: Total Buy Value, Total Sell Value, Total Transaction Costs (STT + DP + SEBI + Stamp), Cost % of Trade
+- Tax warnings: ticker | Class (STCG/LTCG/Unknown badge) | Holding Days | Est. Gain | Est. Tax. Unknown = "verify manually" with explanation.
+- Execute button (only shown in live mode): triggers `POST /api/portfolio/{name}/execute` with confirmation dialog.
+
+**View 4: Portfolio Monitor (`#/monitor`)**
+
+Components: `<monitor-table>`
+
+Data: `GET /api/portfolio/{name}/monitor`
+
+Reports:
+- Verdict table: Ticker | Sector | TTM Growth | CAGR 3Y | DSO Delta | Cap Stall Severity | Days below SMA200 | Verdict badge
+- Verdict badges: ✅ KEEP HOLD (green), 👀 HIGH ALERT (amber), ⚠️ AUTO EXIT (red)
+- Summary row: Exit count, Alert count, Hold count
+
+**View 5: Drift History (`#/drift`)**
+
+Components: `<drift-timeline>`, `<drift-gauge>`
+
+Data: `GET /api/daemon/history` + `GET /api/portfolio/{name}/drift`
+
+Reports:
+- Drift timeline: ECharts line chart showing DriftIndex over the last 90 days from `data/daemon_state.json`. Threshold line at configured drift_threshold (e.g. 5%). Points above threshold are red.
+- Current drift gauge: a progress-bar-style indicator showing today's drift (0% → 50%+). Green below threshold, amber 4–5%, red above.
+- Per-ticker drift table: Ticker | Actual Weight | Target Weight | Deviation | Direction arrow
+
+---
+
+### R8.4 — `mycase serve` Subcommand
+
+```
+mycase serve --port 8080 [--live]
+```
+
+Flags:
+- `--port`: HTTP port (default 8080)
+- `--live`: use live Zerodha broker (default: mock)
+
+On start:
+1. Open DuckDB cache (already happens in main.go)
+2. Init broker (Zerodha or Mock)
+3. Start SSE broadcaster goroutine
+4. Start HTTP server with embedded static assets
+5. Print: `Dashboard running at http://localhost:8080`
+
+---
+
+### R8.5 — Performance and Correctness Rules
+
+- No global mutable JS state; all state lives inside Web Components
+- Components deregister event listeners in `disconnectedCallback()` to prevent memory leaks
+- SSE reconnects automatically on disconnect (EventSource API handles this natively)
+- Backtest handler cancels the computation goroutine when the client disconnects (`r.Context().Done()`)
+- All HTTP handlers set appropriate cache headers: no-cache for `/api/*`, long-term for `/static/vendor/*`
+- No CORS config needed (same-origin, local server)
+- ECharts instances call `.dispose()` in `disconnectedCallback()` to free WebGL resources
+- All monetary values formatted as `₹ X,XX,XXX.XX` (Indian number format, not Western)
+- `pkg/server/` has no direct dependency on `cmd/` — it uses `pkg/` packages only
