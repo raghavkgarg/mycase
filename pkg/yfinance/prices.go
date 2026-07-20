@@ -244,6 +244,93 @@ func FetchHistoricalDataWithTimestamps(ctx context.Context, ticker string, range
 	return res, nil
 }
 
+// FetchHistoricalByDateRange fetches daily close prices for a ticker between two dates.
+// Uses period1/period2 Yahoo API params instead of a range string.
+// Results are cached in DuckDB; historical ranges (to before today) never expire.
+func FetchHistoricalByDateRange(ctx context.Context, ticker string, from, to time.Time) (*HistoricalData, error) {
+	if hist, ok := checkDateRangeCache(ctx, ticker, from, to); ok {
+		return hist, nil
+	}
+
+	ySym := MapTickerToYahoo(ticker)
+	url := fmt.Sprintf(
+		"https://query1.finance.yahoo.com/v8/finance/chart/%s?period1=%d&period2=%d&interval=1d",
+		ySym, from.Unix(), to.Unix(),
+	)
+
+	client := &http.Client{Timeout: 15 * time.Second}
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36")
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("network error: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("http status %d for %s", resp.StatusCode, ticker)
+	}
+
+	var histRes HistoricalChartResponse
+	if err := json.NewDecoder(resp.Body).Decode(&histRes); err != nil {
+		return nil, fmt.Errorf("failed to parse json: %w", err)
+	}
+	if histRes.Chart.Error != nil {
+		return nil, fmt.Errorf("yahoo error: %v", histRes.Chart.Error)
+	}
+	if len(histRes.Chart.Result) == 0 {
+		return nil, fmt.Errorf("no chart results for %s", ticker)
+	}
+
+	result := histRes.Chart.Result[0]
+	if len(result.Indicators.Quote) == 0 {
+		return nil, fmt.Errorf("no quote indicators for %s", ticker)
+	}
+
+	rawClose := result.Indicators.Quote[0].Close
+	rawVolume := result.Indicators.Quote[0].Volume
+	rawOpen := result.Indicators.Quote[0].Open
+
+	var validClose, validOpen, validVolume []float64
+	var validTimestamps []int64
+
+	for i, p := range rawClose {
+		if p > 0 && i < len(result.Timestamp) {
+			validClose = append(validClose, p)
+			validTimestamps = append(validTimestamps, result.Timestamp[i])
+			oVal := 0.0
+			if i < len(rawOpen) {
+				oVal = rawOpen[i]
+			}
+			validOpen = append(validOpen, oVal)
+			vVal := 0.0
+			if i < len(rawVolume) {
+				vVal = rawVolume[i]
+			}
+			validVolume = append(validVolume, vVal)
+		}
+	}
+
+	if len(validClose) == 0 {
+		return nil, fmt.Errorf("no valid closing prices for %s in range", ticker)
+	}
+
+	res := &HistoricalData{
+		Timestamps: validTimestamps,
+		Closes:     validClose,
+		Opens:      validOpen,
+		Volumes:    validVolume,
+	}
+
+	storeDateRangeCache(ctx, ticker, from, to, res)
+	return res, nil
+}
+
 // FetchIntradayData fetches intraday price data for a ticker for the specified range (e.g. 1d, 5d, 7d) with 1m interval
 func FetchIntradayData(ctx context.Context, ticker string, rangeStr string) (*IntradayData, error) {
 	ySym := MapTickerToYahoo(ticker)

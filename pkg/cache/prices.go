@@ -3,6 +3,7 @@ package cache
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"time"
 )
 
@@ -102,6 +103,66 @@ func isFreshToday(fetchedAt time.Time) bool {
 	nowIST := time.Now().In(ist)
 	f := fetchedAt.In(ist)
 	return f.Year() == nowIST.Year() && f.YearDay() == nowIST.YearDay()
+}
+
+// GetPricesByDateRange returns cached price records for [from, to] for a ticker.
+// Historical ranges (to before today IST) never expire; ranges ending today use
+// same-day freshness.
+func (c *Cache) GetPricesByDateRange(ctx context.Context, ticker string, from, to time.Time) ([]PriceRecord, bool, error) {
+	rangeKey := fmt.Sprintf("dr_%s_%s", from.Format("20060102"), to.Format("20060102"))
+
+	var fetchedAt int64
+	err := c.db.QueryRowContext(ctx,
+		`SELECT fetched_at FROM cache_meta WHERE ticker = ? AND range_key = ?`,
+		ticker, rangeKey,
+	).Scan(&fetchedAt)
+	if err == sql.ErrNoRows {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, err
+	}
+
+	ist := time.FixedZone("IST", 5*3600+30*60)
+	todayIST := time.Now().In(ist).Truncate(24 * time.Hour)
+	toIST := to.In(ist).Truncate(24 * time.Hour)
+	// Only apply freshness check when the range ends today (historical = always fresh)
+	if !toIST.Before(todayIST) && !isFreshToday(time.Unix(fetchedAt, 0)) {
+		return nil, false, nil
+	}
+
+	rows, err := c.db.QueryContext(ctx,
+		`SELECT ts, close, open, volume FROM prices
+		 WHERE ticker = ? AND date >= ? AND date <= ?
+		 ORDER BY date ASC`,
+		ticker, from.Format("2006-01-02"), to.Format("2006-01-02"),
+	)
+	if err != nil {
+		return nil, false, err
+	}
+	defer rows.Close()
+
+	var records []PriceRecord
+	for rows.Next() {
+		var r PriceRecord
+		if err := rows.Scan(&r.Timestamp, &r.Close, &r.Open, &r.Volume); err != nil {
+			return nil, false, err
+		}
+		records = append(records, r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, false, err
+	}
+	if len(records) == 0 {
+		return nil, false, nil
+	}
+	return records, true, nil
+}
+
+// StorePricesByDateRange upserts price rows and marks the date range as fetched in cache_meta.
+func (c *Cache) StorePricesByDateRange(ctx context.Context, ticker string, from, to time.Time, records []PriceRecord) error {
+	rangeKey := fmt.Sprintf("dr_%s_%s", from.Format("20060102"), to.Format("20060102"))
+	return c.StorePrices(ctx, ticker, rangeKey, records)
 }
 
 func rangeKeyToStartDate(rangeKey string) time.Time {

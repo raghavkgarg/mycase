@@ -23,6 +23,7 @@ mycase [global flags]
 ├── performance    Historical backtest simulation
 ├── monitor        Interactive drift simulator
 ├── basket         Order execution via Zerodha Kite
+├── backtest       Historical backtest: CAGR, Sharpe, Max Drawdown, Alpha/Beta vs benchmark
 ├── holdings       Live/mock holdings snapshot
 ├── merge
 │   ├── combine    Merge multiple CSVs into one
@@ -47,6 +48,7 @@ Key flags per command:
 | `performance` | `--file`, `--capital`, `--date`, `--time` |
 | `monitor` | `--file`, `--style`, `--strategy`, `--date`, `--interactive` |
 | `basket` | `--live`, `[portfolio-name]` |
+| `backtest` | `--file`, `--capital`, `--from`, `--to`, `--rebalance`, `--slippage`, `--benchmark`, `--drift-threshold` |
 | `holdings` | `--live` |
 
 ---
@@ -72,6 +74,7 @@ mycase/
 │   ├── broker/                 # Broker interface (broker.go), MockBroker (mock.go); zerodha/ = ZerodhaBroker + New factory
 │   ├── cache/                  # DuckDB persistent cache: prices, fundamentals, cache_meta tables
 │   ├── config/                 # Broker credentials (config.go); themes; PipelineConfig (pipeline.go)
+│   ├── backtest/               # Historical backtest engine: SimConfig, Run, CAGR/Sharpe/Sortino/Calmar/Alpha/Beta metrics
 │   ├── costs/                  # Indian equity transaction costs (STT, stamp duty, DP, SEBI); STCG/LTCG classification (Finance Act 2024)
 │   ├── csvloader/              # basket CSV I/O, golden copy merge, pipeline CSV helpers
 │   ├── daemon/                 # Drift daemon: CalculateDrift, RunCheck, RunLoop, State persistence
@@ -99,12 +102,6 @@ mycase/
     ├── backups/                # Auto-backups before golden copy overwrites
     ├── candidates/             # Pick output CSVs
     └── .cache/                 # Yahoo Finance JSON cache (date-stamped, auto-created)
-```
-
-**Planned additions** (not yet implemented):
-```
-pkg/
-└── backtest/     # R7: Historical backtesting engine
 ```
 
 ---
