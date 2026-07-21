@@ -67,6 +67,37 @@ func FillWithMockData(
 		h, hasLiveHist := liveHist[t]
 		f, hasLiveFund := liveFunds[t]
 		if hasLiveHist && hasLiveFund && len(h.Closes) > 200 {
+			if len(h.Closes) < nDays {
+				padLen := nDays - len(h.Closes)
+				paddedCloses := make([]float64, nDays)
+				paddedOpens := make([]float64, nDays)
+				paddedVolumes := make([]float64, nDays)
+				paddedTimestamps := make([]int64, nDays)
+
+				firstClose := h.Closes[0]
+				firstOpen := h.Opens[0]
+				firstVol := h.Volumes[0]
+
+				for i := 0; i < padLen; i++ {
+					paddedCloses[i] = firstClose
+					paddedOpens[i] = firstOpen
+					paddedVolumes[i] = firstVol
+					if i < len(outBenchData.Timestamps) {
+						paddedTimestamps[i] = outBenchData.Timestamps[i]
+					}
+				}
+				copy(paddedCloses[padLen:], h.Closes)
+				copy(paddedOpens[padLen:], h.Opens)
+				copy(paddedVolumes[padLen:], h.Volumes)
+				copy(paddedTimestamps[padLen:], h.Timestamps)
+
+				h = &yfinance.HistoricalData{
+					Closes:     paddedCloses,
+					Opens:      paddedOpens,
+					Volumes:    paddedVolumes,
+					Timestamps: paddedTimestamps,
+				}
+			}
 			histData[t] = h
 			fundamentals[t] = f
 			continue

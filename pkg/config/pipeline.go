@@ -5,6 +5,8 @@ import "gopkg.in/yaml.v3"
 // PipelineConfig holds the resolved pipeline configuration.
 type PipelineConfig struct {
 	Indices               []string `yaml:"indices"`
+	Files                 []string `yaml:"files"`
+	File                  string   `yaml:"file"`
 	Strategy              string   `yaml:"strategy"`
 	TopN                  int      `yaml:"top_n"`
 	GoldenCopyPath        string   `yaml:"golden_copy_path"`
@@ -16,6 +18,8 @@ type PipelineConfig struct {
 
 type rawPipelineConfig struct {
 	Indices               []string `yaml:"indices"`
+	Files                 any      `yaml:"files"`
+	File                  any      `yaml:"file"`
 	Strategy              any      `yaml:"strategy"`
 	TopN                  any      `yaml:"top_n"`
 	GoldenCopyPath        any      `yaml:"golden_copy_path"`
@@ -81,6 +85,28 @@ func (cfg *PipelineConfig) UnmarshalYAML(value *yaml.Node) error {
 		return err
 	}
 	cfg.Indices = a.Indices
+	var files []string
+	extractFiles := func(val any) {
+		if val == nil {
+			return
+		}
+		if s, ok := val.(string); ok && s != "" {
+			files = append(files, s)
+		} else if slice, ok := val.([]any); ok {
+			for _, item := range slice {
+				if s, ok := item.(string); ok && s != "" {
+					files = append(files, s)
+				}
+			}
+		}
+	}
+	extractFiles(a.File)
+	extractFiles(a.Files)
+	cfg.Files = files
+	if len(files) > 0 {
+		cfg.File = files[0]
+	}
+
 	cfg.Strategy = resolveFirst(a.Strategy, "balanced")
 	cfg.TopN = resolveFirst(a.TopN, 20)
 	cfg.GoldenCopyPath = resolveFirst(a.GoldenCopyPath, "data/microsmall.csv")

@@ -314,3 +314,29 @@ func TestApplyRebalancingBand_BeyondTolerance(t *testing.T) {
 		t.Errorf("large diff should use target weight: want 0.7, got %f", result["A"])
 	}
 }
+
+func TestIsUSIndex(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected bool
+	}{
+		{"sp500 keyword", "sp500", true},
+		{"S&P 500 formatted", "s&p 500", true},
+		{"nasdaq keyword", "nasdaq100", true},
+		{"qtum filename", "data/qtum.csv", true},
+		{"qtum index", "qtum", true},
+		{"us prefix file", "us_tech.csv", true},
+		{"Indian index", "nifty50", false},
+		{"Indian file", "data/nifty50.csv", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := IsUSIndex(tt.input)
+			if result != tt.expected {
+				t.Errorf("IsUSIndex(%q) = %v; want %v", tt.input, result, tt.expected)
+			}
+		})
+	}
+}

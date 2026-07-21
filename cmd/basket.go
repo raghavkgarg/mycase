@@ -20,6 +20,7 @@ import (
 	"github.com/raghavkgarg/mycase/pkg/executor"
 	"github.com/raghavkgarg/mycase/pkg/optimizer"
 	"github.com/raghavkgarg/mycase/pkg/printer"
+	"github.com/raghavkgarg/mycase/pkg/stockpicker"
 )
 
 var BasketCommand = &cli.Command{
@@ -62,6 +63,11 @@ func runBasketWithParams(ctx context.Context, liveMode bool, basketFilename stri
 	basket, basketKeys, err := csvloader.LoadBasketCSV(basketFilename)
 	if err != nil {
 		return fmt.Errorf("loading basket config: %w", err)
+	}
+
+	if stockpicker.IsUSIndex(basketFilename) {
+		fmt.Printf("\n[Basket Engine] US market portfolio detected (%s). Zerodha execution only supports Indian stocks (NSE/BSE). Skipping basket execution.\n", basketFilename)
+		return nil
 	}
 
 	fmt.Println("\nSelect an action:")

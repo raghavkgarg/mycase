@@ -75,12 +75,39 @@ func runPipeline(ctx context.Context, c *cli.Command) error {
 		}
 	}
 
+	type pipelineSource struct {
+		name     string
+		filePath string
+		isIndex  bool
+	}
+
+	var sources []pipelineSource
+	for _, f := range cfg.Files {
+		if strings.TrimSpace(f) != "" {
+			sources = append(sources, pipelineSource{
+				name:     csvloader.GetUniverseName(f),
+				filePath: f,
+				isIndex:  false,
+			})
+		}
+	}
+	for _, idx := range cfg.Indices {
+		if strings.TrimSpace(idx) != "" {
+			sources = append(sources, pipelineSource{
+				name:    idx,
+				isIndex: true,
+			})
+		}
+	}
+
+	sourcesCount := len(sources)
+
 	totalSteps := 1
 	if execOnly {
 		totalSteps += 2
 	} else {
-		totalSteps += len(cfg.Indices)
-		if len(cfg.Indices) > 1 {
+		totalSteps += sourcesCount
+		if sourcesCount > 1 {
 			totalSteps += 3
 		}
 		totalSteps += 5
@@ -91,16 +118,14 @@ func runPipeline(ctx context.Context, c *cli.Command) error {
 	stepCounter := 1
 
 	if !execOnly {
-		if len(cfg.Indices) == 0 {
-			return fmt.Errorf("no indices configured in pipeline.yaml")
+		if sourcesCount == 0 {
+			return fmt.Errorf("no indices or files configured in pipeline.yaml")
 		}
 
 		var outputCSVs []string
-		for _, indexName := range cfg.Indices {
-			fmt.Printf("\n[Step %d/%d] Running %s stock selection on %s...\n", stepCounter, totalSteps, cfg.Strategy, indexName)
-			outPath := filepath.Join("data", "candidates", "index_picks", fmt.Sprintf("%s_%s.csv", indexName, cfg.Strategy))
+		for _, src := range sources {
+			outPath := filepath.Join("data", "candidates", "index_picks", fmt.Sprintf("%s_%s.csv", src.name, cfg.Strategy))
 			opts := &stockpicker.Options{
-				IndexName:          indexName,
 				Method:             cfg.Strategy,
 				TopN:               cfg.TopN,
 				RangeStr:           "3mo",
@@ -109,11 +134,19 @@ func runPipeline(ctx context.Context, c *cli.Command) error {
 				HysteresisBuffer:   cfg.HysteresisRankBuffer,
 				OutputFile:         outPath,
 			}
-			if len(cfg.Indices) > 1 {
+			if src.isIndex {
+				fmt.Printf("\n[Step %d/%d] Running %s stock selection on index %s...\n", stepCounter, totalSteps, cfg.Strategy, src.name)
+				opts.IndexName = src.name
+			} else {
+				fmt.Printf("\n[Step %d/%d] Running %s stock selection on file %s...\n", stepCounter, totalSteps, cfg.Strategy, src.filePath)
+				opts.FilePath = src.filePath
+				opts.DisplayName = src.name
+			}
+			if sourcesCount > 1 {
 				opts.SkipScuttlebutt = true
 			}
 			if err := runPickWithOpts(ctx, opts); err != nil {
-				return fmt.Errorf("step %d (pick %s): %w", stepCounter, indexName, err)
+				return fmt.Errorf("step %d (pick %s): %w", stepCounter, src.name, err)
 			}
 			outputCSVs = append(outputCSVs, outPath)
 			stepCounter++
@@ -124,7 +157,7 @@ func runPipeline(ctx context.Context, c *cli.Command) error {
 		goldenBase := csvloader.GetUniverseName(goldenCSV)
 		combineCSV := filepath.Join("data", "candidates", "temp", fmt.Sprintf("combine_%s.csv", goldenBase))
 
-		if len(cfg.Indices) > 1 {
+		if sourcesCount > 1 {
 			if err := os.MkdirAll(filepath.Dir(combineCSV), 0755); err != nil {
 				fmt.Printf("Warning: Failed to create temp directory: %v\n", err)
 			}
@@ -277,16 +310,43 @@ func runPipeline(ctx context.Context, c *cli.Command) error {
 		stepCounter++
 	}
 
-	isUSPortfolio := stockpicker.IsUSIndex(cfg.GoldenCopyPath)
+	var usDetectedSources []string
+	if stockpicker.IsUSIndex(cfg.GoldenCopyPath) {
+		usDetectedSources = append(usDetectedSources, csvloader.GetUniverseName(cfg.GoldenCopyPath))
+	}
 	for _, idx := range cfg.Indices {
 		if stockpicker.IsUSIndex(idx) {
-			isUSPortfolio = true
-			break
+			uName := idx
+			alreadyAdded := false
+			for _, s := range usDetectedSources {
+				if s == uName {
+					alreadyAdded = true
+					break
+				}
+			}
+			if !alreadyAdded {
+				usDetectedSources = append(usDetectedSources, uName)
+			}
+		}
+	}
+	for _, f := range cfg.Files {
+		if stockpicker.IsUSIndex(f) {
+			uName := csvloader.GetUniverseName(f)
+			alreadyAdded := false
+			for _, s := range usDetectedSources {
+				if s == uName {
+					alreadyAdded = true
+					break
+				}
+			}
+			if !alreadyAdded {
+				usDetectedSources = append(usDetectedSources, uName)
+			}
 		}
 	}
 
-	if isUSPortfolio {
-		fmt.Printf("\n[Step %d/%d] US market portfolio detected (%v). Skipping Zerodha Indian broker authentication & basket execution.\n", stepCounter, totalSteps, cfg.Indices)
+	if len(usDetectedSources) > 0 {
+		fmt.Printf("\n[Step %d/%d] US market portfolio detected (%v). Skipping Zerodha Indian broker authentication & basket execution.\n", stepCounter, totalSteps, usDetectedSources)
 	} else {
 		// Auth step
 		fmt.Printf("\n[Step %d/%d] Setting up Zerodha authentication...\n", stepCounter, totalSteps)

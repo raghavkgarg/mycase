@@ -41,6 +41,7 @@ func main() {
 			mycmd.DaemonCommand,
 			mycmd.BacktestCommand,
 			mycmd.ServeCommand,
+			mycmd.ConvertCommand,
 		},
 	}
 	if err := app.Run(context.Background(), os.Args); err != nil {

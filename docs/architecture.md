@@ -152,6 +152,7 @@ pkg/           — domain logic; no CLI imports
   daemon/      — drift computation, alert dispatch
   costs/       — transaction cost model, tax classification
   monitoring/  — 4-pillar health scoring
+  excel/       — native Excel (.xlsx) parsing & smart ticker extraction
 config/        — YAML/JSON configs (read-only at runtime)
 data/          — golden copies, candidate output, DuckDB cache
 ```
@@ -464,7 +465,7 @@ All date operations use `Asia/Kolkata` (UTC+5:30):
 
 No self-daemonization in Go. `mycase daemon install` writes a launchd plist (macOS) or prints a systemd unit (Linux). Process lifecycle (restart on crash, run at login, log rotation) is handled by the OS. State persists to `data/daemon_state.json` across restarts so `mycase daemon status` can report the last check even after a reboot.
 
-### D4 — Web Dashboard Without a Framework (R8, not yet implemented)
+### D4 — Web Dashboard Without a Framework (R8, implemented in pkg/server)
 
 Plain HTML5 + ES2022 + native Web Components + Apache ECharts (vendored). No React, no HTMX, no build pipeline. `//go:embed static/*` bundles all assets into the binary. SSE for live quote streaming. HTMX was rejected because it cannot drive live chart updates (ECharts requires imperative JS calls); React adds a build step and framework dep to a tool meant to have zero install friction.
 

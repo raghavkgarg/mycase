@@ -10,10 +10,11 @@ Practical usage guide: common workflows, every command with realistic examples, 
 2. [Core Workflow: Pick → Optimize → Basket](#2-core-workflow)
 3. [Backtesting](#3-backtesting)
 4. [Performance Tracking](#4-performance-tracking)
-5. [Drift Monitoring Daemon](#5-drift-monitoring-daemon)
+5. [Portfolio Health & Drift Monitoring](#5-portfolio-health--drift-monitoring)
 6. [Cache Management](#6-cache-management)
 7. [Pipeline (Full Automation)](#7-pipeline-full-automation)
-8. [Command Reference](#8-command-reference)
+8. [Web Dashboard Server](#8-web-dashboard-server)
+9. [Command Reference](#9-command-reference)
 
 ---
 
@@ -29,18 +30,30 @@ mycase --version
 
 ### Authenticate with Zerodha (live mode only)
 
+Run the interactive authentication utility to link your Zerodha Kite Connect account:
+
 ```bash
 mycase auth
-# Follow the prompts: paste your API key, open the login URL, paste the request token
-# Saves access token to config/credentials.json
 ```
+1. Enter your Zerodha Kite API Key & API Secret (if prompted for first time).
+2. The browser automatically opens the Zerodha login page.
+3. Log in and authorize — local server handles the callback automatically on `http://localhost:8000`.
+4. Saves API key, secret, and generated `access_token` to `config/config.json`.
 
-Dry-run mode works without credentials — commands fall back to `MockBroker` silently.
+> [!NOTE]
+> Zerodha Kite access tokens expire daily. If any `--live` command returns `Incorrect api_key or access_token`, simply re-run `mycase auth` to refresh your token for the day.
+
+Dry-run mode works without credentials — commands fall back to `MockBroker` silently when run without `--live`.
 
 ### Edit `config/pipeline.yaml`
 
 ```yaml
+# Select constituents via built-in indices OR custom CSV / Excel (.xlsx) files
 indices: [smallcap250]
+# Or specify custom files:
+# file: data/qtum.xlsx
+# files: [data/qtum.xlsx, data/my_universe.csv]
+
 method: multibagger
 top_n: 15
 capital: 500000
@@ -64,8 +77,12 @@ alerts:
 # Pick top 15 multibagger candidates from NSE SmallCap 250
 mycase pick --index smallcap250 --method multibagger --top 15
 
-# Pick from a custom CSV of tickers
+# Pick from a custom CSV or Excel (.xlsx) file of tickers (auto-converted seamlessly)
+mycase pick --file data/qtum.xlsx --method multibagger --top 10
 mycase pick --file data/universe.csv --method balanced --top 20
+
+# Convert an ETF / broker Excel file to clean CSV using the helper tool
+mycase convert data/qtum.xlsx data/qtum.csv
 
 # Pick with hysteresis (existing golden copy protects current holdings)
 mycase pick --index smallcap250 --golden data/microsmall.csv \
@@ -164,9 +181,40 @@ mycase performance --file data/microsmall.csv --capital 500000 --date 20250115
 
 For purchase dates > 7 days ago, the command automatically switches to daily close mode and selects the appropriate Yahoo Finance range (1mo/3mo/6mo/1y/2y/5y).
 
+### Holdings Snapshot
+
+View current Zerodha portfolio holdings grouped by theme (`config/themes.json`) with P&L and allocation breakdown:
+
+```bash
+# Dry-run / mock holdings snapshot
+mycase holdings
+
+# Live holdings snapshot directly from Zerodha account
+mycase holdings --live
+```
+
+Snapshots are automatically formatted and saved to `holding/holding_YYYYMMDD.txt`.
+
 ---
 
-## 5. Drift Monitoring Daemon
+## 5. Portfolio Health & Drift Monitoring
+
+### Interactive 4-Pillar Health Simulation
+
+Run an interactive portfolio health simulation scoring holdings across 4 pillars (Capital Stall, Fundamental Drift, Valuation Stretch, Risk/Volatility):
+
+```bash
+# Basic interactive health simulation
+mycase monitor --file data/microsmall.csv --interactive
+
+# Specify strategy preset and simulation start date
+mycase monitor --file data/microsmall.csv --interactive --strategy multibagger --date 2026-01-01
+
+# Run with style preset (hyper-aggressive, moderate, passive) and custom capital
+mycase monitor --file data/microsmall.csv --style hyper-aggressive --capital 500000
+```
+
+### Drift Monitoring Daemon
 
 The daemon checks drift at 15:45 IST daily (post-market close) and sends alerts when `DriftIndex > threshold`.
 
@@ -236,18 +284,51 @@ The DuckDB cache (`data/cache.db`) stores:
 ## 7. Pipeline (Full Automation)
 
 ```bash
-# Run all steps from config/pipeline.yaml
+# Run all steps configured in config/pipeline.yaml (supports indices, file, or files)
 mycase pipeline
 
 # Override specific params
 mycase pipeline --index nifty500 --method aggressive --top 10 --capital 1000000
 ```
 
+`config/pipeline.yaml` supports selecting constituents by `indices`, `file` (single custom CSV/XLSX), `files` (multiple custom files), or combining `indices` and `files` together.
+
 The pipeline runs: pick → optimize → report → performance → monitor, in sequence. Each step gets the output of the previous one. All steps share one process and one DuckDB connection.
 
 ---
 
-## 8. Command Reference
+## 8. Web Dashboard Server
+
+Launch the web UI dashboard in your browser to visualize portfolio allocations, factor scores, backtest forms, drift timelines, and order previews:
+
+```bash
+# Start dashboard on default port (http://localhost:8080)
+mycase serve
+
+# Run on a custom port
+mycase serve --port 3000
+
+# Run with live Zerodha API connection
+mycase serve --port 8080 --live
+```
+
+Once started, open `http://localhost:8080` in your web browser.
+
+Features included in the web dashboard:
+- Interactive backtest controls and performance factor visualization
+- Dynamic weight distribution donuts & comparison charts (powered by ECharts)
+- Real-time stock health & monitoring table
+- Basket order preview and tax impact breakdown
+
+---
+
+## 9. Command Reference
+
+### `auth`
+
+| Command | Flags | Description |
+|---------|-------|-------------|
+| `mycase auth` | — | Interactively authenticate with Zerodha Kite Connect and save daily access token |
 
 ### `pick`
 
@@ -302,6 +383,17 @@ The pipeline runs: pick → optimize → report → performance → monitor, in 
 | `--date` | today | Purchase date (`YYYY-MM-DD` or `YYYYMMDD`) |
 | `--time` | `09:30` | Purchase time in IST (`HH:MM`), used only within 7-day intraday window |
 
+### `monitor`
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--file`, `-f` | `data/microsmall.csv` | Portfolio CSV path |
+| `--interactive` | false | Run in interactive terminal mode |
+| `--strategy` | `balanced` | Weighting strategy preset (`balanced`, `aggressive`, `conservative`, `multibagger`) |
+| `--date` | — | Start date for simulation (`YYYY-MM-DD`) |
+| `--style` | `moderate` | Monitoring style preset (`hyper-aggressive`, `moderate`, `passive`) |
+| `--capital` | `100000.0` | Initial capital invested |
+
 ### `daemon`
 
 | Subcommand | Flags | Description |
@@ -319,6 +411,40 @@ The pipeline runs: pick → optimize → report → performance → monitor, in 
 |-----------|-------|-------------|
 | `status` | — | Row counts and last-fetch timestamps |
 | `clear` | `--ticker`, `--all` | Evict ticker or wipe all |
+
+### `convert`
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--file`, `-f` | positional arg | Input Excel (`.xlsx`) portfolio or ETF holdings file |
+| `--output`, `-o` | `<input>.csv` | Path to output clean CSV file |
+
+### `holdings`
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--live` | `false` | Fetch live Zerodha holdings (default: mock holdings) |
+
+### `merge`
+
+| Subcommand | Arguments | Description |
+|-----------|-----------|-------------|
+| `combine` | `<out_csv> <in1_csv> <in2_csv>...` | Combine multiple candidate CSV files into one |
+| `golden` | `<source_csv> <dest_csv>` | Merge source CSV into golden copy (preserves exited tickers at 0 weight) |
+
+### `report`
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--file`, `-f` | required | Path to stockpicker output CSV file |
+| `--method`, `-m` | `balanced` | Weighting strategy (`balanced`, `aggressive`, `conservative`, `multibagger`) |
+
+### `serve`
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--port` | `8080` | HTTP server port for local dashboard |
+| `--live` | `false` | Connect with live Zerodha API (default: mock broker) |
 
 ---
 

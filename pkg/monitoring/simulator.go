@@ -59,9 +59,9 @@ func RunSimulation(
 		return result, fmt.Errorf("insufficient price history for simulation (need at least 200 days, got %d)", minHistory)
 	}
 
-	// Define simulation window: the last 1 year (typically 252 trading days)
-	// or the remaining history after taking the first 200 days for SMA warmup.
-	simDays := min(minHistory-200, 252)
+	// Maximum days we can simulate without running out of SMA 200 history:
+	maxSimDays := minHistory - 199
+	simDays := min(maxSimDays, 252)
 	if simDays < 1 {
 		simDays = 1
 	}
@@ -86,9 +86,10 @@ func RunSimulation(
 				}
 			}
 			if foundIdx >= 0 && foundIdx < len(benchData.Closes) {
-				simDays = len(benchData.Closes) - foundIdx
-				if len(benchData.Closes)-simDays < 200 {
-					simDays = max(1, len(benchData.Closes)-200)
+				requestedDays := len(benchData.Closes) - foundIdx
+				simDays = min(requestedDays, maxSimDays)
+				if simDays < 1 {
+					simDays = 1
 				}
 			}
 		}
@@ -198,19 +199,23 @@ func RunSimulation(
 		for t := range activeStocks {
 			h := histData[t]
 			tIdx := len(h.Closes) - simDays + d
-			// Calculate SMA 200
+			// Calculate SMA 200 safely with boundary checks
 			smaSum := 0.0
-			for i := tIdx - 199; i <= tIdx; i++ {
+			smaStart := max(0, tIdx-199)
+			smaCount := tIdx - smaStart + 1
+			for i := smaStart; i <= tIdx; i++ {
 				smaSum += h.Closes[i]
 			}
-			sma200 := smaSum / 200.0
+			sma200 := smaSum / float64(smaCount)
 
-			// Calculate 20-day average volume for volume breakout comparison
+			// Calculate 20-day average volume safely with boundary checks
 			vol20Sum := 0.0
-			for i := tIdx - 19; i <= tIdx; i++ {
+			volStart := max(0, tIdx-19)
+			volCount := tIdx - volStart + 1
+			for i := volStart; i <= tIdx; i++ {
 				vol20Sum += h.Volumes[i]
 			}
-			vol20Avg := vol20Sum / 20.0
+			vol20Avg := vol20Sum / float64(volCount)
 
 			closePrice := h.Closes[tIdx]
 			if closePrice < sma200 {

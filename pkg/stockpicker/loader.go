@@ -6,20 +6,113 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/raghavkgarg/mycase/pkg/config"
 	"github.com/raghavkgarg/mycase/pkg/csvloader"
+	"github.com/raghavkgarg/mycase/pkg/excel"
 	"github.com/raghavkgarg/mycase/pkg/yfinance"
 )
 
-// IsUSIndex returns true if the index name or path refers to a US index.
+// IsUSIndex returns true if the index name or path refers to a US index or US market portfolio.
 func IsUSIndex(name string) bool {
+	if strings.TrimSpace(name) == "" {
+		return false
+	}
 	clean := strings.ToLower(name)
-	return strings.Contains(clean, "sp500") || strings.Contains(clean, "nasdaq") || strings.Contains(clean, "nyse") || strings.Contains(clean, "us_") || strings.HasPrefix(clean, "us")
+	clean = strings.ReplaceAll(clean, "&", "")
+	clean = strings.ReplaceAll(clean, " ", "")
+	clean = strings.ReplaceAll(clean, "-", "_")
+
+	keywords := []string{"sp500", "nasdaq", "nyse", "us_", "qtum", "dow", "dji", "russell", "rut", "mag7", "fang", "spx", "qqq"}
+	for _, kw := range keywords {
+		if strings.Contains(clean, kw) {
+			return true
+		}
+	}
+	if strings.HasPrefix(clean, "us") {
+		return true
+	}
+
+	baseName := filepath.Base(name)
+	baseClean := strings.ToLower(strings.TrimSuffix(baseName, filepath.Ext(baseName)))
+	for _, kw := range keywords {
+		if strings.Contains(baseClean, kw) {
+			return true
+		}
+	}
+
+	targetPaths := []string{
+		name,
+		filepath.Join("data", name),
+	}
+	if !strings.HasSuffix(name, ".csv") && !strings.HasSuffix(name, ".xlsx") {
+		targetPaths = append(targetPaths, name+".csv", filepath.Join("data", name+".csv"))
+	}
+
+	for _, p := range targetPaths {
+		if info, err := os.Stat(p); err == nil && !info.IsDir() {
+			if checkFileContainsUSTickers(p) {
+				return true
+			}
+		}
+	}
+
+	return false
 }
+
+func checkFileContainsUSTickers(filePath string) bool {
+	if excel.IsXLSXFile(filePath) {
+		tmpCSV := filePath + ".converted_check.csv"
+		defer os.Remove(tmpCSV)
+		if _, err := excel.ConvertXLSXToCSV(filePath, tmpCSV); err != nil {
+			return false
+		}
+		filePath = tmpCSV
+	}
+
+	file, err := os.Open(filePath)
+	if err != nil {
+		return false
+	}
+	defer file.Close()
+
+	reader := csv.NewReader(file)
+	records, err := reader.ReadAll()
+	if err != nil || len(records) < 2 {
+		return false
+	}
+
+	tickerIdx := -1
+	for i, h := range records[0] {
+		hClean := strings.ToLower(strings.TrimSpace(h))
+		if hClean == "ticker" || hClean == "symbol" {
+			tickerIdx = i
+			break
+		}
+	}
+
+	if tickerIdx == -1 {
+		return false
+	}
+
+	for _, record := range records[1:] {
+		if len(record) > tickerIdx {
+			ticker := strings.TrimSpace(record[tickerIdx])
+			if ticker != "" {
+				if strings.HasPrefix(ticker, "US:") || strings.HasPrefix(ticker, "NASDAQ:") || strings.HasPrefix(ticker, "NYSE:") || strings.HasSuffix(ticker, ".US") {
+					return true
+				}
+			}
+		}
+	}
+
+	return false
+}
+
 
 // GetBenchmarkSymbolForIndex determines the appropriate benchmark ticker for an index or active tickers.
 func GetBenchmarkSymbolForIndex(indexName string, tickers []string) string {
@@ -34,6 +127,16 @@ func GetBenchmarkSymbolForIndex(indexName string, tickers []string) string {
 }
 
 func loadLocalCSVConstituents(filePath string) ([]string, error) {
+	if excel.IsXLSXFile(filePath) {
+		fmt.Printf("Detected Excel (.xlsx) file format in %s, auto-converting...\n", filePath)
+		tmpCSV := filePath + ".converted.csv"
+		defer os.Remove(tmpCSV)
+		if _, err := excel.ConvertXLSXToCSV(filePath, tmpCSV); err != nil {
+			return nil, fmt.Errorf("auto-converting excel file: %w", err)
+		}
+		filePath = tmpCSV
+	}
+
 	file, err := os.Open(filePath)
 	if err != nil {
 		return nil, err

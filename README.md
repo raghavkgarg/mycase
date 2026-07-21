@@ -49,7 +49,7 @@ mycase basket data/myportfolio
 | Command | Description |
 |---------|-------------|
 | `pipeline` | Run the full workflow (pick → optimize → report → monitor) from `pipeline.yaml` |
-| `pick` | Score and rank stocks from an index or CSV; apply hysteresis if a golden copy exists |
+| `pick` | Score and rank stocks from built-in indices, CSVs, or Excel (.xlsx) files; auto-converts Excel input |
 | `optimize` | Compute target weights (inverse-volatility, MFS multi-factor, or equal-weight) |
 | `report` | Generate a plain-text selection rationale for each picked stock |
 | `performance` | Compute P&L from a purchase date to latest close (daily or intraday) |
@@ -65,6 +65,7 @@ mycase basket data/myportfolio
 | `daemon install` | Write launchd plist (macOS) or print systemd unit (Linux) |
 | `cache status` | Show DuckDB cache row counts and last fetch timestamps |
 | `cache clear` | Evict one ticker or wipe the entire price cache |
+| `convert` | Convert Excel (.xlsx) portfolio/ETF holdings file to clean CSV |
 | `auth` | Authenticate with Zerodha Kite Connect |
 
 ---
