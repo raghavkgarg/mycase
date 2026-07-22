@@ -1,22 +1,27 @@
 [
   {
-    "name": "My Managed",
-    "prefix": "My",
+    "name": "Theme KK Advise",
+    "prefix": "My KK",
     "csv_path": "data/myall.csv"
   },
   {
-    "name": "AI Theme Advice",
-    "prefix": "AI Theme",
+    "name": "Theme  AI Advice",
+    "prefix": "My AI",
     "csv_path": "data/aitheme.csv"
   },
   {
-    "name": "Micro Theme Advice",
-    "prefix": "Micro Theme",
+    "name": "Theme Micro Advice",
+    "prefix": "My Micro",
     "csv_path": "data/modularmicro.csv"
   },
   {
-    "name": "Theme My Micro",
-    "prefix": "Theme Capital",
-    "csv_path": "data/mymicro.csv"
+    "name": "Theme Hydrogen Nuclear",
+    "prefix": "My Hydrogen",
+    "csv_path": "data/hydrogen.csv"
+  },
+  {
+    "name": "Theme Microsmall",
+    "prefix": "My MicroSmall",
+    "csv_path": "data/microsmall.csv"
   }
 ]

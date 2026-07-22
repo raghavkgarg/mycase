@@ -22,6 +22,7 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("GET /api/portfolio/{name}/monitor", s.handleMonitor)
 	s.mux.HandleFunc("POST /api/portfolio/{name}/backtest", s.handleBacktest)
 	s.mux.HandleFunc("POST /api/portfolio/{name}/execute", s.handleExecute)
+	s.mux.HandleFunc("POST /api/portfolio/{name}/retry", s.handleRetry)
 	s.mux.HandleFunc("GET /api/quotes", s.broadcaster.ServeSSE)
 	s.mux.HandleFunc("GET /api/cache/status", s.handleCacheStatus)
 	s.mux.HandleFunc("GET /api/daemon/history", s.handleDaemonHistory)

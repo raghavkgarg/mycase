@@ -18,6 +18,7 @@ import (
 	"github.com/raghavkgarg/mycase/pkg/costs"
 	"github.com/raghavkgarg/mycase/pkg/csvloader"
 	"github.com/raghavkgarg/mycase/pkg/daemon"
+	"github.com/raghavkgarg/mycase/pkg/executor"
 	"github.com/raghavkgarg/mycase/pkg/monitoring"
 	"github.com/raghavkgarg/mycase/pkg/optimizer"
 	"github.com/raghavkgarg/mycase/pkg/yfinance"
@@ -739,8 +740,16 @@ func (s *Server) handleExecute(w http.ResponseWriter, r *http.Request) {
 
 	placed := make([]placeResult, 0, len(kept))
 	var errs []string
+	var successLines []string
+	var failedLines []string
+	var failedSpecs []executor.FailedOrderSpec
 
-	for _, o := range kept {
+	nowStr := time.Now().Format("060102_150405")
+
+	for i, o := range kept {
+		if i > 0 {
+			time.Sleep(200 * time.Millisecond)
+		}
 		res, perr := s.broker.PlaceOrder("regular", o)
 		pr := placeResult{
 			Ticker: o.TradingSymbol,
@@ -751,16 +760,51 @@ func (s *Server) handleExecute(w http.ResponseWriter, r *http.Request) {
 		if perr != nil {
 			pr.Error = perr.Error()
 			errs = append(errs, fmt.Sprintf("%s: %v", o.TradingSymbol, perr))
+			failedLines = append(failedLines, fmt.Sprintf("Error placing order for %s: %v", o.TradingSymbol, perr))
+			failedSpecs = append(failedSpecs, executor.FailedOrderSpec{
+				TradingSymbol:   o.TradingSymbol,
+				Exchange:        o.Exchange,
+				TransactionType: o.TransactionType,
+				Quantity:        o.Quantity,
+				Price:           o.Price,
+				Product:         o.Product,
+				ErrorReason:     perr.Error(),
+				OrderVariety:    "regular",
+			})
 		} else {
 			pr.OrderID = res.OrderID
 			pr.TriggerID = res.TriggerID
+			successLines = append(successLines, fmt.Sprintf("Placed REGULAR order %s for %d shares of %s @ ₹%.2f", res.OrderID, o.Quantity, o.TradingSymbol, o.Price))
 		}
 		placed = append(placed, pr)
+	}
+
+	if len(successLines) > 0 {
+		executor.SaveSuccessLog(fmt.Sprintf("API EXECUTION (%s)", name), strings.Join(successLines, "\n"), nowStr)
+	}
+	if len(failedSpecs) > 0 {
+		executor.SaveErrorLog(fmt.Sprintf("API EXECUTION (%s)", name), strings.Join(failedLines, "\n"), failedSpecs, nowStr)
 	}
 
 	writeJSON(w, map[string]any{
 		"placed": placed,
 		"errors": errs,
+	})
+}
+
+// ── /api/portfolio/{name}/retry ───────────────────────────────────────────────
+
+func (s *Server) handleRetry(w http.ResponseWriter, r *http.Request) {
+	jsonPath, err := executor.FindLatestErrorPayload()
+	if err != nil {
+		writeError(w, http.StatusNotFound, "No retry payload found: "+err.Error())
+		return
+	}
+
+	go executor.ExecuteRetryPayload(jsonPath, s.broker, nil)
+
+	writeJSON(w, map[string]any{
+		"message": "Retry execution launched for " + jsonPath,
 	})
 }
 
