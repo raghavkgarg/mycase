@@ -760,7 +760,7 @@ func (s *Server) handleExecute(w http.ResponseWriter, r *http.Request) {
 		if perr != nil {
 			pr.Error = perr.Error()
 			errs = append(errs, fmt.Sprintf("%s: %v", o.TradingSymbol, perr))
-			failedLines = append(failedLines, fmt.Sprintf("Error placing order for %s: %v", o.TradingSymbol, perr))
+			failedLines = append(failedLines, fmt.Sprintf("Error placing REGULAR %s order for %s: %v", strings.ToUpper(o.TransactionType), o.TradingSymbol, perr))
 			failedSpecs = append(failedSpecs, executor.FailedOrderSpec{
 				TradingSymbol:   o.TradingSymbol,
 				Exchange:        o.Exchange,
@@ -774,7 +774,7 @@ func (s *Server) handleExecute(w http.ResponseWriter, r *http.Request) {
 		} else {
 			pr.OrderID = res.OrderID
 			pr.TriggerID = res.TriggerID
-			successLines = append(successLines, fmt.Sprintf("Placed REGULAR order %s for %d shares of %s @ ₹%.2f", res.OrderID, o.Quantity, o.TradingSymbol, o.Price))
+			successLines = append(successLines, fmt.Sprintf("Placed REGULAR %s order %s for %d shares of %s @ ₹%.2f", strings.ToUpper(o.TransactionType), res.OrderID, o.Quantity, o.TradingSymbol, o.Price))
 		}
 		placed = append(placed, pr)
 	}

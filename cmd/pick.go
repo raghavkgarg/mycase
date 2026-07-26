@@ -10,6 +10,7 @@ import (
 
 	"github.com/urfave/cli/v3"
 
+	"github.com/raghavkgarg/mycase/pkg/csvloader"
 	"github.com/raghavkgarg/mycase/pkg/selectiontracker"
 	"github.com/raghavkgarg/mycase/pkg/stockpicker"
 	"github.com/raghavkgarg/mycase/pkg/yfinance"
@@ -21,7 +22,7 @@ var PickCommand = &cli.Command{
 	Flags: []cli.Flag{
 		&cli.StringFlag{Name: "index", Aliases: []string{"i"}, Value: "smallcap250", Usage: "Index to pick stocks from"},
 		&cli.StringFlag{Name: "file", Aliases: []string{"f"}, Usage: "Path to custom CSV file (takes precedence over --index)"},
-		&cli.StringFlag{Name: "method", Aliases: []string{"m"}, Value: "balanced", Usage: "Scoring strategy (balanced, aggressive, conservative, multibagger)"},
+		&cli.StringFlag{Name: "method", Aliases: []string{"m"}, Value: "balanced", Usage: "Scoring strategy (balanced, aggressive, conservative, multibagger, value)"},
 		&cli.IntFlag{Name: "top", Value: 20, Usage: "Number of top stocks to pick"},
 		&cli.StringFlag{Name: "range", Value: "3mo", Usage: "Historical data range (3mo, 6mo, 1y)"},
 		&cli.BoolFlag{Name: "skip-scuttlebutt", Usage: "Skip qualitative scuttlebutt checklist report"},
@@ -77,7 +78,25 @@ func runPickWithOpts(ctx context.Context, opts *stockpicker.Options) error {
 	}
 	stockpicker.PrintHeader(displayNameVal, opts.Method, opts.TopN, rangeStr, opts.FilePath)
 
-	fullHistory, activeKeys := stockpicker.FetchHistoricalPrices(ctx, tickersSrc.Tickers)
+	goldenWeights := stockpicker.LoadGoldenWeights(opts.GoldenPath)
+
+	// Combine index tickers with golden copy holdings to ensure existing holdings are evaluated for safety/exits
+	allTickersMap := make(map[string]bool)
+	var combinedTickers []string
+	for _, t := range tickersSrc.Tickers {
+		if !allTickersMap[t] {
+			allTickersMap[t] = true
+			combinedTickers = append(combinedTickers, t)
+		}
+	}
+	for t := range goldenWeights {
+		if !allTickersMap[t] {
+			allTickersMap[t] = true
+			combinedTickers = append(combinedTickers, t)
+		}
+	}
+
+	fullHistory, activeKeys := stockpicker.FetchHistoricalPrices(ctx, combinedTickers)
 	if len(activeKeys) == 0 {
 		fmt.Println("No active tickers loaded. Exiting...")
 		return nil
@@ -117,9 +136,11 @@ func runPickWithOpts(ctx context.Context, opts *stockpicker.Options) error {
 	var finalWeights map[string]float64
 	var scores map[string]float64
 
-	goldenWeights := stockpicker.LoadGoldenWeights(opts.GoldenPath)
-
-	if opts.Method == "multibagger" {
+	if opts.Method == "value" {
+		scores = stockpicker.ScoreValue(ctx, activeKeys, fundamentals, fullHistory, cfg.HardFilters)
+		selectedKeys = stockpicker.SelectTopNValue(activeKeys, scores, fundamentals, cfg.HardFilters, opts.TopN, goldenWeights, opts.HysteresisBuffer, tracker)
+		finalWeights = stockpicker.NormalizeValueWeights(selectedKeys, scores, fundamentals, cfg.HardFilters, goldenWeights, opts.RebalanceTolerance)
+	} else if opts.Method == "multibagger" {
 		scores = stockpicker.ScoreMultibagger(ctx, activeKeys, fundamentals, fullHistory, cfg.HardFilters)
 		selectedKeys = stockpicker.SelectTopNMultibagger(activeKeys, scores, fundamentals, cfg.HardFilters, opts.TopN, goldenWeights, opts.HysteresisBuffer, tracker)
 		finalWeights = stockpicker.NormalizeMultibaggerWeights(selectedKeys, scores, fundamentals, cfg.HardFilters, goldenWeights, opts.RebalanceTolerance)
@@ -132,8 +153,8 @@ func runPickWithOpts(ctx context.Context, opts *stockpicker.Options) error {
 		return finalWeights[selectedKeys[i]] > finalWeights[selectedKeys[j]]
 	})
 
-	if opts.Method == "multibagger" {
-		stockpicker.PrintMultibaggerTable(selectedKeys, finalWeights, scores, fundamentals, fullHistory, displayNameVal)
+	if opts.Method == "value" || opts.Method == "multibagger" {
+		stockpicker.PrintMultibaggerTable(selectedKeys, finalWeights, scores, fundamentals, fullHistory, displayNameVal, opts.Method)
 		if !opts.SkipScuttlebutt {
 			stockpicker.PrintScuttlebutt(selectedKeys, fundamentals, displayNameVal, opts.Method)
 		}
@@ -142,10 +163,12 @@ func runPickWithOpts(ctx context.Context, opts *stockpicker.Options) error {
 	}
 
 	sectors := make(map[string]string)
+	resultDates := make(map[string]string)
 	for ticker, fund := range fundamentals {
 		sectors[ticker] = fund.Sector
+		resultDates[ticker] = fund.ResultPrevComing
 	}
-	if err := tracker.SaveReport(displayNameVal, opts.Method, goldenWeights, sectors, finalWeights); err != nil {
+	if err := tracker.SaveReport(displayNameVal, opts.Method, goldenWeights, sectors, finalWeights, resultDates); err != nil {
 		fmt.Printf("Warning: Failed to save selection reasons report: %v\n", err)
 	}
 
@@ -161,5 +184,10 @@ func runPickWithOpts(ctx context.Context, opts *stockpicker.Options) error {
 	if err := stockpicker.SavePortfolioToCSV(selectedKeys, finalWeights, outPath); err != nil {
 		return fmt.Errorf("writing output file: %w", err)
 	}
+
+	if opts.GoldenPath != "" && len(goldenWeights) > 0 {
+		csvloader.PrintComparisonReport(outPath, opts.GoldenPath, opts.Method)
+	}
+
 	return nil
 }

@@ -210,6 +210,417 @@ func normalizeValue(val, minVal, maxVal, maxPoints float64, higherIsBetter bool)
 	return score
 }
 
+// ScoreValue computes a 100-point relative scoring matrix for large-cap value candidates.
+func ScoreValue(
+	ctx context.Context,
+	activeKeys []string,
+	fundamentals map[string]yfinance.Fundamentals,
+	fullHistory map[string]*yfinance.HistoricalData,
+	hardFilters *config.HardFilters,
+) map[string]float64 {
+	fmt.Printf("Calculating 100-Point Large-Cap Value Relative Scoring Matrix for %d candidates...\n", len(activeKeys))
+
+	// Raw indicator maps
+	epvMOS := make(map[string]float64)
+	valBands := make(map[string]float64)
+	sectorZScores := make(map[string]float64)
+	shillerYields := make(map[string]float64)
+	cashRealizations := make(map[string]float64)
+	fcfYields := make(map[string]float64)
+	shareholderYields := make(map[string]float64)
+	smartMoneyDeltas := make(map[string]float64)
+	marginSpreads := make(map[string]float64)
+
+	// Calculate sector medians and standard deviations for Sector Z-Score
+	sectorPEs := make(map[string][]float64)
+	for _, t := range activeKeys {
+		f := fundamentals[t]
+		sec := f.Sector
+		if sec == "" {
+			sec = "Unknown"
+		}
+		pe := f.ForwardPE
+		if pe > 0 && pe != 999.0 {
+			sectorPEs[sec] = append(sectorPEs[sec], pe)
+		}
+	}
+	sectorMedians := make(map[string]float64)
+	sectorStdevs := make(map[string]float64)
+	for sec, peList := range sectorPEs {
+		if len(peList) > 0 {
+			sort.Float64s(peList)
+			med := peList[len(peList)/2]
+			sectorMedians[sec] = med
+
+			sumSq := 0.0
+			for _, v := range peList {
+				diff := v - med
+				sumSq += diff * diff
+			}
+			stdev := math.Sqrt(sumSq / float64(len(peList)))
+			if stdev == 0 {
+				stdev = 1.0
+			}
+			sectorStdevs[sec] = stdev
+		}
+	}
+
+	minEPV, maxEPV := math.MaxFloat64, -math.MaxFloat64
+	minBand, maxBand := math.MaxFloat64, -math.MaxFloat64
+	minZ, maxZ := math.MaxFloat64, -math.MaxFloat64
+	minShiller, maxShiller := math.MaxFloat64, -math.MaxFloat64
+	minCash, maxCash := math.MaxFloat64, -math.MaxFloat64
+	minFCF, maxFCF := math.MaxFloat64, -math.MaxFloat64
+	minYield, maxYield := math.MaxFloat64, -math.MaxFloat64
+	minInst, maxInst := math.MaxFloat64, -math.MaxFloat64
+	minMargin, maxMargin := math.MaxFloat64, -math.MaxFloat64
+
+	for _, t := range activeKeys {
+		f := fundamentals[t]
+		_ = fullHistory[t]
+
+		// 1. EPV Margin of Safety (or P/ABV inverse for BFSI)
+		if yfinance.IsFinancialSector(f.Sector) {
+			pb := f.PBRatio
+			if pb <= 0 {
+				pb = 99.0
+			}
+			epvMOS[t] = 1.0 / pb
+		} else {
+			_, mos, ok := yfinance.CalculateEPV(&f, 0.105)
+			if !ok {
+				mos = -100.0
+			}
+			epvMOS[t] = mos
+		}
+		if epvMOS[t] < minEPV {
+			minEPV = epvMOS[t]
+		}
+		if epvMOS[t] > maxEPV {
+			maxEPV = epvMOS[t]
+		}
+
+		// 2. 5Y Valuation Band Percentile (P/E relative to self)
+		pe := f.ForwardPE
+		if pe <= 0 || pe == 999.0 {
+			pe = 50.0
+		}
+		valBands[t] = pe
+		if valBands[t] < minBand {
+			minBand = valBands[t]
+		}
+		if valBands[t] > maxBand {
+			maxBand = valBands[t]
+		}
+
+		// 3. Sector-Adjusted Z-Score
+		sec := f.Sector
+		if sec == "" {
+			sec = "Unknown"
+		}
+		med := sectorMedians[sec]
+		stdev := sectorStdevs[sec]
+		z := 0.0
+		if stdev > 0 && pe > 0 {
+			z = (med - pe) / stdev
+		}
+		sectorZScores[t] = z
+		if z < minZ {
+			minZ = z
+		}
+		if z > maxZ {
+			maxZ = z
+		}
+
+		// 4. Shiller CAPE Yield
+		shYield, _ := yfinance.CalculateShillerYield(&f)
+		shillerYields[t] = shYield
+		if shYield < minShiller {
+			minShiller = shYield
+		}
+		if shYield > maxShiller {
+			maxShiller = shYield
+		}
+
+		// 5. Cash Realization (CFO / PAT)
+		cashRatio := 0.0
+		if f.NetIncome > 0 && f.OperatingCashflow > 0 {
+			cashRatio = f.OperatingCashflow / f.NetIncome
+		}
+		cashRealizations[t] = cashRatio
+		if cashRatio < minCash {
+			minCash = cashRatio
+		}
+		if cashRatio > maxCash {
+			maxCash = cashRatio
+		}
+
+		// 6. Free Cash Flow Yield
+		fcfY := 0.0
+		if f.MarketCap > 0 && f.FreeCashflow > 0 {
+			fcfY = f.FreeCashflow / f.MarketCap
+		}
+		fcfYields[t] = fcfY
+		if fcfY < minFCF {
+			minFCF = fcfY
+		}
+		if fcfY > maxFCF {
+			maxFCF = fcfY
+		}
+
+		// 7. Total Shareholder Yield
+		shYieldVal := yfinance.CalculateShareholderYield(&f)
+		shareholderYields[t] = shYieldVal
+		if shYieldVal < minYield {
+			minYield = shYieldVal
+		}
+		if shYieldVal > maxYield {
+			maxYield = shYieldVal
+		}
+
+		// 8. Smart Money Institutional Stake
+		smartMoneyDeltas[t] = f.HeldPercentInstitutions
+		if f.HeldPercentInstitutions < minInst {
+			minInst = f.HeldPercentInstitutions
+		}
+		if f.HeldPercentInstitutions > maxInst {
+			maxInst = f.HeldPercentInstitutions
+		}
+
+		// 9. Margin Inflection Spread
+		mSpread := f.OperatingMargins
+		if len(f.AnnualGrossProfit) >= 3 && f.TTMRevenue > 0 {
+			mSpread = f.OperatingMargins - (f.AnnualGrossProfit[0].Value / f.TTMRevenue)
+		}
+		marginSpreads[t] = mSpread
+		if mSpread < minMargin {
+			minMargin = mSpread
+		}
+		if mSpread > maxMargin {
+			maxMargin = mSpread
+		}
+	}
+
+	scores := make(map[string]float64)
+	for _, t := range activeKeys {
+		wEPV := 15.0
+		w5YBand := 10.0
+		wSectorZ := 10.0
+		wShiller := 10.0
+		wCash := 15.0
+		wFCF := 10.0
+		wYield := 10.0
+		wInst := 10.0
+		wMargin := 10.0
+
+		if hardFilters != nil {
+			if hardFilters.ScoreWeightEPVMOS > 0 {
+				wEPV = hardFilters.ScoreWeightEPVMOS
+			}
+			if hardFilters.ScoreWeight5YValPercentile > 0 {
+				w5YBand = hardFilters.ScoreWeight5YValPercentile
+			}
+			if hardFilters.ScoreWeightSectorZScore > 0 {
+				wSectorZ = hardFilters.ScoreWeightSectorZScore
+			}
+			if hardFilters.ScoreWeightShillerYield > 0 {
+				wShiller = hardFilters.ScoreWeightShillerYield
+			}
+			if hardFilters.ScoreWeightCashRealization > 0 {
+				wCash = hardFilters.ScoreWeightCashRealization
+			}
+			if hardFilters.ScoreWeightFCFYield > 0 {
+				wFCF = hardFilters.ScoreWeightFCFYield
+			}
+			if hardFilters.ScoreWeightShareholderYield > 0 {
+				wYield = hardFilters.ScoreWeightShareholderYield
+			}
+			if hardFilters.ScoreWeightSmartMoneyDelta > 0 {
+				wInst = hardFilters.ScoreWeightSmartMoneyDelta
+			}
+			if hardFilters.ScoreWeightMarginInflection > 0 {
+				wMargin = hardFilters.ScoreWeightMarginInflection
+			}
+		}
+
+		p1_epv := normalizeValue(epvMOS[t], minEPV, maxEPV, wEPV, true)
+		p1_band := normalizeValue(valBands[t], minBand, maxBand, w5YBand, false)
+		p1_z := normalizeValue(sectorZScores[t], minZ, maxZ, wSectorZ, true)
+		p2_shiller := normalizeValue(shillerYields[t], minShiller, maxShiller, wShiller, true)
+		p2_cash := normalizeValue(cashRealizations[t], minCash, maxCash, wCash, true)
+		p3_fcf := normalizeValue(fcfYields[t], minFCF, maxFCF, wFCF, true)
+		p3_yield := normalizeValue(shareholderYields[t], minYield, maxYield, wYield, true)
+		p4_inst := normalizeValue(smartMoneyDeltas[t], minInst, maxInst, wInst, true)
+		p4_margin := normalizeValue(marginSpreads[t], minMargin, maxMargin, wMargin, true)
+
+		scores[t] = p1_epv + p1_band + p1_z + p2_shiller + p2_cash + p3_fcf + p3_yield + p4_inst + p4_margin
+	}
+
+	// Sort activeKeys descending by total score, with Shareholder Yield tie-breaker
+	sort.Slice(activeKeys, func(i, j int) bool {
+		scoreI := scores[activeKeys[i]]
+		scoreJ := scores[activeKeys[j]]
+		if math.Abs(scoreI-scoreJ) < 1e-9 {
+			return shareholderYields[activeKeys[i]] > shareholderYields[activeKeys[j]]
+		}
+		return scoreI > scoreJ
+	})
+
+	return scores
+}
+
+// SelectTopNValue selects top N constituents for the value strategy applying sector caps.
+func SelectTopNValue(
+	activeKeys []string,
+	scores map[string]float64,
+	fundamentals map[string]yfinance.Fundamentals,
+	hardFilters *config.HardFilters,
+	topN int,
+	existingHoldings map[string]float64,
+	hysteresisBuffer int,
+	tracker *selectiontracker.Tracker,
+) []string {
+	maxPerSector := hardFilters.MaxStocksPerSector
+	if maxPerSector <= 0 {
+		maxPerSector = 3
+	}
+	fmt.Printf("Applying Value Strategy Sector Caps (max %d stocks per sector)...\n", maxPerSector)
+
+	var sectorCapCandidates []string
+	sectorCounts := make(map[string]int)
+	sectorTopTickers := make(map[string][]string)
+
+	for rankIdx, t := range activeKeys {
+		rank := rankIdx + 1
+		tracker.RecordRawScore(t, scores[t], rank)
+
+		f := fundamentals[t]
+		sec := f.Sector
+		if sec == "" {
+			sec = "Unknown"
+		}
+
+		fcfY := 0.0
+		if f.MarketCap > 0 && f.FreeCashflow > 0 {
+			fcfY = (f.FreeCashflow / f.MarketCap) * 100.0
+		}
+		driverStr := fmt.Sprintf("Forward PE: %.1f, FCF Yield: %.1f%%, Inst Stake: %.1f%%", f.ForwardPE, fcfY, f.HeldPercentInstitutions*100.0)
+		tracker.RecordAdditionDriver(t, driverStr)
+
+		if sectorCounts[sec] >= maxPerSector {
+			tracker.RecordSectorCapDrop(t, sec, sectorTopTickers[sec])
+			continue
+		}
+		sectorCounts[sec]++
+		sectorTopTickers[sec] = append(sectorTopTickers[sec], t)
+		sectorCapCandidates = append(sectorCapCandidates, t)
+	}
+
+	bufferLimit := topN + hysteresisBuffer
+	return ApplyHysteresisSelection(sectorCapCandidates, existingHoldings, topN, bufferLimit, tracker)
+}
+
+// NormalizeAndCapWeights rescales weights to sum to 1.0 while enforcing stock and sector caps.
+func NormalizeAndCapWeights(
+	selectedKeys []string,
+	weights map[string]float64,
+	fundamentals map[string]yfinance.Fundamentals,
+	stockCap float64,
+	sectorCap float64,
+) {
+	if len(selectedKeys) == 0 {
+		return
+	}
+	if stockCap <= 0 {
+		stockCap = 0.10
+	}
+	if sectorCap <= 0 {
+		sectorCap = 0.25
+	}
+
+	for iter := 0; iter < 10; iter++ {
+		var total float64
+		for _, k := range selectedKeys {
+			total += weights[k]
+		}
+		if total > 0 {
+			for _, k := range selectedKeys {
+				weights[k] = weights[k] / total
+			}
+		}
+
+		hasCapViolation := false
+		for _, k := range selectedKeys {
+			if weights[k] > stockCap {
+				weights[k] = stockCap
+				hasCapViolation = true
+			}
+		}
+
+		optimizer.EnforceSectorCaps(selectedKeys, weights, fundamentals, sectorCap)
+
+		if !hasCapViolation {
+			var checkSum float64
+			for _, k := range selectedKeys {
+				checkSum += weights[k]
+			}
+			if math.Abs(checkSum-1.0) < 1e-4 {
+				break
+			}
+		}
+	}
+
+	var finalSum float64
+	for _, k := range selectedKeys {
+		finalSum += weights[k]
+	}
+	if finalSum > 0 {
+		for _, k := range selectedKeys {
+			weights[k] = weights[k] / finalSum
+		}
+	}
+}
+
+// NormalizeValueWeights normalizes weights proportionally to scores enforcing stock & sector caps.
+func NormalizeValueWeights(
+	selectedKeys []string,
+	scores map[string]float64,
+	fundamentals map[string]yfinance.Fundamentals,
+	hardFilters *config.HardFilters,
+	existingHoldings map[string]float64,
+	rebalanceTolerance float64,
+) map[string]float64 {
+	fmt.Printf("Normalizing weights for selected top %d value stocks...\n", len(selectedKeys))
+	finalWeights := make(map[string]float64)
+	var sumScore float64
+	for _, t := range selectedKeys {
+		sumScore += scores[t]
+	}
+	for _, t := range selectedKeys {
+		if sumScore > 0 {
+			finalWeights[t] = scores[t] / sumScore
+		} else {
+			finalWeights[t] = 1.0 / float64(len(selectedKeys))
+		}
+	}
+
+	stockCapVal := hardFilters.MaxStockWeightCap
+	if stockCapVal <= 0 {
+		stockCapVal = 0.10
+	}
+	capVal := hardFilters.MaxSectorWeightCap
+	if capVal <= 0 {
+		capVal = 0.25
+	}
+
+	NormalizeAndCapWeights(selectedKeys, finalWeights, fundamentals, stockCapVal, capVal)
+
+	// Apply rebalancing band/tolerance
+	finalWeights = ApplyRebalancingBand(selectedKeys, finalWeights, existingHoldings, rebalanceTolerance)
+
+	return finalWeights
+}
+
 // SelectTopNMultibagger filters top N constituents applying sector caps and hysteresis buffer.
 func SelectTopNMultibagger(
 	activeKeys []string,
@@ -241,6 +652,12 @@ func SelectTopNMultibagger(
 		if sec == "" {
 			sec = "Unknown"
 		}
+
+		_, ttmGrowth, cagr3y := yfinance.CalculateSalesGrowth(&f)
+		roceVal, _ := getLatestROCE(&f)
+		driverStr := fmt.Sprintf("TTM Growth: %+.1f%% (3Y: %+.1f%%), ROCE: %.1f%%, Inst Stake: %.1f%%", ttmGrowth*100.0, cagr3y*100.0, roceVal*100.0, f.HeldPercentInstitutions*100.0)
+		tracker.RecordAdditionDriver(t, driverStr)
+
 		if sectorCounts[sec] >= maxPerSector {
 			tracker.RecordSectorCapDrop(t, sec, sectorTopTickers[sec])
 			continue
@@ -278,11 +695,16 @@ func NormalizeMultibaggerWeights(
 			finalWeights[t] = 1.0 / float64(len(selectedKeys))
 		}
 	}
+	stockCapVal := hardFilters.MaxStockWeightCap
+	if stockCapVal <= 0 {
+		stockCapVal = 0.10
+	}
 	capVal := hardFilters.MaxSectorWeightCap
 	if capVal <= 0 {
 		capVal = 0.25
 	}
-	optimizer.EnforceSectorCaps(selectedKeys, finalWeights, fundamentals, capVal)
+
+	NormalizeAndCapWeights(selectedKeys, finalWeights, fundamentals, stockCapVal, capVal)
 
 	// Apply rebalancing band/tolerance
 	finalWeights = ApplyRebalancingBand(selectedKeys, finalWeights, existingHoldings, rebalanceTolerance)

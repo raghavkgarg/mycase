@@ -119,16 +119,29 @@ func runBasketWithParams(ctx context.Context, liveMode bool, basketFilename stri
 
 				currentQty := currentHoldings[symbol]
 				finalQty := rawQuantities[i]
-				buyQty := finalQty - currentQty
+				diff := finalQty - currentQty
 
-				if buyQty > 0 {
+				if diff > 0 {
 					bufferPrice := ltp + 2.0
 					roundedPrice := math.Round(bufferPrice*10.0) / 10.0
 					basketOrders = append(basketOrders, broker.Order{
 						TradingSymbol:   symbol,
 						Exchange:        "NSE",
 						TransactionType: "BUY",
-						Quantity:        buyQty,
+						Quantity:        diff,
+						OrderType:       "LIMIT",
+						Product:         "CNC",
+						Ltp:             ltp,
+						Price:           roundedPrice,
+					})
+				} else if diff < 0 {
+					bufferPrice := ltp - 2.0
+					roundedPrice := math.Round(bufferPrice*10.0) / 10.0
+					basketOrders = append(basketOrders, broker.Order{
+						TradingSymbol:   symbol,
+						Exchange:        "NSE",
+						TransactionType: "SELL",
+						Quantity:        int(math.Abs(float64(diff))),
 						OrderType:       "LIMIT",
 						Product:         "CNC",
 						Ltp:             ltp,
@@ -216,7 +229,7 @@ func runBasketWithParams(ctx context.Context, liveMode bool, basketFilename stri
 		}
 	}
 
-	basketOrders = applyTransactionFilters(basketOrders, quoteData, b)
+	basketOrders = applyTransactionFilters(basketOrders, quoteData, b, basket)
 
 	executor.ExecuteBasketOrders(
 		basketOrders, quoteData, currentHoldings, finalQuantities,
@@ -231,6 +244,7 @@ func applyTransactionFilters(
 	orders []broker.Order,
 	quotes map[string]float64,
 	b broker.Broker,
+	basket map[string]float64,
 ) []broker.Order {
 	if len(orders) == 0 {
 		return orders
@@ -238,7 +252,7 @@ func applyTransactionFilters(
 
 	const microTxThreshold = 0.005 // 0.5% cost-to-value threshold
 
-	kept, filtered := optimizer.FilterMicroTransactions(orders, quotes, costs.DefaultZerodha, microTxThreshold)
+	kept, filtered := optimizer.FilterMicroTransactionsWithExits(orders, quotes, costs.DefaultZerodha, microTxThreshold, basket)
 
 	if len(filtered) > 0 {
 		fmt.Printf("\n--- Micro-Transaction Filter (cost > %.1f%% of trade value) ---\n", microTxThreshold*100)

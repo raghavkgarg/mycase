@@ -7,6 +7,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/cookiejar"
+	"sort"
+	"strings"
 	"sync"
 	"time"
 )
@@ -58,13 +60,13 @@ func FetchFundamentals(ctx context.Context, tickers []string) (map[string]Fundam
 	var uncachedTickers []string
 	for _, t := range tickers {
 		// 1. DuckDB persistent cache
-		if f, ok := checkFundamentalsCache(ctx, t); ok {
+		if f, ok := checkFundamentalsCache(ctx, t); ok && f.ResultPrevComing != "" && f.ResultPrevComing != "N/A -> N/A" {
 			fundamentals[t] = *f
 			continue
 		}
 		// 2. File cache (same-day)
 		var cached Fundamentals
-		if loadFromCache("fundamentals", t, &cached) {
+		if loadFromCache("fundamentals", t, &cached) && cached.ResultPrevComing != "" && cached.ResultPrevComing != "N/A -> N/A" {
 			fundamentals[t] = cached
 		} else {
 			uncachedTickers = append(uncachedTickers, t)
@@ -111,7 +113,7 @@ func FetchFundamentals(ctx context.Context, tickers []string) (map[string]Fundam
 		wg.Go(func() {
 			for job := range jobs {
 				ySym := MapTickerToYahoo(job.ticker)
-				url := fmt.Sprintf("https://query2.finance.yahoo.com/v10/finance/quoteSummary/%s?modules=financialData,defaultKeyStatistics,summaryDetail,assetProfile,earnings&crumb=%s", ySym, crumb)
+				url := fmt.Sprintf("https://query2.finance.yahoo.com/v10/finance/quoteSummary/%s?modules=financialData,defaultKeyStatistics,summaryDetail,assetProfile,earnings,calendarEvents&crumb=%s", ySym, crumb)
 
 				req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 				if err != nil {
@@ -308,6 +310,35 @@ func FetchFundamentals(ctx context.Context, tickers []string) (map[string]Fundam
 					}
 				}
 
+				var allDates []time.Time
+				for _, q := range res.Earnings.EarningsChart.Quarterly {
+					if q.ReportedDate.Fmt != "" {
+						if tVal, err := time.Parse("2006-01-02", q.ReportedDate.Fmt); err == nil {
+							allDates = append(allDates, tVal)
+						}
+					} else if q.ReportedDate.Raw > 0 {
+						allDates = append(allDates, time.Unix(q.ReportedDate.Raw, 0).UTC())
+					}
+				}
+				for _, ed := range res.CalendarEvents.Earnings.EarningsDate {
+					if ed.Fmt != "" {
+						if tVal, err := time.Parse("2006-01-02", ed.Fmt); err == nil {
+							allDates = append(allDates, tVal)
+						}
+					} else if ed.Raw > 0 {
+						allDates = append(allDates, time.Unix(ed.Raw, 0).UTC())
+					}
+				}
+
+				// Enrich dates from Screener.in for Indian stocks
+				if strings.HasPrefix(job.ticker, "NSE:") || strings.HasPrefix(job.ticker, "BSE:") || strings.HasSuffix(job.ticker, ".NS") || strings.HasSuffix(job.ticker, ".BO") {
+					if sDates, err := FetchScreenerEarningsDates(ctx, job.ticker); err == nil && len(sDates) > 0 {
+						allDates = append(allDates, sDates...)
+					}
+				}
+
+				resPrevComing := FormatPrevComingResultDates(allDates)
+
 				fund := Fundamentals{
 					PEGRatio:                 pegRatio,
 					ROE:                      fd.ReturnOnEquity.Raw,
@@ -337,6 +368,7 @@ func FetchFundamentals(ctx context.Context, tickers []string) (map[string]Fundam
 					AnnualTotalAssets:        annualTotalAssets,
 					AnnualCurrentLiabilities: annualCurrentLiabilities,
 					AnnualInterestExpense:    annualInterestExpense,
+					ResultPrevComing:         resPrevComing,
 				}
 
 				results <- fetchResult{ticker: job.ticker, fund: fund}
@@ -365,4 +397,47 @@ func FetchFundamentals(ctx context.Context, tickers []string) (map[string]Fundam
 	}
 
 	return fundamentals, nil
+}
+
+// FormatPrevComingResultDates parses raw timestamps/date strings and formats as "DD-MM-YY -> DD-MM-YY"
+func FormatPrevComingResultDates(allDates []time.Time) string {
+	if len(allDates) == 0 {
+		return "N/A -> N/A"
+	}
+	dateMap := make(map[string]time.Time)
+	for _, d := range allDates {
+		dateMap[d.Format("2006-01-02")] = d
+	}
+	var sortedDates []time.Time
+	for _, d := range dateMap {
+		sortedDates = append(sortedDates, d)
+	}
+	sort.Slice(sortedDates, func(i, j int) bool {
+		return sortedDates[i].Before(sortedDates[j])
+	})
+
+	now := time.Now()
+	var prevDate, comingDate time.Time
+	foundPrev, foundComing := false, false
+
+	for _, d := range sortedDates {
+		if !d.After(now) {
+			prevDate = d
+			foundPrev = true
+		} else if !foundComing {
+			comingDate = d
+			foundComing = true
+		}
+	}
+
+	prevStr := "N/A"
+	if foundPrev {
+		prevStr = prevDate.Format("02-01-06")
+	}
+	comingStr := "N/A"
+	if foundComing {
+		comingStr = comingDate.Format("02-01-06")
+	}
+
+	return fmt.Sprintf("%s -> %s", prevStr, comingStr)
 }

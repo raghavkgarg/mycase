@@ -2,10 +2,32 @@ package monitoring
 
 import (
 	"fmt"
-	"github.com/raghavkgarg/mycase/pkg/yfinance"
 	"sort"
+	"strings"
 	"time"
+
+	"github.com/raghavkgarg/mycase/pkg/yfinance"
 )
+
+// getROCE estimates ROCE or ROE from Fundamentals
+func getROCE(f *yfinance.Fundamentals) float64 {
+	if f.ROE > 0 {
+		return f.ROE
+	}
+	if len(f.AnnualOperatingIncome) > 0 && len(f.AnnualTotalAssets) > 0 {
+		ebit := f.AnnualOperatingIncome[0].Value
+		assets := f.AnnualTotalAssets[0].Value
+		liab := 0.0
+		if len(f.AnnualCurrentLiabilities) > 0 {
+			liab = f.AnnualCurrentLiabilities[0].Value
+		}
+		ce := assets - liab
+		if ce > 0 {
+			return ebit / ce
+		}
+	}
+	return 0.0
+}
 
 // GetCapStallSeverity calculates the Cap Stall Severity based on DSO Delta and TTM Growth.
 func GetCapStallSeverity(ttmGrowth, cagr3y, dsoDelta float64) string {
@@ -218,7 +240,12 @@ func RunSimulation(
 			vol20Avg := vol20Sum / float64(volCount)
 
 			closePrice := h.Closes[tIdx]
-			if closePrice < sma200 {
+			smaThreshold := sma200
+			if strings.ToLower(params.Strategy) == "value" {
+				// Large-cap value stocks are allowed to consolidate up to 10% below 200-day SMA before watch alert
+				smaThreshold = sma200 * 0.90
+			}
+			if closePrice < smaThreshold {
 				consecutiveDaysBelowSMA[t]++
 				// Check rising volume constraint: volume on below-SMA days is above average
 				if consecutiveDaysBelowSMA[t] > params.SMADays && h.Volumes[tIdx] > vol20Avg {
@@ -253,52 +280,104 @@ func RunSimulation(
 		// --- Pillar 1 & 2: Quarterly Reviews (Every 3 Months / ~63 trading days) ---
 		if d > 0 && d%63 == 0 {
 			var toExit []string
+			isValStrat := strings.ToLower(params.Strategy) == "value"
 			for t := range activeStocks {
 				f, exists := fundamentals[t]
 				if !exists {
 					continue
 				}
 
-				// Pillar 1: Sales Growth Accelerator (TTM vs 3Y CAGR)
-				passedSales, _, _ := yfinance.CalculateSalesGrowth(&f)
+				if isValStrat {
+					// --- VALUE STRATEGY MONITORING POLICY ---
+					// Scale D/E ratio from Yahoo Finance percentage (e.g. 1.78 -> 0.0178, 45.0 -> 0.45)
+					deRatio := f.DebtToEquity / 100.0
 
-				// Pillar 2: Working capital sentry (DSO check)
-				_, dsoPrev, dsoLatest := yfinance.CalculateDSO(&f)
-				dsoDelta := 0.0
-				if dsoPrev > 0 {
-					dsoDelta = (dsoLatest - dsoPrev) / dsoPrev
-				}
-				passedWC := dsoDelta <= params.DSODeteriorationThreshold
+					// Pillar 1: Fundamental Solvency & Quality Guard (ROCE >= 8%, Debt/Equity <= 1.0, CFO/PAT >= 0.5)
+					roceVal := getROCE(&f)
+					passedROCE := roceVal >= 0.08 || roceVal == 0
+					passedDebt := deRatio <= 1.0 || deRatio == 0
 
-				// Pillar 3: Asset Turnover & CapEx Inflection
-				_, atPrev, atLatest, pctCapExChange, _ := yfinance.CalculateAssetTurnoverCapEx(&f, params.MaxCapExYoYMultiplier)
-				passedAT := atLatest > atPrev
+					cfoPat := 0.0
+					if f.NetIncome > 0 && f.OperatingCashflow > 0 {
+						cfoPat = f.OperatingCashflow / f.NetIncome
+					}
+					passedCFO := cfoPat >= 0.50 || cfoPat == 0
+					passedQuality := passedROCE && passedDebt && passedCFO
 
-				maxCapExPct := (params.MaxCapExYoYMultiplier - 1.0) * 100.0
-				passedCapEx := pctCapExChange <= maxCapExPct
+					// Pillar 2: Working Capital & Revenue Collapse Sentry
+					_, dsoPrev, dsoLatest := yfinance.CalculateDSO(&f)
+					dsoDelta := 0.0
+					if dsoPrev > 0 {
+						dsoDelta = (dsoLatest - dsoPrev) / dsoPrev
+					}
+					_, ttmGrowth, _ := yfinance.CalculateSalesGrowth(&f)
+					passedDSO := dsoDelta <= params.DSODeteriorationThreshold
+					passedGrowth := ttmGrowth >= -0.25 // Allow normal cyclical dips; trigger exit on severe revenue collapse (< -25%)
+					passedWCAndGrowth := passedDSO && passedGrowth
 
-				// Require at least 2 out of 3 operational criteria to pass
-				passCount := 0
-				if passedSales {
-					passCount++
-				}
-				if passedWC {
-					passCount++
-				}
-				if passedAT {
-					passCount++
-				}
+					// Pillar 3: Operating Margin & Solvency Health
+					passedMargin := f.OperatingMargins >= 0.05 || f.OperatingMargins == 0
 
-				// Exit if CapEx gate is violated OR if less than 2 out of 3 operational criteria pass consecutively
-				if !passedCapEx {
-					toExit = append(toExit, t)
-				} else if passCount < 2 {
-					consecutiveQuartersFailed[t]++
-					if consecutiveQuartersFailed[t] >= params.ConsecutiveQuartersExit {
+					passCount := 0
+					if passedQuality {
+						passCount++
+					}
+					if passedWCAndGrowth {
+						passCount++
+					}
+					if passedMargin {
+						passCount++
+					}
+
+					// Exit if catastrophic collapse (TTM growth < -40% or Debt/Equity > 1.5) OR if failing < 2/3 Pillars for consecutive quarters
+					if ttmGrowth < -0.40 || deRatio > 1.5 {
 						toExit = append(toExit, t)
+					} else if passCount < 2 {
+						consecutiveQuartersFailed[t]++
+						if consecutiveQuartersFailed[t] >= params.ConsecutiveQuartersExit {
+							toExit = append(toExit, t)
+						}
+					} else {
+						consecutiveQuartersFailed[t] = 0
 					}
 				} else {
-					consecutiveQuartersFailed[t] = 0
+					// --- MULTIBAGGER / STANDARD MONITORING POLICY ---
+					passedSales, _, _ := yfinance.CalculateSalesGrowth(&f)
+
+					_, dsoPrev, dsoLatest := yfinance.CalculateDSO(&f)
+					dsoDelta := 0.0
+					if dsoPrev > 0 {
+						dsoDelta = (dsoLatest - dsoPrev) / dsoPrev
+					}
+					passedWC := dsoDelta <= params.DSODeteriorationThreshold
+
+					_, atPrev, atLatest, pctCapExChange, _ := yfinance.CalculateAssetTurnoverCapEx(&f, params.MaxCapExYoYMultiplier)
+					passedAT := atLatest > atPrev
+
+					maxCapExPct := (params.MaxCapExYoYMultiplier - 1.0) * 100.0
+					passedCapEx := pctCapExChange <= maxCapExPct
+
+					passCount := 0
+					if passedSales {
+						passCount++
+					}
+					if passedWC {
+						passCount++
+					}
+					if passedAT {
+						passCount++
+					}
+
+					if !passedCapEx {
+						toExit = append(toExit, t)
+					} else if passCount < 2 {
+						consecutiveQuartersFailed[t]++
+						if consecutiveQuartersFailed[t] >= params.ConsecutiveQuartersExit {
+							toExit = append(toExit, t)
+						}
+					} else {
+						consecutiveQuartersFailed[t] = 0
+					}
 				}
 			}
 

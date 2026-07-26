@@ -48,6 +48,104 @@ func CalculateRSI(closes []float64) float64 {
 	return 100.0 - (100.0 / (1.0 + rs))
 }
 
+// IsFinancialSector checks if a sector belongs to Banks, NBFCs, Insurance, or Financial Services.
+func IsFinancialSector(sector string) bool {
+	s := sector
+	return s == "Financial Services" || s == "Financials" || s == "Banking" || s == "Banks" || s == "Insurance"
+}
+
+// CalculateEPV calculates Bruce Greenwald's Earnings Power Value (EPV) and Margin of Safety (MOS).
+func CalculateEPV(f *Fundamentals, wacc float64) (epv float64, mos float64, ok bool) {
+	if wacc <= 0 {
+		wacc = 0.105 // 10.5% default WACC for Indian Large-Caps
+	}
+
+	nOp := len(f.AnnualOperatingIncome)
+	var avgEBIT float64
+	if nOp > 0 {
+		sum := 0.0
+		count := 0
+		for i := max(0, nOp-3); i < nOp; i++ {
+			if f.AnnualOperatingIncome[i].Value > 0 {
+				sum += f.AnnualOperatingIncome[i].Value
+				count++
+			}
+		}
+		if count > 0 {
+			avgEBIT = sum / float64(count)
+		}
+	}
+
+	if avgEBIT <= 0 && f.NetIncome > 0 {
+		avgEBIT = f.NetIncome / 0.70 // Proxy EBIT from Net Income
+	}
+
+	if avgEBIT <= 0 {
+		return 0, 0, false
+	}
+
+	nopat := avgEBIT * 0.70 // 30% tax rate assumption
+	adjustedCashEarnings := nopat
+
+	epv = adjustedCashEarnings / wacc
+	if epv <= 0 {
+		return 0, 0, false
+	}
+
+	// Calculate Enterprise Value (EV) = MarketCap + TotalDebt - OperatingCashflow (cash proxy)
+	ev := f.MarketCap + f.TotalDebt
+	if ev <= 0 {
+		ev = f.MarketCap
+	}
+
+	mos = (1.0 - (ev / epv)) * 100.0
+	return epv, mos, true
+}
+
+// CalculateShillerYield calculates Shiller CAPE Yield based on 3-year average EPS relative to stock price.
+func CalculateShillerYield(f *Fundamentals) (float64, bool) {
+	if f.RegularPrice <= 0 {
+		return 0, false
+	}
+
+	nHist := len(f.EarningsHistory)
+	if nHist == 0 {
+		if f.NetIncome > 0 && f.MarketCap > 0 {
+			return f.NetIncome / f.MarketCap, true
+		}
+		return 0, false
+	}
+
+	sumEarnings := 0.0
+	count := 0
+	for i := max(0, nHist-3); i < nHist; i++ {
+		sumEarnings += f.EarningsHistory[i].Earnings
+		count++
+	}
+
+	if count == 0 || sumEarnings <= 0 {
+		return 0, false
+	}
+
+	avgEarnings := sumEarnings / float64(count)
+	if f.MarketCap > 0 {
+		return avgEarnings / f.MarketCap, true
+	}
+	return 0, false
+}
+
+// CalculateShareholderYield computes total cash returned to shareholders via dividends and cash yield.
+func CalculateShareholderYield(f *Fundamentals) float64 {
+	if f.MarketCap <= 0 {
+		return 0.0
+	}
+	yield := 0.0
+	if f.OperatingCashflow > 0 {
+		yield += (f.FreeCashflow / f.MarketCap) * 100.0
+	}
+	return yield
+}
+
 // CheckVolumeBreakout checks for a green-day volume breakout in a given rolling lookback window and multiplier
 func CheckVolumeBreakout(closes, opens, volumes []float64, lookback int, multiplier float64) bool {
 	n := len(closes)
@@ -134,8 +232,19 @@ func CalculateSalesGrowth(f *Fundamentals) (bool, float64, float64) {
 		}
 	}
 	ttmGrowth := 0.0
-	if baseRev > 0 {
-		ttmGrowth = (f.TTMRevenue / baseRev) - 1.0
+	if f.TTMRevenue > 0 && baseRev > 0 {
+		ratio := f.TTMRevenue / baseRev
+		if ratio < 0.10 && nRev >= 2 {
+			// If TTM is 10x+ smaller due to Yahoo Finance API unit scale discrepancy,
+			// fallback to latest annual YoY growth
+			prevAnnual := f.AnnualRevenue[nRev-1].Value
+			prev2Annual := f.AnnualRevenue[nRev-2].Value
+			if prev2Annual > 0 {
+				ttmGrowth = (prevAnnual / prev2Annual) - 1.0
+			}
+		} else {
+			ttmGrowth = ratio - 1.0
+		}
 	}
 
 	return ttmGrowth > cagr3y, ttmGrowth, cagr3y

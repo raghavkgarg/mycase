@@ -29,6 +29,32 @@
       "score_weight_roce": 15.0,
       "score_weight_volume_breakout": 15.0,
       "score_weight_relative_strength": 15.0
+    },
+    "value": {
+      "min_market_cap": 200000000000,
+      "max_market_cap": 50000000000000,
+      "min_adv": 100000000,
+      "min_cfo_pat": 0.70,
+      "max_debt_to_equity": 0.80,
+      "min_interest_coverage": 4.0,
+      "min_roce": 0.12,
+      "min_roe": 0.12,
+      "max_net_npa": 0.015,
+      "min_car": 0.15,
+      "min_roa": 0.012,
+      "min_200day_sma_ratio": 0.85,
+      "max_stocks_per_sector": 3,
+      "max_sector_weight_cap": 0.25,
+      "max_stock_weight_cap": 0.10,
+      "score_weight_epv_mos": 15.0,
+      "score_weight_5y_val_percentile": 10.0,
+      "score_weight_sector_zscore": 10.0,
+      "score_weight_shiller_yield": 10.0,
+      "score_weight_cash_realization": 15.0,
+      "score_weight_fcf_yield": 10.0,
+      "score_weight_shareholder_yield": 10.0,
+      "score_weight_smart_money_delta": 10.0,
+      "score_weight_margin_inflection": 10.0
     }
   },
   "strategies": {
@@ -76,6 +102,14 @@
       "insiders_percent": 0.10,
       "return": 0.10,
       "net_debt_ebitda": 0.10
+    },
+    "value": {
+      "pb_ratio": 0.20,
+      "roe": 0.20,
+      "operating_margins": 0.20,
+      "market_cap": 0.15,
+      "net_debt_ebitda": 0.15,
+      "return": 0.10
     }
   }
 }

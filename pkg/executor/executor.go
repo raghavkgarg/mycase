@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/raghavkgarg/mycase/pkg/broker"
+	"github.com/raghavkgarg/mycase/pkg/config"
 	"github.com/raghavkgarg/mycase/pkg/market"
 	"github.com/raghavkgarg/mycase/pkg/printer"
 	"github.com/raghavkgarg/mycase/pkg/yfinance"
@@ -88,6 +89,24 @@ func ExecuteBasketOrders(
 	}
 
 	if reader != nil {
+		if !b.IsMock() {
+			ipv4, ipv6 := config.FetchPublicIPs()
+			fmt.Println("\n====================================================================")
+			fmt.Println("               IP WHITELIST PRE-EXECUTION CHECK                     ")
+			fmt.Println("====================================================================")
+			if ipv6 != "" {
+				fmt.Printf("Current IPv6: %s\n", ipv6)
+			}
+			if ipv4 != "" {
+				fmt.Printf("Current IPv4: %s\n", ipv4)
+			}
+			if ipv4 == "" && ipv6 == "" {
+				fmt.Println("Current Public IP: Unable to resolve automatically")
+			}
+			fmt.Println("👉 Please make sure your IP is whitelisted under App Settings on:")
+			fmt.Println("   https://developers.kite.trade/profile")
+			fmt.Println("====================================================================")
+		}
 		fmt.Print("Do you want to execute these orders? (y/n): ")
 		confirmInput, _ := reader.ReadString('\n')
 		if strings.ToLower(strings.TrimSpace(confirmInput)) != "y" {
@@ -164,7 +183,7 @@ func ExecuteBasketOrders(
 			result, err := placeGTTWithRetry(b, gttOrder)
 			if err != nil {
 				errMsg := err.Error()
-				failedLines = append(failedLines, fmt.Sprintf("Error placing GTT order for %s: %v", order.TradingSymbol, errMsg))
+				failedLines = append(failedLines, fmt.Sprintf("Error placing GTT %s order for %s: %v", strings.ToUpper(order.TransactionType), order.TradingSymbol, errMsg))
 				failedSpecs = append(failedSpecs, FailedOrderSpec{
 					TradingSymbol:   order.TradingSymbol,
 					Exchange:        order.Exchange,
@@ -176,10 +195,10 @@ func ExecuteBasketOrders(
 					OrderVariety:    "gtt",
 					IsGTT:           true,
 				})
-				fmt.Printf("Error placing GTT order for %s: %v\n", order.TradingSymbol, errMsg)
+				fmt.Printf("Error placing GTT %s order for %s: %v\n", strings.ToUpper(order.TransactionType), order.TradingSymbol, errMsg)
 			} else {
-				line := fmt.Sprintf("Placed GTT order (Trigger ID: %d) for %d shares of %s (Trigger: ₹%.2f, Limit: ₹%.2f) at %s",
-					result.TriggerID, order.Quantity, order.TradingSymbol, triggerPrice, limitPrice, orderNow)
+				line := fmt.Sprintf("Placed GTT %s order (Trigger ID: %d) for %d shares of %s (Trigger: ₹%.2f, Limit: ₹%.2f) at %s",
+					strings.ToUpper(order.TransactionType), result.TriggerID, order.Quantity, order.TradingSymbol, triggerPrice, limitPrice, orderNow)
 				successLines = append(successLines, line)
 				fmt.Println(line)
 			}
@@ -192,7 +211,7 @@ func ExecuteBasketOrders(
 			result, err := placeOrderWithRetry(b, orderVariety, regOrder)
 			if err != nil {
 				errMsg := err.Error()
-				failedLines = append(failedLines, fmt.Sprintf("Error placing order for %s: %v", order.TradingSymbol, errMsg))
+				failedLines = append(failedLines, fmt.Sprintf("Error placing %s %s order for %s: %v", strings.ToUpper(orderVariety), strings.ToUpper(order.TransactionType), order.TradingSymbol, errMsg))
 				failedSpecs = append(failedSpecs, FailedOrderSpec{
 					TradingSymbol:   order.TradingSymbol,
 					Exchange:        order.Exchange,
@@ -204,10 +223,10 @@ func ExecuteBasketOrders(
 					OrderVariety:    orderVariety,
 					IsGTT:           false,
 				})
-				fmt.Printf("Error placing order for %s: %v\n", order.TradingSymbol, errMsg)
+				fmt.Printf("Error placing %s %s order for %s: %v\n", strings.ToUpper(orderVariety), strings.ToUpper(order.TransactionType), order.TradingSymbol, errMsg)
 			} else {
-				line := fmt.Sprintf("Placed %s order %s for %d shares of %s @ ₹%.2f at %s",
-					strings.ToUpper(orderVariety), result.OrderID, order.Quantity, order.TradingSymbol, execPrice, orderNow)
+				line := fmt.Sprintf("Placed %s %s order %s for %d shares of %s @ ₹%.2f at %s",
+					strings.ToUpper(orderVariety), strings.ToUpper(order.TransactionType), result.OrderID, order.Quantity, order.TradingSymbol, execPrice, orderNow)
 				successLines = append(successLines, line)
 				fmt.Println(line)
 			}
@@ -380,10 +399,10 @@ func ExecuteRetryPayload(jsonPath string, b broker.Broker, reader *bufio.Reader)
 			if perr != nil {
 				order.ErrorReason = perr.Error()
 				remainingFailed = append(remainingFailed, order)
-				fmt.Printf("Retry Error placing GTT order for %s: %v\n", order.TradingSymbol, perr)
+				fmt.Printf("Retry Error placing GTT %s order for %s: %v\n", strings.ToUpper(order.TransactionType), order.TradingSymbol, perr)
 			} else {
-				line := fmt.Sprintf("Placed GTT order (Trigger ID: %d) for %d shares of %s (Trigger: ₹%.2f, Limit: ₹%.2f) at %s",
-					res.TriggerID, order.Quantity, order.TradingSymbol, triggerPrice, limitPrice, orderNow)
+				line := fmt.Sprintf("Placed GTT %s order (Trigger ID: %d) for %d shares of %s (Trigger: ₹%.2f, Limit: ₹%.2f) at %s",
+					strings.ToUpper(order.TransactionType), res.TriggerID, order.Quantity, order.TradingSymbol, triggerPrice, limitPrice, orderNow)
 				successLines = append(successLines, line)
 				fmt.Println(line)
 			}
@@ -401,10 +420,10 @@ func ExecuteRetryPayload(jsonPath string, b broker.Broker, reader *bufio.Reader)
 			if perr != nil {
 				order.ErrorReason = perr.Error()
 				remainingFailed = append(remainingFailed, order)
-				fmt.Printf("Retry Error placing order for %s: %v\n", order.TradingSymbol, perr)
+				fmt.Printf("Retry Error placing %s %s order for %s: %v\n", strings.ToUpper(variety), strings.ToUpper(order.TransactionType), order.TradingSymbol, perr)
 			} else {
-				line := fmt.Sprintf("Placed %s order %s for %d shares of %s @ ₹%.2f at %s",
-					strings.ToUpper(variety), res.OrderID, order.Quantity, order.TradingSymbol, execPrice, orderNow)
+				line := fmt.Sprintf("Placed %s %s order %s for %d shares of %s @ ₹%.2f at %s",
+					strings.ToUpper(variety), strings.ToUpper(order.TransactionType), res.OrderID, order.Quantity, order.TradingSymbol, execPrice, orderNow)
 				successLines = append(successLines, line)
 				fmt.Println(line)
 			}

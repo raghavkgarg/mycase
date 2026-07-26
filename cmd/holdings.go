@@ -57,10 +57,11 @@ func runHoldings(ctx context.Context, c *cli.Command) error {
 			tickers = make(map[string]bool)
 		}
 		groups = append(groups, printer.ThemeGroup{
-			Name:    tc.Name,
-			Prefix:  tc.Prefix,
-			CSVPath: tc.CSVPath,
-			Tickers: tickers,
+			Name:         tc.Name,
+			Prefix:       tc.Prefix,
+			CSVPath:      tc.CSVPath,
+			TargetWeight: tc.TargetWeight,
+			Tickers:      tickers,
 		})
 	}
 

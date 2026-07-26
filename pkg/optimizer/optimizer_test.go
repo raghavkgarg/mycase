@@ -107,6 +107,34 @@ func TestOptimizeFreshBuy_ExistingHoldings(t *testing.T) {
 	}
 }
 
+func TestOptimizeFreshBuy_ZeroWeightExit(t *testing.T) {
+	// Stock with 0.0 weight should have final quantity 0 (SELL signal)
+	// and its sell proceeds should be added to effective investment budget.
+	basketKeys := []string{"NSE:ACTIVE", "NSE:EXIT"}
+	basket := map[string]float64{
+		"NSE:ACTIVE": 1.0,
+		"NSE:EXIT":   0.0,
+	}
+	quoteData := map[string]float64{
+		"NSE:ACTIVE": 100.0,
+		"NSE:EXIT":   100.0,
+	}
+	currentHoldings := map[string]int{
+		"ACTIVE": 0,
+		"EXIT":   5, // 5 shares of EXIT stock @ 100 = 500 sell proceeds
+	}
+
+	// Budget of 500 + 500 sell proceeds = 1000 effective budget -> ~9 shares of ACTIVE
+	result := OptimizeFreshBuy(basketKeys, basket, quoteData, currentHoldings, 500.0)
+
+	if result[1] != 0 {
+		t.Errorf("expected 0 quantity for EXIT stock (weight=0.0), got %d", result[1])
+	}
+	if result[0] < 8 {
+		t.Errorf("expected ACTIVE stock to utilize fresh budget + sell proceeds (~9 shares), got %d", result[0])
+	}
+}
+
 func TestCalculateDailyReturns_Empty(t *testing.T) {
 	if r := CalculateDailyReturns(nil); r != nil {
 		t.Errorf("expected nil for nil input, got %v", r)

@@ -8,6 +8,10 @@ data/cache.db
 data/broker.db
 data/
 
+# DOCS files
+docs/multibagger.md
+docs/value.md
+
 # Credentials containing API keys, API secrets, and access tokens
 config/config.json
 

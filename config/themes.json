@@ -2,26 +2,31 @@
   {
     "name": "Theme KK Advise",
     "prefix": "My KK",
-    "csv_path": "data/myall.csv"
+    "csv_path": "data/myall.csv",
+    "target_weight": 0.30
   },
   {
-    "name": "Theme  AI Advice",
+    "name": "Theme AI Advice",
     "prefix": "My AI",
-    "csv_path": "data/aitheme.csv"
+    "csv_path": "data/aitheme.csv",
+    "target_weight": 0.20
   },
   {
     "name": "Theme Micro Advice",
     "prefix": "My Micro",
-    "csv_path": "data/modularmicro.csv"
+    "csv_path": "data/modularmicro.csv",
+    "target_weight": 0.30
   },
   {
     "name": "Theme Hydrogen Nuclear",
     "prefix": "My Hydrogen",
-    "csv_path": "data/hydrogen.csv"
+    "csv_path": "data/hydrogen.csv",
+    "target_weight": 0.00
   },
   {
     "name": "Theme Microsmall",
     "prefix": "My MicroSmall",
-    "csv_path": "data/microsmall.csv"
+    "csv_path": "data/microsmall.csv",
+    "target_weight": 0.20
   }
 ]

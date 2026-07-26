@@ -30,7 +30,7 @@ var MonitorCommand = &cli.Command{
 		&cli.StringFlag{Name: "style", Value: "moderate", Usage: "Monitoring style preset (hyper-aggressive, moderate, passive)"},
 		&cli.FloatFlag{Name: "capital", Value: 100000.0, Usage: "Initial capital invested"},
 		&cli.StringFlag{Name: "date", Usage: "Start date for simulation (YYYY-MM-DD)"},
-		&cli.StringFlag{Name: "strategy", Value: "balanced", Usage: "Weighting strategy preset (balanced, aggressive, conservative, multibagger)"},
+		&cli.StringFlag{Name: "strategy", Aliases: []string{"method", "m", "s"}, Value: "balanced", Usage: "Strategy policy preset (value, multibagger, balanced, aggressive, conservative)"},
 		&cli.StringFlag{Name: "timestamp", Usage: "Unified run timestamp in YYYYMMDD_HHMMSS format"},
 	},
 	Action: func(ctx context.Context, c *cli.Command) error {
@@ -94,7 +94,12 @@ func runMonitorWithParams(ctx context.Context, filePath string, interactive bool
 		return fmt.Errorf("no valid stocks found in CSV")
 	}
 
-	params := monitorPresetParams(style)
+	activeStrategy := strategy
+	if !strategyExplicit {
+		activeStrategy = monitorGetPipelineStrategy()
+	}
+
+	params := monitorPresetParams(style, activeStrategy)
 	params.StartDate = date
 
 	if interactive {
@@ -114,6 +119,7 @@ func runMonitorWithParams(ctx context.Context, filePath string, interactive bool
 	params.MaxCapExYoYMultiplier = maxCapEx
 
 	fmt.Printf("\nRunning simulation with parameters:\n")
+	fmt.Printf("- Strategy Policy: %s\n", strings.ToUpper(activeStrategy))
 	fmt.Printf("- Consecutive Quarters Exit: %d\n", params.ConsecutiveQuartersExit)
 	fmt.Printf("- DSO Deterioration Trigger: %.1f%%\n", params.DSODeteriorationThreshold*100.0)
 	fmt.Printf("- CapEx YoY Reinvestment Cap: %.2f\n", params.MaxCapExYoYMultiplier)
@@ -140,42 +146,45 @@ func runMonitorWithParams(ctx context.Context, filePath string, interactive bool
 		return fmt.Errorf("simulation error: %w", err)
 	}
 
-	activeStrategy := strategy
-	if !strategyExplicit {
-		activeStrategy = monitorGetPipelineStrategy()
-	}
-
 	generateMonitorReport(simResult, filePath, style, isMockUsed, params, activeStrategy, timestamp)
 	return nil
 }
 
-func monitorPresetParams(style string) monitoring.PolicyParams {
+func monitorPresetParams(style, strategy string) monitoring.PolicyParams {
+	p := monitoring.PolicyParams{
+		Strategy: strategy,
+	}
+	isVal := strings.ToLower(strategy) == "value"
 	switch strings.ToLower(style) {
 	case "hyper-aggressive":
-		return monitoring.PolicyParams{
-			ConsecutiveQuartersExit:   1,
-			DSODeteriorationThreshold: 0.10,
-			SMADays:                   5,
-			RebalanceMonths:           3,
-			MaxWeightDrift:            0.12,
+		p.ConsecutiveQuartersExit = 1
+		p.DSODeteriorationThreshold = 0.10
+		p.SMADays = 5
+		p.RebalanceMonths = 3
+		p.MaxWeightDrift = 0.12
+		if isVal {
+			p.DSODeteriorationThreshold = 0.20
 		}
 	case "passive":
-		return monitoring.PolicyParams{
-			ConsecutiveQuartersExit:   3,
-			DSODeteriorationThreshold: 0.25,
-			SMADays:                   20,
-			RebalanceMonths:           12,
-			MaxWeightDrift:            0.20,
+		p.ConsecutiveQuartersExit = 3
+		p.DSODeteriorationThreshold = 0.25
+		p.SMADays = 20
+		p.RebalanceMonths = 12
+		p.MaxWeightDrift = 0.20
+		if isVal {
+			p.DSODeteriorationThreshold = 0.35
 		}
 	default:
-		return monitoring.PolicyParams{
-			ConsecutiveQuartersExit:   2,
-			DSODeteriorationThreshold: 0.15,
-			SMADays:                   10,
-			RebalanceMonths:           6,
-			MaxWeightDrift:            0.15,
+		p.ConsecutiveQuartersExit = 2
+		p.DSODeteriorationThreshold = 0.15
+		p.SMADays = 10
+		p.RebalanceMonths = 6
+		p.MaxWeightDrift = 0.15
+		if isVal {
+			p.DSODeteriorationThreshold = 0.30
 		}
 	}
+	return p
 }
 
 func monitorInteractiveMenu(defaults monitoring.PolicyParams) monitoring.PolicyParams {
@@ -195,9 +204,9 @@ func monitorInteractiveMenu(defaults monitoring.PolicyParams) monitoring.PolicyP
 
 	switch choice {
 	case 1:
-		return monitorPresetParams("hyper-aggressive")
+		return monitorPresetParams("hyper-aggressive", defaults.Strategy)
 	case 3:
-		return monitorPresetParams("passive")
+		return monitorPresetParams("passive", defaults.Strategy)
 	case 4:
 		var quarters, smaDays, rebalanceMonths int
 		var dsoDeterioration, maxDrift float64
@@ -228,6 +237,7 @@ func monitorInteractiveMenu(defaults monitoring.PolicyParams) monitoring.PolicyP
 			maxDrift = defaults.MaxWeightDrift * 100.0
 		}
 		return monitoring.PolicyParams{
+			Strategy:                  defaults.Strategy,
 			ConsecutiveQuartersExit:   quarters,
 			DSODeteriorationThreshold: dsoDeterioration / 100.0,
 			SMADays:                   smaDays,
@@ -235,7 +245,7 @@ func monitorInteractiveMenu(defaults monitoring.PolicyParams) monitoring.PolicyP
 			MaxWeightDrift:            maxDrift / 100.0,
 		}
 	default:
-		return monitorPresetParams("moderate")
+		return monitorPresetParams("moderate", defaults.Strategy)
 	}
 }
 

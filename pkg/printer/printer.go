@@ -281,11 +281,150 @@ func findMissingTickers(tickers map[string]bool, holdings []portfolio.Holding) [
 
 // ThemeGroup holds categorized holdings and configuration for a specific theme group
 type ThemeGroup struct {
-	Name     string
-	Prefix   string
-	CSVPath  string
-	Tickers  map[string]bool
-	Holdings []portfolio.Holding
+	Name         string
+	Prefix       string
+	CSVPath      string
+	TargetWeight float64
+	Tickers      map[string]bool
+	Holdings     []portfolio.Holding
+}
+
+func renderThemeAllocationSummary(groups []ThemeGroup, uncategorizedHoldings []portfolio.Holding, totalCurrent float64) string {
+	header := "=======================================================================================================================\n"
+	cols := "Theme              | Invested Value | Current Value | PnL           | PnL %     | Actual Wt   | Target Wt   | Drift    \n"
+	sep := "-----------------------------------------------------------------------------------------------------------------------\n"
+
+	var sb strings.Builder
+	sb.WriteString(header)
+
+	title := "THEME TARGET VS ACTUAL WEIGHT ALLOCATION SUMMARY"
+	titleLen := len(title)
+	padding := max((119-titleLen)/2, 0)
+	centeredTitle := strings.Repeat(" ", padding) + title
+	sb.WriteString(centeredTitle + strings.Repeat(" ", max(0, 119-len(centeredTitle))) + "\n")
+	sb.WriteString(header + cols + sep)
+
+	var totalInvestedAll, totalCurrentAll, totalPnLAll, totalTargetWt float64
+
+	for _, g := range groups {
+		var invested, current, pnl float64
+		for _, h := range g.Holdings {
+			totalQty := h.Quantity + h.T1Quantity + h.T2Quantity
+			invested += float64(totalQty) * h.AveragePrice
+			current += float64(totalQty) * h.LastPrice
+			pnl += h.PnL
+		}
+
+		if len(g.Holdings) == 0 && g.TargetWeight == 0 {
+			continue
+		}
+
+		var pnlPct float64
+		if invested > 0 {
+			pnlPct = (pnl / invested) * 100.0
+		}
+
+		var actualWt float64
+		if totalCurrent > 0 {
+			actualWt = (current / totalCurrent) * 100.0
+		}
+		targetWt := g.TargetWeight * 100.0
+		drift := actualWt - targetWt
+
+		cleanName := strings.TrimSpace(strings.TrimPrefix(g.Name, "Theme"))
+
+		totalInvestedAll += invested
+		totalCurrentAll += current
+		totalPnLAll += pnl
+		totalTargetWt += targetWt
+
+		driftStr := FormatPnLPct(drift)
+		if drift == 0 {
+			driftStr = "0.00%"
+		}
+
+		sb.WriteString(fmt.Sprintf("%s | %s | %s | %s | %s | %s | %s | %s\n",
+			PadString(cleanName, 18),
+			PadStringRight(fmt.Sprintf("₹%.2f", invested), 14),
+			PadStringRight(fmt.Sprintf("₹%.2f", current), 14),
+			PadStringRight(FormatPnL(pnl), 13),
+			PadStringRight(FormatPnLPct(pnlPct), 9),
+			PadStringRight(fmt.Sprintf("%.2f%%", actualWt), 11),
+			PadStringRight(fmt.Sprintf("%.2f%%", targetWt), 11),
+			PadStringRight(driftStr, 9),
+		))
+	}
+
+	if len(uncategorizedHoldings) > 0 {
+		var invested, current, pnl float64
+		for _, h := range uncategorizedHoldings {
+			totalQty := h.Quantity + h.T1Quantity + h.T2Quantity
+			invested += float64(totalQty) * h.AveragePrice
+			current += float64(totalQty) * h.LastPrice
+			pnl += h.PnL
+		}
+
+		var pnlPct float64
+		if invested > 0 {
+			pnlPct = (pnl / invested) * 100.0
+		}
+
+		var actualWt float64
+		if totalCurrent > 0 {
+			actualWt = (current / totalCurrent) * 100.0
+		}
+		drift := actualWt
+
+		totalInvestedAll += invested
+		totalCurrentAll += current
+		totalPnLAll += pnl
+
+		driftStr := FormatPnLPct(drift)
+		if drift == 0 {
+			driftStr = "0.00%"
+		}
+
+		sb.WriteString(fmt.Sprintf("%s | %s | %s | %s | %s | %s | %s | %s\n",
+			PadString("Uncategorized", 18),
+			PadStringRight(fmt.Sprintf("₹%.2f", invested), 14),
+			PadStringRight(fmt.Sprintf("₹%.2f", current), 14),
+			PadStringRight(FormatPnL(pnl), 13),
+			PadStringRight(FormatPnLPct(pnlPct), 9),
+			PadStringRight(fmt.Sprintf("%.2f%%", actualWt), 11),
+			PadStringRight(fmt.Sprintf("%.2f%%", 0.0), 11),
+			PadStringRight(driftStr, 9),
+		))
+	}
+
+	var totalPnLPct float64
+	if totalInvestedAll > 0 {
+		totalPnLPct = (totalPnLAll / totalInvestedAll) * 100.0
+	}
+
+	var totalActualWt float64
+	if totalCurrent > 0 {
+		totalActualWt = (totalCurrentAll / totalCurrent) * 100.0
+	}
+	totalDrift := totalActualWt - totalTargetWt
+	totalDriftStr := FormatPnLPct(totalDrift)
+	if totalDrift == 0 {
+		totalDriftStr = "0.00%"
+	}
+
+	sb.WriteString(sep)
+	sb.WriteString(fmt.Sprintf("%s | %s | %s | %s | %s | %s | %s | %s\n",
+		PadString("Total", 18),
+		PadStringRight(fmt.Sprintf("₹%.2f", totalInvestedAll), 14),
+		PadStringRight(fmt.Sprintf("₹%.2f", totalCurrentAll), 14),
+		PadStringRight(FormatPnL(totalPnLAll), 13),
+		PadStringRight(FormatPnLPct(totalPnLPct), 9),
+		PadStringRight(fmt.Sprintf("%.2f%%", totalActualWt), 11),
+		PadStringRight(fmt.Sprintf("%.2f%%", totalTargetWt), 11),
+		PadStringRight(totalDriftStr, 9),
+	))
+	sb.WriteString(header + "\n")
+
+	return sb.String()
 }
 
 // RenderHoldingsSnapshot formats and constructs the holdings layout snapshot.
@@ -303,6 +442,9 @@ func RenderHoldingsSnapshot(
 
 	var sb strings.Builder
 	sb.WriteString("\n")
+
+	// Render Theme Target vs Actual Weight Allocation Summary
+	sb.WriteString(renderThemeAllocationSummary(groups, uncategorizedHoldings, totalCurrent))
 
 	// Render configured groups
 	for _, g := range groups {

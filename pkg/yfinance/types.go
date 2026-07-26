@@ -121,6 +121,14 @@ type QuoteSummaryResponse struct {
 				Sector   string `json:"sector"`
 				Industry string `json:"industry"`
 			} `json:"assetProfile"`
+			CalendarEvents struct {
+				Earnings struct {
+					EarningsDate []struct {
+						Fmt string `json:"fmt"`
+						Raw int64  `json:"raw"`
+					} `json:"earningsDate"`
+				} `json:"earnings"`
+			} `json:"calendarEvents"`
 			Earnings struct {
 				FinancialsChart struct {
 					Yearly []struct {
@@ -133,6 +141,15 @@ type QuoteSummaryResponse struct {
 						} `json:"earnings"`
 					} `json:"yearly"`
 				} `json:"financialsChart"`
+				EarningsChart struct {
+					Quarterly []struct {
+						Date         string `json:"date"`
+						ReportedDate struct {
+							Fmt string `json:"fmt"`
+							Raw int64  `json:"raw"`
+						} `json:"reportedDate"`
+					} `json:"quarterly"`
+				} `json:"earningsChart"`
 			} `json:"earnings"`
 		} `json:"result"`
 		Error any `json:"error"`
@@ -177,6 +194,7 @@ type Fundamentals struct {
 	AnnualTotalAssets        []AnnualMetric
 	AnnualCurrentLiabilities []AnnualMetric
 	AnnualInterestExpense    []AnnualMetric
+	ResultPrevComing         string
 }
 
 // AnnualMetric holds historical value with its date

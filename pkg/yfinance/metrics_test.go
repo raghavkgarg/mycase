@@ -205,3 +205,56 @@ func TestCalculateRSI_ExactlyFifteen(t *testing.T) {
 		t.Errorf("RSI out of [0,100]: %f", rsi)
 	}
 }
+
+func TestIsFinancialSector(t *testing.T) {
+	if !IsFinancialSector("Financial Services") {
+		t.Error("Financial Services should be identified as financial sector")
+	}
+	if !IsFinancialSector("Banking") {
+		t.Error("Banking should be identified as financial sector")
+	}
+	if IsFinancialSector("Technology") {
+		t.Error("Technology should not be identified as financial sector")
+	}
+}
+
+func TestCalculateEPV(t *testing.T) {
+	f := Fundamentals{
+		MarketCap: 100000,
+		TotalDebt: 20000,
+		AnnualOperatingIncome: []AnnualMetric{
+			{Date: "2024-12-31", Value: 20000},
+			{Date: "2025-12-31", Value: 22000},
+			{Date: "2026-12-31", Value: 24000},
+		},
+	}
+	epv, mos, ok := CalculateEPV(&f, 0.10)
+	if !ok {
+		t.Error("expected EPV calculation to succeed")
+	}
+	if epv <= 0 {
+		t.Errorf("expected positive EPV, got %f", epv)
+	}
+	if mos == 0 {
+		t.Error("expected non-zero MOS")
+	}
+}
+
+func TestCalculateShillerYield(t *testing.T) {
+	f := Fundamentals{
+		RegularPrice: 100,
+		MarketCap:    1000000,
+		EarningsHistory: []AnnualFinancial{
+			{Year: 2024, Earnings: 50000},
+			{Year: 2025, Earnings: 55000},
+			{Year: 2026, Earnings: 60000},
+		},
+	}
+	yield, ok := CalculateShillerYield(&f)
+	if !ok {
+		t.Error("expected Shiller yield calculation to succeed")
+	}
+	if yield <= 0 {
+		t.Errorf("expected positive yield, got %f", yield)
+	}
+}

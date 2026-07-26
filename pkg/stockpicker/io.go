@@ -71,7 +71,7 @@ func PrintSafetyFilterSummary(hardFilters *config.HardFilters, stats FilterStats
 	fmt.Printf("Remaining Candidates: %d / %d\n\n", remaining, total)
 }
 
-// PrintMultibaggerTable prints output comparisons formatted for the multibagger strategy.
+// PrintMultibaggerTable prints output comparisons formatted for the multibagger and value strategies.
 func PrintMultibaggerTable(
 	selectedKeys []string,
 	finalWeights map[string]float64,
@@ -79,9 +79,10 @@ func PrintMultibaggerTable(
 	fundamentals map[string]yfinance.Fundamentals,
 	fullHistory map[string]*yfinance.HistoricalData,
 	displayName string,
+	method string,
 ) {
 	fmt.Println("\n=================================================================================================")
-	fmt.Printf("             TOP %d SELECTED MULTIBAGGER STOCKS FROM %s               \n", len(selectedKeys), strings.ToUpper(displayName))
+	fmt.Printf("             TOP %d SELECTED %s STOCKS FROM %s               \n", len(selectedKeys), strings.ToUpper(method), strings.ToUpper(displayName))
 	fmt.Println("=================================================================================================")
 	fmt.Printf("%-16s | %-10s | %-8s | %-10s | %-5s | %-7s | %-6s | %-12s\n", "Ticker", "TTM Growth", "3Y CAGR", "DSO (L/P)", "RSI", "Inst %", "Score", "Final Weight")
 	fmt.Println("-------------------------------------------------------------------------------------------------")

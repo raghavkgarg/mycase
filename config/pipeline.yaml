@@ -2,7 +2,7 @@ indices:
    - microcap250
    - small250
   # - midcap150
-  # - nifty50
+  #  - nifty50
   # - nifty200
   # - sp500
 
@@ -19,9 +19,10 @@ golden_copy_path:
   # -  data/sp500.csv
   # -  data/qtum.csv
 strategy: 
-  - multibagger
+   - multibagger
   # - aggresive
   # - balance
+  # - value
 top_n: 
   - 20
   # - 50
@@ -35,7 +36,7 @@ purchase_date:
   # - "2026-02-01"
 
 rebalance_tolerance_pct:
-  - 0.10
+  - 0.25
 
 hysteresis_rank_buffer:
-  - 2
+  - 5

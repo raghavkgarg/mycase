@@ -1,10 +1,85 @@
 package config
 
 import (
+	"context"
 	"encoding/json"
+	"io"
+	"net"
+	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
+	"time"
 )
+
+// FetchPublicIPs returns the current host machine's public IPv4 and IPv6 addresses.
+func FetchPublicIPs() (ipv4 string, ipv6 string) {
+	v4URLs := []string{
+		"https://ipinfo.io/ip",
+		"https://icanhazip.com",
+		"https://ifconfig.me/ip",
+		"https://api.ipify.org",
+	}
+	v6URLs := []string{
+		"https://icanhazip.com",
+		"https://ifconfig.me/ip",
+		"https://v6.ipify.org",
+	}
+
+	ipv4 = fetchIPFromURLs(v4URLs, "tcp4")
+	v6Candidate := fetchIPFromURLs(v6URLs, "tcp6")
+	if strings.Contains(v6Candidate, ":") {
+		ipv6 = v6Candidate
+	} else if strings.Contains(ipv4, ":") {
+		ipv6 = ipv4
+		ipv4 = ""
+	}
+
+	return ipv4, ipv6
+}
+
+func fetchIPFromURLs(urls []string, network string) string {
+	client := &http.Client{
+		Timeout: 2 * time.Second,
+		Transport: &http.Transport{
+			DialContext: func(ctx context.Context, netName, addr string) (net.Conn, error) {
+				var d net.Dialer
+				return d.DialContext(ctx, network, addr)
+			},
+		},
+	}
+
+	for _, u := range urls {
+		req, err := http.NewRequest("GET", u, nil)
+		if err != nil {
+			continue
+		}
+		req.Header.Set("User-Agent", "curl/7.68.0")
+		resp, err := client.Do(req)
+		if err != nil {
+			continue
+		}
+		body, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil {
+			continue
+		}
+		ipStr := strings.TrimSpace(string(body))
+		if len(ipStr) > 0 && !strings.Contains(ipStr, "<") && !strings.Contains(ipStr, " ") {
+			return ipStr
+		}
+	}
+	return ""
+}
+
+// FetchPublicIP retrieves current public IP (preferring IPv6 if available, else IPv4).
+func FetchPublicIP() string {
+	ipv4, ipv6 := FetchPublicIPs()
+	if ipv6 != "" {
+		return ipv6
+	}
+	return ipv4
+}
 
 // Config represents Zerodha Kite API credentials
 type Config struct {
@@ -49,9 +124,10 @@ func SaveConfig(filename string, cfg *Config) error {
 
 // ThemeConfig represents a configuration for a specific holdings theme/group
 type ThemeConfig struct {
-	Name    string `json:"name"`
-	Prefix  string `json:"prefix"`
-	CSVPath string `json:"csv_path"`
+	Name         string  `json:"name"`
+	Prefix       string  `json:"prefix"`
+	CSVPath      string  `json:"csv_path"`
+	TargetWeight float64 `json:"target_weight,omitempty"`
 }
 
 // LoadThemes reads the themes configuration from config/themes.json
@@ -61,9 +137,11 @@ func LoadThemes(filename string) ([]ThemeConfig, error) {
 	if err != nil {
 		// Fallback to default configs
 		return []ThemeConfig{
-			{Name: "My Managed", Prefix: "My", CSVPath: "data/myall.csv"},
-			{Name: "AI Theme Advice", Prefix: "AI Theme", CSVPath: "data/aitheme.csv"},
-			{Name: "Micro Theme Advice", Prefix: "Micro Theme", CSVPath: "data/modularmicro.csv"},
+			{Name: "Theme KK Advise", Prefix: "My KK", CSVPath: "data/myall.csv", TargetWeight: 0.30},
+			{Name: "Theme AI Advice", Prefix: "My AI", CSVPath: "data/aitheme.csv", TargetWeight: 0.20},
+			{Name: "Theme Micro Advice", Prefix: "My Micro", CSVPath: "data/modularmicro.csv", TargetWeight: 0.30},
+			{Name: "Theme Hydrogen Nuclear", Prefix: "My Hydrogen", CSVPath: "data/hydrogen.csv", TargetWeight: 0.00},
+			{Name: "Theme Microsmall", Prefix: "My MicroSmall", CSVPath: "data/microsmall.csv", TargetWeight: 0.20},
 		}, nil
 	}
 	defer file.Close()
@@ -127,6 +205,21 @@ type HardFilters struct {
 	ScoreWeightROCE             float64  `json:"score_weight_roce"`
 	ScoreWeightVolumeBreakout   float64  `json:"score_weight_volume_breakout"`
 	ScoreWeightRelativeStrength float64  `json:"score_weight_relative_strength"`
+	MinROE                      float64  `json:"min_roe"`
+	MaxNetNPA                   float64  `json:"max_net_npa"`
+	MinCAR                      float64  `json:"min_car"`
+	MinROA                      float64  `json:"min_roa"`
+	Min200DaySMARatio           float64  `json:"min_200day_sma_ratio"`
+	MaxStockWeightCap           float64  `json:"max_stock_weight_cap"`
+	ScoreWeightEPVMOS           float64  `json:"score_weight_epv_mos"`
+	ScoreWeight5YValPercentile  float64  `json:"score_weight_5y_val_percentile"`
+	ScoreWeightSectorZScore     float64  `json:"score_weight_sector_zscore"`
+	ScoreWeightShillerYield     float64  `json:"score_weight_shiller_yield"`
+	ScoreWeightCashRealization  float64  `json:"score_weight_cash_realization"`
+	ScoreWeightFCFYield         float64  `json:"score_weight_fcf_yield"`
+	ScoreWeightShareholderYield float64  `json:"score_weight_shareholder_yield"`
+	ScoreWeightSmartMoneyDelta  float64  `json:"score_weight_smart_money_delta"`
+	ScoreWeightMarginInflection float64  `json:"score_weight_margin_inflection"`
 }
 
 // MFSStrategies wrapper containing the mapping of strategies and filters

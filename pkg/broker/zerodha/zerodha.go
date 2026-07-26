@@ -3,12 +3,34 @@ package zerodha
 import (
 	"fmt"
 	"math"
+	"regexp"
+	"strings"
 
 	kiteconnect "github.com/zerodha/gokiteconnect/v4"
 
 	"github.com/raghavkgarg/mycase/pkg/broker"
 	"github.com/raghavkgarg/mycase/pkg/config"
 )
+
+var reKiteIP = regexp.MustCompile(`IP \(([^)]+)\) is not allowed`)
+
+func enrichIPError(err error) error {
+	if err == nil {
+		return nil
+	}
+	errStr := err.Error()
+	if match := reKiteIP.FindStringSubmatch(errStr); len(match) > 1 {
+		rejectedIP := match[1]
+		return fmt.Errorf("%w\n   [ACTION REQUIRED] Please whitelist IP '%s' under App Settings at https://developers.kite.trade/profile", err, rejectedIP)
+	}
+
+	if strings.Contains(strings.ToLower(errStr), "ip") || strings.Contains(strings.ToLower(errStr), "not allowed") || strings.Contains(strings.ToLower(errStr), "denied") {
+		if ip := config.FetchPublicIP(); ip != "" {
+			return fmt.Errorf("%w\n   [ACTION REQUIRED] Please whitelist IP '%s' under App Settings at https://developers.kite.trade/profile", err, ip)
+		}
+	}
+	return err
+}
 
 // ZerodhaBroker is a live Kite Connect implementation of broker.Broker.
 type ZerodhaBroker struct {
@@ -37,7 +59,7 @@ func (z *ZerodhaBroker) IsMock() bool { return false }
 func (z *ZerodhaBroker) GetQuotes(keys []string) (map[string]float64, error) {
 	kiteQuote, err := z.client.GetQuote(keys...)
 	if err != nil {
-		return nil, fmt.Errorf("zerodha GetQuote: %w", err)
+		return nil, enrichIPError(fmt.Errorf("zerodha GetQuote: %w", err))
 	}
 	result := make(map[string]float64, len(keys))
 	for _, k := range keys {
@@ -51,7 +73,7 @@ func (z *ZerodhaBroker) GetQuotes(keys []string) (map[string]float64, error) {
 func (z *ZerodhaBroker) GetHoldings() ([]broker.Holding, error) {
 	kiteHoldings, err := z.client.GetHoldings()
 	if err != nil {
-		return nil, fmt.Errorf("failed to fetch holdings from Zerodha Kite: %w", err)
+		return nil, enrichIPError(fmt.Errorf("failed to fetch holdings from Zerodha Kite: %w", err))
 	}
 
 	var rawHoldings []broker.Holding
@@ -129,7 +151,7 @@ func (z *ZerodhaBroker) PlaceOrder(variety string, order broker.Order) (broker.O
 		Price:           execPrice,
 	})
 	if err != nil {
-		return broker.OrderResult{}, err
+		return broker.OrderResult{}, enrichIPError(err)
 	}
 	return broker.OrderResult{OrderID: resp.OrderID}, nil
 }
@@ -150,7 +172,7 @@ func (z *ZerodhaBroker) PlaceGTT(order broker.Order) (broker.OrderResult, error)
 		},
 	})
 	if err != nil {
-		return broker.OrderResult{}, err
+		return broker.OrderResult{}, enrichIPError(err)
 	}
 	return broker.OrderResult{TriggerID: resp.TriggerID}, nil
 }

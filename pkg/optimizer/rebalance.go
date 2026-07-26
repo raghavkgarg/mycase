@@ -30,10 +30,37 @@ func FilterMicroTransactions(
 	model costs.CostModel,
 	thresholdPct float64,
 ) (kept, filtered []broker.Order) {
+	return FilterMicroTransactionsWithExits(orders, quotes, model, thresholdPct, nil)
+}
+
+// FilterMicroTransactionsWithExits partitions orders into kept and filtered slices,
+// preserving full exit orders (where target weight <= 0) regardless of transaction cost ratio.
+func FilterMicroTransactionsWithExits(
+	orders []broker.Order,
+	quotes map[string]float64,
+	model costs.CostModel,
+	thresholdPct float64,
+	basket map[string]float64,
+) (kept, filtered []broker.Order) {
 	if thresholdPct <= 0 {
 		return orders, nil
 	}
 	for _, o := range orders {
+		// Full exit orders (where target weight is 0.0) bypass micro-transaction filtering to ensure complete liquidation
+		isExit := false
+		if o.TransactionType == "SELL" && basket != nil {
+			for k, w := range basket {
+				if (k == o.TradingSymbol || k == "NSE:"+o.TradingSymbol || k == "BSE:"+o.TradingSymbol) && w <= 0.0 {
+					isExit = true
+					break
+				}
+			}
+		}
+		if isExit {
+			kept = append(kept, o)
+			continue
+		}
+
 		price := o.Price
 		if price <= 0 {
 			price = quotes["NSE:"+o.TradingSymbol]

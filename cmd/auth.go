@@ -28,6 +28,10 @@ func runAuthCmd(ctx context.Context) error {
 	fmt.Println("====================================================================")
 	fmt.Println("             Zerodha Kite Connect Auth Setup Utility               ")
 	fmt.Println("====================================================================")
+	if publicIP := config.FetchPublicIP(); publicIP != "" {
+		fmt.Printf("Current Public IP: %s\n", publicIP)
+		fmt.Println("  (Make sure this IP is whitelisted under App Settings on https://developers.kite.trade/profile)")
+	}
 
 	configFile := "config/config.json"
 	var apiKey, apiSecret string

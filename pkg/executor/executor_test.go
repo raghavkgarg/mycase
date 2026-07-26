@@ -66,4 +66,21 @@ func TestExecuteRetryPayloadMock(t *testing.T) {
 	if _, err := os.Stat(jsonPath); !os.IsNotExist(err) {
 		t.Fatalf("expected JSON retry file to be deleted after 100%% retry success")
 	}
+
+	// Verify retry success log contains "BUY"
+	orderEntries, _ := os.ReadDir("Order")
+	foundBuyLog := false
+	for _, entry := range orderEntries {
+		if strings.HasPrefix(entry.Name(), "Order_") {
+			content, _ := os.ReadFile(filepath.Join("Order", entry.Name()))
+			if strings.Contains(string(content), "Placed REGULAR BUY order") {
+				foundBuyLog = true
+				_ = os.Remove(filepath.Join("Order", entry.Name()))
+				break
+			}
+		}
+	}
+	if !foundBuyLog {
+		t.Fatalf("expected retry success log to contain 'Placed REGULAR BUY order'")
+	}
 }

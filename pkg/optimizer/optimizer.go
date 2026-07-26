@@ -23,31 +23,61 @@ func OptimizeFreshBuy(
 	n := len(basketKeys)
 	rawQuantities := make([]int, n)
 
-	// Calculate baseline cost (initial 1 share for items not owned)
+	// Calculate exit sell proceeds (for stocks with target weight <= 0.0)
+	exitSellProceeds := 0.0
+	for i, inst := range basketKeys {
+		targetWeight := basket[inst]
+		parts := strings.Split(inst, ":")
+		symbol := parts[len(parts)-1]
+		currentQty := currentHoldings[symbol]
+		ltp := quoteData[inst]
+
+		if targetWeight <= 0.0 {
+			// Stock is dropped/exited -> final target quantity is 0 (SELL all shares)
+			rawQuantities[i] = 0
+			if currentQty > 0 {
+				exitSellProceeds += float64(currentQty) * ltp
+			}
+		} else {
+			// Active stock -> start at current holdings
+			rawQuantities[i] = currentQty
+		}
+	}
+
+	// Add exit sell proceeds to total investment budget so freed capital is deployed into active targets
+	effectiveInvestment := totalInvestment + exitSellProceeds
+
+	// Calculate baseline cost (initial 1 share for items not owned among active stocks)
 	baselineCost := 0.0
 	for i, inst := range basketKeys {
+		targetWeight := basket[inst]
+		if targetWeight <= 0.0 {
+			continue
+		}
+
 		parts := strings.Split(inst, ":")
 		symbol := parts[len(parts)-1]
 		ltp := quoteData[inst]
-
-		// limit_price in Mojo is buffer of 3% above LTP, rounded to 1 decimal place.
 		limitPrice := market.CalculateBufferedLimitPrice(ltp)
 
 		currentQty := currentHoldings[symbol]
-		startQty := currentQty
 		if currentQty == 0 {
-			startQty = 1
+			rawQuantities[i] = 1
 			baselineCost += limitPrice
 		}
-		rawQuantities[i] = startQty
 	}
 
 	// Fallback if baseline cost overshoots budget
-	if baselineCost > totalInvestment {
+	if baselineCost > effectiveInvestment {
 		for i, inst := range basketKeys {
+			targetWeight := basket[inst]
 			parts := strings.Split(inst, ":")
 			symbol := parts[len(parts)-1]
-			rawQuantities[i] = currentHoldings[symbol]
+			if targetWeight <= 0.0 {
+				rawQuantities[i] = 0
+			} else {
+				rawQuantities[i] = currentHoldings[symbol]
+			}
 		}
 	}
 
@@ -69,6 +99,10 @@ func OptimizeFreshBuy(
 
 			newSharesCost := 0.0
 			for j, instJ := range basketKeys {
+				targetWeightJ := basket[instJ]
+				if targetWeightJ <= 0.0 {
+					continue
+				}
 				partsJ := strings.Split(instJ, ":")
 				symbolJ := partsJ[len(partsJ)-1]
 				ltpJ := quoteData[instJ]
@@ -81,7 +115,7 @@ func OptimizeFreshBuy(
 				}
 			}
 
-			if newSharesCost <= totalInvestment {
+			if newSharesCost <= effectiveInvestment {
 				ltpI := quoteData[inst]
 				// Allocation ratio: current allocated value divided by target weight
 				allocRatio := (float64(rawQuantities[i]) * ltpI) / targetWeight

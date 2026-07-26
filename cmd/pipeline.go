@@ -25,6 +25,15 @@ var PipelineCommand = &cli.Command{
 	Flags: []cli.Flag{
 		&cli.BoolFlag{Name: "exec-only", Usage: "Start directly from execution steps (auth + basket)"},
 		&cli.StringFlag{Name: "config", Value: "config/pipeline.yaml", Usage: "Path to pipeline YAML configuration file"},
+		&cli.StringFlag{Name: "index", Aliases: []string{"i"}, Usage: "Index to pick stocks from (e.g. nifty50, smallcap250)"},
+		&cli.StringFlag{Name: "file", Aliases: []string{"f"}, Usage: "Path to custom CSV/XLSX file"},
+		&cli.StringFlag{Name: "strategy", Aliases: []string{"method", "m"}, Usage: "Scoring strategy (balanced, aggressive, conservative, multibagger, value)"},
+		&cli.IntFlag{Name: "top", Aliases: []string{"top-n", "n"}, Usage: "Number of top stocks to pick"},
+		&cli.StringFlag{Name: "golden", Aliases: []string{"golden-copy"}, Usage: "Path to golden copy CSV for hysteresis and rebalancing band"},
+		&cli.IntFlag{Name: "capital", Usage: "Initial capital for performance simulation"},
+		&cli.StringFlag{Name: "purchase-date", Aliases: []string{"date"}, Usage: "Purchase date for performance simulation (YYYY-MM-DD)"},
+		&cli.FloatFlag{Name: "rebalance-tolerance", Usage: "Rebalancing weight tolerance % (e.g. 0.10 for 0.10%)"},
+		&cli.IntFlag{Name: "hysteresis-buffer", Usage: "Extra ranks to allow existing holdings to drift"},
 	},
 	Action: runPipeline,
 }
@@ -37,15 +46,64 @@ func runPipeline(ctx context.Context, c *cli.Command) error {
 	fmt.Println("             Go Mycase Automated Pipeline Runner                 ")
 	fmt.Println("====================================================================")
 
+	var cfg config.PipelineConfig
 	configFile, err := os.Open(configPath)
-	if err != nil {
+	if err == nil {
+		defer configFile.Close()
+		if err := yaml.NewDecoder(configFile).Decode(&cfg); err != nil {
+			return fmt.Errorf("parsing config file %s: %w", configPath, err)
+		}
+	} else if c.IsSet("config") {
 		return fmt.Errorf("opening config file %s: %w", configPath, err)
 	}
-	defer configFile.Close()
 
-	var cfg config.PipelineConfig
-	if err := yaml.NewDecoder(configFile).Decode(&cfg); err != nil {
-		return fmt.Errorf("parsing config file %s: %w", configPath, err)
+	if c.IsSet("index") {
+		idx := c.String("index")
+		if idx != "" {
+			cfg.Indices = []string{idx}
+			if !c.IsSet("golden") {
+				cfg.GoldenCopyPath = filepath.Join("data", idx+".csv")
+			}
+		}
+	}
+
+	if c.IsSet("file") {
+		f := c.String("file")
+		if f != "" {
+			cfg.Files = []string{f}
+			cfg.File = f
+			if !c.IsSet("index") {
+				cfg.Indices = nil
+			}
+		}
+	}
+
+	if c.IsSet("strategy") {
+		cfg.Strategy = c.String("strategy")
+	}
+
+	if c.IsSet("top") {
+		cfg.TopN = int(c.Int("top"))
+	}
+
+	if c.IsSet("golden") {
+		cfg.GoldenCopyPath = c.String("golden")
+	}
+
+	if c.IsSet("capital") {
+		cfg.Capital = int(c.Int("capital"))
+	}
+
+	if c.IsSet("purchase-date") {
+		cfg.PurchaseDate = c.String("purchase-date")
+	}
+
+	if c.IsSet("rebalance-tolerance") {
+		cfg.RebalanceTolerancePct = c.Float("rebalance-tolerance")
+	}
+
+	if c.IsSet("hysteresis-buffer") {
+		cfg.HysteresisRankBuffer = int(c.Int("hysteresis-buffer"))
 	}
 
 	reader := bufio.NewReader(os.Stdin)

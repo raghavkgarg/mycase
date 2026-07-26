@@ -135,3 +135,23 @@ func TestPipelineConfig_UnmarshalYAML_NegativeTolerance(t *testing.T) {
 		t.Errorf("negative tolerance should clamp to 0.10, got %f", cfg.RebalanceTolerancePct)
 	}
 }
+
+func TestPipelineCommand_Flags(t *testing.T) {
+	flags := PipelineCommand.Flags
+	expectedFlags := []string{"index", "file", "strategy", "top", "golden", "capital", "purchase-date", "rebalance-tolerance", "hysteresis-buffer"}
+	for _, ef := range expectedFlags {
+		found := false
+		for _, f := range flags {
+			for _, name := range f.Names() {
+				if name == ef {
+					found = true
+					break
+				}
+			}
+		}
+		if !found {
+			t.Errorf("expected PipelineCommand to have flag %q", ef)
+		}
+	}
+}
+

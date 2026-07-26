@@ -296,8 +296,52 @@ func isEligible(
 		}
 	}
 
-	// 11. Special Multibagger strategy filters
-	if method == "multibagger" {
+	// 11. Special Multibagger / Value strategy filters
+	if method == "value" {
+		// 200-Day SMA ratio floor check (allows up to 15% dip below 200-SMA)
+		minSMARatio := 0.85
+		if hardFilters.Min200DaySMARatio > 0 {
+			minSMARatio = hardFilters.Min200DaySMARatio
+		}
+		if len(closes) >= 200 {
+			sum := 0.0
+			for i := len(closes) - 200; i < len(closes); i++ {
+				sum += closes[i]
+			}
+			sma200 := sum / 200.0
+			latestClose := closes[len(closes)-1]
+			if sma200 > 0 && (latestClose/sma200) < minSMARatio {
+				stats.EliminatedSMATrend++
+				return false, fmt.Sprintf("Below 200-Day SMA trend floor ratio (%.2f < %.2f limit)", latestClose/sma200, minSMARatio)
+			}
+		}
+
+		// Dual-Path Filtering (BFSI vs Non-Financials)
+		if yfinance.IsFinancialSector(f.Sector) {
+			// Financial Path (BFSI / Banks / NBFCs)
+			minROE := 0.12
+			if hardFilters.MinROE > 0 {
+				minROE = hardFilters.MinROE
+			}
+			if f.ROE > 0 && f.ROE < minROE {
+				stats.EliminatedROCE++
+				return false, fmt.Sprintf("Low Financial ROE (%.1f%% < %.1f%% threshold)", f.ROE*100.0, minROE*100.0)
+			}
+		} else {
+			// Industrial / Non-Financial Path
+			minCFO := 0.70
+			if hardFilters.MinCFOPAT > 0 {
+				minCFO = hardFilters.MinCFOPAT
+			}
+			if f.NetIncome > 0 && f.OperatingCashflow > 0 {
+				cfoRatio := f.OperatingCashflow / f.NetIncome
+				if cfoRatio < minCFO {
+					stats.EliminatedCashFlow++
+					return false, fmt.Sprintf("Low Cash Conversion CFO/PAT (%.1f%% < %.1f%% limit)", cfoRatio*100.0, minCFO*100.0)
+				}
+			}
+		}
+	} else if method == "multibagger" {
 		// 1. Sales Growth Accelerator (TTM vs 3Y CAGR)
 		passedSales, _, _ := yfinance.CalculateSalesGrowth(&f)
 
