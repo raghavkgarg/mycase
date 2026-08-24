@@ -447,3 +447,25 @@ These are things we explicitly will **not** build or pursue:
 **Net expected alpha (Phases 1–6, conservative)**: 1.5–3% annually over the 60/40 blend, at lower max drawdown.
 
 **Net expected alpha (all phases, optimistic)**: 3–5% annually. This is the upper bound; don't plan around it.
+
+---
+
+## Appendix B: Future Explorations (Parked)
+
+Ideas worth revisiting once the core system (Phases 1–6) is stable and the ecosystem matures.
+
+### Native macOS App (SwiftUI + DuckDB)
+
+**Revisit when**: macOS 27, DuckDB 2.0, and Phases 3–6 are complete.
+
+**Why it might be better**: The current web dashboard (`mycase serve` + browser) works but has friction — starting a server, opening a tab, no native notifications. A SwiftUI app could offer:
+- Menu bar presence showing portfolio value / drift status at a glance
+- Native notifications for autopilot proposals with confirm/dismiss action buttons
+- No server process needed — read DuckDB directly from Swift
+- Single `.app` bundle distribution (drag to Applications)
+- Swift Charts for smoother equity curve rendering
+- Shortcuts / Siri integration for hands-free status checks
+
+**Architecture**: Swift reads DuckDB directly for display, shells out to `mycase` CLI for all mutations (pick, optimize, basket). Go binary remains the source of truth for logic; Swift is pure presentation + OS integration. The web dashboard stays for headless/remote scenarios.
+
+**Why not now**: Phases 3–7 are higher priority (they generate alpha; the UI doesn't). Swift Charts and DuckDB Swift bindings are still maturing. Maintaining two presentation layers adds cost. Defer until the system is stable enough that the UX is the bottleneck, not the strategy.
