@@ -2,31 +2,43 @@ package config
 
 import "gopkg.in/yaml.v3"
 
+// ScheduleConfig holds configuration for the autopilot scheduler.
+type ScheduleConfig struct {
+	Frequency       string   `yaml:"frequency"`          // "quarterly", "monthly", "drift-triggered"
+	Day             string   `yaml:"day"`                // "first_trading_day", "last_trading_day", or day number ("2", "15")
+	Notify          []string `yaml:"notify"`             // alert channels: ["telegram", "discord"]
+	AutoExecute     bool     `yaml:"auto_execute"`       // if true, skip confirmation (dangerous)
+	DriftTriggerPct float64  `yaml:"drift_trigger_pct"`  // mid-cycle drift % that triggers early rebalance (0 = disabled)
+	ProposalTTLDays int      `yaml:"proposal_ttl_days"`  // days before unconfirmed proposal expires (default 7)
+}
+
 // PipelineConfig holds the resolved pipeline configuration.
 type PipelineConfig struct {
-	Indices               []string `yaml:"indices"`
-	Files                 []string `yaml:"files"`
-	File                  string   `yaml:"file"`
-	Strategy              string   `yaml:"strategy"`
-	TopN                  int      `yaml:"top_n"`
-	GoldenCopyPath        string   `yaml:"golden_copy_path"`
-	Capital               int      `yaml:"capital"`
-	PurchaseDate          string   `yaml:"purchase_date"`
-	RebalanceTolerancePct float64  `yaml:"rebalance_tolerance_pct"`
-	HysteresisRankBuffer  int      `yaml:"hysteresis_rank_buffer"`
+	Indices               []string       `yaml:"indices"`
+	Files                 []string       `yaml:"files"`
+	File                  string         `yaml:"file"`
+	Strategy              string         `yaml:"strategy"`
+	TopN                  int            `yaml:"top_n"`
+	GoldenCopyPath        string         `yaml:"golden_copy_path"`
+	Capital               int            `yaml:"capital"`
+	PurchaseDate          string         `yaml:"purchase_date"`
+	RebalanceTolerancePct float64        `yaml:"rebalance_tolerance_pct"`
+	HysteresisRankBuffer  int            `yaml:"hysteresis_rank_buffer"`
+	Schedule              ScheduleConfig `yaml:"schedule"`
 }
 
 type rawPipelineConfig struct {
-	Indices               []string `yaml:"indices"`
-	Files                 any      `yaml:"files"`
-	File                  any      `yaml:"file"`
-	Strategy              any      `yaml:"strategy"`
-	TopN                  any      `yaml:"top_n"`
-	GoldenCopyPath        any      `yaml:"golden_copy_path"`
-	Capital               any      `yaml:"capital"`
-	PurchaseDate          any      `yaml:"purchase_date"`
-	RebalanceTolerancePct any      `yaml:"rebalance_tolerance_pct"`
-	HysteresisRankBuffer  any      `yaml:"hysteresis_rank_buffer"`
+	Indices               []string       `yaml:"indices"`
+	Files                 any            `yaml:"files"`
+	File                  any            `yaml:"file"`
+	Strategy              any            `yaml:"strategy"`
+	TopN                  any            `yaml:"top_n"`
+	GoldenCopyPath        any            `yaml:"golden_copy_path"`
+	Capital               any            `yaml:"capital"`
+	PurchaseDate          any            `yaml:"purchase_date"`
+	RebalanceTolerancePct any            `yaml:"rebalance_tolerance_pct"`
+	HysteresisRankBuffer  any            `yaml:"hysteresis_rank_buffer"`
+	Schedule              ScheduleConfig `yaml:"schedule"`
 }
 
 // resolveFirst extracts T from val (which may be a scalar or a []any from multi-doc YAML).
@@ -122,5 +134,16 @@ func (cfg *PipelineConfig) UnmarshalYAML(value *yaml.Node) error {
 		buf = 5
 	}
 	cfg.HysteresisRankBuffer = buf
+	// Schedule config — struct fields are decoded directly by YAML, apply defaults.
+	cfg.Schedule = a.Schedule
+	if cfg.Schedule.Frequency == "" {
+		cfg.Schedule.Frequency = "quarterly"
+	}
+	if cfg.Schedule.Day == "" {
+		cfg.Schedule.Day = "first_trading_day"
+	}
+	if cfg.Schedule.ProposalTTLDays <= 0 {
+		cfg.Schedule.ProposalTTLDays = 7
+	}
 	return nil
 }

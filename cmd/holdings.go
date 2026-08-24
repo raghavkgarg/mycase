@@ -9,10 +9,10 @@ import (
 
 	"github.com/urfave/cli/v3"
 
+	"github.com/raghavkgarg/mycase/pkg/broker"
 	"github.com/raghavkgarg/mycase/pkg/broker/zerodha"
 	"github.com/raghavkgarg/mycase/pkg/config"
 	"github.com/raghavkgarg/mycase/pkg/csvloader"
-	"github.com/raghavkgarg/mycase/pkg/portfolio"
 	"github.com/raghavkgarg/mycase/pkg/printer"
 )
 
@@ -65,7 +65,7 @@ func runHoldings(ctx context.Context, c *cli.Command) error {
 		})
 	}
 
-	var uncategorizedHoldings []portfolio.Holding
+	var uncategorizedHoldings []broker.Holding
 	for _, h := range rawHoldings {
 		keyNSE := "NSE:" + h.TradingSymbol
 		keyBSE := "BSE:" + h.TradingSymbol

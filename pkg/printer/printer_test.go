@@ -4,11 +4,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/raghavkgarg/mycase/pkg/portfolio"
+	"github.com/raghavkgarg/mycase/pkg/broker"
 )
 
 func TestRenderThemeAllocationSummary(t *testing.T) {
-	rawHoldings := []portfolio.Holding{
+	rawHoldings := []broker.Holding{
 		{TradingSymbol: "STOCK1", Exchange: "NSE", Quantity: 10, AveragePrice: 100.0, LastPrice: 150.0, PnL: 500.0, PnLPct: 50.0},
 		{TradingSymbol: "STOCK2", Exchange: "NSE", Quantity: 5, AveragePrice: 200.0, LastPrice: 250.0, PnL: 250.0, PnLPct: 25.0},
 	}
@@ -18,13 +18,13 @@ func TestRenderThemeAllocationSummary(t *testing.T) {
 			Name:         "Theme KK Advise",
 			Prefix:       "My KK",
 			TargetWeight: 0.60,
-			Holdings:     []portfolio.Holding{rawHoldings[0]},
+			Holdings:     []broker.Holding{rawHoldings[0]},
 		},
 		{
 			Name:         "Theme AI Advice",
 			Prefix:       "My AI",
 			TargetWeight: 0.40,
-			Holdings:     []portfolio.Holding{rawHoldings[1]},
+			Holdings:     []broker.Holding{rawHoldings[1]},
 		},
 	}
 

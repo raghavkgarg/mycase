@@ -28,6 +28,7 @@ func main() {
 		Version: fmt.Sprintf("%s (commit: %s, built: %s)", Version, GitCommit, BuildDate),
 		Commands: []*cli.Command{
 			mycmd.PipelineCommand,
+			mycmd.AutopilotCommand,
 			mycmd.PickCommand,
 			mycmd.OptimizeCommand,
 			mycmd.ReportCommand,

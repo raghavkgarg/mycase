@@ -27,6 +27,11 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("GET /api/cache/status", s.handleCacheStatus)
 	s.mux.HandleFunc("GET /api/daemon/history", s.handleDaemonHistory)
 
+	// ── Autopilot API ────────────────────────────────────────────────────────
+	s.mux.HandleFunc("GET /api/autopilot/proposal", s.handleAutopilotProposal)
+	s.mux.HandleFunc("POST /api/autopilot/confirm", s.handleAutopilotConfirm)
+	s.mux.HandleFunc("POST /api/autopilot/dismiss", s.handleAutopilotDismiss)
+
 	// ── Static files ─────────────────────────────────────────────────────────
 	// Vendor files get long-term caching; everything else is no-cache.
 	s.mux.Handle("GET /static/vendor/", withLongCache(http.StripPrefix("/static/", http.FileServerFS(staticFS))))

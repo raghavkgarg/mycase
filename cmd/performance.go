@@ -11,7 +11,7 @@ import (
 
 	"github.com/urfave/cli/v3"
 
-	"github.com/raghavkgarg/mycase/pkg/performance"
+	"github.com/raghavkgarg/mycase/pkg/backtest"
 )
 
 var PerformanceCommand = &cli.Command{
@@ -112,7 +112,7 @@ func runPerfWithParams(ctx context.Context, filePath string, capital float64, ta
 		return fmt.Errorf("invalid CSV format. Must contain 'ticker' and 'weight' columns")
 	}
 
-	var portfolio []performance.StockEntry
+	var portfolio []backtest.Holding
 	for _, record := range records[1:] {
 		if len(record) <= tickerIdx || len(record) <= weightIdx {
 			continue
@@ -122,7 +122,7 @@ func runPerfWithParams(ctx context.Context, filePath string, capital float64, ta
 		if err != nil || ticker == "" {
 			continue
 		}
-		portfolio = append(portfolio, performance.StockEntry{Ticker: ticker, Weight: weightVal})
+		portfolio = append(portfolio, backtest.Holding{Ticker: ticker, Weight: weightVal})
 	}
 	if len(portfolio) == 0 {
 		return fmt.Errorf("no valid stocks found in CSV")
@@ -134,7 +134,7 @@ func runPerfWithParams(ctx context.Context, filePath string, capital float64, ta
 		fmt.Printf("Analyzing portfolio performance: Bought on %s at %s IST till latest Close...\n\n", targetTime.Format("2006-01-02"), targetTime.Format("15:04"))
 	}
 
-	results := performance.ValuatePortfolio(ctx, portfolio, capital, targetTime, useDailyClose, rangeStr, istLoc)
+	results := backtest.ValuatePortfolio(ctx, portfolio, capital, targetTime, useDailyClose, rangeStr, istLoc)
 
 	fmt.Printf("%-15s %-8s %-12s %-12s %-22s %-12s %-12s %-10s\n", "Ticker", "Weight", "Allocated", "Buy Price", "Buy Time/Date (IST)", "Close Price", "Final Value", "Return")
 	fmt.Println(strings.Repeat("-", 112))

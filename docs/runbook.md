@@ -297,6 +297,81 @@ The pipeline runs: pick → optimize → report → performance → monitor, in 
 
 ---
 
+## 7b. Autopilot (Scheduled Non-Interactive Pipeline)
+
+The autopilot runs the same pick → optimize → merge → compute-orders steps as the interactive pipeline, but without any user prompts. It generates a proposal, sends an alert, and waits for confirmation.
+
+### Run manually (one-shot)
+
+```bash
+# Dry-run with mock broker (for testing)
+mycase autopilot run --skip-trading-day-check
+
+# Live run (uses real holdings/quotes for order computation)
+mycase autopilot run --live
+```
+
+### Check status
+
+```bash
+mycase autopilot status
+```
+
+Shows: pending proposal details, expiry countdown, and next scheduled run date.
+
+### Confirm or dismiss proposals
+
+Proposals are confirmed via the web dashboard (`http://localhost:8080/#/rebalance`) or dismissed via CLI:
+
+```bash
+mycase autopilot dismiss
+```
+
+### Install as scheduled service
+
+```bash
+# macOS (launchd): fires quarterly on Jan 2, Apr 2, Jul 2, Oct 2 at 10:00 IST
+mycase autopilot install
+launchctl load ~/Library/LaunchAgents/com.mycase.autopilot.plist
+
+# Linux: prints systemd unit + timer
+mycase autopilot install
+```
+
+### Uninstall
+
+```bash
+mycase autopilot uninstall
+```
+
+### Configuration
+
+Add to `config/pipeline.yaml`:
+
+```yaml
+schedule:
+  frequency: quarterly          # quarterly, monthly, or drift-triggered
+  day: first_trading_day        # first_trading_day, last_trading_day, or day number
+  notify: [telegram]            # alert channels
+  auto_execute: false           # true = skip confirmation (dangerous)
+  drift_trigger_pct: 15         # mid-quarter drift % for early rebalance (0 = disabled)
+  proposal_ttl_days: 7          # days before proposal expires
+```
+
+### Workflow
+
+1. Autopilot fires (scheduled or manual)
+2. If not a trading day → skips, retries next day
+3. Runs stock selection → weight optimization → golden copy merge
+4. Computes rebalance orders against live holdings
+5. Saves proposal to `data/autopilot/pending_proposal.json`
+6. Sends Telegram/Discord alert with summary + dashboard link
+7. Investor reviews at `http://localhost:8080/#/rebalance`
+8. Clicks "Confirm & Execute" → orders placed via broker
+9. Confirmation alert sent
+
+---
+
 ## 8. Web Dashboard Server
 
 Launch the web UI dashboard in your browser to visualize portfolio allocations, factor scores, backtest forms, drift timelines, and order previews:
@@ -445,6 +520,16 @@ Features included in the web dashboard:
 |------|---------|-------------|
 | `--port` | `8080` | HTTP server port for local dashboard |
 | `--live` | `false` | Connect with live Zerodha API (default: mock broker) |
+
+### `autopilot`
+
+| Subcommand | Flags | Description |
+|-----------|-------|-------------|
+| `run` | `--live`, `--config`, `--skip-trading-day-check` | Run non-interactive pipeline, generate proposal, send alerts |
+| `status` | `--config` | Show pending proposal and next scheduled run |
+| `dismiss` | — | Dismiss pending proposal without executing |
+| `install` | `--config` | Install launchd plist (macOS) or print systemd unit (Linux) |
+| `uninstall` | — | Remove installed service |
 
 ---
 

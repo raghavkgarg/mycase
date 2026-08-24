@@ -132,7 +132,13 @@ Answers: "Has the portfolio drifted far enough from target weights that I need t
 
 ### `report` — Plain-text rationale per stock
 
-Outputs a paragraph per selected stock explaining why it passed filters and what factors drove its score. Used for the investor's own records and second-guessing.
+Outputs a paragraph per selected stock explaining why it passed filters and what factors drove its score. Used for the investor's own records and second-guessing. (Implementation lives in `pkg/stockpicker/rationale.go`.)
+
+### `autopilot` — Hands-off quarterly rebalancing
+
+Runs the full pick → optimize → merge → compute-orders pipeline non-interactively, generates a proposal file, and sends a Telegram/Discord alert. The investor reviews and confirms via the web dashboard. No orders are placed without explicit confirmation.
+
+Answers: "Run the quarterly rebalance without me babysitting 15 terminal prompts, and tell me when it's ready for my approval."
 
 ---
 
@@ -143,16 +149,26 @@ Outputs a paragraph per selected stock explaining why it passed filters and what
 ```
 cmd/           — thin CLI wrappers; parse flags, call pkg functions
 pkg/           — domain logic; no CLI imports
-  stockpicker/ — scoring, hard filters, hysteresis
+  stockpicker/ — scoring, hard filters, hysteresis, selection rationale
   optimizer/   — inverse-volatility, MFS weights, sector caps
-  backtest/    — engine, metrics
+  backtest/    — engine, metrics, portfolio valuation
+  autopilot/   — non-interactive pipeline, proposal model, scheduling, alerts
   yfinance/    — price and fundamental data fetching
   cache/       — DuckDB read/write for prices and fundamentals
   broker/      — Broker interface; zerodha/ and mock/ implementations
   daemon/      — drift computation, alert dispatch
   costs/       — transaction cost model, tax classification
   monitoring/  — 4-pillar health scoring
+  alert/       — Alerter interface; Telegram, Discord implementations
+  executor/    — live order placement with retry logic
+  printer/     — terminal output formatting
+  csvloader/   — CSV/golden copy operations, comparison reports
   excel/       — native Excel (.xlsx) parsing & smart ticker extraction
+  config/      — configuration loading/parsing (pipeline, mfs, alerts)
+  datafetcher/ — market data retrieval with broker fallback
+  market/      — market hours detection, GTT price calculations
+  selectiontracker/ — audit trail for stock selection decisions
+  server/      — web dashboard (HTTP, SSE, embedded static)
 config/        — YAML/JSON configs (read-only at runtime)
 data/          — golden copies, candidate output, DuckDB cache
 ```

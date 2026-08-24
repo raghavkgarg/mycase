@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/raghavkgarg/mycase/pkg/autopilot"
 	"github.com/raghavkgarg/mycase/pkg/backtest"
 	"github.com/raghavkgarg/mycase/pkg/broker"
 	"github.com/raghavkgarg/mycase/pkg/cache"
@@ -835,4 +836,127 @@ func (s *Server) handleDaemonHistory(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, state)
+}
+
+
+// ── /api/autopilot/* ──────────────────────────────────────────────────────────
+
+func (s *Server) handleAutopilotProposal(w http.ResponseWriter, r *http.Request) {
+	proposal, err := autopilot.LoadProposal()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load proposal: "+err.Error())
+		return
+	}
+	if proposal == nil {
+		writeJSON(w, map[string]any{"proposal": nil})
+		return
+	}
+	writeJSON(w, map[string]any{"proposal": proposal})
+}
+
+func (s *Server) handleAutopilotConfirm(w http.ResponseWriter, r *http.Request) {
+	proposal, err := autopilot.LoadProposal()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load proposal: "+err.Error())
+		return
+	}
+	if proposal == nil {
+		writeError(w, http.StatusNotFound, "no pending proposal")
+		return
+	}
+	if proposal.IsExpired() {
+		writeError(w, http.StatusGone, "proposal has expired")
+		return
+	}
+	if proposal.Status != autopilot.StatusPending {
+		writeError(w, http.StatusConflict, "proposal is not pending (status: "+proposal.Status+")")
+		return
+	}
+	if s.broker.IsMock() {
+		writeError(w, http.StatusForbidden, "cannot execute in mock mode — start server with --live")
+		return
+	}
+
+	// Execute orders from the proposal
+	var results []autopilot.OrderResult
+	for _, o := range proposal.Orders {
+		order := broker.Order{
+			TradingSymbol:   o.Ticker,
+			Exchange:        o.Exchange,
+			TransactionType: o.Action,
+			Quantity:        o.Quantity,
+			OrderType:       "LIMIT",
+			Product:         "CNC",
+			Price:           o.LimitPrice,
+		}
+		result, err := s.broker.PlaceOrder("regular", order)
+		if err != nil {
+			results = append(results, autopilot.OrderResult{
+				Ticker:  o.Ticker,
+				Action:  o.Action,
+				Success: false,
+				Error:   err.Error(),
+			})
+		} else {
+			results = append(results, autopilot.OrderResult{
+				Ticker:  o.Ticker,
+				Action:  o.Action,
+				OrderID: result.OrderID,
+				Success: true,
+			})
+		}
+		time.Sleep(200 * time.Millisecond) // throttle
+	}
+
+	// Update proposal with execution results
+	proposal.ExecutionLog = results
+	if err := autopilot.ConfirmProposal(proposal); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to confirm proposal: "+err.Error())
+		return
+	}
+
+	// Archive
+	_ = autopilot.ArchiveProposal(proposal)
+
+	// Count results
+	successCount := 0
+	for _, r := range results {
+		if r.Success {
+			successCount++
+		}
+	}
+
+	writeJSON(w, map[string]any{
+		"status":    "confirmed",
+		"placed":    successCount,
+		"failed":    len(results) - successCount,
+		"results":   results,
+	})
+}
+
+func (s *Server) handleAutopilotDismiss(w http.ResponseWriter, r *http.Request) {
+	proposal, err := autopilot.LoadProposal()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load proposal: "+err.Error())
+		return
+	}
+	if proposal == nil {
+		writeError(w, http.StatusNotFound, "no pending proposal")
+		return
+	}
+	if proposal.Status != autopilot.StatusPending {
+		writeError(w, http.StatusConflict, "proposal is not pending (status: "+proposal.Status+")")
+		return
+	}
+
+	if err := autopilot.DismissProposal(proposal); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to dismiss: "+err.Error())
+		return
+	}
+	_ = autopilot.ArchiveProposal(proposal)
+
+	writeJSON(w, map[string]any{
+		"status": "dismissed",
+		"id":     proposal.ID,
+	})
 }

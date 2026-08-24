@@ -8,9 +8,9 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/raghavkgarg/mycase/pkg/broker"
 	"github.com/raghavkgarg/mycase/pkg/market"
 	"github.com/raghavkgarg/mycase/pkg/optimizer"
-	"github.com/raghavkgarg/mycase/pkg/portfolio"
 )
 
 // PadString pads a string with spaces on the right to reach the target width in runes
@@ -183,12 +183,12 @@ func FormatPnLPct(val float64) string {
 	return fmt.Sprintf("%s%.2f%%", sign, math.Abs(val))
 }
 
-func renderSection(title string, labelPrefix string, holdings []portfolio.Holding, totalCurrentAll float64) string {
+func renderSection(title string, labelPrefix string, holdings []broker.Holding, totalCurrentAll float64) string {
 	if len(holdings) == 0 {
 		return ""
 	}
 	// Sort by PnL% ascending
-	slices.SortFunc(holdings, func(a, b portfolio.Holding) int {
+	slices.SortFunc(holdings, func(a, b broker.Holding) int {
 		return cmp.Compare(a.PnLPct, b.PnLPct)
 	})
 
@@ -257,7 +257,7 @@ func renderSection(title string, labelPrefix string, holdings []portfolio.Holdin
 	return sb.String()
 }
 
-func findMissingTickers(tickers map[string]bool, holdings []portfolio.Holding) []string {
+func findMissingTickers(tickers map[string]bool, holdings []broker.Holding) []string {
 	holdingSymbols := make(map[string]bool)
 	for _, h := range holdings {
 		holdingSymbols[h.TradingSymbol] = true
@@ -286,10 +286,10 @@ type ThemeGroup struct {
 	CSVPath      string
 	TargetWeight float64
 	Tickers      map[string]bool
-	Holdings     []portfolio.Holding
+	Holdings     []broker.Holding
 }
 
-func renderThemeAllocationSummary(groups []ThemeGroup, uncategorizedHoldings []portfolio.Holding, totalCurrent float64) string {
+func renderThemeAllocationSummary(groups []ThemeGroup, uncategorizedHoldings []broker.Holding, totalCurrent float64) string {
 	header := "=======================================================================================================================\n"
 	cols := "Theme              | Invested Value | Current Value | PnL           | PnL %     | Actual Wt   | Target Wt   | Drift    \n"
 	sep := "-----------------------------------------------------------------------------------------------------------------------\n"
@@ -429,9 +429,9 @@ func renderThemeAllocationSummary(groups []ThemeGroup, uncategorizedHoldings []p
 
 // RenderHoldingsSnapshot formats and constructs the holdings layout snapshot.
 func RenderHoldingsSnapshot(
-	rawHoldings []portfolio.Holding,
+	rawHoldings []broker.Holding,
 	groups []ThemeGroup,
-	uncategorizedHoldings []portfolio.Holding,
+	uncategorizedHoldings []broker.Holding,
 ) string {
 	// Calculate totalCurrent for weights
 	var totalCurrent float64

@@ -1,4 +1,4 @@
-package performance
+package backtest
 
 import (
 	"context"
@@ -8,12 +8,6 @@ import (
 
 	"github.com/raghavkgarg/mycase/pkg/yfinance"
 )
-
-// StockEntry holds a ticker and its portfolio weight.
-type StockEntry struct {
-	Ticker string
-	Weight float64
-}
 
 // StockResult holds the per-stock P&L calculation result.
 type StockResult struct {
@@ -33,7 +27,7 @@ type StockResult struct {
 // 7 days ago; intraday mode is used otherwise.
 func ValuatePortfolio(
 	ctx context.Context,
-	portfolio []StockEntry,
+	portfolio []Holding,
 	capital float64,
 	targetTime time.Time,
 	useDailyClose bool,
@@ -45,7 +39,7 @@ func ValuatePortfolio(
 
 	for i, s := range portfolio {
 		wg.Add(1)
-		go func(idx int, info StockEntry) {
+		go func(idx int, info Holding) {
 			defer wg.Done()
 			res := StockResult{
 				Ticker:    info.Ticker,

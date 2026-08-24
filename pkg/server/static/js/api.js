@@ -42,6 +42,11 @@ export const api = {
   },
 
   execute: (name) => fetch(`/api/portfolio/${name}/execute`, { method: 'POST' }).then(r => r.json()),
+
+  // Autopilot proposal endpoints
+  autopilotProposal: () => fetch('/api/autopilot/proposal').then(r => r.json()),
+  autopilotConfirm: () => fetch('/api/autopilot/confirm', { method: 'POST' }).then(r => r.json()),
+  autopilotDismiss: () => fetch('/api/autopilot/dismiss', { method: 'POST' }).then(r => r.json()),
 }
 
 // Format a number as Indian currency string: ₹X,XX,XXX.XX

@@ -16,7 +16,6 @@ import (
 
 	"github.com/raghavkgarg/mycase/pkg/config"
 	"github.com/raghavkgarg/mycase/pkg/csvloader"
-	"github.com/raghavkgarg/mycase/pkg/report"
 	"github.com/raghavkgarg/mycase/pkg/stockpicker"
 	"github.com/raghavkgarg/mycase/pkg/yfinance"
 )
@@ -205,7 +204,7 @@ func runReportWithParams(ctx context.Context, filePath, method string) error {
 		fmt.Fprintf(writer, "%d. %s (Portfolio Weight: %.2f%%)\n", i+1, t, s.weight*100.0)
 		fmt.Fprintf(writer, "-------------------------------------------------------------------------\n")
 
-		for _, r := range report.BuildRationale(t, method, fund, hist1y[t], price3mo[t], hardFilters) {
+		for _, r := range stockpicker.BuildRationale(t, method, fund, hist1y[t], price3mo[t], hardFilters) {
 			fmt.Fprintf(writer, "• %s\n", r)
 		}
 		fmt.Fprintf(writer, "\n")
