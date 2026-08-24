@@ -1,0 +1,5 @@
+{
+  "client_id": "your_schwab_app_key",
+  "client_secret": "your_schwab_app_secret",
+  "callback_url": "https://127.0.0.1:8443/callback"
+}

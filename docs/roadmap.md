@@ -76,12 +76,13 @@ Automation eliminates all four. The system runs quarterly, follows its rules, an
 | Hysteresis protection | ✅ Production | Prevents churn from small rank fluctuations |
 | Excel/CSV ingestion | ✅ Production | ETF/broker file → clean ticker CSV |
 | Screener.in integration | ✅ Production | Quarterly result dates, earnings calendar |
+| Quarterly autopilot | ✅ Production | Non-interactive pipeline, launchd scheduling, proposal→confirm→execute workflow |
+| Schwab API (US broker + market data) | ✅ Production | OAuth2 auth, real-time quotes, price history, order execution, ticker routing |
 
 ### What's specced but not built
 
 | Component | Spec location | Blocking? |
 |-----------|---------------|-----------|
-| Schwab API integration (US broker + market data) | `docs/refactor.md` Phase R9 | Yes — blocks US market access |
 | Tax-optimized rebalancing (FIFO engine) | `docs/feature.md` Feature 1 | No — India-only enhancement |
 | Options overlay | `docs/feature.md` Feature 2 | No — post-maturity optimization |
 | Screener.in deep integration (QoQ, shareholding, CWIP) | `docs/screener.md` | No — enrichment |
@@ -92,9 +93,7 @@ Automation eliminates all four. The system runs quarterly, follows its rules, an
 |-----|--------|
 | US market strategy (factor tilt on S&P 500 / Russell) | Cannot diversify geographically |
 | Strategic asset allocation layer (India/US split) | No cross-market portfolio construction |
-| Scheduled autopilot (cron/launchd for quarterly pipeline) | Still requires manual `mycase pipeline` invocation |
 | Live performance attribution (benchmark tracking) | Cannot measure if we're actually outperforming |
-| Rebalance-on-approval workflow (alert → confirm → execute) | All-or-nothing: manual CLI or full `--live` |
 
 ---
 
@@ -107,11 +106,11 @@ The system should operate as a **6-layer stack** where each layer has a clear re
 │  Layer 6: Performance Audit & Attribution                │
 │  Benchmark tracking, alpha decomposition, annual report  │
 ├─────────────────────────────────────────────────────────┤
-│  Layer 5: Autopilot & Scheduling                         │
+│  Layer 5: Autopilot & Scheduling                ✅ BUILT │
 │  Quarterly pipeline, drift-trigger, alert→confirm→exec   │
 ├─────────────────────────────────────────────────────────┤
 │  Layer 4: Execution & Tax Awareness                      │
-│  Zerodha (India), Schwab (US), FIFO lots, TLH engine    │
+│  Zerodha (India), Schwab (US) ✅, FIFO lots, TLH engine │
 ├─────────────────────────────────────────────────────────┤
 │  Layer 3: Portfolio Construction                         │
 │  Cross-market allocation, per-market optimization,       │
@@ -121,7 +120,7 @@ The system should operate as a **6-layer stack** where each layer has a clear re
 │  Multibagger (India S/M), Value (India L), US Factor,    │
 │  MFS scoring, hard filters                               │
 ├─────────────────────────────────────────────────────────┤
-│  Layer 1: Multi-Market Data                              │
+│  Layer 1: Multi-Market Data                      ✅ BUILT │
 │  Yahoo Finance (India), Schwab API (US), DuckDB cache,   │
 │  Screener.in (enrichment), NSE/BSE constituents          │
 └─────────────────────────────────────────────────────────┘
@@ -174,52 +173,17 @@ The router in `pkg/yfinance/router.go` (new) selects data source based on prefix
 
 ## 4. Phased Roadmap
 
-### Phase 1: Quarterly Autopilot Pipeline (removes busy work)
+### ~~Phase 1: Quarterly Autopilot Pipeline~~ ✅ Completed (R10)
 
-**What**: Make the existing pipeline run on a schedule without human intervention for the pick→optimize→report steps. Execution still requires confirmation.
-
-**Why first**: This removes the most busy work immediately with zero strategy changes. The current system works — it just requires you to remember to run it.
-
-**Deliverables**:
-- `mycase pipeline --schedule quarterly` writes a launchd plist (macOS) / cron entry that fires on the 1st trading day of Jan/Apr/Jul/Oct
-- Pipeline generates the full report + proposed orders
-- Telegram/Discord alert with summary: "Quarterly rebalance ready. 3 exits, 2 entries. Estimated cost: ₹847. Review at http://localhost:8080/rebalance"
-- Dashboard `/rebalance` page shows proposed orders with a "Confirm & Execute" button
-- Confirmation triggers `basket --live` execution
-- All reports archived to `report/{theme}/{date}_quarterly.txt`
-
-**Config addition** to `pipeline.yaml`:
-```yaml
-schedule:
-  frequency: quarterly          # quarterly, monthly, or drift-triggered
-  day: first_trading_day        # first_trading_day, last_trading_day, or specific date (15)
-  notify: [telegram]
-  auto_execute: false           # true = no confirmation needed (dangerous)
-  drift_trigger_pct: 15         # fire mid-quarter if any stock drifts > 15%
-```
-
-**Effort**: ~1 week. Mostly scheduling + alert integration (both pieces exist separately).
+Implemented as `mycase autopilot {run, install, uninstall, status, dismiss}`. Non-interactive pipeline generates a proposal file, sends Telegram/Discord alert, and waits for investor confirmation via web dashboard or CLI. Scheduling via launchd `StartCalendarInterval` plist. See `docs/architecture.md` D7–D9 for design decisions, `docs/runbook.md` §7b for usage.
 
 ---
 
-### Phase 2: Schwab Integration — US Market Access (R9)
+### ~~Phase 2: Schwab Integration — US Market Access (R9)~~ ✅ Completed
 
-**What**: Implement the Schwab API integration as specced in `docs/refactor.md` Phase R9.
+Implemented as `pkg/schwab/` (auth, client, market data, broker) + `pkg/datafetcher/router.go` (ticker routing) + `pkg/costs/us.go` (US cost model). CLI: `mycase auth --broker schwab`. See `docs/refactor.md` R9 in Completed Phases and `docs/architecture.md` D6 for broker interface design.
 
-**Why second**: Unlocks the US market leg. Without this, the portfolio is 100% India equity — concentrated geographic and currency risk. S&P 500 access is the single biggest diversification win.
-
-**Deliverables** (per R9 spec):
-- R9.1: OAuth2 auth flow (`mycase auth --broker schwab`)
-- R9.2: HTTP client with auto-refresh
-- R9.3: Market data — price history + quotes mapped to existing types
-- R9.4: Ticker router (US: prefix → Schwab, NSE:/BSE: → Yahoo)
-- R9.5: Broker implementation (holdings, quotes, order placement)
-- R9.6: Config + CLI changes
-- R9.7: US transaction cost model ($0 commission, negligible SEC/TAF fees)
-
-**Effort**: ~3 weeks. Auth is the trickiest part (OAuth2 + refresh dance).
-
-**Prerequisite**: Schwab developer app registration + approval (1–3 business days).
+**Prerequisite for live use**: Schwab developer app registration + approval (1–3 business days), then `mycase auth --broker schwab` to complete OAuth flow.
 
 ---
 
@@ -388,15 +352,15 @@ allocation:
 
 ### Timeline Summary
 
-| Phase | Target | Dependency | Core value delivered |
-|-------|--------|------------|---------------------|
-| 1. Quarterly Autopilot | Sep 2026 | None | Removes all manual busy work |
-| 2. Schwab Integration | Oct 2026 | Schwab app approval | US market access |
-| 3. US Factor Strategy | Nov 2026 | Phase 2 | US stock picking with factor edge |
-| 4. Asset Allocation | Nov 2026 | Phase 3 | Unified India+US portfolio |
-| 5. Tax-Loss Harvesting | Jan 2027 | Phase 1 (India), Phase 2 (US) | 0.5-1.5% tax alpha |
-| 6. Performance Attribution | Feb 2027 | Phase 4 | Know if system works |
-| 7. Options Overlay | H2 2027 | Phase 6 + 6mo live data | Income optimization |
+| Phase | Target | Dependency | Core value delivered | Status |
+|-------|--------|------------|---------------------|--------|
+| 1. Quarterly Autopilot | ~~Sep 2026~~ | None | Removes all manual busy work | ✅ Done |
+| 2. Schwab Integration | ~~Oct 2026~~ | Schwab app approval | US market access | ✅ Done |
+| 3. US Factor Strategy | Nov 2026 | Phase 2 ✅ | US stock picking with factor edge | ⬜ Next |
+| 4. Asset Allocation | Nov 2026 | Phase 3 | Unified India+US portfolio | ⬜ |
+| 5. Tax-Loss Harvesting | Jan 2027 | Phase 1 ✅ (India), Phase 2 ✅ (US) | 0.5-1.5% tax alpha | ⬜ |
+| 6. Performance Attribution | Feb 2027 | Phase 4 | Know if system works | ⬜ |
+| 7. Options Overlay | H2 2027 | Phase 6 + 6mo live data | Income optimization | ⬜ |
 
 ---
 

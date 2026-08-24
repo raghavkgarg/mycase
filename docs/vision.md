@@ -30,15 +30,17 @@ The core workflow is implemented and working end-to-end:
 
 All of this runs as a single binary with no external services, no subscriptions, and no network dependencies beyond Yahoo Finance and the Zerodha API.
 
+**Web Dashboard**: A 5-tab local web UI (`mycase serve --port 8080`) with native Web Components, ECharts, and SSE for live quote streaming. Views for holdings, backtesting (streaming equity curve), rebalance preview (order table + tax warnings), monitoring verdicts, and drift history. No framework, no build pipeline — all assets embedded in the binary via `//go:embed`.
+
+**Quarterly Autopilot**: A non-interactive pipeline (`mycase autopilot run`) that runs pick → optimize → report without user prompts, generates a proposal file, and sends a Telegram/Discord alert. The investor reviews and confirms via the web dashboard or dismisses via CLI. Scheduling via launchd plist fires on the 2nd of each quarter month. No orders are placed without explicit confirmation.
+
 ---
 
 ## What We'd Build Next
 
-### Near-term: Web Dashboard (R8)
+### Near-term: US Market Access (Schwab Integration)
 
-The biggest usability gap is that the tool is CLI-only. The investment thesis, portfolio health, and backtest results are all in the terminal. A local web dashboard would make the tool useful to an investor who doesn't think in command lines.
-
-The dashboard is designed — views for holdings (live prices via SSE), backtesting (streaming equity curve), rebalance preview (order table + tax warnings), monitoring verdicts, and drift history. Tech: native Web Components, ECharts, Go stdlib HTTP, no framework, no build pipeline. The backend is a `mycase serve` subcommand; all assets are embedded in the binary.
+The portfolio is 100% Indian equity — concentrated geographic and currency risk. Adding S&P 500 access via the Schwab API (OAuth2 auth, market data, order placement) is the single biggest diversification win. The spec is written (`docs/refactor.md` Phase R9); implementation is next.
 
 ### Medium-term: Multi-Broker Support
 

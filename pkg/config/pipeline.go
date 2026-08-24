@@ -25,6 +25,9 @@ type PipelineConfig struct {
 	RebalanceTolerancePct float64        `yaml:"rebalance_tolerance_pct"`
 	HysteresisRankBuffer  int            `yaml:"hysteresis_rank_buffer"`
 	Schedule              ScheduleConfig `yaml:"schedule"`
+	Broker                string         `yaml:"broker"`             // "zerodha" or "schwab"
+	SchwabConfig          string         `yaml:"schwab_config"`      // path to schwab.json
+	SchwabToken           string         `yaml:"schwab_token"`       // path to schwab_token.json
 }
 
 type rawPipelineConfig struct {
@@ -39,6 +42,9 @@ type rawPipelineConfig struct {
 	RebalanceTolerancePct any            `yaml:"rebalance_tolerance_pct"`
 	HysteresisRankBuffer  any            `yaml:"hysteresis_rank_buffer"`
 	Schedule              ScheduleConfig `yaml:"schedule"`
+	Broker                string         `yaml:"broker"`
+	SchwabConfig          string         `yaml:"schwab_config"`
+	SchwabToken           string         `yaml:"schwab_token"`
 }
 
 // resolveFirst extracts T from val (which may be a scalar or a []any from multi-doc YAML).
@@ -144,6 +150,20 @@ func (cfg *PipelineConfig) UnmarshalYAML(value *yaml.Node) error {
 	}
 	if cfg.Schedule.ProposalTTLDays <= 0 {
 		cfg.Schedule.ProposalTTLDays = 7
+	}
+
+	// Broker config
+	cfg.Broker = a.Broker
+	if cfg.Broker == "" {
+		cfg.Broker = "zerodha"
+	}
+	cfg.SchwabConfig = a.SchwabConfig
+	if cfg.SchwabConfig == "" {
+		cfg.SchwabConfig = "config/schwab.json"
+	}
+	cfg.SchwabToken = a.SchwabToken
+	if cfg.SchwabToken == "" {
+		cfg.SchwabToken = "config/schwab_token.json"
 	}
 	return nil
 }

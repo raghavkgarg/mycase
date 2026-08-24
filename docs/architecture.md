@@ -155,9 +155,10 @@ pkg/           — domain logic; no CLI imports
   autopilot/   — non-interactive pipeline, proposal model, scheduling, alerts
   yfinance/    — price and fundamental data fetching
   cache/       — DuckDB read/write for prices and fundamentals
-  broker/      — Broker interface; zerodha/ and mock/ implementations
+  broker/      — Broker interface; zerodha/, schwab/, and mock/ implementations
+  schwab/      — Schwab Trader API: OAuth2 auth, HTTP client, market data, US broker
   daemon/      — drift computation, alert dispatch
-  costs/       — transaction cost model, tax classification
+  costs/       — transaction cost model (India + US), tax classification
   monitoring/  — 4-pillar health scoring
   alert/       — Alerter interface; Telegram, Discord implementations
   executor/    — live order placement with retry logic
@@ -165,7 +166,7 @@ pkg/           — domain logic; no CLI imports
   csvloader/   — CSV/golden copy operations, comparison reports
   excel/       — native Excel (.xlsx) parsing & smart ticker extraction
   config/      — configuration loading/parsing (pipeline, mfs, alerts)
-  datafetcher/ — market data retrieval with broker fallback
+  datafetcher/ — market data retrieval with broker fallback + ticker routing (US→Schwab, India→Yahoo)
   market/      — market hours detection, GTT price calculations
   selectiontracker/ — audit trail for stock selection decisions
   server/      — web dashboard (HTTP, SSE, embedded static)
@@ -492,3 +493,15 @@ The system uses STCG 20% and LTCG 12.5% (₹1.25L exemption) — the rates enact
 ### D6 — Broker Interface for Future Expansion
 
 The `Broker` interface in `pkg/broker/broker.go` allows adding AngelOne SmartAPI, Fyers, or Upstox without changes to any command. Each broker would live in its own `pkg/broker/{name}/` directory. There are no official Go SDKs for Fyers/Angel — all would require custom HTTP clients.
+
+### D7 — Autopilot as Separate Subcommand, Not a Pipeline Flag
+
+The interactive pipeline has ~15 user prompts, file editing pauses, and report-opening commands. Rather than adding `--non-interactive` (which would require every new prompt to check a skip condition), `mycase autopilot run` is a clean, purpose-built non-interactive pipeline. It shares the internal `runPickWithOpts`, `runReportWithParams`, etc. but never calls `reader.ReadString`. The existing `mycase pipeline` stays as-is for manual inspection workflows.
+
+### D8 — Autopilot Scheduling via launchd, Not In-Process Loop
+
+The drift daemon uses an in-process sleep-until loop for daily checks — acceptable for 24h intervals. Quarterly autopilot runs span months, making a long-lived process impractical (memory leaks, OS updates, reboots). Instead, `mycase autopilot install` writes a launchd `StartCalendarInterval` plist that fires on the 2nd of Jan/Apr/Jul/Oct at 10:00 IST. The process runs once, does its work, exits. If the scheduled day is not a trading day (checked by attempting a quote fetch), the drift daemon (running daily at 15:45) picks up a retry marker and re-invokes next trading day.
+
+### D9 — Proposal State Decouples Pipeline from Confirmation
+
+After autopilot runs pick → optimize → report, it persists a `Proposal` JSON (`data/autopilot/pending_proposal.json`) containing proposed orders, cost breakdown, tax warnings, golden copy diff, and a 7-day expiry. The web dashboard reads this file to render the `/rebalance` confirmation page; the Telegram alert summarizes and links to it. This decouples the pipeline run from the confirmation step — they don't need to happen in the same process, and the investor can confirm hours or days later. Three server endpoints manage the lifecycle: `GET /api/autopilot/proposal`, `POST /api/autopilot/confirm`, `POST /api/autopilot/dismiss`.

@@ -40,3 +40,18 @@ rebalance_tolerance_pct:
 
 hysteresis_rank_buffer:
   - 5
+
+
+# Broker configuration
+# broker: zerodha                     # "zerodha" (default) or "schwab"
+# schwab_config: config/schwab.json   # Schwab app credentials
+# schwab_token: config/schwab_token.json  # Schwab OAuth tokens (auto-managed)
+
+# Autopilot scheduling
+# schedule:
+#   frequency: quarterly
+#   day: first_trading_day
+#   notify: [telegram]
+#   auto_execute: false
+#   drift_trigger_pct: 15
+#   proposal_ttl_days: 7
