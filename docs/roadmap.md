@@ -1,8 +1,10 @@
 # Mycase — Roadmap
 
-**Goal**: An automated equity system that delivers slight but consistent outperformance over broad-market indices (S&P 500, Nifty 50) while eliminating emotional decision-making and manual busy work.
+**Goal**: An automated US equity system that delivers slight but consistent outperformance over the S&P 500 while eliminating emotional decision-making and manual busy work.
 
 **Updated**: August 2026
+
+**Target investor**: US-based individual investor using Schwab. The India market components exist as legacy code from an earlier multi-market design but are not part of the active strategy.
 
 ---
 
@@ -27,8 +29,7 @@ Mycase is not a stock-picking edge machine. It is a **behavioral discipline engi
 
 1. **Prevent the investor from doing something stupid** during drawdowns (automation doesn't feel fear)
 2. **Harvest mechanical premiums** that require no insight — rebalancing premium, tax-loss harvesting, factor mean-reversion
-3. **Apply systematic factor tilts** (quality + value + momentum) that have academic support for long-term outperformance
-4. **Diversify across uncorrelated markets** (India + US) to reduce portfolio-level drawdowns without sacrificing returns
+3. **Apply systematic factor tilts** (quality + momentum) that have academic support for long-term outperformance
 
 ### The realistic edge
 
@@ -37,10 +38,9 @@ Mycase is not a stock-picking edge machine. It is a **behavioral discipline engi
 | Behavioral discipline (no panic sell/FOMO buy) | 1–2% / year | Dalbar study: avg investor underperforms by 3–4% due to timing |
 | Rebalancing premium (sell winners, buy losers mechanically) | 0.3–0.8% / year | Bernstein, Perold & Sharpe |
 | Tax-loss harvesting (systematic loss realization) | 0.5–1.5% / year | Wealthfront, Betterment published data |
-| Factor tilts (quality + value + small-cap) | 0.5–2% / year | Fama-French, AQR, Cliff Asness |
-| Geographic diversification (India + US) | Risk reduction, not alpha per se | Correlation < 0.6 historically |
+| Factor tilts (quality + momentum) | 0.5–2% / year | Fama-French, AQR, Cliff Asness |
 
-**Realistic combined target**: 1–3% annualized outperformance over a passive 60/40 India/US equity split, with lower max drawdown. Over 20 years at ₹50L invested, even 1.5% alpha compounds to ₹20L+ additional wealth.
+**Realistic combined target**: 1–3% annualized outperformance over SPY (passive S&P 500), with comparable or lower max drawdown. Over 20 years at $500K invested, even 1.5% alpha compounds to $200K+ additional wealth.
 
 ### Why automation wins
 
@@ -92,7 +92,6 @@ Automation eliminates all four. The system runs quarterly, follows its rules, an
 
 | Gap | Impact |
 |-----|--------|
-| Strategic asset allocation layer (India/US split) | No cross-market portfolio construction |
 | Live performance attribution (benchmark tracking) | Cannot measure if we're actually outperforming |
 
 ---
@@ -193,71 +192,19 @@ Implemented as `mycase pick --index sp500 --method us_quality_momentum --top 20`
 
 ---
 
-### Phase 4: Strategic Asset Allocation Layer
+### ~~Phase 4: Strategic Asset Allocation Layer~~ ❌ Dropped
 
-**What**: A top-level portfolio construction layer that manages the India/US split, enforces target allocations, and handles cross-market rebalancing.
-
-**Why**: Without this, India and US portfolios are two separate things. The investor has to manually decide "how much in India vs US." This layer makes that systematic and handles the drift between the two.
-
-**Design**:
-
-```yaml
-# config/pipeline.yaml addition
-allocation:
-  india:
-    target: 0.60                # 60% target allocation
-    strategies:
-      - index: microsmall       # existing
-        method: multibagger
-        top_n: 20
-        weight_in_india: 0.70   # 70% of India allocation → micro/small
-      - index: nifty50
-        method: value
-        top_n: 10
-        weight_in_india: 0.30   # 30% of India allocation → large-cap value
-    broker: zerodha
-
-  us:
-    target: 0.40                # 40% target allocation
-    strategies:
-      - index: sp500
-        method: us_quality_momentum
-        top_n: 20
-        weight_in_us: 1.0
-    broker: schwab
-
-  rebalance_band: 0.05          # rebalance when actual drifts > 5% from target
-  tax_aware: true               # consider tax impact before cross-market rebalance
-```
-
-**Rebalancing logic**:
-1. Compute current India% vs US% from live holdings (both brokers)
-2. If drift > `rebalance_band`, propose cross-market rebalance
-3. Tax-aware: prefer deploying new capital to the underweight market over selling the overweight market (avoids taxable events)
-4. Within each market: run the existing per-market rebalance logic
-
-**Deliverables**:
-- `pkg/portfolio/allocator.go` — cross-market allocation engine
-- `mycase pipeline` updated to run both legs and produce a unified report
-- Dashboard shows combined portfolio (India + US) with geographic allocation donut
-- Drift daemon monitors cross-market drift in addition to per-stock drift
-
-**Effort**: ~2 weeks.
+**Reason**: The system is now focused on US-only investing via Schwab. Cross-market India/US allocation requires the investor to have brokerage access in both markets (Zerodha + Schwab), which is impractical for a US-based investor. Indian markets are also underperforming, making the complexity unjustified. The India code remains as legacy but is not part of the active strategy.
 
 ---
 
-### Phase 5: Tax-Loss Harvesting Engine
+### Phase 4 (renumbered): Tax-Loss Harvesting Engine
 
-**What**: Implement the FIFO capital gains engine (specced in `docs/feature.md`) and add systematic tax-loss harvesting to the rebalance workflow.
+**What**: Implement FIFO lot tracking and systematic tax-loss harvesting for the US portfolio.
 
 **Why**: Tax-loss harvesting is the closest thing to a free lunch in investing. By systematically selling positions at a loss (and immediately replacing them with a correlated substitute), you realize tax deductions without changing portfolio exposure. This is worth 0.5–1.5% per year in tax savings.
 
-**India-specific rules**:
-- STCG (< 12 months): 20% tax → harvesting a ₹10,000 loss saves ₹2,000 in tax
-- LTCG (≥ 12 months): 12.5% tax above ₹1.25L exemption
-- Wash sale: no explicit wash sale rule in India (unlike US 30-day rule), but income tax officers may challenge artificial losses. Conservative approach: replace with sector peer, not same stock
-
-**US-specific rules**:
+**US tax rules**:
 - Short-term (< 1 year): taxed as ordinary income (up to 37%)
 - Long-term (≥ 1 year): 15% or 20%
 - Wash sale rule: cannot buy "substantially identical" security within 30 days before or after the sale
@@ -266,39 +213,38 @@ allocation:
 **Deliverables**:
 - `pkg/tax/fifo.go` — FIFO lot matching engine
 - `pkg/tax/tlh.go` — tax-loss harvesting logic (identify harvest candidates, select substitutes)
-- `mycase tax import --file data/tradebook.csv` — load Zerodha tradebook
-- `mycase basket --tax-optimize` — orders sequenced to maximize TLH + use LTCG exemption
-- Dashboard tax tab: YTD realized gains/losses, available harvest candidates, exemption utilization
+- `mycase tax import --broker schwab` — load Schwab transaction history
+- `mycase basket --tax-optimize` — orders sequenced to maximize TLH
+- Dashboard tax tab: YTD realized gains/losses, available harvest candidates, wash sale calendar
 
 **Effort**: ~3 weeks. The FIFO engine is the complex part; TLH logic is straightforward once lots are tracked.
 
 ---
 
-### Phase 6: Live Performance Attribution
+### Phase 5 (renumbered): Live Performance Attribution
 
-**What**: Continuously track the actual portfolio's performance against benchmarks and decompose returns into their sources.
+**What**: Continuously track the actual portfolio's performance against SPY and decompose returns into their sources.
 
 **Why**: Without this, you don't know if the system is working. "I think I'm beating the market" is not the same as "I'm beating the market by 1.7% annualized with a 0.82 information ratio." You need hard numbers to decide whether to continue, adjust, or simplify to pure index funds.
 
 **Deliverables**:
-- `pkg/attribution/tracker.go` — daily NAV computation from live holdings
-- Benchmarks tracked: Nifty 50, S&P 500, a 60/40 Nifty/SPY blend (the "do nothing" baseline)
-- Monthly attribution report: how much came from stock selection vs asset allocation vs rebalancing vs tax savings
+- `pkg/attribution/tracker.go` — daily NAV computation from live Schwab holdings
+- Benchmark tracked: SPY (S&P 500 ETF) — the "do nothing" baseline
+- Monthly attribution report: how much came from stock selection vs rebalancing vs tax savings
 - `mycase performance --vs-benchmark` — show cumulative alpha chart
-- Dashboard performance tab: equity curve overlaid with benchmarks, rolling 1Y alpha
+- Dashboard performance tab: equity curve overlaid with SPY, rolling 1Y alpha
 - Alert: if trailing 12-month alpha is significantly negative, send a "review your strategy" nudge
 
-**Attribution decomposition** (Brinson model):
-- **Allocation effect**: did India/US split help vs 60/40 benchmark?
-- **Selection effect**: did stock picks within each market beat the market's index?
-- **Interaction effect**: combination of both
+**Attribution decomposition**:
+- **Selection effect**: did factor-tilted picks beat SPY?
+- **Rebalancing effect**: did quarterly rebalancing add value vs buy-and-hold?
 - **Tax effect**: how much did TLH save vs a no-TLH baseline?
 
 **Effort**: ~2 weeks. The hard part is getting consistent NAV history; the math is standard.
 
 ---
 
-### Phase 7: Options Overlay (Post-Maturity)
+### Phase 6 (renumbered): Options Overlay (Post-Maturity)
 
 **What**: Once the portfolio is stable and well-tracked (6+ months live), add an options overlay for income generation and tail-risk hedging.
 
@@ -324,10 +270,10 @@ allocation:
 | 1. Quarterly Autopilot | ~~Sep 2026~~ | None | Removes all manual busy work | ✅ Done |
 | 2. Schwab Integration | ~~Oct 2026~~ | Schwab app approval | US market access | ✅ Done |
 | 3. US Factor Strategy | ~~Nov 2026~~ | Phase 2 ✅ | US stock picking with factor edge | ✅ Done |
-| 4. Asset Allocation | Nov 2026 | Phase 3 ✅ | Unified India+US portfolio | ⬜ Next |
-| 5. Tax-Loss Harvesting | Jan 2027 | Phase 1 ✅ (India), Phase 2 ✅ (US) | 0.5-1.5% tax alpha | ⬜ |
-| 6. Performance Attribution | Feb 2027 | Phase 4 | Know if system works | ⬜ |
-| 7. Options Overlay | H2 2027 | Phase 6 + 6mo live data | Income optimization | ⬜ |
+| ~~4. Asset Allocation~~ | — | — | ~~India+US portfolio~~ | ❌ Dropped |
+| 4. Tax-Loss Harvesting | Dec 2026 | Phase 2 ✅ | 0.5-1.5% tax alpha | ⬜ Next |
+| 5. Performance Attribution | Jan 2027 | Phase 3 ✅ | Know if system works | ⬜ |
+| 6. Options Overlay | H2 2027 | Phase 5 + 6mo live data | Income optimization | ⬜ |
 
 ---
 
@@ -335,9 +281,9 @@ allocation:
 
 ### Primary metric: Net-of-cost, net-of-tax CAGR vs benchmark
 
-**Benchmark**: A 60% Nifty 50 / 40% S&P 500 blend, rebalanced annually. This is what you'd get from two index funds with zero effort.
+**Benchmark**: SPY (S&P 500 ETF). This is what you'd get from one index fund with zero effort.
 
-**Target**: Outperform the blend by 1–3% annualized over a rolling 3-year window.
+**Target**: Outperform SPY by 1–3% annualized over a rolling 3-year window.
 
 **Measurement**: Begin tracking from the first fully-automated quarterly rebalance. Report monthly. Meaningful statistical significance requires 3+ years of data.
 
@@ -350,7 +296,7 @@ allocation:
 | Turnover | < 30% annually | Low turnover = low costs + low tax drag |
 | Time spent by investor | < 1 hour/quarter | The entire point is removing busy work |
 | Rebalance discipline | 100% execution rate | Never skip a scheduled rebalance (emotional override = system failure) |
-| Tax savings | Track ₹ saved via TLH annually | Concrete, measurable benefit |
+| Tax savings | Track $ saved via TLH annually | Concrete, measurable benefit |
 
 ### Failure conditions (when to simplify to pure index funds)
 
@@ -359,7 +305,7 @@ allocation:
 - System requires > 2 hours/quarter of manual intervention → automation has failed
 - Investor overrides the system more than once per year → behavioral discipline has broken down
 
-If any failure condition triggers: simplify to 3-fund portfolio (Nifty 50 index + S&P 500 index + debt fund) and stop trying to outperform. Knowing when to quit is part of the system.
+If any failure condition triggers: simplify to VOO/VTI (passive S&P 500 / total market index) and stop trying to outperform. Knowing when to quit is part of the system.
 
 ---
 
@@ -403,15 +349,13 @@ These are things we explicitly will **not** build or pursue:
 | Alpha source | Which phase delivers it | Expected contribution |
 |--------------|------------------------|----------------------|
 | Behavioral discipline | Phase 1 (autopilot removes temptation to override) | 1–2% / year |
-| Rebalancing premium | Phase 1 (quarterly rebalance) + Phase 4 (cross-market) | 0.3–0.8% / year |
-| Geographic diversification | Phase 2 + 4 (India + US) | Risk reduction (lower drawdowns) |
-| Factor tilts (India) | Already built (multibagger + value) | 0.5–1.5% / year |
-| Factor tilts (US) | Phase 3 (quality + momentum) | 0.5–1% / year |
-| Tax-loss harvesting | Phase 5 | 0.5–1.5% / year (tax savings) |
-| Performance awareness | Phase 6 (know when to simplify) | Prevents compounding losses from a broken strategy |
-| Options income | Phase 7 | 1–3% / year on mature portfolio |
+| Rebalancing premium | Phase 1 (quarterly rebalance) | 0.3–0.8% / year |
+| Factor tilts (US) | Phase 3 (quality + momentum) | 0.5–1.5% / year |
+| Tax-loss harvesting | Phase 4 | 0.5–1.5% / year (tax savings) |
+| Performance awareness | Phase 5 (know when to simplify) | Prevents compounding losses from a broken strategy |
+| Options income | Phase 6 | 1–3% / year on mature portfolio |
 
-**Net expected alpha (Phases 1–6, conservative)**: 1.5–3% annually over the 60/40 blend, at lower max drawdown.
+**Net expected alpha (Phases 1–5, conservative)**: 1.5–3% annually over SPY, at comparable max drawdown.
 
 **Net expected alpha (all phases, optimistic)**: 3–5% annually. This is the upper bound; don't plan around it.
 
