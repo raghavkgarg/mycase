@@ -1,0 +1,38 @@
+# US Market Pipeline Configuration
+# Used by: autopilot, pipeline, daemon commands (when broker=schwab)
+
+indices:
+  - sp500
+
+strategy:
+  - us_quality_momentum
+
+top_n:
+  - 20
+
+capital:
+  - 100000  # USD
+
+rebalance_tolerance_pct:
+  - 0.25
+
+hysteresis_rank_buffer:
+  - 5
+
+# Broker
+broker: schwab
+schwab_config: config/schwab.json
+schwab_token: config/schwab_token.json
+
+# Golden copy (existing portfolio for hysteresis comparison)
+# golden_copy_path:
+#   - data/us_portfolio.csv
+
+# Autopilot scheduling
+# schedule:
+#   frequency: quarterly
+#   day: first_trading_day
+#   notify: [telegram]
+#   auto_execute: false
+#   drift_trigger_pct: 10
+#   proposal_ttl_days: 7
