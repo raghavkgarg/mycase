@@ -64,6 +64,7 @@ Automation eliminates all four. The system runs quarterly, follows its rules, an
 | Stock selection — Multibagger | ✅ Production | Indian micro/small/mid-cap, 11 hard filters + 100-pt scoring |
 | Stock selection — MFS multi-factor | ✅ Production | 16-factor scoring, 4 strategy presets |
 | Stock selection — Value | ✅ Implemented | Indian large-cap, EPV-based, dual-path BFSI/industrial filters |
+| Stock selection — US Quality-Momentum | ✅ Production | S&P 500, 6-factor quality+momentum scoring, 3 hard filters |
 | Weight optimization | ✅ Production | Inverse-volatility, MFS-proportional, equal-weight |
 | Sector caps & redistribution | ✅ Production | Iterative 25% sector cap, 3 stocks/sector, per-stock cap |
 | Backtesting engine | ✅ Production | Date-aligned, sell-then-buy, slippage, 7 metrics |
@@ -91,7 +92,6 @@ Automation eliminates all four. The system runs quarterly, follows its rules, an
 
 | Gap | Impact |
 |-----|--------|
-| US market strategy (factor tilt on S&P 500 / Russell) | Cannot diversify geographically |
 | Strategic asset allocation layer (India/US split) | No cross-market portfolio construction |
 | Live performance attribution (benchmark tracking) | Cannot measure if we're actually outperforming |
 
@@ -187,42 +187,9 @@ Implemented as `pkg/schwab/` (auth, client, market data, broker) + `pkg/datafetc
 
 ---
 
-### Phase 3: US Factor Strategy
+### ~~Phase 3: US Factor Strategy~~ ✅ Completed
 
-**What**: Apply systematic factor scoring to US equities (S&P 500 or Russell 1000 universe).
-
-**Why**: A pure index fund already "beats most people." A factor-tilted selection (overweight quality + momentum, underweight expensive/low-quality) has historically added 1-2% over decades. This is our marginal alpha on the US side.
-
-**Strategy design** — simpler than Multibagger because US large-cap data is cleaner:
-
-| Factor | Weight | Direction | Rationale |
-|--------|--------|-----------|-----------|
-| ROIC (Return on Invested Capital) | 20 pts | Higher = better | Capital efficiency — the Buffett metric |
-| Free Cash Flow Yield (FCF/EV) | 20 pts | Higher = better | Actual cash generation vs enterprise value |
-| 12-month Momentum (skip last month) | 15 pts | Higher = better | Jegadeesh-Titman momentum, skip recent month to avoid reversal |
-| Earnings Quality (CFO/Net Income) | 15 pts | Higher = better | Accruals anomaly — cash-backed earnings persist |
-| Shareholder Yield (div + buyback) | 15 pts | Higher = better | Total capital return to shareholders |
-| Low Volatility | 15 pts | Lower vol = better | Low-vol anomaly: less risk, not less return |
-
-**Hard filters** (US):
-- Market cap > $10B (liquid large-cap only)
-- Average daily volume > $50M
-- Positive trailing FCF
-- No ADRs (avoid dual-listing complexity)
-
-**Universe**: S&P 500 constituents fetched from a maintained source (Wikipedia table, or Schwab instrument search filtered by index membership).
-
-**Top N**: 20-25 stocks (enough diversification, few enough to have meaningful factor tilt)
-
-**Rebalance**: Quarterly, aligned with India rebalance
-
-**Deliverables**:
-- `mycase pick --index sp500 --method us_quality_momentum --top 20`
-- New scoring function in `pkg/stockpicker/scoring.go` (or new file `scoring_us.go`)
-- S&P 500 constituent fetcher (Schwab instruments endpoint or CSV)
-- Backtest against SPY to validate factor tilt adds value historically
-
-**Effort**: ~2 weeks. The scoring engine is generic — this is mostly mapping Schwab fundamentals to factors and tuning thresholds.
+Implemented as `mycase pick --index sp500 --method us_quality_momentum --top 20`. Six-factor 100-point scoring model (ROIC, FCF Yield, 12-month Momentum skip-1-month, Earnings Quality, Shareholder Yield, Low Volatility) with US-specific hard filters (market cap > $10B, ADV > $50M, positive FCF). Scoring in `pkg/stockpicker/scoring_us.go`, config in `config/mfs.json` under `us_quality_momentum`. S&P 500 constituents fetched from GitHub dataset. Sector caps (max 4/sector), hysteresis, and rebalancing bands apply identically to India strategies.
 
 ---
 
@@ -356,8 +323,8 @@ allocation:
 |-------|--------|------------|---------------------|--------|
 | 1. Quarterly Autopilot | ~~Sep 2026~~ | None | Removes all manual busy work | ✅ Done |
 | 2. Schwab Integration | ~~Oct 2026~~ | Schwab app approval | US market access | ✅ Done |
-| 3. US Factor Strategy | Nov 2026 | Phase 2 ✅ | US stock picking with factor edge | ⬜ Next |
-| 4. Asset Allocation | Nov 2026 | Phase 3 | Unified India+US portfolio | ⬜ |
+| 3. US Factor Strategy | ~~Nov 2026~~ | Phase 2 ✅ | US stock picking with factor edge | ✅ Done |
+| 4. Asset Allocation | Nov 2026 | Phase 3 ✅ | Unified India+US portfolio | ⬜ Next |
 | 5. Tax-Loss Harvesting | Jan 2027 | Phase 1 ✅ (India), Phase 2 ✅ (US) | 0.5-1.5% tax alpha | ⬜ |
 | 6. Performance Attribution | Feb 2027 | Phase 4 | Know if system works | ⬜ |
 | 7. Options Overlay | H2 2027 | Phase 6 + 6mo live data | Income optimization | ⬜ |

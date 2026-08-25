@@ -194,6 +194,11 @@ func mapSchwabFundamentals(f *Fundamental) yfinance.Fundamentals {
 		DebtToEquity:     f.TotalDebtToEquity,
 		TTMRevenue:       f.RevenueTTM,
 		Sector:           "", // Not available from instruments endpoint
+		DividendYield:    f.DivYield / 100.0,
+		ReturnOnAssets:   f.ReturnOnAssets / 100.0,
+		Beta:             f.Beta,
+		NetProfitMargin:  f.NetProfitMarginTTM / 100.0,
+		GrossMarginTTM:   f.GrossMarginTTM / 100.0,
 	}
 }
 

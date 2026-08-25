@@ -22,7 +22,7 @@ var PickCommand = &cli.Command{
 	Flags: []cli.Flag{
 		&cli.StringFlag{Name: "index", Aliases: []string{"i"}, Value: "smallcap250", Usage: "Index to pick stocks from"},
 		&cli.StringFlag{Name: "file", Aliases: []string{"f"}, Usage: "Path to custom CSV file (takes precedence over --index)"},
-		&cli.StringFlag{Name: "method", Aliases: []string{"m"}, Value: "balanced", Usage: "Scoring strategy (balanced, aggressive, conservative, multibagger, value)"},
+		&cli.StringFlag{Name: "method", Aliases: []string{"m"}, Value: "balanced", Usage: "Scoring strategy (balanced, aggressive, conservative, multibagger, value, us_quality_momentum)"},
 		&cli.IntFlag{Name: "top", Value: 20, Usage: "Number of top stocks to pick"},
 		&cli.StringFlag{Name: "range", Value: "3mo", Usage: "Historical data range (3mo, 6mo, 1y)"},
 		&cli.BoolFlag{Name: "skip-scuttlebutt", Usage: "Skip qualitative scuttlebutt checklist report"},
@@ -121,7 +121,10 @@ func runPickWithOpts(ctx context.Context, opts *stockpicker.Options) error {
 	stockpicker.InjectGovernance(fundamentals, cfg.Governance)
 	tracker := selectiontracker.New()
 
-	if cfg.HardFilters != nil {
+	if opts.Method == "us_quality_momentum" {
+		// US-specific hard filters (market cap, ADV, positive FCF only)
+		activeKeys = stockpicker.ApplyUSHardFilters(ctx, activeKeys, cfg.HardFilters, fundamentals, tracker)
+	} else if cfg.HardFilters != nil {
 		activeKeys = stockpicker.ApplySafetyFilters(ctx, activeKeys, opts.Method, cfg.HardFilters, fundamentals, fullHistory, tracker)
 	} else {
 		tracker.InitialCount = len(activeKeys)
@@ -144,6 +147,10 @@ func runPickWithOpts(ctx context.Context, opts *stockpicker.Options) error {
 		scores = stockpicker.ScoreMultibagger(ctx, activeKeys, fundamentals, fullHistory, cfg.HardFilters)
 		selectedKeys = stockpicker.SelectTopNMultibagger(activeKeys, scores, fundamentals, cfg.HardFilters, opts.TopN, goldenWeights, opts.HysteresisBuffer, tracker)
 		finalWeights = stockpicker.NormalizeMultibaggerWeights(selectedKeys, scores, fundamentals, cfg.HardFilters, goldenWeights, opts.RebalanceTolerance)
+	} else if opts.Method == "us_quality_momentum" {
+		scores = stockpicker.ScoreUSQualityMomentum(ctx, activeKeys, fundamentals, fullHistory, cfg.HardFilters)
+		selectedKeys = stockpicker.SelectTopNUSQM(activeKeys, scores, fundamentals, cfg.HardFilters, opts.TopN, goldenWeights, opts.HysteresisBuffer, tracker)
+		finalWeights = stockpicker.NormalizeUSQMWeights(selectedKeys, scores, fundamentals, cfg.HardFilters, goldenWeights, opts.RebalanceTolerance)
 	} else {
 		selectedKeys = stockpicker.SelectTopNStandard(activeKeys, slicedPrices, benchmarkPrices, fundamentals, cfg.Weights, opts.TopN, goldenWeights, opts.HysteresisBuffer, tracker)
 		finalWeights = stockpicker.NormalizeStandardWeights(selectedKeys, slicedPrices, benchmarkPrices, fundamentals, cfg.Weights, goldenWeights, opts.RebalanceTolerance)
@@ -153,9 +160,9 @@ func runPickWithOpts(ctx context.Context, opts *stockpicker.Options) error {
 		return finalWeights[selectedKeys[i]] > finalWeights[selectedKeys[j]]
 	})
 
-	if opts.Method == "value" || opts.Method == "multibagger" {
+	if opts.Method == "value" || opts.Method == "multibagger" || opts.Method == "us_quality_momentum" {
 		stockpicker.PrintMultibaggerTable(selectedKeys, finalWeights, scores, fundamentals, fullHistory, displayNameVal, opts.Method)
-		if !opts.SkipScuttlebutt {
+		if !opts.SkipScuttlebutt && opts.Method != "us_quality_momentum" {
 			stockpicker.PrintScuttlebutt(selectedKeys, fundamentals, displayNameVal, opts.Method)
 		}
 	} else {

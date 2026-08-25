@@ -220,6 +220,14 @@ type HardFilters struct {
 	ScoreWeightShareholderYield float64  `json:"score_weight_shareholder_yield"`
 	ScoreWeightSmartMoneyDelta  float64  `json:"score_weight_smart_money_delta"`
 	ScoreWeightMarginInflection float64  `json:"score_weight_margin_inflection"`
+
+	// US Quality-Momentum scoring weights
+	ScoreWeightROIC              float64 `json:"score_weight_roic"`
+	ScoreWeightFCFYieldUS        float64 `json:"score_weight_fcf_yield_us"`
+	ScoreWeightMomentum12M       float64 `json:"score_weight_momentum_12m"`
+	ScoreWeightEarningsQuality   float64 `json:"score_weight_earnings_quality"`
+	ScoreWeightShareholderYieldUS float64 `json:"score_weight_shareholder_yield_us"`
+	ScoreWeightLowVol            float64 `json:"score_weight_low_vol"`
 }
 
 // MFSStrategies wrapper containing the mapping of strategies and filters

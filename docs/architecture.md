@@ -287,6 +287,42 @@ Used by `optimize --method mfs`. Each stock is scored across 16 factors:
 
 The iterative approach is necessary because redistributing excess from one capped entity may push another over its limit.
 
+### US Quality-Momentum Strategy (S&P 500)
+
+Applied via `mycase pick --index sp500 --method us_quality_momentum --top 20`. Designed for US large-cap equities with cleaner data and simpler governance (no promoter/pledging concerns).
+
+#### US Hard Filters
+
+| Filter | Threshold | Rationale |
+|--------|-----------|-----------|
+| Market Cap | ≥ $10B | Liquid large-cap only; avoids illiquid names |
+| ADV | ≥ $50M/day | Ensures exit without market impact |
+| Free Cash Flow | > 0 | Quality gate — no cash-burning businesses |
+
+India-specific filters (promoter stake, pledging, ROCE, SMA trend) are skipped for US stocks.
+
+#### US 100-Point Quality-Momentum Scoring
+
+Stocks passing hard filters are scored across 6 factors (total 100 points):
+
+| Factor | Points | Direction | What it measures |
+|--------|--------|-----------|-----------------|
+| ROIC | 20 | Higher = better | Return on Invested Capital; computed as NOPAT/(Total Assets − Current Liabilities), falling back to ROA or ROE |
+| FCF Yield | 20 | Higher = better | Free Cash Flow / Market Cap; actual cash generation vs price paid |
+| 12-Month Momentum (skip 1 month) | 15 | Higher = better | Jegadeesh-Titman momentum; excludes most recent month to avoid short-term reversal |
+| Earnings Quality | 15 | Higher = better | Operating Cash Flow / Net Income; cash-backed earnings persist (accruals anomaly) |
+| Shareholder Yield | 15 | Higher = better | Dividend yield + net buyback yield; total capital return to shareholders |
+| Low Volatility | 15 | Lower = better | Annualized standard deviation of daily returns; low-vol anomaly: less risk, not less return |
+
+All factors are min-max normalized within the candidate set. Low Volatility is inverted (lower vol → higher score). Tie-breaker: higher FCF Yield wins.
+
+#### US Weight Normalization
+
+Weights are score-proportional with iterative capping:
+- Per-stock cap: 8% (tighter than India's 10% due to higher correlation in US large-cap)
+- Per-sector cap: 25%
+- Hysteresis buffer and rebalancing band apply identically to India strategies
+
 ---
 
 ## 6. Weight Optimization

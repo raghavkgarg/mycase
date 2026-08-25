@@ -90,13 +90,20 @@ mycase pick --index smallcap250 --golden data/microsmall.csv \
 
 # Pick from NSE MidCap 150, aggressive strategy
 mycase pick --index midcap150 --method aggressive --top 10
+
+# Pick top 20 US quality-momentum stocks from S&P 500
+mycase pick --index sp500 --method us_quality_momentum --top 20
+
+# Pick US stocks with hysteresis (protect existing US holdings)
+mycase pick --index sp500 --method us_quality_momentum --top 20 \
+    --golden data/us_portfolio.csv --hysteresis-buffer 5
 ```
 
 Output goes to `data/candidates/index_picks/{index}_{method}_{date}.csv`.
 
-**Indices**: `nifty50`, `nifty100`, `nifty500`, `smallcap250`, `midcap150`, `microcap250`
+**Indices**: `nifty50`, `nifty100`, `nifty500`, `smallcap250`, `midcap150`, `microcap250`, `sp500`
 
-**Methods**: `balanced`, `aggressive`, `conservative`, `multibagger`
+**Methods**: `balanced`, `aggressive`, `conservative`, `multibagger`, `value`, `us_quality_momentum`
 
 ### Step 2: Optimize weights
 

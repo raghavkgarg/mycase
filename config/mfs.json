@@ -30,6 +30,21 @@
       "score_weight_volume_breakout": 15.0,
       "score_weight_relative_strength": 15.0
     },
+    "us_quality_momentum": {
+      "min_market_cap": 10000000000,
+      "max_market_cap": 0,
+      "min_adv": 50000000,
+      "min_fcf": 0,
+      "max_stocks_per_sector": 4,
+      "max_sector_weight_cap": 0.25,
+      "max_stock_weight_cap": 0.08,
+      "score_weight_roic": 20.0,
+      "score_weight_fcf_yield_us": 20.0,
+      "score_weight_momentum_12m": 15.0,
+      "score_weight_earnings_quality": 15.0,
+      "score_weight_shareholder_yield_us": 15.0,
+      "score_weight_low_vol": 15.0
+    },
     "value": {
       "min_market_cap": 200000000000,
       "max_market_cap": 50000000000000,
@@ -102,6 +117,14 @@
       "insiders_percent": 0.10,
       "return": 0.10,
       "net_debt_ebitda": 0.10
+    },
+    "us_quality_momentum": {
+      "roe": 0.20,
+      "operating_margins": 0.20,
+      "return": 0.20,
+      "sharpe": 0.15,
+      "sortino": 0.15,
+      "volatility": 0.10
     },
     "value": {
       "pb_ratio": 0.20,

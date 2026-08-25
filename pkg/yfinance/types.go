@@ -195,6 +195,13 @@ type Fundamentals struct {
 	AnnualCurrentLiabilities []AnnualMetric
 	AnnualInterestExpense    []AnnualMetric
 	ResultPrevComing         string
+
+	// US-specific fields (populated from Schwab)
+	DividendYield    float64 // Annual dividend yield as decimal (e.g., 0.02 = 2%)
+	ReturnOnAssets   float64 // ROA as decimal
+	Beta             float64 // Stock beta vs market
+	NetProfitMargin  float64 // Net profit margin as decimal
+	GrossMarginTTM   float64 // Gross margin TTM as decimal
 }
 
 // AnnualMetric holds historical value with its date
