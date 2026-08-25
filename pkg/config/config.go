@@ -327,3 +327,28 @@ func LoadCSVLinks(filename string) (map[string]string, error) {
 	}
 	return links, nil
 }
+
+
+// UserDefaults holds user-level preference defaults loaded from config/defaults.json.
+// These provide convenience defaults for CLI flags; explicit flags always override.
+type UserDefaults struct {
+	Broker string `json:"broker"`
+	Market string `json:"market"`
+	Index  string `json:"index"`
+	Method string `json:"method"`
+	TopN   int    `json:"top_n"`
+	Range  string `json:"range"`
+}
+
+// LoadUserDefaults reads config/defaults.json and returns user preferences.
+// Returns zero-value defaults if the file doesn't exist or is malformed.
+func LoadUserDefaults(filename string) UserDefaults {
+	var defaults UserDefaults
+	file, err := os.Open(filename)
+	if err != nil {
+		return defaults
+	}
+	defer file.Close()
+	_ = json.NewDecoder(file).Decode(&defaults)
+	return defaults
+}

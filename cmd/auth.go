@@ -24,8 +24,7 @@ var AuthCommand = &cli.Command{
 		&cli.StringFlag{
 			Name:    "broker",
 			Aliases: []string{"b"},
-			Value:   "zerodha",
-			Usage:   "Broker to authenticate with: zerodha, schwab",
+			Usage:   "Broker to authenticate with: zerodha, schwab (default from config/defaults.json)",
 		},
 		&cli.StringFlag{
 			Name:  "config",
@@ -40,6 +39,13 @@ var AuthCommand = &cli.Command{
 	},
 	Action: func(ctx context.Context, c *cli.Command) error {
 		broker := strings.ToLower(c.String("broker"))
+		if broker == "" {
+			defaults := config.LoadUserDefaults("config/defaults.json")
+			broker = defaults.Broker
+		}
+		if broker == "" {
+			broker = "schwab"
+		}
 		switch broker {
 		case "schwab":
 			configPath := c.String("config")
@@ -48,7 +54,7 @@ var AuthCommand = &cli.Command{
 			}
 			tokenPath := c.String("token-path")
 			return runSchwabAuth(ctx, configPath, tokenPath)
-		case "zerodha", "":
+		case "zerodha":
 			return runAuthCmd(ctx)
 		default:
 			return fmt.Errorf("unsupported broker %q — supported: zerodha, schwab", broker)

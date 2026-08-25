@@ -1,0 +1,8 @@
+{
+  "broker": "schwab",
+  "market": "us",
+  "index": "sp500",
+  "method": "us_quality_momentum",
+  "top_n": 20,
+  "range": "3mo"
+}
