@@ -1,7 +1,7 @@
 # Mycase Refactor Plan
 
 **Branch**: `feature/mycase-changes`  
-**Go version**: 1.26.5  
+**Go version**: 1.27.0  
 See `docs/architecture.md` for design details, CLI structure, directory layout, and decisions.  
 See `docs/testing.md` for test coverage, conventions, and gaps.
 
@@ -32,6 +32,7 @@ See `docs/testing.md` for test coverage, conventions, and gaps.
 | **R10.1** — Package cleanup | Deleted `pkg/portfolio` (type alias → `broker.Holding`), `pkg/kiteclient` (dead code). Merged `pkg/report` → `pkg/stockpicker/rationale.go`, `pkg/performance` → `pkg/backtest/valuation.go`. 25 → 21 packages. | |
 | **R9** — Schwab API Integration | `pkg/broker/schwab/`: OAuth2 auth flow (auth.go, tls.go), HTTP client with auto-refresh + rate limiting (client.go), market data mapped to yfinance types (market.go, types.go), broker.Broker implementation (broker.go). `pkg/datafetcher/router.go`: ticker routing (US: → Schwab, NSE:/BSE: → Yahoo, fallback to Yahoo on error). `pkg/costs/us.go`: US cost model ($0 commission, SEC fee, TAF) + US tax classification with wash sale detection. `cmd/auth.go`: extended with `--broker schwab` flag. `pkg/config/pipeline.go`: Broker/SchwabConfig/SchwabToken fields. | |
 | **R11** — Broker Factory & Market Abstraction | `cmd/broker.go`: factory creates Schwab or Zerodha broker from `config/defaults.json` (inlined in cmd/ — no separate package needed). `pkg/broker/market.go`: `MarketConfig` (benchmark, exchange, currency, timezone), `ExchangeFromTicker`, `DeliveryProduct`, `BrokerName`. `pkg/broker/costs.go`: `CostModelForBroker`. Removed all `zerodha.New()` from 7 cmd files. Removed hardcoded `"NSE"` exchange, `"^NSEI"` benchmark, `₹` currency, `15:45 IST` scheduling. Daemon uses market-aware `nextMarketClose()`. Autopilot scheduler uses `scheduleLocation()`. `pkg/broker/schwab/client.go`: added `FetchAccountHash`. `pkg/config/pipeline.go`: added `LoadPipelineConfig`. Moved `pkg/schwab/` → `pkg/broker/schwab/` for consistent layout. All commands work with `broker=schwab` by default; backward-compatible with `broker=zerodha`. Go bumped 1.26.5 → 1.27.0, `go fix` applied. | |
+| **R12** — CLI Rendering Layer | `pkg/render/`: stdlib `text/tabwriter`-based table rendering with panic-safe `recover` fallback. `Table()`, `TableWithOpts()`, `Section()`, `KV()` for structured output. `Pct()`, `Currency()`, `Change()`, `Sparkline()` formatters. `Green()`/`Red()`/`Bold()`/`Dim()` ANSI color with TTY auto-detection, `NO_COLOR`/`FORCE_COLOR` support. Zero external dependencies. See `docs/render.md` for design. | |
 
 ---
 

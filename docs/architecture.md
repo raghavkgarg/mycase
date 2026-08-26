@@ -1,6 +1,6 @@
 # Mycase — Architecture Reference
 
-**Module**: `github.com/raghavkgarg/mycase` | **Go**: 1.26.5 | **Binary**: `mycase`
+**Module**: `github.com/raghavkgarg/mycase` | **Go**: 1.27.0 | **Binary**: `mycase`
 
 ---
 

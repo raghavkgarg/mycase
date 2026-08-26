@@ -79,6 +79,7 @@ Automation eliminates all four. The system runs quarterly, follows its rules, an
 | Screener.in integration | ✅ Production | Quarterly result dates, earnings calendar |
 | Quarterly autopilot | ✅ Production | Non-interactive pipeline, launchd scheduling, proposal→confirm→execute workflow |
 | Schwab API (US broker + market data) | ✅ Production | OAuth2 auth, real-time quotes, price history, order execution, ticker routing |
+| CLI rendering layer (`pkg/render`) | ✅ Production | stdlib tabwriter tables, color (TTY-aware), formatters (Pct, Currency, Sparkline), panic-safe fallback |
 
 ### What's specced but not built
 
@@ -367,16 +368,77 @@ Ideas worth revisiting once the core system (Phases 1–6) is stable and the eco
 
 ### Native macOS App (SwiftUI + DuckDB)
 
-**Revisit when**: macOS 27, DuckDB 2.0, and Phases 3–6 are complete.
+**Revisit when**: macOS 27, DuckDB 2.0, and Phases 4–5 are complete.
 
-**Why it might be better**: The current web dashboard (`mycase serve` + browser) works but has friction — starting a server, opening a tab, no native notifications. A SwiftUI app could offer:
+**Why it might be better**: The current web dashboard (`mycase serve` + browser) works but has friction — starting a server, opening a tab, no native notifications. More critically, the pipeline's "pause for human editing" step currently requires opening a raw CSV in a text editor — zero context, zero validation, easy to break.
+
+A SwiftUI app solves both problems:
+
+#### Core Value: Portfolio Editing UI
+
+The pipeline currently does:
+```
+Pipeline runs → writes proposal CSV → prints "remove unwanted stocks"
+→ user opens CSV in TextEdit/Excel → deletes rows → saves
+→ user presses Enter in terminal → pipeline resumes
+```
+
+This is fragile: wrong column deleted, accidental formatting, no context while editing. A native editing view replaces this with:
+
+- Table view with ticker, weight, sector, score, momentum — full context visible
+- Checkbox/swipe to exclude stocks (not raw row deletion)
+- Color-coded flags: "dropped from index", "failed hard filter", "new addition"
+- Inline sparklines for price history
+- Confirm button that writes back to the golden copy (or signals the pipeline via API callback)
+- Validation: can't accidentally remove all stocks, can't break CSV structure
+
+**This eliminates the golden copy's "must be a file" constraint** — once a proper editing UI exists, the golden copy can move to DuckDB too. The pipeline "pause" becomes: write proposal to DB → push SSE event → SwiftUI shows approval UI → user confirms → pipeline resumes via HTTP callback.
+
+#### Additional Capabilities
+
 - Menu bar presence showing portfolio value / drift status at a glance
 - Native notifications for autopilot proposals with confirm/dismiss action buttons
 - No server process needed — read DuckDB directly from Swift
 - Single `.app` bundle distribution (drag to Applications)
-- Swift Charts for smoother equity curve rendering
+- Swift Charts for equity curves, sector donut, weight comparison
 - Shortcuts / Siri integration for hands-free status checks
+- Rebalance proposals with approve/reject per trade
+- Push notifications for drift alerts (daemon already dispatches them)
+- Touch Bar widget for quick portfolio health
 
-**Architecture**: Swift reads DuckDB directly for display, shells out to `mycase` CLI for all mutations (pick, optimize, basket). Go binary remains the source of truth for logic; Swift is pure presentation + OS integration. The web dashboard stays for headless/remote scenarios.
+#### Architecture
 
-**Why not now**: Phases 3–7 are higher priority (they generate alpha; the UI doesn't). Swift Charts and DuckDB Swift bindings are still maturing. Maintaining two presentation layers adds cost. Defer until the system is stable enough that the UX is the bottleneck, not the strategy.
+```
+┌─────────────┐         ┌──────────────┐         ┌─────────────┐
+│  SwiftUI    │◄──JSON──►│  pkg/server  │◄────────►│  DuckDB     │
+│  (macOS)    │   HTTP    │  (existing)  │          │  + golden   │
+└─────────────┘         └──────────────┘         └─────────────┘
+                              │
+                         SSE quotes
+```
+
+- The Go server already serves JSON APIs for holdings, weights, drift, orders, monitor
+- SwiftUI app is a native client to the **same API** the web dashboard uses — no new server work
+- Pipeline "pause for human edit" becomes an API-driven approval flow
+- Swift reads DuckDB directly for read-heavy display (portfolio value, historical charts)
+- Shells out to `mycase` CLI for all mutations (pick, optimize, basket)
+- Go binary remains the source of truth for logic; Swift is pure presentation + OS integration
+- The web dashboard stays for headless/remote scenarios
+
+#### Phased Build Plan
+
+| Step | What | Effort |
+|------|------|--------|
+| 1. Proposal approval view | The one screen that replaces CSV editing. `URLSession` + `Codable` against existing API | 1 week |
+| 2. Holdings dashboard | Table + donut chart. Read-only. Same data as web dashboard | 1 week |
+| 3. Menu bar widget | Portfolio value + drift %. Background polling or SSE | 3 days |
+| 4. Native notifications | Wire to daemon alerts. macOS `UserNotifications` framework | 2 days |
+| 5. Performance charts | Swift Charts equity curve overlaid with SPY | 1 week |
+| 6. Full migration | Replace web dashboard as primary UI. Server stays for API | 2 weeks |
+
+#### Why Not Now
+
+Phases 4–5 (TLH, Performance Attribution) are higher priority — they generate alpha; the UI doesn't. The CSV workflow is ugly but works for quarterly rebalance (4×/year). Defer until:
+- The system is stable enough that UX is the bottleneck, not the strategy
+- DuckDB intermediate migration is done (see `docs/duckdb-migration.md`) — the golden copy can then move to DB
+- Swift Charts and DuckDB Swift bindings are mature enough for production use
