@@ -30,8 +30,8 @@ See `docs/testing.md` for test coverage, conventions, and gaps.
 | **Makefile** | Targets: build, install, cross-compile (linux/darwin arm64/amd64), run, test, test-verbose, test-race, test-integration, test-coverage, cleanup, clean, fetch-echarts, help. LDFLAGS inject Version/GitCommit/BuildDate. | `0ad3a25`, `782a663` |
 | **R10** — Autopilot Pipeline | `pkg/autopilot/`: non-interactive quarterly pipeline (proposal model, scheduling, alert formatting). `cmd/autopilot.go`: run/status/dismiss/install/uninstall. Server: 3 new API endpoints (`/api/autopilot/{proposal,confirm,dismiss}`). Frontend: `<order-preview>` renders proposal with confirm/dismiss buttons. `ScheduleConfig` in pipeline.yaml. `pkg/stockpicker/run.go` exported for programmatic use. | |
 | **R10.1** — Package cleanup | Deleted `pkg/portfolio` (type alias → `broker.Holding`), `pkg/kiteclient` (dead code). Merged `pkg/report` → `pkg/stockpicker/rationale.go`, `pkg/performance` → `pkg/backtest/valuation.go`. 25 → 21 packages. | |
-| **R9** — Schwab API Integration | `pkg/schwab/`: OAuth2 auth flow (auth.go, tls.go), HTTP client with auto-refresh + rate limiting (client.go), market data mapped to yfinance types (market.go, types.go), broker.Broker implementation (broker.go). `pkg/datafetcher/router.go`: ticker routing (US: → Schwab, NSE:/BSE: → Yahoo, fallback to Yahoo on error). `pkg/costs/us.go`: US cost model ($0 commission, SEC fee, TAF) + US tax classification with wash sale detection. `cmd/auth.go`: extended with `--broker schwab` flag. `pkg/config/pipeline.go`: Broker/SchwabConfig/SchwabToken fields. | |
-| **R11** — Broker Factory & Market Abstraction | `pkg/brokerfactory/`: factory creates Schwab or Zerodha broker from `config/defaults.json`. `pkg/broker/market.go`: `MarketConfig` (benchmark, exchange, currency, timezone), `ExchangeFromTicker`, `DeliveryProduct`, `BrokerName`. `pkg/broker/costs.go`: `CostModelForBroker`. Removed all `zerodha.New()` from 7 cmd files, replaced with `brokerfactory.NewFromDefaults(live)`. Removed hardcoded `"NSE"` exchange, `"^NSEI"` benchmark, `₹` currency, `15:45 IST` scheduling. Daemon uses market-aware `nextMarketClose()`. Autopilot scheduler uses `scheduleLocation()`. `pkg/schwab/client.go`: added `FetchAccountHash`. `pkg/config/pipeline.go`: added `LoadPipelineConfig`. All commands work with `broker=schwab` by default; backward-compatible with `broker=zerodha`. | |
+| **R9** — Schwab API Integration | `pkg/broker/schwab/`: OAuth2 auth flow (auth.go, tls.go), HTTP client with auto-refresh + rate limiting (client.go), market data mapped to yfinance types (market.go, types.go), broker.Broker implementation (broker.go). `pkg/datafetcher/router.go`: ticker routing (US: → Schwab, NSE:/BSE: → Yahoo, fallback to Yahoo on error). `pkg/costs/us.go`: US cost model ($0 commission, SEC fee, TAF) + US tax classification with wash sale detection. `cmd/auth.go`: extended with `--broker schwab` flag. `pkg/config/pipeline.go`: Broker/SchwabConfig/SchwabToken fields. | |
+| **R11** — Broker Factory & Market Abstraction | `cmd/broker.go`: factory creates Schwab or Zerodha broker from `config/defaults.json` (inlined in cmd/ — no separate package needed). `pkg/broker/market.go`: `MarketConfig` (benchmark, exchange, currency, timezone), `ExchangeFromTicker`, `DeliveryProduct`, `BrokerName`. `pkg/broker/costs.go`: `CostModelForBroker`. Removed all `zerodha.New()` from 7 cmd files. Removed hardcoded `"NSE"` exchange, `"^NSEI"` benchmark, `₹` currency, `15:45 IST` scheduling. Daemon uses market-aware `nextMarketClose()`. Autopilot scheduler uses `scheduleLocation()`. `pkg/broker/schwab/client.go`: added `FetchAccountHash`. `pkg/config/pipeline.go`: added `LoadPipelineConfig`. Moved `pkg/schwab/` → `pkg/broker/schwab/` for consistent layout. All commands work with `broker=schwab` by default; backward-compatible with `broker=zerodha`. Go bumped 1.26.5 → 1.27.0, `go fix` applied. | |
 
 ---
 
@@ -360,207 +360,32 @@ Implementation: add `USCostModel` to `pkg/costs/` that returns near-zero costs. 
 
 Eliminate all hardcoded `zerodha.New(...)` calls and India-specific assumptions (exchange prefixes, benchmarks, cost models, currency, scheduling) from the command layer. Replace with a broker factory driven by `config/defaults.json` so that a US-only investor can use `basket`, `holdings`, `autopilot`, `daemon`, and `retry` commands without modification.
 
-### Why
+### What was done
 
-- 6 commands hardcode `zerodha.New(live, "config/config.json")` — unusable for US/Schwab
-- Exchange is hardcoded to `"NSE"` on every order in basket.go
-- Benchmark defaults to `^NSEI` (Nifty 50) in optimize, backtest, and monitor
-- Cost model is hardcoded to `costs.DefaultZerodha` in basket and autopilot
-- Currency is hardcoded to `₹` in executor, daemon, and autopilot output
-- Daemon schedules drift checks at 15:45 IST (India market close)
-
-Schwab already implements `broker.Broker` (`pkg/schwab/broker.go`) — the interface layer is complete. The problem is purely in the command/orchestration layer.
-
-### Design
-
-#### 1. Broker Factory (`pkg/broker/factory.go`)
-
-```go
-package broker
-
-import (
-    "fmt"
-    "github.com/raghavkgarg/mycase/pkg/config"
-)
-
-// NewFromDefaults creates the appropriate broker based on config/defaults.json.
-// If live=false or credentials are missing, returns MockBroker.
-func NewFromDefaults(live bool) (Broker, error) {
-    defaults := config.LoadUserDefaults("config/defaults.json")
-    return NewByName(defaults.Broker, live)
-}
-
-// NewByName creates a broker by explicit name.
-func NewByName(name string, live bool) (Broker, error) {
-    switch name {
-    case "schwab":
-        return newSchwabBroker(live)
-    case "zerodha":
-        return newZerodhaBroker(live)
-    case "", "mock":
-        return &MockBroker{}, nil
-    default:
-        return nil, fmt.Errorf("unsupported broker: %q", name)
-    }
-}
+**Package layout** (final):
+```
+pkg/broker/              Interface (Broker, Holding, Order), MarketConfig, CostModelForBroker, MockBroker
+pkg/broker/schwab/       US broker implementation (moved from pkg/schwab/)
+pkg/broker/zerodha/      India broker implementation
+cmd/broker.go            Factory: newBroker(live) → creates Schwab or Zerodha from config/defaults.json
 ```
 
-Schwab construction reads `config/schwab.json` + `config/schwab_token.json` internally. Zerodha reads `config/config.json`. The caller doesn't need to know which config file to pass.
+The factory lives in `cmd/` because it's the only consumer — no separate `pkg/brokerfactory/` package needed. `cmd/` can import both implementations without circular dependencies.
 
-#### 2. Market Config (`pkg/broker/market.go`)
+**Key changes**:
+- `cmd/broker.go` — `newBroker(live)` and `newBrokerByName(name, live)` replace all 7 `zerodha.New()` calls
+- `pkg/broker/market.go` — `MarketConfig` struct with `LoadMarketConfig()`, `ExchangeFromTicker()`, `DeliveryProduct()`, `BrokerName()`
+- `pkg/broker/costs.go` — `CostModelForBroker(name)` returns India or US cost model
+- `pkg/broker/schwab/client.go` — added `FetchAccountHash()` for broker bootstrap
+- `pkg/config/pipeline.go` — added `LoadPipelineConfig()`
+- Exchange derived from ticker prefix (not hardcoded `"NSE"`)
+- Benchmark from `MarketConfig` (not hardcoded `"^NSEI"`)
+- Currency from `MarketConfig` (not hardcoded `"₹"`)
+- Daemon uses `nextMarketClose(mktCfg)` instead of `nextIST1545()`
+- Autopilot scheduler uses `scheduleLocation()` for market-aware timezone
+- All CLI help text genericized (no Zerodha mentions)
+- `pkg/schwab/` moved to `pkg/broker/schwab/` for consistent layout
+- Go bumped 1.26.5 → 1.27.0, `go fix` + `gofmt` applied
 
-```go
-package broker
+**Result**: All commands work with `broker=schwab` by default; backward-compatible with `broker=zerodha` in `config/defaults.json`.
 
-import "github.com/raghavkgarg/mycase/pkg/config"
-
-// MarketConfig provides market-specific defaults derived from config/defaults.json.
-type MarketConfig struct {
-    Benchmark string // "^GSPC" or "^NSEI"
-    Exchange  string // "US" or "NSE"
-    Currency  string // "$" or "₹"
-    CloseHour int    // 16 (US ET) or 15 (India IST)
-    CloseMin  int    // 0 (US) or 30 (India)
-    Timezone  string // "America/New_York" or "Asia/Kolkata"
-}
-
-func LoadMarketConfig() MarketConfig {
-    defaults := config.LoadUserDefaults("config/defaults.json")
-    switch defaults.Market {
-    case "us":
-        return MarketConfig{
-            Benchmark: "^GSPC",
-            Exchange:  "US",
-            Currency:  "$",
-            CloseHour: 16, CloseMin: 0,
-            Timezone:  "America/New_York",
-        }
-    default: // "india" or ""
-        return MarketConfig{
-            Benchmark: "^NSEI",
-            Exchange:  "NSE",
-            Currency:  "₹",
-            CloseHour: 15, CloseMin: 30,
-            Timezone:  "Asia/Kolkata",
-        }
-    }
-}
-```
-
-#### 3. Cost Model from Broker
-
-Add to the `Broker` interface or provide via factory:
-
-```go
-// In pkg/broker/factory.go or as interface method
-func CostModelForBroker(name string) costs.CostModel {
-    switch name {
-    case "schwab":
-        return costs.DefaultUS
-    default:
-        return costs.DefaultZerodha
-    }
-}
-```
-
-### Files to Change
-
-#### Tier 1 — Broker instantiation (replace `zerodha.New(...)` with factory)
-
-| File | Current | After |
-|------|---------|-------|
-| `cmd/autopilot.go:107` | `b := zerodha.New(live, "config/config.json")` | `b, err := broker.NewFromDefaults(live)` |
-| `cmd/basket.go:55` | `b := zerodha.New(liveMode, "config/config.json")` | `b, err := broker.NewFromDefaults(liveMode)` |
-| `cmd/daemon.go:80` | `b := zerodha.New(c.Bool("live"), "config/config.json")` | `b, err := broker.NewFromDefaults(c.Bool("live"))` |
-| `cmd/daemon.go:112` | `b := zerodha.New(c.Bool("live"), "config/config.json")` | `b, err := broker.NewFromDefaults(c.Bool("live"))` |
-| `cmd/holdings.go:35` | `b := zerodha.New(liveMode, "config/config.json")` | `b, err := broker.NewFromDefaults(liveMode)` |
-| `cmd/retry.go:23` | `b := zerodha.New(liveMode, "config/config.json")` | `b, err := broker.NewFromDefaults(liveMode)` |
-| `cmd/serve.go:23` | `b := zerodha.New(c.Bool("live"), "config/config.json")` | `b, err := broker.NewFromDefaults(c.Bool("live"))` |
-
-Remove `import "github.com/raghavkgarg/mycase/pkg/broker/zerodha"` from these files.
-
-#### Tier 2 — Exchange and order construction
-
-| File | Current | After |
-|------|---------|-------|
-| `cmd/basket.go` | `Exchange: "NSE"` on all orders | Derive from ticker prefix: `broker.ExchangeFromTicker(ticker)` |
-| `cmd/basket.go` | `Product: "CNC"` on all orders | `broker.DeliveryProduct(marketConfig.Exchange)` — "CNC" for India, "" for US |
-| `pkg/executor/executor.go` | `"NSE:" + order.TradingSymbol` for quotes | Use `order.Exchange + ":" + order.TradingSymbol` (or store full ticker key in Order) |
-| `cmd/holdings.go` | `"NSE:" + h.TradingSymbol` / `"BSE:" + ...` | Use `h.Exchange + ":" + h.TradingSymbol` (Schwab already sets Exchange="US") |
-
-#### Tier 3 — Benchmark and config paths
-
-| File | Current | After |
-|------|---------|-------|
-| `cmd/backtest.go:30` | `Value: "^NSEI"` default flag | `Value: ""` → resolve via `broker.LoadMarketConfig().Benchmark` |
-| `cmd/optimize.go:95` | `"^NSEI"` hardcoded benchmark | `broker.LoadMarketConfig().Benchmark` |
-| `cmd/monitor.go:223` | `"^NSEI"` hardcoded benchmark | `broker.LoadMarketConfig().Benchmark` |
-| `cmd/monitor.go:24` | `Value: "data/microsmall.csv"` default file | Read from `defaults.json` → `pipeline_config` → golden_copy_path |
-| `cmd/daemon.go:73` | `return "data/microsmall.csv"` fallback | Read from pipeline config or defaults |
-| `cmd/daemon.go:43,55` | `Value: "config/pipeline.yaml"` | `Value: ""` → resolve from `defaults.PipelineConfig` |
-| `cmd/autopilot.go:42,50,63` | `Value: "config/pipeline.yaml"` | Same as above |
-| `cmd/pipeline.go:27` | `Value: "config/pipeline.yaml"` | Same as above |
-
-#### Tier 4 — Cost model and currency
-
-| File | Current | After |
-|------|---------|-------|
-| `cmd/basket.go:167,174,186` | `costs.DefaultZerodha` | `broker.CostModelForBroker(defaults.Broker)` |
-| `pkg/autopilot/autopilot.go:147` | `costs.DefaultZerodha` | Inject cost model via `RunConfig` |
-| `pkg/executor/executor.go` | `₹` currency symbol throughout | `marketConfig.Currency` |
-| `pkg/autopilot/autopilot.go` | `₹` in output | `marketConfig.Currency` |
-| `pkg/daemon/daemon.go` | `₹` in alert body | `marketConfig.Currency` |
-
-#### Tier 5 — Scheduling
-
-| File | Current | After |
-|------|---------|-------|
-| `pkg/daemon/daemon.go` | `nextIST1545()` — fires at 15:45 IST | Use `marketConfig.CloseHour`, `marketConfig.CloseMin`, `marketConfig.Timezone` |
-
-#### Tier 6 — UI text / help strings
-
-| File | Current | After |
-|------|---------|-------|
-| `cmd/basket.go:28` | `"Execute or preview basket orders on Zerodha"` | `"Execute or preview basket orders"` |
-| `cmd/basket.go:30` | `"Use live Zerodha API (default: dry-run)"` | `"Use live broker API (default: dry-run)"` |
-| `cmd/holdings.go:20` | `"Snapshot of current Zerodha holdings"` | `"Snapshot of current holdings"` |
-| `cmd/holdings.go:22` | `"Use live Zerodha API (default: dry-run)"` | `"Use live broker API (default: dry-run)"` |
-| `cmd/retry.go:20` | `"Use live Zerodha broker (default: mock)"` | `"Use live broker (default: mock)"` |
-| `cmd/pipeline.go:131,214,217` | Zerodha references in prompts | Use active broker name |
-| `pkg/executor/executor.go` | IP whitelist references `developers.kite.trade` | Conditional on broker |
-
-### Implementation Order
-
-1. **`pkg/broker/factory.go`** — broker factory (`NewFromDefaults`, `NewByName`)
-2. **`pkg/broker/market.go`** — market config (`LoadMarketConfig`, `MarketConfig` struct)
-3. **`pkg/broker/factory.go`** — cost model helper (`CostModelForBroker`)
-4. **Update cmd/ files** — replace all `zerodha.New(...)` calls (Tier 1)
-5. **Update cmd/basket.go** — exchange derivation, product type (Tier 2)
-6. **Update pkg/executor/executor.go** — exchange prefix, currency (Tier 2 + 4)
-7. **Update benchmark defaults** — backtest, optimize, monitor (Tier 3)
-8. **Update config path defaults** — pipeline config resolution (Tier 3)
-9. **Update cost model injection** — basket, autopilot (Tier 4)
-10. **Update daemon scheduling** — market-aware close time (Tier 5)
-11. **Update help text** — remove Zerodha mentions (Tier 6)
-12. **Tests** — verify all commands work with `broker=schwab` in defaults
-
-### What stays untouched
-
-- `pkg/broker/zerodha/zerodha.go` — still the India broker implementation
-- `pkg/schwab/broker.go` — already implements `broker.Broker`
-- `pkg/datafetcher/router.go` — already properly abstracted
-- `config/pipeline.yaml`, `config/governance.json`, `config/themes.json` — India configs, kept for other users
-- `broker.Broker` interface — `PlaceGTT()` stays (Schwab returns error, which is fine)
-- `broker.Holding` — `T1Quantity`/`T2Quantity` stay (Schwab sets to 0)
-
-### Success criteria
-
-After this refactor:
-- `mycase pick` — works (already done ✅)
-- `mycase auth` — works with Schwab by default (already done ✅)
-- `mycase holdings --live` — fetches Schwab positions
-- `mycase basket --live` — places Schwab equity orders
-- `mycase autopilot run --live` — runs full US pipeline with Schwab
-- `mycase daemon check --live` — drift check against Schwab holdings
-- `mycase backtest` — uses ^GSPC benchmark by default
-- All commands still work with `"broker": "zerodha"` in defaults.json for India users
