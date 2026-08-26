@@ -2,6 +2,7 @@ package datafetcher
 
 import (
 	"context"
+	"maps"
 	"time"
 
 	"github.com/raghavkgarg/mycase/pkg/schwab"
@@ -75,9 +76,7 @@ func (r *Router) FetchQuotes(ctx context.Context, tickers []string) (map[string]
 		if err != nil {
 			return nil, err
 		}
-		for k, v := range yfPrices {
-			prices[k] = v
-		}
+		maps.Copy(prices, yfPrices)
 	}
 
 	// Fetch US tickers from Schwab (or Yahoo fallback)
@@ -90,13 +89,9 @@ func (r *Router) FetchQuotes(ctx context.Context, tickers []string) (map[string]
 				if yfErr != nil {
 					return nil, err // return original Schwab error
 				}
-				for k, v := range yfPrices {
-					prices[k] = v
-				}
+				maps.Copy(prices, yfPrices)
 			} else {
-				for k, v := range schwabPrices {
-					prices[k] = v
-				}
+				maps.Copy(prices, schwabPrices)
 			}
 		} else {
 			// No Schwab client — use Yahoo for US tickers too
@@ -104,9 +99,7 @@ func (r *Router) FetchQuotes(ctx context.Context, tickers []string) (map[string]
 			if err != nil {
 				return nil, err
 			}
-			for k, v := range yfPrices {
-				prices[k] = v
-			}
+			maps.Copy(prices, yfPrices)
 		}
 	}
 
@@ -133,9 +126,7 @@ func (r *Router) FetchFundamentals(ctx context.Context, tickers []string) (map[s
 		if err != nil {
 			return nil, err
 		}
-		for k, v := range yfFund {
-			result[k] = v
-		}
+		maps.Copy(result, yfFund)
 	}
 
 	// US: Schwab (or Yahoo fallback)
@@ -148,22 +139,16 @@ func (r *Router) FetchFundamentals(ctx context.Context, tickers []string) (map[s
 				if yfErr != nil {
 					return nil, err
 				}
-				for k, v := range yfFund {
-					result[k] = v
-				}
+				maps.Copy(result, yfFund)
 			} else {
-				for k, v := range schwabFund {
-					result[k] = v
-				}
+				maps.Copy(result, schwabFund)
 			}
 		} else {
 			yfFund, err := yfinance.FetchFundamentals(ctx, usTickers)
 			if err != nil {
 				return nil, err
 			}
-			for k, v := range yfFund {
-				result[k] = v
-			}
+			maps.Copy(result, yfFund)
 		}
 	}
 

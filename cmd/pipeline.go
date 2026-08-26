@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -375,13 +376,7 @@ func runPipeline(ctx context.Context, c *cli.Command) error {
 	for _, idx := range cfg.Indices {
 		if stockpicker.IsUSIndex(idx) {
 			uName := idx
-			alreadyAdded := false
-			for _, s := range usDetectedSources {
-				if s == uName {
-					alreadyAdded = true
-					break
-				}
-			}
+			alreadyAdded := slices.Contains(usDetectedSources, uName)
 			if !alreadyAdded {
 				usDetectedSources = append(usDetectedSources, uName)
 			}
@@ -390,13 +385,7 @@ func runPipeline(ctx context.Context, c *cli.Command) error {
 	for _, f := range cfg.Files {
 		if stockpicker.IsUSIndex(f) {
 			uName := csvloader.GetUniverseName(f)
-			alreadyAdded := false
-			for _, s := range usDetectedSources {
-				if s == uName {
-					alreadyAdded = true
-					break
-				}
-			}
+			alreadyAdded := slices.Contains(usDetectedSources, uName)
 			if !alreadyAdded {
 				usDetectedSources = append(usDetectedSources, uName)
 			}

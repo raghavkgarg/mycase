@@ -28,9 +28,9 @@ type Proposal struct {
 	Status    string    `json:"status"`
 
 	// Portfolio context
-	Portfolio string `json:"portfolio"`  // golden copy path
-	Strategy  string `json:"strategy"`   // e.g. "multibagger"
-	Frequency string `json:"frequency"`  // e.g. "quarterly"
+	Portfolio string `json:"portfolio"` // golden copy path
+	Strategy  string `json:"strategy"`  // e.g. "multibagger"
+	Frequency string `json:"frequency"` // e.g. "quarterly"
 
 	// Changes from previous golden copy
 	Entries       []StockChange `json:"entries"`        // new additions
@@ -52,9 +52,9 @@ type Proposal struct {
 	SelectionPath string `json:"selection_path"`
 
 	// Execution results (filled after confirmation)
-	ConfirmedAt    *time.Time     `json:"confirmed_at,omitempty"`
-	ExecutionLog   []OrderResult  `json:"execution_log,omitempty"`
-	ExecutionError string         `json:"execution_error,omitempty"`
+	ConfirmedAt    *time.Time    `json:"confirmed_at,omitempty"`
+	ExecutionLog   []OrderResult `json:"execution_log,omitempty"`
+	ExecutionError string        `json:"execution_error,omitempty"`
 }
 
 // ProposedOrder represents a single order in the rebalance proposal.

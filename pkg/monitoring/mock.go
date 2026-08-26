@@ -78,7 +78,7 @@ func FillWithMockData(
 				firstOpen := h.Opens[0]
 				firstVol := h.Volumes[0]
 
-				for i := 0; i < padLen; i++ {
+				for i := range padLen {
 					paddedCloses[i] = firstClose
 					paddedOpens[i] = firstOpen
 					paddedVolumes[i] = firstVol

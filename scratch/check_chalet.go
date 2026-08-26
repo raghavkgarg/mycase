@@ -5,8 +5,8 @@ import (
 	"fmt"
 
 	"github.com/raghavkgarg/mycase/pkg/config"
-	"github.com/raghavkgarg/mycase/pkg/stockpicker"
 	"github.com/raghavkgarg/mycase/pkg/selectiontracker"
+	"github.com/raghavkgarg/mycase/pkg/stockpicker"
 	"github.com/raghavkgarg/mycase/pkg/yfinance"
 )
 
@@ -44,6 +44,6 @@ func main() {
 		fmt.Println(ticker, "REJECTED by safety filters:")
 		fmt.Println("Reason:", tracker.SafetyReasons[ticker])
 	}
-	
+
 	_ = cfg
 }

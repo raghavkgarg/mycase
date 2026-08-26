@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"slices"
 	"testing"
 	"time"
 
@@ -142,11 +143,8 @@ func TestPipelineCommand_Flags(t *testing.T) {
 	for _, ef := range expectedFlags {
 		found := false
 		for _, f := range flags {
-			for _, name := range f.Names() {
-				if name == ef {
-					found = true
-					break
-				}
+			if slices.Contains(f.Names(), ef) {
+				found = true
 			}
 		}
 		if !found {
@@ -154,4 +152,3 @@ func TestPipelineCommand_Flags(t *testing.T) {
 		}
 	}
 }
-

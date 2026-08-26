@@ -9,18 +9,18 @@ import (
 // Schwab charges $0 commission for equity trades.
 // SEC and TAF fees apply only to sell orders.
 const (
-	USCommission       = 0.0             // $0 commission (Schwab, Fidelity, etc.)
-	SECFeeRate         = 0.000008        // ~$8.00 per $1M of sell proceeds (as of 2024)
-	TAFPerShare        = 0.000166        // $0.000166 per share sold
-	TAFMaxPerShare     = 0.01            // max $0.01 per share for TAF
-	USSTCGThresholdDays = 365            // holding < 1 year = short-term
+	USCommission        = 0.0      // $0 commission (Schwab, Fidelity, etc.)
+	SECFeeRate          = 0.000008 // ~$8.00 per $1M of sell proceeds (as of 2024)
+	TAFPerShare         = 0.000166 // $0.000166 per share sold
+	TAFMaxPerShare      = 0.01     // max $0.01 per share for TAF
+	USSTCGThresholdDays = 365      // holding < 1 year = short-term
 )
 
 // US capital gains tax rates (2024 federal; state taxes vary).
 const (
-	USSTCGRate = 0.37   // worst-case ordinary income rate (37% top bracket)
-	USLTCGRate = 0.20   // 20% for highest bracket; 15% for most taxpayers
-	USWashSaleDays = 30 // cannot buy substantially identical within 30 days
+	USSTCGRate     = 0.37 // worst-case ordinary income rate (37% top bracket)
+	USLTCGRate     = 0.20 // 20% for highest bracket; 15% for most taxpayers
+	USWashSaleDays = 30   // cannot buy substantially identical within 30 days
 )
 
 // USCostModel handles US equity delivery transaction costs.
@@ -94,13 +94,13 @@ func (c USTaxClass) String() string {
 
 // USTaxWarning describes the tax treatment for a US sell order.
 type USTaxWarning struct {
-	Ticker          string
-	Class           USTaxClass
-	HoldingDays     int
-	EstimatedGain   float64 // (sellPrice - costBasis) × qty
-	EstimatedTax    float64 // estimated federal tax
-	WashSaleRisk    bool    // true if recently bought within 30 days
-	Note            string
+	Ticker        string
+	Class         USTaxClass
+	HoldingDays   int
+	EstimatedGain float64 // (sellPrice - costBasis) × qty
+	EstimatedTax  float64 // estimated federal tax
+	WashSaleRisk  bool    // true if recently bought within 30 days
+	Note          string
 }
 
 // ClassifyUSSell returns a USTaxWarning for a US SELL order.

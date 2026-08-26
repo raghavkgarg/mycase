@@ -538,7 +538,7 @@ func NormalizeAndCapWeights(
 		sectorCap = 0.25
 	}
 
-	for iter := 0; iter < 10; iter++ {
+	for range 10 {
 		var total float64
 		for _, k := range selectedKeys {
 			total += weights[k]

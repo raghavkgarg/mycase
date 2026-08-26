@@ -93,16 +93,16 @@ type parsedDriverMetrics struct {
 }
 
 func extractMetricBetween(s, startStr, endStr string) string {
-	idx := strings.Index(s, startStr)
-	if idx == -1 {
+	_, after, ok := strings.Cut(s, startStr)
+	if !ok {
 		return ""
 	}
-	sub := s[idx+len(startStr):]
-	endIdx := strings.Index(sub, endStr)
-	if endIdx == -1 {
+	sub := after
+	before0, _, ok0 := strings.Cut(sub, endStr)
+	if !ok0 {
 		return strings.TrimSpace(sub)
 	}
-	return strings.TrimSpace(sub[:endIdx])
+	return strings.TrimSpace(before0)
 }
 
 func parseDriverString(s string) parsedDriverMetrics {
@@ -201,9 +201,9 @@ func (t *Tracker) SaveReport(displayName, method string, existingHoldings map[st
 								continue
 							}
 							reasonCol := strings.TrimSpace(parts[len(parts)-1])
-							dIdx := strings.Index(reasonCol, "Drivers: ")
-							if dIdx != -1 {
-								prevDriversMap[ticker] = strings.TrimSpace(reasonCol[dIdx+len("Drivers: "):])
+							_, after, ok := strings.Cut(reasonCol, "Drivers: ")
+							if ok {
+								prevDriversMap[ticker] = strings.TrimSpace(after)
 							}
 						}
 					}

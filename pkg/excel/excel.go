@@ -259,7 +259,7 @@ func ConvertXLSXToCSV(inputPath, outputPath string) (int, error) {
 	var totalMV float64
 	seenTickers := make(map[string]bool)
 
-	for i := 0; i < len(rows); i++ {
+	for i := range rows {
 		r := rows[i]
 		var nextR sheetRow
 		if i+1 < len(rows) {

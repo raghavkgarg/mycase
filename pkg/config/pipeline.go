@@ -8,12 +8,12 @@ import (
 
 // ScheduleConfig holds configuration for the autopilot scheduler.
 type ScheduleConfig struct {
-	Frequency       string   `yaml:"frequency"`          // "quarterly", "monthly", "drift-triggered"
-	Day             string   `yaml:"day"`                // "first_trading_day", "last_trading_day", or day number ("2", "15")
-	Notify          []string `yaml:"notify"`             // alert channels: ["telegram", "discord"]
-	AutoExecute     bool     `yaml:"auto_execute"`       // if true, skip confirmation (dangerous)
-	DriftTriggerPct float64  `yaml:"drift_trigger_pct"`  // mid-cycle drift % that triggers early rebalance (0 = disabled)
-	ProposalTTLDays int      `yaml:"proposal_ttl_days"`  // days before unconfirmed proposal expires (default 7)
+	Frequency       string   `yaml:"frequency"`         // "quarterly", "monthly", "drift-triggered"
+	Day             string   `yaml:"day"`               // "first_trading_day", "last_trading_day", or day number ("2", "15")
+	Notify          []string `yaml:"notify"`            // alert channels: ["telegram", "discord"]
+	AutoExecute     bool     `yaml:"auto_execute"`      // if true, skip confirmation (dangerous)
+	DriftTriggerPct float64  `yaml:"drift_trigger_pct"` // mid-cycle drift % that triggers early rebalance (0 = disabled)
+	ProposalTTLDays int      `yaml:"proposal_ttl_days"` // days before unconfirmed proposal expires (default 7)
 }
 
 // PipelineConfig holds the resolved pipeline configuration.
@@ -29,9 +29,9 @@ type PipelineConfig struct {
 	RebalanceTolerancePct float64        `yaml:"rebalance_tolerance_pct"`
 	HysteresisRankBuffer  int            `yaml:"hysteresis_rank_buffer"`
 	Schedule              ScheduleConfig `yaml:"schedule"`
-	Broker                string         `yaml:"broker"`             // "zerodha" or "schwab"
-	SchwabConfig          string         `yaml:"schwab_config"`      // path to schwab.json
-	SchwabToken           string         `yaml:"schwab_token"`       // path to schwab_token.json
+	Broker                string         `yaml:"broker"`        // "zerodha" or "schwab"
+	SchwabConfig          string         `yaml:"schwab_config"` // path to schwab.json
+	SchwabToken           string         `yaml:"schwab_token"`  // path to schwab_token.json
 }
 
 type rawPipelineConfig struct {
@@ -171,7 +171,6 @@ func (cfg *PipelineConfig) UnmarshalYAML(value *yaml.Node) error {
 	}
 	return nil
 }
-
 
 // LoadPipelineConfig reads and parses a pipeline YAML config file.
 // Returns an error if the file cannot be opened or parsed.

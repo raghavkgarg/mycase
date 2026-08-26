@@ -323,9 +323,9 @@ func parseTokenResponse(resp *http.Response) (*Token, error) {
 		AccessToken  string `json:"access_token"`
 		RefreshToken string `json:"refresh_token"`
 		TokenType    string `json:"token_type"`
-		ExpiresIn    int64  `json:"expires_in"`    // seconds until access token expires
+		ExpiresIn    int64  `json:"expires_in"` // seconds until access token expires
 		Scope        string `json:"scope"`
-		IDToken      string `json:"id_token"`      // unused
+		IDToken      string `json:"id_token"` // unused
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
 		return nil, fmt.Errorf("failed to decode token response: %w", err)

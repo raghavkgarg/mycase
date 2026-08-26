@@ -197,7 +197,6 @@ p{font-size:16px;line-height:1.5;margin-bottom:30px}
 	return nil
 }
 
-
 // runSchwabAuth performs the Schwab OAuth2 authorization_code flow.
 func runSchwabAuth(ctx context.Context, configPath, tokenPath string) error {
 	fmt.Println("====================================================================")

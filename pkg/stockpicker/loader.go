@@ -113,7 +113,6 @@ func checkFileContainsUSTickers(filePath string) bool {
 	return false
 }
 
-
 // GetBenchmarkSymbolForIndex determines the appropriate benchmark ticker for an index or active tickers.
 func GetBenchmarkSymbolForIndex(indexName string, tickers []string) string {
 	cleanIndex := strings.ToLower(indexName)

@@ -20,7 +20,7 @@ func TestSaveSuccessAndErrorLog(t *testing.T) {
 	}()
 
 	SaveSuccessLog("SNAPSHOT TEST", "Placed 1 order", tmpNow)
-	if _, err := os.Stat(filepath.Join("Order", "Order_" + tmpNow + ".txt")); os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join("Order", "Order_"+tmpNow+".txt")); os.IsNotExist(err) {
 		t.Fatalf("expected Order log to exist")
 	}
 

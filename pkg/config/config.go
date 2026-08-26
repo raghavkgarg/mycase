@@ -222,12 +222,12 @@ type HardFilters struct {
 	ScoreWeightMarginInflection float64  `json:"score_weight_margin_inflection"`
 
 	// US Quality-Momentum scoring weights
-	ScoreWeightROIC              float64 `json:"score_weight_roic"`
-	ScoreWeightFCFYieldUS        float64 `json:"score_weight_fcf_yield_us"`
-	ScoreWeightMomentum12M       float64 `json:"score_weight_momentum_12m"`
-	ScoreWeightEarningsQuality   float64 `json:"score_weight_earnings_quality"`
+	ScoreWeightROIC               float64 `json:"score_weight_roic"`
+	ScoreWeightFCFYieldUS         float64 `json:"score_weight_fcf_yield_us"`
+	ScoreWeightMomentum12M        float64 `json:"score_weight_momentum_12m"`
+	ScoreWeightEarningsQuality    float64 `json:"score_weight_earnings_quality"`
 	ScoreWeightShareholderYieldUS float64 `json:"score_weight_shareholder_yield_us"`
-	ScoreWeightLowVol            float64 `json:"score_weight_low_vol"`
+	ScoreWeightLowVol             float64 `json:"score_weight_low_vol"`
 }
 
 // MFSStrategies wrapper containing the mapping of strategies and filters
@@ -327,7 +327,6 @@ func LoadCSVLinks(filename string) (map[string]string, error) {
 	}
 	return links, nil
 }
-
 
 // UserDefaults holds user-level preference defaults loaded from config/defaults.json.
 // These provide convenience defaults for CLI flags; explicit flags always override.

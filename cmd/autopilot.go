@@ -43,9 +43,9 @@ var autopilotRunCmd = &cli.Command{
 }
 
 var autopilotStatusCmd = &cli.Command{
-	Name:   "status",
-	Usage:  "Show pending proposal status and next scheduled run",
-	Flags:  []cli.Flag{
+	Name:  "status",
+	Usage: "Show pending proposal status and next scheduled run",
+	Flags: []cli.Flag{
 		&cli.StringFlag{Name: "config", Value: "config/pipeline.yaml", Usage: "Pipeline config file"},
 	},
 	Action: runAutopilotStatus,

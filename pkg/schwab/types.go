@@ -34,17 +34,17 @@ type QuoteData struct {
 
 // QuoteDetail holds the nested quote fields.
 type QuoteDetail struct {
-	LastPrice       float64 `json:"lastPrice"`
-	OpenPrice       float64 `json:"openPrice"`
-	HighPrice       float64 `json:"highPrice"`
-	LowPrice        float64 `json:"lowPrice"`
-	ClosePrice      float64 `json:"closePrice"`
-	NetChange       float64 `json:"netChange"`
-	NetPercentChange float64 `json:"netPercentChangeInDouble"`
-	TotalVolume     int64   `json:"totalVolume"`
-	Mark            float64 `json:"mark"`
-	FiftyTwoWeekHigh float64 `json:"52WeekHigh"`
-	FiftyTwoWeekLow  float64 `json:"52WeekLow"`
+	LastPrice              float64 `json:"lastPrice"`
+	OpenPrice              float64 `json:"openPrice"`
+	HighPrice              float64 `json:"highPrice"`
+	LowPrice               float64 `json:"lowPrice"`
+	ClosePrice             float64 `json:"closePrice"`
+	NetChange              float64 `json:"netChange"`
+	NetPercentChange       float64 `json:"netPercentChangeInDouble"`
+	TotalVolume            int64   `json:"totalVolume"`
+	Mark                   float64 `json:"mark"`
+	FiftyTwoWeekHigh       float64 `json:"52WeekHigh"`
+	FiftyTwoWeekLow        float64 `json:"52WeekLow"`
 	RegularMarketLastPrice float64 `json:"regularMarketLastPrice"`
 }
 
@@ -66,28 +66,28 @@ type Instrument struct {
 
 // Fundamental holds fundamental data from Schwab's instrument search.
 type Fundamental struct {
-	Symbol             string  `json:"symbol"`
-	MarketCap          float64 `json:"marketCap"`          // in millions
-	PeRatio            float64 `json:"peRatio"`
-	PegRatio           float64 `json:"pegRatio"`
-	PbRatio            float64 `json:"pbRatio"`
-	DivYield           float64 `json:"divYield"`
-	ReturnOnEquity     float64 `json:"returnOnEquity"`
-	ReturnOnAssets     float64 `json:"returnOnAssets"`
-	OperatingMarginTTM float64 `json:"operatingMarginTTM"`
-	NetProfitMarginTTM float64 `json:"netProfitMarginTTM"`
-	GrossMarginTTM     float64 `json:"grossMarginTTM"`
-	QuickRatio         float64 `json:"quickRatio"`
-	CurrentRatio       float64 `json:"currentRatio"`
-	DebtToCapital      float64 `json:"debtToCapital"`
-	TotalDebtToEquity  float64 `json:"totalDebtToEquity"`
-	EpsTTM             float64 `json:"epsTTM"`
-	RevenueTTM         float64 `json:"revenueTTM"`         // total revenue TTM
-	Vol10DayAvg        float64 `json:"vol10DayAvg"`
-	Vol3MonthAvg       float64 `json:"vol3MonthAvg"`
-	Beta               float64 `json:"beta"`
-	SharesOutstanding  float64 `json:"sharesOutstanding"`
-	BookValuePerShare  float64 `json:"bookValuePerShare"`
+	Symbol               string  `json:"symbol"`
+	MarketCap            float64 `json:"marketCap"` // in millions
+	PeRatio              float64 `json:"peRatio"`
+	PegRatio             float64 `json:"pegRatio"`
+	PbRatio              float64 `json:"pbRatio"`
+	DivYield             float64 `json:"divYield"`
+	ReturnOnEquity       float64 `json:"returnOnEquity"`
+	ReturnOnAssets       float64 `json:"returnOnAssets"`
+	OperatingMarginTTM   float64 `json:"operatingMarginTTM"`
+	NetProfitMarginTTM   float64 `json:"netProfitMarginTTM"`
+	GrossMarginTTM       float64 `json:"grossMarginTTM"`
+	QuickRatio           float64 `json:"quickRatio"`
+	CurrentRatio         float64 `json:"currentRatio"`
+	DebtToCapital        float64 `json:"debtToCapital"`
+	TotalDebtToEquity    float64 `json:"totalDebtToEquity"`
+	EpsTTM               float64 `json:"epsTTM"`
+	RevenueTTM           float64 `json:"revenueTTM"` // total revenue TTM
+	Vol10DayAvg          float64 `json:"vol10DayAvg"`
+	Vol3MonthAvg         float64 `json:"vol3MonthAvg"`
+	Beta                 float64 `json:"beta"`
+	SharesOutstanding    float64 `json:"sharesOutstanding"`
+	BookValuePerShare    float64 `json:"bookValuePerShare"`
 	FreeCashFlowPerShare float64 `json:"freeCashFlowPerShare"`
 }
 
@@ -100,17 +100,17 @@ type AccountResponse struct {
 
 // SecuritiesAccount holds account details.
 type SecuritiesAccount struct {
-	Type       string     `json:"type"`
-	AccountID  string     `json:"accountId"`
-	Positions  []Position `json:"positions"`
+	Type      string     `json:"type"`
+	AccountID string     `json:"accountId"`
+	Positions []Position `json:"positions"`
 }
 
 // Position holds a single position in the account.
 type Position struct {
-	LongQuantity  float64          `json:"longQuantity"`
-	ShortQuantity float64          `json:"shortQuantity"`
-	AveragePrice  float64          `json:"averagePrice"`
-	MarketValue   float64          `json:"marketValue"`
+	LongQuantity  float64            `json:"longQuantity"`
+	ShortQuantity float64            `json:"shortQuantity"`
+	AveragePrice  float64            `json:"averagePrice"`
+	MarketValue   float64            `json:"marketValue"`
 	Instrument    PositionInstrument `json:"instrument"`
 }
 
@@ -125,11 +125,11 @@ type PositionInstrument struct {
 
 // SchwabOrder is the order payload for POST /trader/v1/accounts/{hash}/orders.
 type SchwabOrder struct {
-	OrderType          string    `json:"orderType"`          // "LIMIT", "MARKET"
-	Session            string    `json:"session"`            // "NORMAL"
-	Duration           string    `json:"duration"`           // "DAY", "GOOD_TILL_CANCEL"
-	Price              float64   `json:"price,omitempty"`    // required for LIMIT orders
-	OrderStrategyType  string    `json:"orderStrategyType"`  // "SINGLE"
+	OrderType          string     `json:"orderType"`         // "LIMIT", "MARKET"
+	Session            string     `json:"session"`           // "NORMAL"
+	Duration           string     `json:"duration"`          // "DAY", "GOOD_TILL_CANCEL"
+	Price              float64    `json:"price,omitempty"`   // required for LIMIT orders
+	OrderStrategyType  string     `json:"orderStrategyType"` // "SINGLE"
 	OrderLegCollection []OrderLeg `json:"orderLegCollection"`
 }
 

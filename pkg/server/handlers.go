@@ -839,7 +839,6 @@ func (s *Server) handleDaemonHistory(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, state)
 }
 
-
 // ── /api/autopilot/* ──────────────────────────────────────────────────────────
 
 func (s *Server) handleAutopilotProposal(w http.ResponseWriter, r *http.Request) {
@@ -928,10 +927,10 @@ func (s *Server) handleAutopilotConfirm(w http.ResponseWriter, r *http.Request) 
 	}
 
 	writeJSON(w, map[string]any{
-		"status":    "confirmed",
-		"placed":    successCount,
-		"failed":    len(results) - successCount,
-		"results":   results,
+		"status":  "confirmed",
+		"placed":  successCount,
+		"failed":  len(results) - successCount,
+		"results": results,
 	})
 }
 

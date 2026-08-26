@@ -31,8 +31,8 @@ type Client struct {
 	marketDataBase string
 
 	// Rate limiting
-	mu          sync.Mutex
-	requestLog  []time.Time
+	mu         sync.Mutex
+	requestLog []time.Time
 }
 
 // NewClient creates a Schwab API client with the given token manager.
@@ -217,7 +217,6 @@ func DecodeJSON[T any](resp *http.Response, target *T) error {
 	}
 	return nil
 }
-
 
 // AccountHashEntry represents one account's number and hash from the Schwab API.
 type AccountHashEntry struct {

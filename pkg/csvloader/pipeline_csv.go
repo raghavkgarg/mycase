@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -341,9 +342,9 @@ func PrintComparisonReport(src, dst, strategy string) {
 			}
 		}
 		sort.Strings(reportFiles)
-		for i := len(reportFiles) - 1; i >= 0; i-- {
-			if reportFiles[i] != todayReportPath {
-				prevReportPath = reportFiles[i]
+		for _, reportFile := range slices.Backward(reportFiles) {
+			if reportFile != todayReportPath {
+				prevReportPath = reportFile
 				break
 			}
 		}
