@@ -1,6 +1,10 @@
 package config
 
-import "gopkg.in/yaml.v3"
+import (
+	"os"
+
+	"gopkg.in/yaml.v3"
+)
 
 // ScheduleConfig holds configuration for the autopilot scheduler.
 type ScheduleConfig struct {
@@ -166,4 +170,21 @@ func (cfg *PipelineConfig) UnmarshalYAML(value *yaml.Node) error {
 		cfg.SchwabToken = "config/schwab_token.json"
 	}
 	return nil
+}
+
+
+// LoadPipelineConfig reads and parses a pipeline YAML config file.
+// Returns an error if the file cannot be opened or parsed.
+func LoadPipelineConfig(path string) (*PipelineConfig, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+
+	var cfg PipelineConfig
+	if err := yaml.NewDecoder(f).Decode(&cfg); err != nil {
+		return nil, err
+	}
+	return &cfg, nil
 }

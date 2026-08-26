@@ -13,6 +13,7 @@ import (
 
 	"github.com/urfave/cli/v3"
 
+	"github.com/raghavkgarg/mycase/pkg/broker"
 	"github.com/raghavkgarg/mycase/pkg/config"
 	"github.com/raghavkgarg/mycase/pkg/csvloader"
 	"github.com/raghavkgarg/mycase/pkg/optimizer"
@@ -119,10 +120,11 @@ func runOptimizeWithParams(ctx context.Context, method, basketPath, removeTicker
 
 	var benchmarkPrices []float64
 	if method != "volatility" {
-		fmt.Printf("Fetching historical benchmark prices for ^NSEI (%s)...\n", rangeStr)
-		benchmarkPrices, err = yfinance.FetchHistoricalPrices(ctx, "^NSEI", rangeStr)
+		benchmark := broker.LoadMarketConfig().Benchmark
+		fmt.Printf("Fetching historical benchmark prices for %s (%s)...\n", benchmark, rangeStr)
+		benchmarkPrices, err = yfinance.FetchHistoricalPrices(ctx, benchmark, rangeStr)
 		if err != nil {
-			fmt.Printf("Warning: Failed to fetch benchmark ^NSEI: %v. Falling back to volatility method.\n", err)
+			fmt.Printf("Warning: Failed to fetch benchmark %s: %v. Falling back to volatility method.\n", benchmark, err)
 			method = "volatility"
 		}
 	}

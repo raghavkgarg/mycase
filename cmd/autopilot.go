@@ -14,7 +14,8 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/raghavkgarg/mycase/pkg/autopilot"
-	"github.com/raghavkgarg/mycase/pkg/broker/zerodha"
+	"github.com/raghavkgarg/mycase/pkg/broker"
+	"github.com/raghavkgarg/mycase/pkg/brokerfactory"
 	"github.com/raghavkgarg/mycase/pkg/config"
 )
 
@@ -107,7 +108,10 @@ func runAutopilotRun(ctx context.Context, c *cli.Command) error {
 	}
 
 	// Create broker
-	b := zerodha.New(live, "config/config.json")
+	b, err := brokerfactory.NewFromDefaults(live)
+	if err != nil {
+		return fmt.Errorf("creating broker: %w", err)
+	}
 
 	// Run autopilot
 	rc := autopilot.RunConfig{
@@ -139,9 +143,10 @@ func runAutopilotRun(ctx context.Context, c *cli.Command) error {
 	fmt.Printf("Portfolio:      %s\n", result.Proposal.Portfolio)
 	fmt.Printf("Strategy:       %s\n", result.Proposal.Strategy)
 	fmt.Printf("Entries:        %d new stocks\n", len(result.Proposal.Entries))
+	mktCfg := broker.LoadMarketConfig()
 	fmt.Printf("Exits:          %d removed\n", len(result.Proposal.Exits))
 	fmt.Printf("Orders:         %d (%d filtered)\n", len(result.Proposal.Orders), len(result.Proposal.FilteredOut))
-	fmt.Printf("Est. cost:      ₹%.0f\n", result.Proposal.EstimatedCost)
+	fmt.Printf("Est. cost:      %s%.0f\n", mktCfg.Currency, result.Proposal.EstimatedCost)
 	fmt.Printf("Expires:        %s\n", result.Proposal.ExpiresAt.Format("2006-01-02 15:04 MST"))
 	fmt.Printf("\nConfirm via:    mycase serve → http://localhost:8080/#/rebalance\n")
 	fmt.Printf("Or dismiss:     mycase autopilot dismiss\n")
@@ -169,7 +174,7 @@ func runAutopilotStatus(ctx context.Context, c *cli.Command) error {
 		fmt.Printf("Entries:        %d\n", len(proposal.Entries))
 		fmt.Printf("Exits:          %d\n", len(proposal.Exits))
 		fmt.Printf("Orders:         %d\n", len(proposal.Orders))
-		fmt.Printf("Est. cost:      ₹%.0f\n", proposal.EstimatedCost)
+		fmt.Printf("Est. cost:      %s%.0f\n", broker.LoadMarketConfig().Currency, proposal.EstimatedCost)
 
 		if proposal.IsExpired() {
 			fmt.Println("\n⚠️  This proposal has expired and cannot be confirmed.")

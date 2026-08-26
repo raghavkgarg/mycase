@@ -13,7 +13,7 @@ import (
 	"github.com/urfave/cli/v3"
 
 	"github.com/raghavkgarg/mycase/pkg/broker"
-	"github.com/raghavkgarg/mycase/pkg/broker/zerodha"
+	"github.com/raghavkgarg/mycase/pkg/brokerfactory"
 	"github.com/raghavkgarg/mycase/pkg/costs"
 	"github.com/raghavkgarg/mycase/pkg/csvloader"
 	"github.com/raghavkgarg/mycase/pkg/datafetcher"
@@ -25,9 +25,9 @@ import (
 
 var BasketCommand = &cli.Command{
 	Name:  "basket",
-	Usage: "Execute or preview basket orders on Zerodha",
+	Usage: "Execute or preview basket orders",
 	Flags: []cli.Flag{
-		&cli.BoolFlag{Name: "live", Usage: "Use live Zerodha API (default: dry-run mock mode)"},
+		&cli.BoolFlag{Name: "live", Usage: "Use live broker API (default: dry-run mock mode)"},
 		&cli.StringFlag{Name: "file", Value: "data/basket.csv", Usage: "Path to basket CSV file"},
 	},
 	Action: func(ctx context.Context, c *cli.Command) error {
@@ -48,6 +48,8 @@ var BasketCommand = &cli.Command{
 }
 
 func runBasketWithParams(ctx context.Context, liveMode bool, basketFilename string) error {
+	mktCfg := broker.LoadMarketConfig()
+
 	fmt.Println("====================================================================")
 	fmt.Println("                 Go Mycase Basket Engine                         ")
 	if liveMode {
@@ -58,15 +60,18 @@ func runBasketWithParams(ctx context.Context, liveMode bool, basketFilename stri
 	fmt.Println("====================================================================")
 	fmt.Printf("Loading basket configuration: %s\n", basketFilename)
 
-	b := zerodha.New(liveMode, "config/config.json")
+	b, err := brokerfactory.NewFromDefaults(liveMode)
+	if err != nil {
+		return fmt.Errorf("creating broker: %w", err)
+	}
 
 	basket, basketKeys, err := csvloader.LoadBasketCSV(basketFilename)
 	if err != nil {
 		return fmt.Errorf("loading basket config: %w", err)
 	}
 
-	if stockpicker.IsUSIndex(basketFilename) {
-		fmt.Printf("\n[Basket Engine] US market portfolio detected (%s). Zerodha execution only supports Indian stocks (NSE/BSE). Skipping basket execution.\n", basketFilename)
+	if stockpicker.IsUSIndex(basketFilename) && broker.BrokerName() != "schwab" {
+		fmt.Printf("\n[Basket Engine] US market portfolio detected (%s). Configure broker=schwab in config/defaults.json for US execution.\n", basketFilename)
 		return nil
 	}
 
@@ -96,7 +101,7 @@ func runBasketWithParams(ctx context.Context, liveMode bool, basketFilename stri
 	var snapshotText string
 
 	if choice == "1" {
-		fmt.Print("Enter total investment amount in Rupees: ")
+		fmt.Printf("Enter total investment amount in %s: ", mktCfg.Currency)
 		amtInput, _ := reader.ReadString('\n')
 		amtStr := strings.TrimSpace(amtInput)
 		if amtStr == "" {
@@ -115,6 +120,7 @@ func runBasketWithParams(ctx context.Context, liveMode bool, basketFilename stri
 			for i, inst := range basketKeys {
 				parts := strings.Split(inst, ":")
 				symbol := parts[len(parts)-1]
+				exchange := broker.ExchangeFromTicker(inst, mktCfg.Exchange)
 				ltp := quoteData[inst]
 
 				currentQty := currentHoldings[symbol]
@@ -126,11 +132,11 @@ func runBasketWithParams(ctx context.Context, liveMode bool, basketFilename stri
 					roundedPrice := math.Round(bufferPrice*10.0) / 10.0
 					basketOrders = append(basketOrders, broker.Order{
 						TradingSymbol:   symbol,
-						Exchange:        "NSE",
+						Exchange:        exchange,
 						TransactionType: "BUY",
 						Quantity:        diff,
 						OrderType:       "LIMIT",
-						Product:         "CNC",
+						Product:         broker.DeliveryProduct(exchange),
 						Ltp:             ltp,
 						Price:           roundedPrice,
 					})
@@ -139,11 +145,11 @@ func runBasketWithParams(ctx context.Context, liveMode bool, basketFilename stri
 					roundedPrice := math.Round(bufferPrice*10.0) / 10.0
 					basketOrders = append(basketOrders, broker.Order{
 						TradingSymbol:   symbol,
-						Exchange:        "NSE",
+						Exchange:        exchange,
 						TransactionType: "SELL",
 						Quantity:        int(math.Abs(float64(diff))),
 						OrderType:       "LIMIT",
-						Product:         "CNC",
+						Product:         broker.DeliveryProduct(exchange),
 						Ltp:             ltp,
 						Price:           roundedPrice,
 					})
@@ -175,26 +181,27 @@ func runBasketWithParams(ctx context.Context, liveMode bool, basketFilename stri
 			symbol := parts[len(parts)-1]
 			totalCurrentPortfolioValue += float64(currentHoldings[symbol]) * quoteData[inst]
 		}
-		fmt.Printf("Total Current Basket Portfolio Value: ₹%.2f\n", totalCurrentPortfolioValue)
+		fmt.Printf("Total Current Basket Portfolio Value: %s%.2f\n", mktCfg.Currency, totalCurrentPortfolioValue)
 
-		fmt.Print("Enter fresh cash/investment to add during rebalance (press Enter for ₹0): ")
+		fmt.Printf("Enter fresh cash/investment to add during rebalance (press Enter for %s0): ", mktCfg.Currency)
 		freshInput, _ := reader.ReadString('\n')
 		freshStr := strings.TrimSpace(freshInput)
 		var freshMoney float64
 		if freshStr != "" {
 			freshMoney, err = strconv.ParseFloat(freshStr, 64)
 			if err != nil {
-				fmt.Printf("Invalid amount: %v. Assuming ₹0.\n", err)
+				fmt.Printf("Invalid amount: %v. Assuming %s0.\n", err, mktCfg.Currency)
 				freshMoney = 0
 			}
 		}
 
 		totalTargetValue := totalCurrentPortfolioValue + freshMoney
-		fmt.Printf("Target Portfolio Value (Current + Fresh Cash): ₹%.2f\n", totalTargetValue)
+		fmt.Printf("Target Portfolio Value (Current + Fresh Cash): %s%.2f\n", mktCfg.Currency, totalTargetValue)
 
 		for _, inst := range basketKeys {
 			parts := strings.Split(inst, ":")
 			symbol := parts[len(parts)-1]
+			exchange := broker.ExchangeFromTicker(inst, mktCfg.Exchange)
 			targetWeight := basket[inst]
 			ltp := quoteData[inst]
 			currentQty := currentHoldings[symbol]
@@ -217,11 +224,11 @@ func runBasketWithParams(ctx context.Context, liveMode bool, basketFilename stri
 				roundedPrice := math.Round(bufferPrice*10.0) / 10.0
 				basketOrders = append(basketOrders, broker.Order{
 					TradingSymbol:   symbol,
-					Exchange:        "NSE",
+					Exchange:        exchange,
 					TransactionType: txType,
 					Quantity:        int(math.Abs(float64(diff))),
 					OrderType:       "LIMIT",
-					Product:         "CNC",
+					Product:         broker.DeliveryProduct(exchange),
 					Ltp:             ltp,
 					Price:           roundedPrice,
 				})
@@ -250,32 +257,35 @@ func applyTransactionFilters(
 		return orders
 	}
 
+	mktCfg := broker.LoadMarketConfig()
+	costModel := broker.CostModelForBroker(broker.BrokerName())
+
 	const microTxThreshold = 0.005 // 0.5% cost-to-value threshold
 
-	kept, filtered := optimizer.FilterMicroTransactionsWithExits(orders, quotes, costs.DefaultZerodha, microTxThreshold, basket)
+	kept, filtered := optimizer.FilterMicroTransactionsWithExits(orders, quotes, costModel, microTxThreshold, basket)
 
 	if len(filtered) > 0 {
 		fmt.Printf("\n--- Micro-Transaction Filter (cost > %.1f%% of trade value) ---\n", microTxThreshold*100)
 		for _, o := range filtered {
 			price := o.Price
 			if price <= 0 {
-				price = quotes["NSE:"+o.TradingSymbol]
+				price = quotes[o.Exchange+":"+o.TradingSymbol]
 			}
-			bd := costs.DefaultZerodha.Calculate(o.TransactionType, o.Quantity, price)
-			fmt.Printf("  SKIPPED %s %s × %d  trade=₹%.0f  costs=₹%.2f (%.2f%%)\n",
+			bd := costModel.Calculate(o.TransactionType, o.Quantity, price)
+			fmt.Printf("  SKIPPED %s %s × %d  trade=%s%.0f  costs=%s%.2f (%.2f%%)\n",
 				o.TransactionType, o.TradingSymbol, o.Quantity,
-				bd.TradeValue, bd.Total, bd.CostRatio*100)
+				mktCfg.Currency, bd.TradeValue, mktCfg.Currency, bd.Total, bd.CostRatio*100)
 		}
 	}
 
-	printCostSummary(kept, quotes)
-	printTaxWarnings(kept, b)
+	printCostSummary(kept, quotes, costModel, mktCfg)
+	printTaxWarnings(kept, b, mktCfg)
 
 	return kept
 }
 
 // printCostSummary shows estimated transaction costs for the orders that will execute.
-func printCostSummary(orders []broker.Order, quotes map[string]float64) {
+func printCostSummary(orders []broker.Order, quotes map[string]float64, costModel costs.CostModel, mktCfg broker.MarketConfig) {
 	if len(orders) == 0 {
 		return
 	}
@@ -283,18 +293,20 @@ func printCostSummary(orders []broker.Order, quotes map[string]float64) {
 	for _, o := range orders {
 		price := o.Price
 		if price <= 0 {
-			price = quotes["NSE:"+o.TradingSymbol]
+			price = quotes[o.Exchange+":"+o.TradingSymbol]
 		}
-		bd := costs.DefaultZerodha.Calculate(o.TransactionType, o.Quantity, price)
+		bd := costModel.Calculate(o.TransactionType, o.Quantity, price)
 		totalCosts += bd.Total
 		totalValue += bd.TradeValue
 	}
-	fmt.Printf("\nEstimated transaction costs: ₹%.2f on ₹%.0f traded (%.3f%%)\n",
-		totalCosts, totalValue, (totalCosts/totalValue)*100)
+	if totalValue > 0 {
+		fmt.Printf("\nEstimated transaction costs: %s%.2f on %s%.0f traded (%.3f%%)\n",
+			mktCfg.Currency, totalCosts, mktCfg.Currency, totalValue, (totalCosts/totalValue)*100)
+	}
 }
 
-// printTaxWarnings fetches holdings and prints STCG/LTCG warnings for SELL orders.
-func printTaxWarnings(orders []broker.Order, b broker.Broker) {
+// printTaxWarnings fetches holdings and prints tax warnings for SELL orders.
+func printTaxWarnings(orders []broker.Order, b broker.Broker, mktCfg broker.MarketConfig) {
 	var sells []broker.Order
 	for _, o := range orders {
 		if o.TransactionType == "SELL" {
@@ -313,20 +325,37 @@ func printTaxWarnings(orders []broker.Order, b broker.Broker) {
 		}
 	}
 
-	fmt.Println("\n--- Tax Warning (Finance Act 2024) ---")
-	for _, o := range sells {
-		h := holdingMap[o.TradingSymbol]
-		price := o.Price
-		if price <= 0 {
-			price = o.Ltp
+	if broker.IsUSBroker(broker.BrokerName()) {
+		fmt.Println("\n--- Tax Warning (US Federal) ---")
+		for _, o := range sells {
+			h := holdingMap[o.TradingSymbol]
+			price := o.Price
+			if price <= 0 {
+				price = o.Ltp
+			}
+			w := costs.ClassifyUSSell(o.TradingSymbol, o.Quantity, price, h.AveragePrice, time.Time{}, false)
+			fmt.Println(" ", w.Note)
+			if w.EstimatedGain > 0 && w.EstimatedTax > 0 {
+				fmt.Printf("    Estimated gain: %s%.0f  |  Estimated tax: %s%.0f\n", mktCfg.Currency, w.EstimatedGain, mktCfg.Currency, w.EstimatedTax)
+			} else if w.EstimatedGain > 0 {
+				fmt.Printf("    Estimated gain: %s%.0f\n", mktCfg.Currency, w.EstimatedGain)
+			}
 		}
-		// PurchaseDate is not available from broker API; ClassifySell handles zero time.
-		w := costs.ClassifySell(o.TradingSymbol, o.Quantity, price, h.AveragePrice, time.Time{})
-		fmt.Println(" ", w.Note)
-		if w.EstimatedGain > 0 && w.EstimatedTax > 0 {
-			fmt.Printf("    Estimated gain: ₹%.0f  |  Estimated tax: ₹%.0f\n", w.EstimatedGain, w.EstimatedTax)
-		} else if w.EstimatedGain > 0 {
-			fmt.Printf("    Estimated gain: ₹%.0f\n", w.EstimatedGain)
+	} else {
+		fmt.Println("\n--- Tax Warning (Finance Act 2024) ---")
+		for _, o := range sells {
+			h := holdingMap[o.TradingSymbol]
+			price := o.Price
+			if price <= 0 {
+				price = o.Ltp
+			}
+			w := costs.ClassifySell(o.TradingSymbol, o.Quantity, price, h.AveragePrice, time.Time{})
+			fmt.Println(" ", w.Note)
+			if w.EstimatedGain > 0 && w.EstimatedTax > 0 {
+				fmt.Printf("    Estimated gain: %s%.0f  |  Estimated tax: %s%.0f\n", mktCfg.Currency, w.EstimatedGain, mktCfg.Currency, w.EstimatedTax)
+			} else if w.EstimatedGain > 0 {
+				fmt.Printf("    Estimated gain: %s%.0f\n", mktCfg.Currency, w.EstimatedGain)
+			}
 		}
 	}
 }

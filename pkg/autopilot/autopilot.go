@@ -264,7 +264,7 @@ func Run(ctx context.Context, rc RunConfig) (*RunResult, error) {
 		if o.TransactionType == "SELL" {
 			tw := costs.ClassifySell(o.TradingSymbol, o.Quantity, o.Price, 0, time.Time{})
 			if tw.Class != costs.TaxUnknown {
-				proposal.TaxWarnings = append(proposal.TaxWarnings, fmt.Sprintf("%s: %s (qty %d, est. gain ₹%.0f)", tw.Ticker, tw.Class.String(), o.Quantity, tw.EstimatedGain))
+				proposal.TaxWarnings = append(proposal.TaxWarnings, fmt.Sprintf("%s: %s (qty %d, est. gain %s%.0f)", tw.Ticker, tw.Class.String(), o.Quantity, broker.LoadMarketConfig().Currency, tw.EstimatedGain))
 			} else {
 				proposal.TaxWarnings = append(proposal.TaxWarnings, fmt.Sprintf("%s: %s — check manually", tw.Ticker, tw.Note))
 			}

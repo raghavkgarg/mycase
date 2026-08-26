@@ -407,7 +407,8 @@ func (s *Server) handleMonitor(w http.ResponseWriter, r *http.Request) {
 	)
 
 	wg.Go(func() {
-		b, ferr := yfinance.FetchHistoricalDataWithTimestamps(ctx, "^NSEI", "2y")
+		benchTicker := broker.LoadMarketConfig().Benchmark
+		b, ferr := yfinance.FetchHistoricalDataWithTimestamps(ctx, benchTicker, "2y")
 		if ferr == nil && b != nil && len(b.Closes) >= 200 {
 			mu.Lock()
 			benchData = b
@@ -540,7 +541,7 @@ func (s *Server) handleBacktest(w http.ResponseWriter, r *http.Request) {
 
 	benchmark := params.Benchmark
 	if benchmark == "" {
-		benchmark = "^NSEI"
+		benchmark = broker.LoadMarketConfig().Benchmark
 	}
 	capital := params.Capital
 	if capital <= 0 {

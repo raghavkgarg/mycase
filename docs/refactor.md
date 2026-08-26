@@ -31,6 +31,7 @@ See `docs/testing.md` for test coverage, conventions, and gaps.
 | **R10** — Autopilot Pipeline | `pkg/autopilot/`: non-interactive quarterly pipeline (proposal model, scheduling, alert formatting). `cmd/autopilot.go`: run/status/dismiss/install/uninstall. Server: 3 new API endpoints (`/api/autopilot/{proposal,confirm,dismiss}`). Frontend: `<order-preview>` renders proposal with confirm/dismiss buttons. `ScheduleConfig` in pipeline.yaml. `pkg/stockpicker/run.go` exported for programmatic use. | |
 | **R10.1** — Package cleanup | Deleted `pkg/portfolio` (type alias → `broker.Holding`), `pkg/kiteclient` (dead code). Merged `pkg/report` → `pkg/stockpicker/rationale.go`, `pkg/performance` → `pkg/backtest/valuation.go`. 25 → 21 packages. | |
 | **R9** — Schwab API Integration | `pkg/schwab/`: OAuth2 auth flow (auth.go, tls.go), HTTP client with auto-refresh + rate limiting (client.go), market data mapped to yfinance types (market.go, types.go), broker.Broker implementation (broker.go). `pkg/datafetcher/router.go`: ticker routing (US: → Schwab, NSE:/BSE: → Yahoo, fallback to Yahoo on error). `pkg/costs/us.go`: US cost model ($0 commission, SEC fee, TAF) + US tax classification with wash sale detection. `cmd/auth.go`: extended with `--broker schwab` flag. `pkg/config/pipeline.go`: Broker/SchwabConfig/SchwabToken fields. | |
+| **R11** — Broker Factory & Market Abstraction | `pkg/brokerfactory/`: factory creates Schwab or Zerodha broker from `config/defaults.json`. `pkg/broker/market.go`: `MarketConfig` (benchmark, exchange, currency, timezone), `ExchangeFromTicker`, `DeliveryProduct`, `BrokerName`. `pkg/broker/costs.go`: `CostModelForBroker`. Removed all `zerodha.New()` from 7 cmd files, replaced with `brokerfactory.NewFromDefaults(live)`. Removed hardcoded `"NSE"` exchange, `"^NSEI"` benchmark, `₹` currency, `15:45 IST` scheduling. Daemon uses market-aware `nextMarketClose()`. Autopilot scheduler uses `scheduleLocation()`. `pkg/schwab/client.go`: added `FetchAccountHash`. `pkg/config/pipeline.go`: added `LoadPipelineConfig`. All commands work with `broker=schwab` by default; backward-compatible with `broker=zerodha`. | |
 
 ---
 
@@ -353,7 +354,7 @@ Implementation: add `USCostModel` to `pkg/costs/` that returns near-zero costs. 
 
 ---
 
-## Phase R11 — Broker Factory & Market Abstraction
+## ~~Phase R11 — Broker Factory & Market Abstraction~~ ✅ Completed
 
 ### Goal
 

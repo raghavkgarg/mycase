@@ -217,3 +217,29 @@ func DecodeJSON[T any](resp *http.Response, target *T) error {
 	}
 	return nil
 }
+
+
+// AccountHashEntry represents one account's number and hash from the Schwab API.
+type AccountHashEntry struct {
+	AccountNumber string `json:"accountNumber"`
+	HashValue     string `json:"hashValue"`
+}
+
+// FetchAccountHash retrieves account hashes from the Schwab Trader API
+// and returns the first account's hash value. This is needed to construct API
+// paths like /accounts/{hash}/positions.
+func (c *Client) FetchAccountHash(ctx context.Context) (string, error) {
+	resp, err := c.GetTrader(ctx, "/accounts/accountNumbers")
+	if err != nil {
+		return "", fmt.Errorf("fetching account numbers: %w", err)
+	}
+
+	var entries []AccountHashEntry
+	if err := DecodeJSON(resp, &entries); err != nil {
+		return "", fmt.Errorf("decoding account numbers: %w", err)
+	}
+	if len(entries) == 0 {
+		return "", fmt.Errorf("no accounts found — ensure your Schwab app has account access permissions")
+	}
+	return entries[0].HashValue, nil
+}

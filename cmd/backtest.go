@@ -9,6 +9,7 @@ import (
 	"github.com/urfave/cli/v3"
 
 	"github.com/raghavkgarg/mycase/pkg/backtest"
+	"github.com/raghavkgarg/mycase/pkg/broker"
 	"github.com/raghavkgarg/mycase/pkg/csvloader"
 	"github.com/raghavkgarg/mycase/pkg/yfinance"
 )
@@ -24,7 +25,7 @@ var BacktestCommand = &cli.Command{
 		&cli.StringFlag{Name: "to", Usage: "End date (YYYY-MM-DD, default: today)"},
 		&cli.StringFlag{Name: "rebalance", Value: "quarterly", Usage: "Rebalance frequency: monthly, quarterly, drift-triggered"},
 		&cli.FloatFlag{Name: "slippage", Value: 0.1, Usage: "Slippage per trade in % (e.g. 0.1 = 0.1%)"},
-		&cli.StringFlag{Name: "benchmark", Value: "^NSEI", Usage: "Benchmark ticker"},
+		&cli.StringFlag{Name: "benchmark", Value: "", Usage: "Benchmark ticker (default: from config/defaults.json)"},
 		&cli.FloatFlag{Name: "drift-threshold", Value: 5.0, Usage: "Drift % to trigger rebalance (drift-triggered mode)"},
 	},
 	Action: runBacktest,
@@ -70,6 +71,9 @@ func runBacktest(ctx context.Context, c *cli.Command) error {
 	capital := c.Float("capital")
 	slippage := c.Float("slippage") / 100.0
 	benchmark := c.String("benchmark")
+	if benchmark == "" {
+		benchmark = broker.LoadMarketConfig().Benchmark
+	}
 	driftThreshold := c.Float("drift-threshold") / 100.0
 
 	// Load portfolio

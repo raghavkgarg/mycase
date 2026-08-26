@@ -10,7 +10,7 @@ import (
 	"github.com/urfave/cli/v3"
 
 	"github.com/raghavkgarg/mycase/pkg/broker"
-	"github.com/raghavkgarg/mycase/pkg/broker/zerodha"
+	"github.com/raghavkgarg/mycase/pkg/brokerfactory"
 	"github.com/raghavkgarg/mycase/pkg/config"
 	"github.com/raghavkgarg/mycase/pkg/csvloader"
 	"github.com/raghavkgarg/mycase/pkg/printer"
@@ -18,9 +18,9 @@ import (
 
 var HoldingsCommand = &cli.Command{
 	Name:  "holdings",
-	Usage: "Snapshot of current Zerodha holdings",
+	Usage: "Snapshot of current broker holdings",
 	Flags: []cli.Flag{
-		&cli.BoolFlag{Name: "live", Usage: "Use live Zerodha API (default: dry-run mock mode)"},
+		&cli.BoolFlag{Name: "live", Usage: "Use live broker API (default: dry-run mock mode)"},
 	},
 	Action: runHoldings,
 }
@@ -37,7 +37,10 @@ func runHoldings(ctx context.Context, c *cli.Command) error {
 	}
 	fmt.Println("====================================================================")
 
-	b := zerodha.New(liveMode, "config/config.json")
+	b, err := brokerfactory.NewFromDefaults(liveMode)
+	if err != nil {
+		return fmt.Errorf("creating broker: %w", err)
+	}
 
 	rawHoldings, err := b.GetHoldings()
 	if err != nil {
@@ -67,12 +70,13 @@ func runHoldings(ctx context.Context, c *cli.Command) error {
 
 	var uncategorizedHoldings []broker.Holding
 	for _, h := range rawHoldings {
-		keyNSE := "NSE:" + h.TradingSymbol
-		keyBSE := "BSE:" + h.TradingSymbol
+		// Build ticker key using the holding's exchange prefix
+		tickerKey := h.Exchange + ":" + h.TradingSymbol
 
 		matched := false
 		for i, g := range groups {
-			if g.Tickers[keyNSE] || g.Tickers[keyBSE] {
+			// Match by primary key or common Indian exchange variants
+			if g.Tickers[tickerKey] || g.Tickers["NSE:"+h.TradingSymbol] || g.Tickers["BSE:"+h.TradingSymbol] || g.Tickers["US:"+h.TradingSymbol] {
 				groups[i].Holdings = append(groups[i].Holdings, h)
 				matched = true
 				break

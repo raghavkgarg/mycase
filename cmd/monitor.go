@@ -15,6 +15,7 @@ import (
 	"github.com/urfave/cli/v3"
 	"gopkg.in/yaml.v3"
 
+	"github.com/raghavkgarg/mycase/pkg/broker"
 	"github.com/raghavkgarg/mycase/pkg/config"
 	"github.com/raghavkgarg/mycase/pkg/csvloader"
 	"github.com/raghavkgarg/mycase/pkg/monitoring"
@@ -261,7 +262,8 @@ func monitorLoadAllData(ctx context.Context, tickers []string) (
 	var wg sync.WaitGroup
 
 	wg.Go(func() {
-		b, err := yfinance.FetchHistoricalDataWithTimestamps(ctx, "^NSEI", "2y")
+		benchTicker := broker.LoadMarketConfig().Benchmark
+		b, err := yfinance.FetchHistoricalDataWithTimestamps(ctx, benchTicker, "2y")
 		if err == nil && b != nil && len(b.Closes) > 200 {
 			mu.Lock()
 			benchData = b

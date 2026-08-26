@@ -154,9 +154,10 @@ func ExecuteBasketOrders(
 	}
 
 	fmt.Println("\nExecuting orders live...")
-	loc, err := time.LoadLocation("Asia/Kolkata")
+	mktCfg := broker.LoadMarketConfig()
+	loc, err := time.LoadLocation(mktCfg.Timezone)
 	if err != nil {
-		loc = time.FixedZone("IST", 5.5*60*60)
+		loc = time.UTC
 	}
 
 	var successLines []string
@@ -167,7 +168,7 @@ func ExecuteBasketOrders(
 		if i > 0 {
 			time.Sleep(200 * time.Millisecond) // Rate limit throttle (max 10 req/s)
 		}
-		ltp := quoteData["NSE:"+order.TradingSymbol]
+		ltp := quoteData[order.Exchange+":"+order.TradingSymbol]
 		if ltp == 0 {
 			ltp = order.Ltp
 		}
@@ -197,8 +198,8 @@ func ExecuteBasketOrders(
 				})
 				fmt.Printf("Error placing GTT %s order for %s: %v\n", strings.ToUpper(order.TransactionType), order.TradingSymbol, errMsg)
 			} else {
-				line := fmt.Sprintf("Placed GTT %s order (Trigger ID: %d) for %d shares of %s (Trigger: ₹%.2f, Limit: ₹%.2f) at %s",
-					strings.ToUpper(order.TransactionType), result.TriggerID, order.Quantity, order.TradingSymbol, triggerPrice, limitPrice, orderNow)
+				line := fmt.Sprintf("Placed GTT %s order (Trigger ID: %d) for %d shares of %s (Trigger: %s%.2f, Limit: %s%.2f) at %s",
+					strings.ToUpper(order.TransactionType), result.TriggerID, order.Quantity, order.TradingSymbol, mktCfg.Currency, triggerPrice, mktCfg.Currency, limitPrice, orderNow)
 				successLines = append(successLines, line)
 				fmt.Println(line)
 			}
@@ -225,8 +226,8 @@ func ExecuteBasketOrders(
 				})
 				fmt.Printf("Error placing %s %s order for %s: %v\n", strings.ToUpper(orderVariety), strings.ToUpper(order.TransactionType), order.TradingSymbol, errMsg)
 			} else {
-				line := fmt.Sprintf("Placed %s %s order %s for %d shares of %s @ ₹%.2f at %s",
-					strings.ToUpper(orderVariety), strings.ToUpper(order.TransactionType), result.OrderID, order.Quantity, order.TradingSymbol, execPrice, orderNow)
+				line := fmt.Sprintf("Placed %s %s order %s for %d shares of %s @ %s%.2f at %s",
+					strings.ToUpper(orderVariety), strings.ToUpper(order.TransactionType), result.OrderID, order.Quantity, order.TradingSymbol, mktCfg.Currency, execPrice, orderNow)
 				successLines = append(successLines, line)
 				fmt.Println(line)
 			}
@@ -344,7 +345,11 @@ func ExecuteRetryPayload(jsonPath string, b broker.Broker, reader *bufio.Reader)
 	// Refresh real-time LTP quotes before retrying
 	var tickers []string
 	for _, fo := range payload.FailedOrders {
-		tickers = append(tickers, "NSE:"+fo.TradingSymbol)
+		exchange := fo.Exchange
+		if exchange == "" {
+			exchange = "NSE"
+		}
+		tickers = append(tickers, exchange+":"+fo.TradingSymbol)
 	}
 
 	quoteMap := make(map[string]float64)
@@ -360,9 +365,10 @@ func ExecuteRetryPayload(jsonPath string, b broker.Broker, reader *bufio.Reader)
 		}
 	}
 
-	loc, err := time.LoadLocation("Asia/Kolkata")
+	mktCfg := broker.LoadMarketConfig()
+	loc, err := time.LoadLocation(mktCfg.Timezone)
 	if err != nil {
-		loc = time.FixedZone("IST", 5.5*60*60)
+		loc = time.UTC
 	}
 
 	var remainingFailed []FailedOrderSpec
@@ -373,7 +379,11 @@ func ExecuteRetryPayload(jsonPath string, b broker.Broker, reader *bufio.Reader)
 			time.Sleep(200 * time.Millisecond) // Rate limiting throttle
 		}
 
-		key := "NSE:" + order.TradingSymbol
+		exchange := order.Exchange
+		if exchange == "" {
+			exchange = "NSE"
+		}
+		key := exchange + ":" + order.TradingSymbol
 		ltp := quoteMap[key]
 		if ltp == 0 {
 			ltp = order.Price
@@ -401,8 +411,8 @@ func ExecuteRetryPayload(jsonPath string, b broker.Broker, reader *bufio.Reader)
 				remainingFailed = append(remainingFailed, order)
 				fmt.Printf("Retry Error placing GTT %s order for %s: %v\n", strings.ToUpper(order.TransactionType), order.TradingSymbol, perr)
 			} else {
-				line := fmt.Sprintf("Placed GTT %s order (Trigger ID: %d) for %d shares of %s (Trigger: ₹%.2f, Limit: ₹%.2f) at %s",
-					strings.ToUpper(order.TransactionType), res.TriggerID, order.Quantity, order.TradingSymbol, triggerPrice, limitPrice, orderNow)
+				line := fmt.Sprintf("Placed GTT %s order (Trigger ID: %d) for %d shares of %s (Trigger: %s%.2f, Limit: %s%.2f) at %s",
+					strings.ToUpper(order.TransactionType), res.TriggerID, order.Quantity, order.TradingSymbol, mktCfg.Currency, triggerPrice, mktCfg.Currency, limitPrice, orderNow)
 				successLines = append(successLines, line)
 				fmt.Println(line)
 			}
@@ -422,8 +432,8 @@ func ExecuteRetryPayload(jsonPath string, b broker.Broker, reader *bufio.Reader)
 				remainingFailed = append(remainingFailed, order)
 				fmt.Printf("Retry Error placing %s %s order for %s: %v\n", strings.ToUpper(variety), strings.ToUpper(order.TransactionType), order.TradingSymbol, perr)
 			} else {
-				line := fmt.Sprintf("Placed %s %s order %s for %d shares of %s @ ₹%.2f at %s",
-					strings.ToUpper(variety), strings.ToUpper(order.TransactionType), res.OrderID, order.Quantity, order.TradingSymbol, execPrice, orderNow)
+				line := fmt.Sprintf("Placed %s %s order %s for %d shares of %s @ %s%.2f at %s",
+					strings.ToUpper(variety), strings.ToUpper(order.TransactionType), res.OrderID, order.Quantity, order.TradingSymbol, mktCfg.Currency, execPrice, orderNow)
 				successLines = append(successLines, line)
 				fmt.Println(line)
 			}

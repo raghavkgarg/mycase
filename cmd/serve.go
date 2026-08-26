@@ -6,7 +6,7 @@ import (
 
 	"github.com/urfave/cli/v3"
 
-	"github.com/raghavkgarg/mycase/pkg/broker/zerodha"
+	"github.com/raghavkgarg/mycase/pkg/brokerfactory"
 	"github.com/raghavkgarg/mycase/pkg/cache"
 	"github.com/raghavkgarg/mycase/pkg/config"
 	"github.com/raghavkgarg/mycase/pkg/server"
@@ -19,10 +19,13 @@ var ServeCommand = &cli.Command{
 	Usage: "Start the web dashboard server",
 	Flags: []cli.Flag{
 		&cli.StringFlag{Name: "port", Value: "8080", Usage: "HTTP port"},
-		&cli.BoolFlag{Name: "live", Usage: "Use live Zerodha broker (default: mock)"},
+		&cli.BoolFlag{Name: "live", Usage: "Use live broker (default: mock)"},
 	},
 	Action: func(ctx context.Context, c *cli.Command) error {
-		b := zerodha.New(c.Bool("live"), "config/config.json")
+		b, err := brokerfactory.NewFromDefaults(c.Bool("live"))
+		if err != nil {
+			return fmt.Errorf("creating broker: %w", err)
+		}
 
 		var dc *cache.Cache
 		if cc, err := cache.Open("data/cache.db"); err == nil {

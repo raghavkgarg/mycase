@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/raghavkgarg/mycase/pkg/alert"
+	"github.com/raghavkgarg/mycase/pkg/broker"
 	"github.com/raghavkgarg/mycase/pkg/config"
 )
 
@@ -52,10 +53,11 @@ func FormatProposalAlert(p *Proposal) alert.Alert {
 			sellCount++
 		}
 	}
+	currency := broker.LoadMarketConfig().Currency
 	body.WriteString(fmt.Sprintf("*Orders*: %d buys, %d sells\n", buyCount, sellCount))
-	body.WriteString(fmt.Sprintf("*Buy value*: ₹%.0f\n", p.TotalBuyValue))
-	body.WriteString(fmt.Sprintf("*Sell value*: ₹%.0f\n", p.TotalSellValue))
-	body.WriteString(fmt.Sprintf("*Estimated cost*: ₹%.0f\n", p.EstimatedCost))
+	body.WriteString(fmt.Sprintf("*Buy value*: %s%.0f\n", currency, p.TotalBuyValue))
+	body.WriteString(fmt.Sprintf("*Sell value*: %s%.0f\n", currency, p.TotalSellValue))
+	body.WriteString(fmt.Sprintf("*Estimated cost*: %s%.0f\n", currency, p.EstimatedCost))
 
 	if len(p.FilteredOut) > 0 {
 		body.WriteString(fmt.Sprintf("*Filtered (micro-tx)*: %d orders skipped\n", len(p.FilteredOut)))

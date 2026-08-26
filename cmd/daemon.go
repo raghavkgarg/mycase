@@ -14,7 +14,8 @@ import (
 
 	"github.com/urfave/cli/v3"
 
-	"github.com/raghavkgarg/mycase/pkg/broker/zerodha"
+	"github.com/raghavkgarg/mycase/pkg/broker"
+	"github.com/raghavkgarg/mycase/pkg/brokerfactory"
 	"github.com/raghavkgarg/mycase/pkg/config"
 	"github.com/raghavkgarg/mycase/pkg/daemon"
 )
@@ -94,7 +95,10 @@ func runDaemonStart(ctx context.Context, c *cli.Command) error {
 		return err
 	}
 	portfolioFile := resolvePortfolioFile(c, alertCfg)
-	b := zerodha.New(c.Bool("live"), "config/config.json")
+	b, err := brokerfactory.NewFromDefaults(c.Bool("live"))
+	if err != nil {
+		return fmt.Errorf("creating broker: %w", err)
+	}
 	fmt.Printf("Drift daemon starting. Portfolio: %s, threshold: %.1f%%\n",
 		portfolioFile, alertCfg.DriftThreshold*100)
 	return daemon.RunLoop(ctx, b, alertCfg, portfolioFile)
@@ -148,16 +152,20 @@ func runDaemonCheck(ctx context.Context, c *cli.Command) error {
 		return err
 	}
 	portfolioFile := resolvePortfolioFile(c, alertCfg)
-	b := zerodha.New(c.Bool("live"), "config/config.json")
+	b, err := brokerfactory.NewFromDefaults(c.Bool("live"))
+	if err != nil {
+		return fmt.Errorf("creating broker: %w", err)
+	}
 
 	result, err := daemon.RunCheck(ctx, b, alertCfg, portfolioFile)
 	if err != nil {
 		return err
 	}
 
+	mktCfg := broker.LoadMarketConfig()
 	fmt.Printf("Drift check at %s\n", result.CheckedAt.Local().Format("2006-01-02 15:04:05 MST"))
 	fmt.Printf("Portfolio:     %s\n", portfolioFile)
-	fmt.Printf("Total value:   ₹%.2f\n", result.TotalValue)
+	fmt.Printf("Total value:   %s%.2f\n", mktCfg.Currency, result.TotalValue)
 	fmt.Printf("Drift index:   %.4f (%.1f%%)\n", result.DriftIndex, result.DriftIndex*100)
 	fmt.Printf("Threshold:     %.4f (%.1f%%)\n", alertCfg.DriftThreshold, alertCfg.DriftThreshold*100)
 

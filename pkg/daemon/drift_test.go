@@ -195,26 +195,30 @@ func TestCalculateDrift_CheckedAtSet(t *testing.T) {
 	}
 }
 
-func TestNextIST1545_AlwaysFuture(t *testing.T) {
-	next := nextIST1545()
+func TestNextMarketClose_AlwaysFuture(t *testing.T) {
+	mktCfg := broker.LoadMarketConfig()
+	next := nextMarketClose(mktCfg)
 	if !next.After(time.Now()) {
-		t.Errorf("nextIST1545() returned %v which is not in the future", next)
+		t.Errorf("nextMarketClose() returned %v which is not in the future", next)
 	}
 }
 
-func TestNextIST1545_CorrectTime(t *testing.T) {
-	next := nextIST1545()
+func TestNextMarketClose_CorrectTime(t *testing.T) {
+	mktCfg := broker.MarketConfigForName("india")
+	next := nextMarketClose(mktCfg)
 	ist, _ := time.LoadLocation("Asia/Kolkata")
 	inIST := next.In(ist)
+	// India market close is 15:30, check fires at 15:45
 	if inIST.Hour() != 15 || inIST.Minute() != 45 || inIST.Second() != 0 {
-		t.Errorf("nextIST1545() in IST = %02d:%02d:%02d, want 15:45:00",
+		t.Errorf("nextMarketClose(india) in IST = %02d:%02d:%02d, want 15:45:00",
 			inIST.Hour(), inIST.Minute(), inIST.Second())
 	}
 }
 
-func TestNextIST1545_WithinOneDay(t *testing.T) {
-	next := nextIST1545()
+func TestNextMarketClose_WithinOneDay(t *testing.T) {
+	mktCfg := broker.LoadMarketConfig()
+	next := nextMarketClose(mktCfg)
 	if d := time.Until(next); d > 25*time.Hour {
-		t.Errorf("nextIST1545() is %v away, expected ≤ 25h", d.Round(time.Minute))
+		t.Errorf("nextMarketClose() is %v away, expected ≤ 25h", d.Round(time.Minute))
 	}
 }
