@@ -10,7 +10,6 @@ import (
 	"github.com/urfave/cli/v3"
 
 	"github.com/raghavkgarg/mycase/pkg/broker"
-	"github.com/raghavkgarg/mycase/pkg/brokerfactory"
 	"github.com/raghavkgarg/mycase/pkg/config"
 	"github.com/raghavkgarg/mycase/pkg/csvloader"
 	"github.com/raghavkgarg/mycase/pkg/printer"
@@ -37,7 +36,7 @@ func runHoldings(ctx context.Context, c *cli.Command) error {
 	}
 	fmt.Println("====================================================================")
 
-	b, err := brokerfactory.NewFromDefaults(liveMode)
+	b, err := newBroker(liveMode)
 	if err != nil {
 		return fmt.Errorf("creating broker: %w", err)
 	}

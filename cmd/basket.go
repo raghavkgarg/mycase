@@ -13,7 +13,6 @@ import (
 	"github.com/urfave/cli/v3"
 
 	"github.com/raghavkgarg/mycase/pkg/broker"
-	"github.com/raghavkgarg/mycase/pkg/brokerfactory"
 	"github.com/raghavkgarg/mycase/pkg/costs"
 	"github.com/raghavkgarg/mycase/pkg/csvloader"
 	"github.com/raghavkgarg/mycase/pkg/datafetcher"
@@ -60,7 +59,7 @@ func runBasketWithParams(ctx context.Context, liveMode bool, basketFilename stri
 	fmt.Println("====================================================================")
 	fmt.Printf("Loading basket configuration: %s\n", basketFilename)
 
-	b, err := brokerfactory.NewFromDefaults(liveMode)
+	b, err := newBroker(liveMode)
 	if err != nil {
 		return fmt.Errorf("creating broker: %w", err)
 	}

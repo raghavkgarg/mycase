@@ -15,7 +15,6 @@ import (
 
 	"github.com/raghavkgarg/mycase/pkg/autopilot"
 	"github.com/raghavkgarg/mycase/pkg/broker"
-	"github.com/raghavkgarg/mycase/pkg/brokerfactory"
 	"github.com/raghavkgarg/mycase/pkg/config"
 )
 
@@ -108,7 +107,7 @@ func runAutopilotRun(ctx context.Context, c *cli.Command) error {
 	}
 
 	// Create broker
-	b, err := brokerfactory.NewFromDefaults(live)
+	b, err := newBroker(live)
 	if err != nil {
 		return fmt.Errorf("creating broker: %w", err)
 	}

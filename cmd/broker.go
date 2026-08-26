@@ -1,30 +1,27 @@
-// Package brokerfactory creates broker instances based on user configuration.
-// It exists as a separate package to avoid circular dependencies between
-// pkg/broker (interface), pkg/broker/zerodha, and pkg/schwab.
-package brokerfactory
+package cmd
 
 import (
 	"context"
 	"fmt"
 
 	"github.com/raghavkgarg/mycase/pkg/broker"
+	"github.com/raghavkgarg/mycase/pkg/broker/schwab"
 	"github.com/raghavkgarg/mycase/pkg/broker/zerodha"
 	"github.com/raghavkgarg/mycase/pkg/config"
-	"github.com/raghavkgarg/mycase/pkg/broker/schwab"
 )
 
 const defaultsPath = "config/defaults.json"
 
-// NewFromDefaults creates the appropriate broker based on config/defaults.json.
+// newBroker creates the appropriate broker based on config/defaults.json.
 // If live is false or credentials are missing/invalid, returns MockBroker.
-func NewFromDefaults(live bool) (broker.Broker, error) {
+func newBroker(live bool) (broker.Broker, error) {
 	defaults := config.LoadUserDefaults(defaultsPath)
-	return NewByName(defaults.Broker, live)
+	return newBrokerByName(defaults.Broker, live)
 }
 
-// NewByName creates a broker by explicit name.
+// newBrokerByName creates a broker by explicit name.
 // If live is false, returns MockBroker regardless of broker name.
-func NewByName(name string, live bool) (broker.Broker, error) {
+func newBrokerByName(name string, live bool) (broker.Broker, error) {
 	if !live {
 		return &broker.MockBroker{}, nil
 	}
@@ -48,7 +45,6 @@ func newSchwabBroker() (broker.Broker, error) {
 	schwabConfigPath := "config/schwab.json"
 	schwabTokenPath := "config/schwab_token.json"
 
-	// Check if pipeline config specifies custom paths
 	if defaults.PipelineConfig != "" {
 		if pipeCfg, err := config.LoadPipelineConfig(defaults.PipelineConfig); err == nil {
 			if pipeCfg.SchwabConfig != "" {

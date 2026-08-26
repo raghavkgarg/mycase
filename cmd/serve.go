@@ -6,7 +6,6 @@ import (
 
 	"github.com/urfave/cli/v3"
 
-	"github.com/raghavkgarg/mycase/pkg/brokerfactory"
 	"github.com/raghavkgarg/mycase/pkg/cache"
 	"github.com/raghavkgarg/mycase/pkg/config"
 	"github.com/raghavkgarg/mycase/pkg/server"
@@ -22,7 +21,7 @@ var ServeCommand = &cli.Command{
 		&cli.BoolFlag{Name: "live", Usage: "Use live broker (default: mock)"},
 	},
 	Action: func(ctx context.Context, c *cli.Command) error {
-		b, err := brokerfactory.NewFromDefaults(c.Bool("live"))
+		b, err := newBroker(c.Bool("live"))
 		if err != nil {
 			return fmt.Errorf("creating broker: %w", err)
 		}

@@ -8,7 +8,6 @@ import (
 
 	"github.com/urfave/cli/v3"
 
-	"github.com/raghavkgarg/mycase/pkg/brokerfactory"
 	"github.com/raghavkgarg/mycase/pkg/executor"
 )
 
@@ -24,7 +23,7 @@ var RetryCommand = &cli.Command{
 		jsonPath := c.Args().First()
 		liveMode := c.Bool("live")
 
-		b, err := brokerfactory.NewFromDefaults(liveMode)
+		b, err := newBroker(liveMode)
 		if err != nil {
 			return fmt.Errorf("creating broker: %w", err)
 		}

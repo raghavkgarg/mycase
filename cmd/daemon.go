@@ -15,7 +15,6 @@ import (
 	"github.com/urfave/cli/v3"
 
 	"github.com/raghavkgarg/mycase/pkg/broker"
-	"github.com/raghavkgarg/mycase/pkg/brokerfactory"
 	"github.com/raghavkgarg/mycase/pkg/config"
 	"github.com/raghavkgarg/mycase/pkg/daemon"
 )
@@ -95,7 +94,7 @@ func runDaemonStart(ctx context.Context, c *cli.Command) error {
 		return err
 	}
 	portfolioFile := resolvePortfolioFile(c, alertCfg)
-	b, err := brokerfactory.NewFromDefaults(c.Bool("live"))
+	b, err := newBroker(c.Bool("live"))
 	if err != nil {
 		return fmt.Errorf("creating broker: %w", err)
 	}
@@ -152,7 +151,7 @@ func runDaemonCheck(ctx context.Context, c *cli.Command) error {
 		return err
 	}
 	portfolioFile := resolvePortfolioFile(c, alertCfg)
-	b, err := brokerfactory.NewFromDefaults(c.Bool("live"))
+	b, err := newBroker(c.Bool("live"))
 	if err != nil {
 		return fmt.Errorf("creating broker: %w", err)
 	}
