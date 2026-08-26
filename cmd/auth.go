@@ -14,7 +14,7 @@ import (
 	kiteconnect "github.com/zerodha/gokiteconnect/v4"
 
 	"github.com/raghavkgarg/mycase/pkg/config"
-	"github.com/raghavkgarg/mycase/pkg/schwab"
+	"github.com/raghavkgarg/mycase/pkg/broker/schwab"
 )
 
 var AuthCommand = &cli.Command{

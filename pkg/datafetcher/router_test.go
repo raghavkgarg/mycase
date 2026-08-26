@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/raghavkgarg/mycase/pkg/schwab"
+	"github.com/raghavkgarg/mycase/pkg/broker/schwab"
 )
 
 func buildSchwabTestClient(t *testing.T, handler http.Handler) *schwab.Client {

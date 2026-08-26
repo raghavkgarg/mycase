@@ -10,7 +10,7 @@ import (
 	"github.com/raghavkgarg/mycase/pkg/broker"
 	"github.com/raghavkgarg/mycase/pkg/broker/zerodha"
 	"github.com/raghavkgarg/mycase/pkg/config"
-	"github.com/raghavkgarg/mycase/pkg/schwab"
+	"github.com/raghavkgarg/mycase/pkg/broker/schwab"
 )
 
 const defaultsPath = "config/defaults.json"

@@ -5,7 +5,7 @@ import (
 	"maps"
 	"time"
 
-	"github.com/raghavkgarg/mycase/pkg/schwab"
+	"github.com/raghavkgarg/mycase/pkg/broker/schwab"
 	"github.com/raghavkgarg/mycase/pkg/yfinance"
 )
 
