@@ -33,3 +33,7 @@ report/
 # OS-specific files
 .DS_Store
 Thumbs.db
+
+
+# Claude/Kiro agent worktrees
+.claude/
