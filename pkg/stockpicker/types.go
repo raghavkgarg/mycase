@@ -9,6 +9,7 @@ import (
 type Options struct {
 	IndexName          string
 	FilePath           string
+	Tickers            []string // pre-built ticker list (bypasses file/index loading)
 	Method             string
 	TopN               int
 	RangeStr           string

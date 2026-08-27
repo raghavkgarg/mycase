@@ -10,11 +10,15 @@ import (
 
 var globalCache *cache.Cache
 
-// SetCache wires a DuckDB cache into the yfinance package.
-// Call once from main before running any commands.
-func SetCache(c *cache.Cache) { globalCache = c }
+// SetCache wires a DuckDB cache into the yfinance package for transparent
+// price/fundamentals caching. Also sets the global cache singleton.
+func SetCache(c *cache.Cache) {
+	globalCache = c
+	cache.SetGlobal(c)
+}
 
 // GetCache returns the active cache (nil if not set).
+// Deprecated: use cache.GetDB() for non-yfinance access.
 func GetCache() *cache.Cache { return globalCache }
 
 func checkPriceCache(ctx context.Context, ticker, rangeKey string) (*HistoricalData, bool) {

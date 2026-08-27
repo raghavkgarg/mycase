@@ -1,6 +1,6 @@
 # DuckDB Migration — Intermediate Pipeline Data
 
-**Status**: Planned  
+**Status**: Planned — Phase 7 in [roadmap](roadmap.md)  
 **Depends on**: Existing `pkg/cache/` DuckDB infrastructure  
 **Blocked by**: Nothing — can proceed independently of TLH / Performance Attribution
 
@@ -173,47 +173,134 @@ CREATE TABLE golden_portfolio (
 
 ## Implementation Plan
 
-### Phase A: Schema + Migration Infrastructure
+### Phase A: Schema + Migration Infrastructure ✅ Done
 
-1. Add new tables to `pkg/cache/db.go` `ensureSchema()` — same pattern as existing tables
-2. Add `RunID` generation (timestamp-based: `run_20260815_143022`)
-3. Add `InsertRun`, `CompleteRun`, `FailRun` methods to cache
+1. ✅ Added new tables to `pkg/cache/db.go` `ensureSchema()` — `pipeline_runs`, `index_picks`, `proposals`, `selections`
+2. ✅ `RunID` generation (timestamp-based: `run_20260826_143022`)
+3. ✅ `InsertRun`, `CompleteRun`, `FailRun`, `GetRun`, `ListRuns`, `LatestRun` methods
+4. ✅ `InsertIndexPicks`, `InsertProposals`, `InsertSelections`, query methods
+5. ✅ 22 unit tests passing
 
-**Effort**: 1 day
+**Effort**: 1 day → completed
 
-### Phase B: Pipeline Writes to DuckDB
+### Phase B: Pipeline Writes to DuckDB ✅ Done
 
-Replace file writes in pipeline stages with DB inserts:
+Write to DB alongside existing CSV writes (belt-and-suspenders):
 
-1. `cmd/pipeline.go` / `pkg/autopilot/autopilot.go`: create `pipeline_runs` row at start
-2. Per-index pick step: write scored candidates to `index_picks` instead of CSV
-3. Combine step: DuckDB query (`SELECT ... FROM index_picks WHERE run_id = ?`) replaces reading CSVs + combining
-4. Prune step: write to `proposals` with `stage='optimized'` instead of `_optim.csv`
-5. Selection tracker: write to `selections` instead of `.txt`, read previous run via query
+1. ✅ `cmd/pipeline.go` / `pkg/autopilot/autopilot.go`: create `pipeline_runs` row at start
+2. ✅ Per-index pick step: write scored candidates to `index_picks` alongside CSV
+3. ✅ Combine/prune steps: write to `proposals` with `stage='draft'`/`'optimized'` alongside CSV
+4. ✅ `stockpicker.RunWithResult` returns `PickResult` struct (selectedKeys, weights, scores, sectors)
+5. ✅ Run marked completed on success, failed on early exit (deferred)
 
-**Effort**: 3–4 days
+**Effort**: 3–4 days → completed
 
-### Phase C: Pipeline Reads from DuckDB
+### Phase C: Pipeline Reads from DuckDB ✅ Done (C1 + C2)
 
-Replace file reads in pipeline stages with DB queries:
+Replace file reads in pipeline stages with DB queries. Based on analysis of actual read sites:
 
-1. Combine step reads from `index_picks` table (eliminates temp file entirely)
-2. Prune step reads draft from `proposals` table
-3. Golden merge reads final from `proposals WHERE stage='final'`
-4. Selection tracker reads previous metrics from `selections WHERE run_id = (previous)`
-5. Report command reads from `selections` for rationale enrichment
+#### What each CSV read site actually extracts
 
-**Effort**: 2–3 days
+| # | Read Site | File Pattern | Columns Used | Can Replace? |
+|---|-----------|-------------|-------------|-------------|
+| 1 | `CombineMultipleCSVs` | `index_picks/*.csv` | `ticker` only | ✅ → `SELECT DISTINCT ticker FROM index_picks WHERE run_id = ?` |
+| 2 | `loadLocalCSVConstituents` (combined) | `temp/combine_*.csv` | `ticker` only | ✅ → same query as #1 (combine+read is one step) |
+| 3 | `loadLocalCSVConstituents` (proposal) | `proposals/*.csv` | `ticker` only | ✅ → `SELECT ticker FROM proposals WHERE run_id = ? AND stage = 'draft'` |
+| 4 | `ReadCSVWeights` (golden, for diff) | golden copy | `ticker` + `weight` | ❌ Golden copy stays as file (Tier 2) |
+| 5 | `LoadBasketCSV` (for orders) | golden copy | `ticker` + `weight` | ❌ Golden copy stays as file |
+| 6 | `MergeGoldenCopy` | proposals + golden | both | ❌ Golden copy stays as file; source could be DB |
+| 7 | `SaveReport` (prev report) | `*_01_selection_reasons.txt` | ticker + drivers | ✅ → `SELECT * FROM selections WHERE run_id = (prev)` |
+| 8 | `parseSelectionReport` | `*_01_selection_reasons.txt` | ticker + score + rank | ✅ → same as #7 |
 
-### Phase D: Cleanup + CLI Tooling
+#### Implementation steps (ordered by risk, safest first)
 
-1. `mycase pipeline history` — list past runs with dates, status, stock counts
-2. `mycase pipeline diff <run1> <run2>` — show what changed between runs
-3. `mycase pipeline show <run_id>` — show proposals/selections for a specific run
-4. Remove file-writing code paths (keep `--export-csv` flag for manual export if needed)
-5. Remove `data/candidates/` directory from active use (archive existing files)
+**C1: Eliminate the combine temp file** (lowest risk)
 
-**Effort**: 2–3 days
+The combine step (`CombineMultipleCSVs`) reads N index-pick CSVs, extracts only ticker names,
+deduplicates them, and writes a temp CSV. Then `loadLocalCSVConstituents` reads that temp CSV
+to get the ticker list. Both steps together just produce `[]string` (unique tickers from all indices).
+
+Replace with:
+```go
+// In autopilot.go / pipeline.go, after all index picks are in DB:
+allPicks, _ := db.GetAllIndexPicks(ctx, runID)
+var tickers []string
+seen := map[string]bool{}
+for _, p := range allPicks {
+    if !seen[p.Ticker] {
+        seen[p.Ticker] = true
+        tickers = append(tickers, p.Ticker)
+    }
+}
+// Pass tickers directly to stockpicker instead of writing/reading a file
+```
+
+**Blocker**: `stockpicker.Run` / `runPickWithOpts` only accepts `opts.FilePath` or `opts.IndexName`.
+Need to add an `opts.Tickers []string` field that `LoadConstituents` can use directly (bypass file I/O).
+
+**C2: Eliminate the proposal re-read for pruning** (low risk)
+
+Same pattern as C1 — the prune step reads the draft proposal CSV only to extract ticker names.
+After C1, we'd pass `opts.Tickers = draftResult.SelectedKeys` directly (already in memory from
+`RunWithResult`). No DB query needed — it's already returned by the previous step.
+
+**C3: Selection tracker reads from DB** (medium risk)
+
+`selectiontracker.SaveReport` currently parses its own previous `.txt` output to extract
+`prevDriversMap[ticker] = "TTM Growth: 25%, CAGR 3Y: 18%, ..."`. This is brittle text parsing.
+
+Replace with:
+```go
+prevSelections, err := db.GetPreviousSelections(ctx, portfolio, method)
+// Build prevDriversMap from Selection.TTMGrowth, RevenueCagr, ROIC, etc.
+```
+
+**Blocker**: The driver metric string format is ad-hoc and method-specific. Need to ensure
+the `selections` table stores all the metrics that the report formatter needs. Current schema
+has: ttm_growth, revenue_cagr, dso_delta, rsi, momentum_1y, fcf_yield, roic. May need to add
+more fields for US strategy (shareholder_yield, earnings_quality, low_volatility).
+
+**C4: MergeGoldenCopy reads source from DB** (low risk, optional)
+
+Currently reads the optimized proposal CSV. Could instead read from
+`proposals WHERE run_id = ? AND stage = 'optimized'`. But since the golden copy itself stays as
+a file, and `MergeGoldenCopy` does file→file merge, this saves one file read but still needs the
+golden file read. Low priority — defer.
+
+#### What does NOT change in Phase C
+
+- **Golden copy stays as a file** — human-editable, manual tweaks between pipeline steps
+- **Human-readable reports stay as files** — `.txt` files opened in editor
+- **CSV writes continue in parallel** — the `--legacy-csv` flag writes CSV alongside DB reads
+  (remove in a later cleanup pass once confidence is high)
+- **`runPickWithOpts` in cmd/pick.go** — the interactive CLI pick command stays file-based
+  (it's not part of the automated pipeline)
+
+#### Effort estimate
+
+| Step | Effort | Risk | Status |
+|------|--------|------|--------|
+| C1: Add `opts.Tickers` to stockpicker + wire in autopilot/pipeline | 1 day | Low | ✅ Done |
+| C2: Pass draft result directly to prune step | 0.5 day | Low | ✅ Done |
+| C3: Selection tracker reads from DB | 1–2 days | Medium | ⬜ Deferred |
+| C4: MergeGoldenCopy from DB (optional) | 0.5 day | Low | ⬜ Deferred |
+
+**Recommended order**: C1 → C2 → C3. Skip C4 until golden copy moves to DB (Tier 2).
+
+**Note**: `cmd/pipeline.go` prune step intentionally kept file-based — user may manually edit the
+proposal CSV between draft and prune (interactive workflow).
+
+**Effort**: C1+C2 completed. C3 deferred (medium risk, needs schema review).
+
+### Phase D: Cleanup + CLI Tooling ✅ Done
+
+1. ✅ `mycase pipeline history` — list past runs with dates, status, stock counts
+2. ✅ `mycase pipeline diff <run1> <run2>` — show what changed between runs
+3. ✅ `mycase pipeline show <run_id>` — show proposals/selections for a specific run
+4. Remove file-writing code paths (keep `--export-csv` flag for manual export if needed) — defer to after Phase C
+5. Remove `data/candidates/` directory from active use (archive existing files) — defer to after Phase C
+
+**Effort**: 2–3 days → completed in Phase 7D
 
 ---
 

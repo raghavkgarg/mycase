@@ -1,6 +1,6 @@
-// Package cache provides a persistent DuckDB-backed cache for Yahoo Finance
-// price and fundamentals data. The caller API of pkg/yfinance is unchanged —
-// the cache is wired in transparently via yfinance.SetCache.
+// Package cache provides a persistent DuckDB-backed cache for price,
+// fundamentals, and pipeline data. The global singleton is set once at startup
+// and accessed via cache.GetDB() from any package.
 package cache
 
 import (
@@ -10,6 +10,16 @@ import (
 
 	_ "github.com/duckdb/duckdb-go/v2"
 )
+
+// globalDB holds the application-wide DuckDB cache instance.
+var globalDB *Cache
+
+// SetGlobal sets the application-wide DuckDB cache singleton.
+// Call once from main after Open.
+func SetGlobal(c *Cache) { globalDB = c }
+
+// GetDB returns the application-wide DuckDB cache (nil if not set).
+func GetDB() *Cache { return globalDB }
 
 // Cache wraps a DuckDB connection for price and fundamentals storage.
 type Cache struct {
@@ -60,6 +70,53 @@ CREATE TABLE IF NOT EXISTS cache_meta (
     range_key  VARCHAR NOT NULL,
     fetched_at BIGINT  NOT NULL,
     PRIMARY KEY (ticker, range_key)
+);
+CREATE TABLE IF NOT EXISTS pipeline_runs (
+    run_id       VARCHAR PRIMARY KEY,
+    started_at   BIGINT  NOT NULL,
+    completed_at BIGINT,
+    status       VARCHAR NOT NULL,
+    portfolio    VARCHAR NOT NULL,
+    method       VARCHAR NOT NULL,
+    config_json  VARCHAR
+);
+CREATE TABLE IF NOT EXISTS index_picks (
+    run_id     VARCHAR NOT NULL,
+    index_name VARCHAR NOT NULL,
+    ticker     VARCHAR NOT NULL,
+    score      DOUBLE,
+    rank       INTEGER,
+    weight     DOUBLE,
+    sector     VARCHAR,
+    PRIMARY KEY (run_id, index_name, ticker)
+);
+CREATE TABLE IF NOT EXISTS proposals (
+    run_id VARCHAR NOT NULL,
+    stage  VARCHAR NOT NULL,
+    ticker VARCHAR NOT NULL,
+    weight DOUBLE  NOT NULL,
+    score  DOUBLE,
+    rank   INTEGER,
+    sector VARCHAR,
+    PRIMARY KEY (run_id, stage, ticker)
+);
+CREATE TABLE IF NOT EXISTS selections (
+    run_id       VARCHAR NOT NULL,
+    ticker       VARCHAR NOT NULL,
+    weight       DOUBLE  NOT NULL,
+    score        DOUBLE,
+    rank         INTEGER,
+    ttm_growth   DOUBLE,
+    revenue_cagr DOUBLE,
+    dso_delta    DOUBLE,
+    rsi          DOUBLE,
+    momentum_1y  DOUBLE,
+    fcf_yield    DOUBLE,
+    roic         DOUBLE,
+    action       VARCHAR,
+    prev_rank    INTEGER,
+    prev_weight  DOUBLE,
+    PRIMARY KEY (run_id, ticker)
 );
 `
 

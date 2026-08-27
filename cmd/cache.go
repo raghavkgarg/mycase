@@ -7,7 +7,7 @@ import (
 
 	"github.com/urfave/cli/v3"
 
-	"github.com/raghavkgarg/mycase/pkg/yfinance"
+	"github.com/raghavkgarg/mycase/pkg/cache"
 )
 
 var CacheCommand = &cli.Command{
@@ -32,7 +32,7 @@ var CacheCommand = &cli.Command{
 }
 
 func runCacheStatus(ctx context.Context, _ *cli.Command) error {
-	c := yfinance.GetCache()
+	c := cache.GetDB()
 	if c == nil {
 		fmt.Println("Cache is not initialised (data/cache.db could not be opened at startup).")
 		return nil
@@ -57,8 +57,8 @@ func runCacheStatus(ctx context.Context, _ *cli.Command) error {
 }
 
 func runCacheClear(ctx context.Context, c *cli.Command) error {
-	cache := yfinance.GetCache()
-	if cache == nil {
+	db := cache.GetDB()
+	if db == nil {
 		fmt.Println("Cache is not initialised.")
 		return nil
 	}
@@ -66,12 +66,12 @@ func runCacheClear(ctx context.Context, c *cli.Command) error {
 	all := c.Bool("all")
 	switch {
 	case ticker != "":
-		if err := cache.ClearTicker(ctx, ticker); err != nil {
+		if err := db.ClearTicker(ctx, ticker); err != nil {
 			return fmt.Errorf("clearing ticker %s: %w", ticker, err)
 		}
 		fmt.Printf("Cleared cache for ticker: %s\n", ticker)
 	case all:
-		if err := cache.ClearAll(ctx); err != nil {
+		if err := db.ClearAll(ctx); err != nil {
 			return fmt.Errorf("clearing cache: %w", err)
 		}
 		fmt.Println("Cache cleared.")

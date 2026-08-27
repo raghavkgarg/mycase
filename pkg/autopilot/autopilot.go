@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/raghavkgarg/mycase/pkg/broker"
+	"github.com/raghavkgarg/mycase/pkg/cache"
 	"github.com/raghavkgarg/mycase/pkg/config"
 	"github.com/raghavkgarg/mycase/pkg/costs"
 	"github.com/raghavkgarg/mycase/pkg/csvloader"
@@ -61,6 +62,29 @@ func Run(ctx context.Context, rc RunConfig) (*RunResult, error) {
 
 	// Clean stale cache files from previous days
 	cleanStaleCache()
+
+	// --- Pipeline run tracking (DuckDB) ---
+	runID := cache.NewRunID()
+	db := cache.GetDB()
+	if db != nil {
+		pipelineRun := cache.PipelineRun{
+			RunID:     runID,
+			StartedAt: now,
+			Portfolio: goldenBase,
+			Method:    cfg.Strategy,
+		}
+		if err := db.InsertRun(ctx, pipelineRun); err != nil {
+			fmt.Printf("[autopilot] Warning: failed to record pipeline run: %v\n", err)
+			db = nil // disable further DB writes this run
+		} else {
+			// Mark run as failed on early exit; overridden by CompleteRun on success.
+			defer func() {
+				if db != nil {
+					_ = db.FailRun(ctx, runID)
+				}
+			}()
+		}
+	}
 
 	// --- Step 1: Stock selection per source ---
 	type pipelineSource struct {
@@ -112,30 +136,64 @@ func Run(ctx context.Context, rc RunConfig) (*RunResult, error) {
 		}
 
 		fmt.Printf("[autopilot] Picking from %s (strategy: %s, top %d)...\n", src.name, cfg.Strategy, cfg.TopN)
-		if err := stockpicker.Run(ctx, opts); err != nil {
+		result, err := stockpicker.RunWithResult(ctx, opts)
+		if err != nil {
 			return nil, fmt.Errorf("stock selection for %s: %w", src.name, err)
 		}
 		outputCSVs = append(outputCSVs, outPath)
 		selectionPaths = append(selectionPaths, outPath)
+
+		// Persist index picks to DuckDB
+		if db != nil && result != nil {
+			picks := pickResultToIndexPicks(src.name, result)
+			if err := db.InsertIndexPicks(ctx, runID, src.name, picks); err != nil {
+				fmt.Printf("[autopilot] Warning: failed to persist index picks for %s: %v\n", src.name, err)
+			}
+		}
 	}
 
 	// --- Step 2: Combine + prune (if multiple sources) ---
 	var sourceCSV string
 	if len(sources) > 1 {
-		combineCSV := filepath.Join("data", "candidates", "temp", fmt.Sprintf("combine_%s.csv", goldenBase))
-		if err := os.MkdirAll(filepath.Dir(combineCSV), 0755); err != nil {
-			return nil, fmt.Errorf("creating temp directory: %w", err)
-		}
-		fmt.Printf("[autopilot] Combining %d source CSVs...\n", len(outputCSVs))
-		if err := csvloader.CombineMultipleCSVs(outputCSVs, combineCSV); err != nil {
-			return nil, fmt.Errorf("combining CSVs: %w", err)
+		// Get combined tickers from DuckDB (eliminates temp combine CSV).
+		var combinedTickers []string
+		if db != nil {
+			allPicks, err := db.GetAllIndexPicks(ctx, runID)
+			if err == nil && len(allPicks) > 0 {
+				seen := make(map[string]bool, len(allPicks))
+				for _, p := range allPicks {
+					if !seen[p.Ticker] {
+						seen[p.Ticker] = true
+						combinedTickers = append(combinedTickers, p.Ticker)
+					}
+				}
+				fmt.Printf("[autopilot] Combined %d unique tickers from DB index_picks.\n", len(combinedTickers))
+			}
 		}
 
-		// Pick top N+5 from combined
+		// Fallback: combine via CSV if DB path didn't yield tickers.
+		if len(combinedTickers) == 0 {
+			combineCSV := filepath.Join("data", "candidates", "temp", fmt.Sprintf("combine_%s.csv", goldenBase))
+			if err := os.MkdirAll(filepath.Dir(combineCSV), 0755); err != nil {
+				return nil, fmt.Errorf("creating temp directory: %w", err)
+			}
+			fmt.Printf("[autopilot] Combining %d source CSVs (fallback)...\n", len(outputCSVs))
+			if err := csvloader.CombineMultipleCSVs(outputCSVs, combineCSV); err != nil {
+				return nil, fmt.Errorf("combining CSVs: %w", err)
+			}
+			// Read tickers from the combined CSV.
+			weights, _ := csvloader.ReadCSVWeights(combineCSV)
+			for t := range weights {
+				combinedTickers = append(combinedTickers, t)
+			}
+			_ = os.Remove(combineCSV)
+		}
+
+		// Pick top N+5 from combined tickers
 		proposalTopN := cfg.TopN + 5
 		proposalPath := filepath.Join("data", "candidates", "proposals", fmt.Sprintf("%s_%s_%s.csv", dateStr, goldenBase, cfg.Strategy))
 		opts := &stockpicker.Options{
-			FilePath:           combineCSV,
+			Tickers:            combinedTickers,
 			Method:             cfg.Strategy,
 			TopN:               proposalTopN,
 			RangeStr:           "3mo",
@@ -146,15 +204,22 @@ func Run(ctx context.Context, rc RunConfig) (*RunResult, error) {
 			OutputFile:         proposalPath,
 		}
 		fmt.Printf("[autopilot] Running combined pick (top %d)...\n", proposalTopN)
-		if err := stockpicker.Run(ctx, opts); err != nil {
+		draftResult, err := stockpicker.RunWithResult(ctx, opts)
+		if err != nil {
 			return nil, fmt.Errorf("combined pick: %w", err)
 		}
-		_ = os.Remove(combineCSV)
 
-		// Prune to top N
+		// Persist draft proposals to DuckDB
+		if db != nil && draftResult != nil {
+			proposals := pickResultToProposals(draftResult)
+			if err := db.InsertProposals(ctx, runID, "draft", proposals); err != nil {
+				fmt.Printf("[autopilot] Warning: failed to persist draft proposals: %v\n", err)
+			}
+		}
+
+		// Prune to top N — pass draft result tickers directly (no file re-read).
 		optimPath := filepath.Join("data", "candidates", "proposals", fmt.Sprintf("%s_%s_%s_optim.csv", dateStr, goldenBase, cfg.Strategy))
-		opts2 := &stockpicker.Options{
-			FilePath:           proposalPath,
+		pruneOpts := &stockpicker.Options{
 			Method:             cfg.Strategy,
 			TopN:               cfg.TopN,
 			RangeStr:           "3mo",
@@ -164,12 +229,26 @@ func Run(ctx context.Context, rc RunConfig) (*RunResult, error) {
 			DisplayName:        goldenBase,
 			OutputFile:         optimPath,
 		}
+		if draftResult != nil && len(draftResult.SelectedKeys) > 0 {
+			pruneOpts.Tickers = draftResult.SelectedKeys
+		} else {
+			pruneOpts.FilePath = proposalPath // fallback: read the CSV we just wrote
+		}
 		fmt.Printf("[autopilot] Pruning to top %d...\n", cfg.TopN)
-		if err := stockpicker.Run(ctx, opts2); err != nil {
+		optimResult, err := stockpicker.RunWithResult(ctx, pruneOpts)
+		if err != nil {
 			return nil, fmt.Errorf("prune pick: %w", err)
 		}
 		sourceCSV = optimPath
 		selectionPaths = append(selectionPaths, optimPath)
+
+		// Persist optimized proposals to DuckDB
+		if db != nil && optimResult != nil {
+			proposals := pickResultToProposals(optimResult)
+			if err := db.InsertProposals(ctx, runID, "optimized", proposals); err != nil {
+				fmt.Printf("[autopilot] Warning: failed to persist optimized proposals: %v\n", err)
+			}
+		}
 	} else {
 		sourceCSV = outputCSVs[0]
 	}
@@ -276,6 +355,15 @@ func Run(ctx context.Context, rc RunConfig) (*RunResult, error) {
 		return nil, fmt.Errorf("saving proposal: %w", err)
 	}
 	fmt.Printf("[autopilot] Proposal saved: %s (expires %s)\n", proposal.ID, proposal.ExpiresAt.Format("2006-01-02"))
+
+	// Mark pipeline run as completed in DuckDB.
+	if db != nil {
+		if err := db.CompleteRun(ctx, runID); err != nil {
+			fmt.Printf("[autopilot] Warning: failed to mark run as completed: %v\n", err)
+		} else {
+			db = nil // prevent deferred FailRun from firing
+		}
+	}
 
 	return &RunResult{
 		Proposal:       proposal,
@@ -411,4 +499,42 @@ func cleanStaleCache() {
 			_ = os.Remove(f)
 		}
 	}
+}
+
+
+// pickResultToIndexPicks converts a stockpicker.PickResult into cache.IndexPick slice.
+func pickResultToIndexPicks(indexName string, r *stockpicker.PickResult) []cache.IndexPick {
+	picks := make([]cache.IndexPick, 0, len(r.SelectedKeys))
+	for i, ticker := range r.SelectedKeys {
+		p := cache.IndexPick{
+			IndexName: indexName,
+			Ticker:    ticker,
+			Rank:      i + 1,
+			Weight:    r.Weights[ticker],
+			Sector:    r.Sectors[ticker],
+		}
+		if r.Scores != nil {
+			p.Score = r.Scores[ticker]
+		}
+		picks = append(picks, p)
+	}
+	return picks
+}
+
+// pickResultToProposals converts a stockpicker.PickResult into cache.Proposal slice.
+func pickResultToProposals(r *stockpicker.PickResult) []cache.Proposal {
+	proposals := make([]cache.Proposal, 0, len(r.SelectedKeys))
+	for i, ticker := range r.SelectedKeys {
+		p := cache.Proposal{
+			Ticker: ticker,
+			Weight: r.Weights[ticker],
+			Rank:   i + 1,
+			Sector: r.Sectors[ticker],
+		}
+		if r.Scores != nil {
+			p.Score = r.Scores[ticker]
+		}
+		proposals = append(proposals, p)
+	}
+	return proposals
 }

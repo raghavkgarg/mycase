@@ -93,7 +93,19 @@ Automation eliminates all four. The system runs quarterly, follows its rules, an
 
 | Gap | Impact |
 |-----|--------|
+| FIFO lot tracking + tax-loss harvesting | Cannot realize tax alpha systematically |
 | Live performance attribution (benchmark tracking) | Cannot measure if we're actually outperforming |
+| Stockpicker bypasses datafetcher Router for US tickers | US fundamentals fetched via Yahoo instead of Schwab during `pick` |
+
+---
+
+### Known technical debt
+
+| Debt | Location | Impact | Fix effort |
+|------|----------|--------|-----------|
+| Stockpicker calls `yfinance.FetchFundamentals` directly | `pkg/stockpicker/run.go:93`, `cmd/pick.go` | US tickers get Yahoo fundamentals (fewer fields, slower) instead of Schwab | 1–2 days: wire `datafetcher.Router` into stockpicker, pass Schwab client via Options or context |
+| `cmd/pick.go` `runPickWithOpts` duplicates `stockpicker.Run` | `cmd/pick.go:100-220` | Two implementations diverge (US hard filters only in cmd version) | 2–3 days: unify into single `stockpicker.RunWithResult` covering all methods |
+| `yfinance.GetCache()` still exists (deprecated) | `pkg/yfinance/duckdbcache.go` | Confusing API — external code should use `cache.GetDB()` | Remove once no callers remain |
 
 ---
 
@@ -199,7 +211,43 @@ Implemented as `mycase pick --index sp500 --method us_quality_momentum --top 20`
 
 ---
 
-### Phase 4 (renumbered): Tax-Loss Harvesting Engine
+### Phase 7: DuckDB Intermediate Pipeline Migration
+
+**What**: Move pipeline intermediate data (index picks, proposals, selection tracker state) from CSV files to DuckDB tables. Adds run tracking, atomic writes, and cross-run diffs.
+
+**Why**: The pipeline currently passes data between stages via CSV files in `data/candidates/`. This is fragile (half-written CSV on crash), opaque (can't query historical runs), and messy (stale files accumulate). The selection tracker parses its own `.txt` output to extract previous-run metrics — brittle. Moving to DuckDB gives atomic transactions, run history, and a foundation for lot tracking (Phase 4 TLH) and performance attribution (Phase 5).
+
+**What moves**:
+- `data/candidates/index_picks/*.csv` → `index_picks` table
+- `data/candidates/proposals/*.csv` → `proposals` table (with stage column)
+- `data/candidates/temp/combine_*.csv` → eliminated (in-memory DuckDB join)
+- Selection tracker cross-run state → `selections` table
+
+**What stays as files**:
+- `data/{name}.csv` (golden copy) — requires manual editing until SwiftUI UI exists
+- Human-readable `.txt` reports — opened in editor
+- Backup CSVs — manual disaster recovery
+- Config files — version-controlled
+
+**Schema**: `pipeline_runs` (run tracking), `index_picks` (per-index scored candidates), `proposals` (draft/optimized/final stages), `selections` (final portfolio with driver metrics for cross-run comparison).
+
+**Deliverables**:
+- Schema additions to `pkg/cache/db.go` (`ensureSchema()`)
+- `pipeline_runs` tracking (run_id, status, portfolio, method)
+- Pipeline write path: stages insert to DB instead of writing CSV
+- Pipeline read path: combine step is a query, not file parsing
+- `mycase pipeline history` — list past runs
+- `mycase pipeline diff <run1> <run2>` — cross-run comparison
+- `mycase pipeline show <run_id>` — inspect a specific run
+- `--legacy-csv` flag during transition for belt-and-suspenders
+
+**Effort**: ~10 days (4 sub-phases: schema 1d, write path 3–4d, read path 2–3d, CLI+cleanup 2–3d). Each sub-phase is independently deployable.
+
+**Detailed design**: See `docs/duckdb-migration.md` for full schema DDL, implementation phases, and risk mitigations.
+
+---
+
+### Phase 4: Tax-Loss Harvesting Engine
 
 **What**: Implement FIFO lot tracking and systematic tax-loss harvesting for the US portfolio.
 
@@ -220,9 +268,11 @@ Implemented as `mycase pick --index sp500 --method us_quality_momentum --top 20`
 
 **Effort**: ~3 weeks. The FIFO engine is the complex part; TLH logic is straightforward once lots are tracked.
 
+**Dependency**: Phase 7 (DuckDB migration) provides the `pipeline_runs` infrastructure and lot storage foundation.
+
 ---
 
-### Phase 5 (renumbered): Live Performance Attribution
+### Phase 5: Live Performance Attribution
 
 **What**: Continuously track the actual portfolio's performance against SPY and decompose returns into their sources.
 
@@ -245,7 +295,7 @@ Implemented as `mycase pick --index sp500 --method us_quality_momentum --top 20`
 
 ---
 
-### Phase 6 (renumbered): Options Overlay (Post-Maturity)
+### Phase 6: Options Overlay (Post-Maturity)
 
 **What**: Once the portfolio is stable and well-tracked (6+ months live), add an options overlay for income generation and tail-risk hedging.
 
@@ -260,7 +310,7 @@ Implemented as `mycase pick --index sp500 --method us_quality_momentum --top 20`
 - `mycase options suggest` — weekly option overlay recommendations
 - Integration with Schwab order API for option execution
 
-**Effort**: ~4 weeks. Deferred to Phase 7 because it requires a stable, tracked portfolio and options expertise.
+**Effort**: ~4 weeks. Deferred because it requires a stable, tracked portfolio and options expertise.
 
 ---
 
@@ -272,8 +322,9 @@ Implemented as `mycase pick --index sp500 --method us_quality_momentum --top 20`
 | 2. Schwab Integration | ~~Oct 2026~~ | Schwab app approval | US market access | ✅ Done |
 | 3. US Factor Strategy | ~~Nov 2026~~ | Phase 2 ✅ | US stock picking with factor edge | ✅ Done |
 | ~~4. Asset Allocation~~ | — | — | ~~India+US portfolio~~ | ❌ Dropped |
-| 4. Tax-Loss Harvesting | Dec 2026 | Phase 2 ✅ | 0.5-1.5% tax alpha | ⬜ Next |
-| 5. Performance Attribution | Jan 2027 | Phase 3 ✅ | Know if system works | ⬜ |
+| 7. DuckDB Pipeline Migration | Sep 2026 | None | Atomic pipeline, run history, query-based diffs | ✅ Done |
+| 4. Tax-Loss Harvesting | Oct 2026 | Phase 7 ✅ | 0.5-1.5% tax alpha | ⬜ Next |
+| 5. Performance Attribution | Nov 2026 | Phase 3 ✅ | Know if system works | ⬜ |
 | 6. Options Overlay | H2 2027 | Phase 5 + 6mo live data | Income optimization | ⬜ |
 
 ---
@@ -352,6 +403,7 @@ These are things we explicitly will **not** build or pursue:
 | Behavioral discipline | Phase 1 (autopilot removes temptation to override) | 1–2% / year |
 | Rebalancing premium | Phase 1 (quarterly rebalance) | 0.3–0.8% / year |
 | Factor tilts (US) | Phase 3 (quality + momentum) | 0.5–1.5% / year |
+| Pipeline reliability | Phase 7 (DuckDB migration — atomic writes, run history) | Operational quality (no lost data) |
 | Tax-loss harvesting | Phase 4 | 0.5–1.5% / year (tax savings) |
 | Performance awareness | Phase 5 (know when to simplify) | Prevents compounding losses from a broken strategy |
 | Options income | Phase 6 | 1–3% / year on mature portfolio |
@@ -364,7 +416,7 @@ These are things we explicitly will **not** build or pursue:
 
 ## Appendix B: Future Explorations (Parked)
 
-Ideas worth revisiting once the core system (Phases 1–6) is stable and the ecosystem matures.
+Ideas worth revisiting once the core system (Phases 1–7) is stable and the ecosystem matures.
 
 ### Native macOS App (SwiftUI + DuckDB)
 
@@ -440,5 +492,5 @@ This is fragile: wrong column deleted, accidental formatting, no context while e
 
 Phases 4–5 (TLH, Performance Attribution) are higher priority — they generate alpha; the UI doesn't. The CSV workflow is ugly but works for quarterly rebalance (4×/year). Defer until:
 - The system is stable enough that UX is the bottleneck, not the strategy
-- DuckDB intermediate migration is done (see `docs/duckdb-migration.md`) — the golden copy can then move to DB
+- DuckDB intermediate migration is done (Phase 7, see `docs/duckdb-migration.md`) — the golden copy can then move to DB
 - Swift Charts and DuckDB Swift bindings are mature enough for production use
