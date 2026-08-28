@@ -169,6 +169,12 @@ CREATE TABLE golden_portfolio (
 );
 ```
 
+> **Note (naming):** the doc refers to `ensureSchema()`, but the implemented method is `initSchema` in `pkg/cache/db.go`. It execs one additive `CREATE TABLE IF NOT EXISTS` DDL block.
+
+### Tax tables (Phase 4 — shipped)
+
+Phase 4 (Tax-Loss Harvesting) added three tables to the same DuckDB file, following the conventions here (BIGINT epoch timestamps, DOUBLE money, composite PKs, no FK constraints): `tax_transactions` (source of truth, idempotent on Schwab `activityId`), `tax_lots`, and `realized_gains` (both derived — full-replace projections rebuilt from transactions on each import). Methods live in `pkg/cache/tax.go`. See `docs/architecture.md` D11 and `docs/runbook.md` §7b.
+
 ---
 
 ## Implementation Plan

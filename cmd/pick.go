@@ -2,19 +2,12 @@ package cmd
 
 import (
 	"context"
-	"fmt"
-	"path/filepath"
-	"sort"
 	"strings"
-	"time"
 
 	"github.com/urfave/cli/v3"
 
 	"github.com/raghavkgarg/mycase/pkg/config"
-	"github.com/raghavkgarg/mycase/pkg/csvloader"
-	"github.com/raghavkgarg/mycase/pkg/selectiontracker"
 	"github.com/raghavkgarg/mycase/pkg/stockpicker"
-	"github.com/raghavkgarg/mycase/pkg/yfinance"
 )
 
 var PickCommand = &cli.Command{
@@ -97,139 +90,11 @@ func pickOptsFromCmd(c *cli.Command) *stockpicker.Options {
 	}
 }
 
+// runPickWithOpts wires the data router (Schwab for US tickers, Yahoo otherwise)
+// and delegates to the unified stockpicker.RunWithResult implementation.
 func runPickWithOpts(ctx context.Context, opts *stockpicker.Options) error {
-	rangeStr := opts.RangeStr
-	if rangeStr != "3mo" && rangeStr != "6mo" && rangeStr != "1y" {
-		return fmt.Errorf("unsupported range '%s'. Supported ranges: 3mo, 6mo, 1y", rangeStr)
+	if opts.DataFetcher == nil {
+		opts.DataFetcher = newDataRouter()
 	}
-
-	tickersSrc, err := stockpicker.LoadConstituents(opts.FilePath, opts.IndexName)
-	if err != nil {
-		return fmt.Errorf("loading constituents: %w", err)
-	}
-	displayNameVal := tickersSrc.Name
-	if opts.DisplayName != "" {
-		displayNameVal = opts.DisplayName
-	}
-	stockpicker.PrintHeader(displayNameVal, opts.Method, opts.TopN, rangeStr, opts.FilePath)
-
-	goldenWeights := stockpicker.LoadGoldenWeights(opts.GoldenPath)
-
-	// Combine index tickers with golden copy holdings to ensure existing holdings are evaluated for safety/exits
-	allTickersMap := make(map[string]bool)
-	var combinedTickers []string
-	for _, t := range tickersSrc.Tickers {
-		if !allTickersMap[t] {
-			allTickersMap[t] = true
-			combinedTickers = append(combinedTickers, t)
-		}
-	}
-	for t := range goldenWeights {
-		if !allTickersMap[t] {
-			allTickersMap[t] = true
-			combinedTickers = append(combinedTickers, t)
-		}
-	}
-
-	fullHistory, activeKeys := stockpicker.FetchHistoricalPrices(ctx, combinedTickers)
-	if len(activeKeys) == 0 {
-		fmt.Println("No active tickers loaded. Exiting...")
-		return nil
-	}
-
-	slicedPrices, benchmarkPrices, err := stockpicker.GetBenchmarkAndSlicedPrices(ctx, tickersSrc.Name, activeKeys, fullHistory, rangeStr)
-	if err != nil {
-		return fmt.Errorf("fetching benchmark prices: %w", err)
-	}
-
-	cfg, err := stockpicker.LoadStrategyConfig(opts.Method)
-	if err != nil {
-		fmt.Printf("Warning: Failed to load config/mfs.json: %v. Using defaults.\n", err)
-	}
-
-	fmt.Printf("Fetching fundamentals from Yahoo Finance...\n")
-	fundamentals, err := yfinance.FetchFundamentals(ctx, activeKeys)
-	if err != nil {
-		fmt.Printf("Warning: Failed to fetch fundamentals: %v. Using fallbacks.\n", err)
-	}
-
-	stockpicker.InjectGovernance(fundamentals, cfg.Governance)
-	tracker := selectiontracker.New()
-
-	if opts.Method == "us_quality_momentum" {
-		// US-specific hard filters (market cap, ADV, positive FCF only)
-		activeKeys = stockpicker.ApplyUSHardFilters(ctx, activeKeys, cfg.HardFilters, fundamentals, tracker)
-	} else if cfg.HardFilters != nil {
-		activeKeys = stockpicker.ApplySafetyFilters(ctx, activeKeys, opts.Method, cfg.HardFilters, fundamentals, fullHistory, tracker)
-	} else {
-		tracker.InitialCount = len(activeKeys)
-	}
-
-	if len(activeKeys) == 0 {
-		fmt.Println("No candidate stocks remaining after hard filters. Exiting...")
-		return nil
-	}
-
-	var selectedKeys []string
-	var finalWeights map[string]float64
-	var scores map[string]float64
-
-	if opts.Method == "value" {
-		scores = stockpicker.ScoreValue(ctx, activeKeys, fundamentals, fullHistory, cfg.HardFilters)
-		selectedKeys = stockpicker.SelectTopNValue(activeKeys, scores, fundamentals, cfg.HardFilters, opts.TopN, goldenWeights, opts.HysteresisBuffer, tracker)
-		finalWeights = stockpicker.NormalizeValueWeights(selectedKeys, scores, fundamentals, cfg.HardFilters, goldenWeights, opts.RebalanceTolerance)
-	} else if opts.Method == "multibagger" {
-		scores = stockpicker.ScoreMultibagger(ctx, activeKeys, fundamentals, fullHistory, cfg.HardFilters)
-		selectedKeys = stockpicker.SelectTopNMultibagger(activeKeys, scores, fundamentals, cfg.HardFilters, opts.TopN, goldenWeights, opts.HysteresisBuffer, tracker)
-		finalWeights = stockpicker.NormalizeMultibaggerWeights(selectedKeys, scores, fundamentals, cfg.HardFilters, goldenWeights, opts.RebalanceTolerance)
-	} else if opts.Method == "us_quality_momentum" {
-		scores = stockpicker.ScoreUSQualityMomentum(ctx, activeKeys, fundamentals, fullHistory, cfg.HardFilters)
-		selectedKeys = stockpicker.SelectTopNUSQM(activeKeys, scores, fundamentals, cfg.HardFilters, opts.TopN, goldenWeights, opts.HysteresisBuffer, tracker)
-		finalWeights = stockpicker.NormalizeUSQMWeights(selectedKeys, scores, fundamentals, cfg.HardFilters, goldenWeights, opts.RebalanceTolerance)
-	} else {
-		selectedKeys = stockpicker.SelectTopNStandard(activeKeys, slicedPrices, benchmarkPrices, fundamentals, cfg.Weights, opts.TopN, goldenWeights, opts.HysteresisBuffer, tracker)
-		finalWeights = stockpicker.NormalizeStandardWeights(selectedKeys, slicedPrices, benchmarkPrices, fundamentals, cfg.Weights, goldenWeights, opts.RebalanceTolerance)
-	}
-
-	sort.Slice(selectedKeys, func(i, j int) bool {
-		return finalWeights[selectedKeys[i]] > finalWeights[selectedKeys[j]]
-	})
-
-	if opts.Method == "value" || opts.Method == "multibagger" || opts.Method == "us_quality_momentum" {
-		stockpicker.PrintMultibaggerTable(selectedKeys, finalWeights, scores, fundamentals, fullHistory, displayNameVal, opts.Method)
-		if !opts.SkipScuttlebutt && opts.Method != "us_quality_momentum" {
-			stockpicker.PrintScuttlebutt(selectedKeys, fundamentals, displayNameVal, opts.Method)
-		}
-	} else {
-		stockpicker.PrintStandardTable(selectedKeys, finalWeights, fullHistory, displayNameVal, opts.Method)
-	}
-
-	sectors := make(map[string]string)
-	resultDates := make(map[string]string)
-	for ticker, fund := range fundamentals {
-		sectors[ticker] = fund.Sector
-		resultDates[ticker] = fund.ResultPrevComing
-	}
-	if err := tracker.SaveReport(displayNameVal, opts.Method, goldenWeights, sectors, finalWeights, resultDates); err != nil {
-		fmt.Printf("Warning: Failed to save selection reasons report: %v\n", err)
-	}
-
-	outPath := opts.OutputFile
-	if outPath == "" {
-		if opts.FilePath != "" {
-			dateStr := time.Now().Format("20060102")
-			outPath = filepath.Join("data", "candidates", "proposals", fmt.Sprintf("%s_%s_%s.csv", dateStr, displayNameVal, opts.Method))
-		} else {
-			outPath = filepath.Join("data", "candidates", "index_picks", fmt.Sprintf("%s_%s.csv", displayNameVal, opts.Method))
-		}
-	}
-	if err := stockpicker.SavePortfolioToCSV(selectedKeys, finalWeights, outPath); err != nil {
-		return fmt.Errorf("writing output file: %w", err)
-	}
-
-	if opts.GoldenPath != "" && len(goldenWeights) > 0 {
-		csvloader.PrintComparisonReport(outPath, opts.GoldenPath, opts.Method)
-	}
-
-	return nil
+	return stockpicker.Run(ctx, opts)
 }

@@ -331,6 +331,55 @@ func FetchHistoricalPrices(ctx context.Context, rawTickers []string) (map[string
 	return fullHistory, activeKeys
 }
 
+// fetchHistoricalPricesWithFetcher is like FetchHistoricalPrices but routes through a DataFetcher.
+func fetchHistoricalPricesWithFetcher(ctx context.Context, fetcher DataFetcher, rawTickers []string) (map[string]*yfinance.HistoricalData, []string) {
+	fmt.Printf("\nFetching historical prices (1y) for constituents via router...\n")
+	type fetchJob struct {
+		ticker string
+	}
+	type fetchResult struct {
+		ticker string
+		hist   *yfinance.HistoricalData
+		err    error
+	}
+
+	jobs := make(chan fetchJob, len(rawTickers))
+	results := make(chan fetchResult, len(rawTickers))
+	var wg sync.WaitGroup
+
+	workerCount := 15
+	for range workerCount {
+		wg.Go(func() {
+			for job := range jobs {
+				hist, err := fetcher.FetchHistoricalDataWithTimestamps(ctx, job.ticker, "1y")
+				results <- fetchResult{ticker: job.ticker, hist: hist, err: err}
+			}
+		})
+	}
+
+	for _, t := range rawTickers {
+		jobs <- fetchJob{ticker: t}
+	}
+	close(jobs)
+
+	go func() {
+		wg.Wait()
+		close(results)
+	}()
+
+	fullHistory := make(map[string]*yfinance.HistoricalData)
+	var activeKeys []string
+	for res := range results {
+		if res.err == nil && res.hist != nil && len(res.hist.Closes) >= 2 {
+			fullHistory[res.ticker] = res.hist
+			activeKeys = append(activeKeys, res.ticker)
+		}
+	}
+
+	fmt.Printf("Successfully fetched historical data for %d / %d active tickers.\n", len(activeKeys), len(rawTickers))
+	return fullHistory, activeKeys
+}
+
 // GetBenchmarkAndSlicedPrices fetches benchmark prices and aligns stock prices with benchmark range.
 func GetBenchmarkAndSlicedPrices(ctx context.Context, indexName string, activeKeys []string, fullHistory map[string]*yfinance.HistoricalData, rangeStr string) (map[string][]float64, []float64, error) {
 	benchSym := GetBenchmarkSymbolForIndex(indexName, activeKeys)

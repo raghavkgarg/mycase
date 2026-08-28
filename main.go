@@ -36,6 +36,7 @@ func main() {
 			mycmd.MonitorCommand,
 			mycmd.BasketCommand,
 			mycmd.HoldingsCommand,
+			mycmd.TaxCommand,
 			mycmd.MergeCommand,
 			mycmd.AuthCommand,
 			mycmd.CacheCommand,

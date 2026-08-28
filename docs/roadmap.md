@@ -79,13 +79,14 @@ Automation eliminates all four. The system runs quarterly, follows its rules, an
 | Screener.in integration | ✅ Production | Quarterly result dates, earnings calendar |
 | Quarterly autopilot | ✅ Production | Non-interactive pipeline, launchd scheduling, proposal→confirm→execute workflow |
 | Schwab API (US broker + market data) | ✅ Production | OAuth2 auth, real-time quotes, price history, order execution, ticker routing |
+| Tax-loss harvesting (FIFO + TLH) | ✅ Production | FIFO lot tracking, harvest candidates, wash-sale detection, `basket --tax-optimize`, dashboard Tax tab |
 | CLI rendering layer (`pkg/render`) | ✅ Production | stdlib tabwriter tables, color (TTY-aware), formatters (Pct, Currency, Sparkline), panic-safe fallback |
 
 ### What's specced but not built
 
 | Component | Spec location | Blocking? |
 |-----------|---------------|-----------|
-| Tax-optimized rebalancing (FIFO engine) | `docs/feature.md` Feature 1 | No — India-only enhancement |
+| Tax-optimized rebalancing (FIFO engine) | `docs/feature.md` Feature 1 | ✅ Built for US (`pkg/tax`) — India variant still specced only |
 | Options overlay | `docs/feature.md` Feature 2 | No — post-maturity optimization |
 | Screener.in deep integration (QoQ, shareholding, CWIP) | `docs/screener.md` | No — enrichment |
 
@@ -93,9 +94,7 @@ Automation eliminates all four. The system runs quarterly, follows its rules, an
 
 | Gap | Impact |
 |-----|--------|
-| FIFO lot tracking + tax-loss harvesting | Cannot realize tax alpha systematically |
 | Live performance attribution (benchmark tracking) | Cannot measure if we're actually outperforming |
-| Stockpicker bypasses datafetcher Router for US tickers | US fundamentals fetched via Yahoo instead of Schwab during `pick` |
 
 ---
 
@@ -103,8 +102,8 @@ Automation eliminates all four. The system runs quarterly, follows its rules, an
 
 | Debt | Location | Impact | Fix effort |
 |------|----------|--------|-----------|
-| Stockpicker calls `yfinance.FetchFundamentals` directly | `pkg/stockpicker/run.go:93`, `cmd/pick.go` | US tickers get Yahoo fundamentals (fewer fields, slower) instead of Schwab | 1–2 days: wire `datafetcher.Router` into stockpicker, pass Schwab client via Options or context |
-| `cmd/pick.go` `runPickWithOpts` duplicates `stockpicker.Run` | `cmd/pick.go:100-220` | Two implementations diverge (US hard filters only in cmd version) | 2–3 days: unify into single `stockpicker.RunWithResult` covering all methods |
+| ~~Stockpicker calls `yfinance.FetchFundamentals` directly~~ | ~~`pkg/stockpicker/run.go:93`, `cmd/pick.go`~~ | ✅ Fixed — `stockpicker.DataFetcher` interface added; `opts.DataFetcher` (a `datafetcher.Router`) routes US tickers to Schwab, others to Yahoo | Done |
+| ~~`cmd/pick.go` `runPickWithOpts` duplicates `stockpicker.Run`~~ | ~~`cmd/pick.go:100-220`~~ | ✅ Fixed — `runPickWithOpts` now wires the router and delegates to `stockpicker.Run`; `us_quality_momentum` branches moved into `RunWithResult` | Done |
 | `yfinance.GetCache()` still exists (deprecated) | `pkg/yfinance/duckdbcache.go` | Confusing API — external code should use `cache.GetDB()` | Remove once no callers remain |
 
 ---
@@ -121,8 +120,8 @@ The system should operate as a **6-layer stack** where each layer has a clear re
 │  Layer 5: Autopilot & Scheduling                ✅ BUILT │
 │  Quarterly pipeline, drift-trigger, alert→confirm→exec   │
 ├─────────────────────────────────────────────────────────┤
-│  Layer 4: Execution & Tax Awareness                      │
-│  Zerodha (India), Schwab (US) ✅, FIFO lots, TLH engine │
+│  Layer 4: Execution & Tax Awareness             ✅ BUILT │
+│  Zerodha (India), Schwab (US), FIFO lots ✅, TLH ✅      │
 ├─────────────────────────────────────────────────────────┤
 │  Layer 3: Portfolio Construction                         │
 │  Cross-market allocation, per-market optimization,       │
@@ -247,28 +246,21 @@ Implemented as `mycase pick --index sp500 --method us_quality_momentum --top 20`
 
 ---
 
-### Phase 4: Tax-Loss Harvesting Engine
+### ~~Phase 4: Tax-Loss Harvesting Engine~~ ✅ Completed
 
-**What**: Implement FIFO lot tracking and systematic tax-loss harvesting for the US portfolio.
+**What**: FIFO lot tracking and systematic tax-loss harvesting for the US portfolio.
 
-**Why**: Tax-loss harvesting is the closest thing to a free lunch in investing. By systematically selling positions at a loss (and immediately replacing them with a correlated substitute), you realize tax deductions without changing portfolio exposure. This is worth 0.5–1.5% per year in tax savings.
+Implemented as the `pkg/tax` package (FIFO engine + TLH logic, broker-agnostic and unit-tested) plus supporting infrastructure:
 
-**US tax rules**:
-- Short-term (< 1 year): taxed as ordinary income (up to 37%)
-- Long-term (≥ 1 year): 15% or 20%
-- Wash sale rule: cannot buy "substantially identical" security within 30 days before or after the sale
-- TLH substitute must be a different stock in the same sector/factor exposure
+- **`pkg/tax/fifo.go`** — `BuildLots` replays a chronological transaction history with FIFO matching (oldest lots consumed first), producing open lots and per-lot realized gains. Buy fees increase cost basis; sell fees reduce proceeds; oversells are flagged as warnings rather than fabricating zero-basis lots.
+- **`pkg/tax/tlh.go`** — `FindHarvestCandidates` identifies loss-making lots worth harvesting (only losing lots within a mixed position), estimates federal tax savings (ST 37% / LT 20%), suggests same-sector substitutes that avoid the wash-sale rule, and flags wash-sale risk. `DetectWashSales` and `SummarizeRealized` (ST/LT split) round out reporting.
+- **`pkg/tax/sequence.go`** — `TaxOptimizeOrders` reorders a batch for execution: loss-sells → gain-sells → buys, and flags any buy that would repurchase a loss-sold security (wash sale).
+- **`pkg/broker/schwab/transactions.go`** — `FetchTransactions` (`GET /accounts/{hash}/transactions?types=TRADE`, chunked by year to respect the API window) + `NormalizeTransactions` mapping Schwab records to broker-agnostic `tax.Transaction`.
+- **DuckDB** — `tax_transactions`, `tax_lots`, `realized_gains` tables (additive `CREATE TABLE IF NOT EXISTS`) with round-tripped Insert/Get methods in `pkg/cache/tax.go`. Lots and realized gains are derived state (recomputed from transactions on each import).
+- **CLI** — `mycase tax import --broker schwab` (bootstraps lots), `mycase tax status` (open lots + YTD/all-time realized summary), `mycase tax harvest` (harvest candidates). `mycase basket --tax-optimize` sequences orders and surfaces wash-sale warnings; the basket's US tax warnings now use real FIFO purchase dates instead of "Unknown".
+- **Dashboard** — new Tax tab (`/api/portfolio/{name}/tax` + `tax-tab.js`) showing realized gains/losses (YTD + all-time), harvest candidates, wash-sale calendar, and open lots with unrealized P&L.
 
-**Deliverables**:
-- `pkg/tax/fifo.go` — FIFO lot matching engine
-- `pkg/tax/tlh.go` — tax-loss harvesting logic (identify harvest candidates, select substitutes)
-- `mycase tax import --broker schwab` — load Schwab transaction history
-- `mycase basket --tax-optimize` — orders sequenced to maximize TLH
-- Dashboard tax tab: YTD realized gains/losses, available harvest candidates, wash sale calendar
-
-**Effort**: ~3 weeks. The FIFO engine is the complex part; TLH logic is straightforward once lots are tracked.
-
-**Dependency**: Phase 7 (DuckDB migration) provides the `pipeline_runs` infrastructure and lot storage foundation.
+**US tax rules honored**: short-term (< 1 year, up to 37%) vs long-term (≥ 1 year, 15/20%), 30-day wash-sale window, substitute must differ from the harvested security and its sector peers already held.
 
 ---
 
@@ -323,8 +315,8 @@ Implemented as `mycase pick --index sp500 --method us_quality_momentum --top 20`
 | 3. US Factor Strategy | ~~Nov 2026~~ | Phase 2 ✅ | US stock picking with factor edge | ✅ Done |
 | ~~4. Asset Allocation~~ | — | — | ~~India+US portfolio~~ | ❌ Dropped |
 | 7. DuckDB Pipeline Migration | Sep 2026 | None | Atomic pipeline, run history, query-based diffs | ✅ Done |
-| 4. Tax-Loss Harvesting | Oct 2026 | Phase 7 ✅ | 0.5-1.5% tax alpha | ⬜ Next |
-| 5. Performance Attribution | Nov 2026 | Phase 3 ✅ | Know if system works | ⬜ |
+| 4. Tax-Loss Harvesting | ~~Oct 2026~~ | Phase 7 ✅ | 0.5-1.5% tax alpha | ✅ Done |
+| 5. Performance Attribution | Nov 2026 | Phase 3 ✅ | Know if system works | ⬜ Next |
 | 6. Options Overlay | H2 2027 | Phase 5 + 6mo live data | Income optimization | ⬜ |
 
 ---

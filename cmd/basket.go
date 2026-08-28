@@ -13,6 +13,7 @@ import (
 	"github.com/urfave/cli/v3"
 
 	"github.com/raghavkgarg/mycase/pkg/broker"
+	"github.com/raghavkgarg/mycase/pkg/cache"
 	"github.com/raghavkgarg/mycase/pkg/costs"
 	"github.com/raghavkgarg/mycase/pkg/csvloader"
 	"github.com/raghavkgarg/mycase/pkg/datafetcher"
@@ -20,6 +21,7 @@ import (
 	"github.com/raghavkgarg/mycase/pkg/optimizer"
 	"github.com/raghavkgarg/mycase/pkg/printer"
 	"github.com/raghavkgarg/mycase/pkg/stockpicker"
+	"github.com/raghavkgarg/mycase/pkg/tax"
 )
 
 var BasketCommand = &cli.Command{
@@ -28,6 +30,7 @@ var BasketCommand = &cli.Command{
 	Flags: []cli.Flag{
 		&cli.BoolFlag{Name: "live", Usage: "Use live broker API (default: dry-run mock mode)"},
 		&cli.StringFlag{Name: "file", Value: "data/basket.csv", Usage: "Path to basket CSV file"},
+		&cli.BoolFlag{Name: "tax-optimize", Usage: "Sequence orders to maximize tax-loss harvesting (US; requires 'mycase tax import')"},
 	},
 	Action: func(ctx context.Context, c *cli.Command) error {
 		filename := c.String("file")
@@ -42,11 +45,11 @@ var BasketCommand = &cli.Command{
 				}
 			}
 		}
-		return runBasketWithParams(ctx, c.Bool("live"), filename)
+		return runBasketWithParams(ctx, c.Bool("live"), filename, c.Bool("tax-optimize"))
 	},
 }
 
-func runBasketWithParams(ctx context.Context, liveMode bool, basketFilename string) error {
+func runBasketWithParams(ctx context.Context, liveMode bool, basketFilename string, taxOptimize bool) error {
 	mktCfg := broker.LoadMarketConfig()
 
 	fmt.Println("====================================================================")
@@ -237,11 +240,61 @@ func runBasketWithParams(ctx context.Context, liveMode bool, basketFilename stri
 
 	basketOrders = applyTransactionFilters(basketOrders, quoteData, b, basket)
 
+	if taxOptimize {
+		basketOrders = applyTaxOptimization(ctx, basketOrders, quoteData)
+	}
+
 	executor.ExecuteBasketOrders(
 		basketOrders, quoteData, currentHoldings, finalQuantities,
 		basketKeys, basket, b, printedPreview, snapshotText, reader,
 	)
 	return nil
+}
+
+// applyTaxOptimization reorders orders to harvest losses first and flags
+// wash-sale risks, using the FIFO lots stored by 'mycase tax import'. It is a
+// US-only optimization; if no lots are available it is a no-op with a hint.
+func applyTaxOptimization(ctx context.Context, orders []broker.Order, quotes map[string]float64) []broker.Order {
+	if len(orders) == 0 {
+		return orders
+	}
+	if !broker.IsUSBroker(broker.BrokerName()) {
+		fmt.Println("\n[tax-optimize] Skipped: tax-loss harvesting applies to US portfolios only.")
+		return orders
+	}
+
+	db := cache.GetDB()
+	if db == nil {
+		fmt.Println("\n[tax-optimize] Skipped: DuckDB cache unavailable.")
+		return orders
+	}
+
+	openLots, err := db.GetOpenLots(ctx)
+	if err != nil || len(openLots) == 0 {
+		fmt.Println("\n[tax-optimize] Skipped: no tax lots found. Run 'mycase tax import --broker schwab' first.")
+		return orders
+	}
+
+	recentBuys, _ := db.LatestBuyDates(ctx)
+
+	plan := tax.TaxOptimizeOrders(orders, quotes, tax.SequenceParams{
+		OpenLots:   openLots,
+		RecentBuys: recentBuys,
+	})
+
+	fmt.Println("\n--- Tax-Loss Harvesting Optimization ---")
+	if len(plan.HarvestSells) > 0 {
+		fmt.Printf("  Harvesting losses on: %s\n", strings.Join(plan.HarvestSells, ", "))
+		fmt.Printf("  Estimated federal tax saving: $%.2f\n", plan.EstTaxSaving)
+		fmt.Println("  Orders resequenced: loss-sells → gain-sells → buys.")
+	} else {
+		fmt.Println("  No harvestable losses in this batch.")
+	}
+	for _, w := range plan.WashSaleWarnings {
+		fmt.Printf("  ⚠️  WASH SALE: %s — %s\n", w.Ticker, w.Note)
+	}
+
+	return plan.Orders
 }
 
 // applyTransactionFilters runs the micro-transaction cost filter and prints
@@ -326,17 +379,34 @@ func printTaxWarnings(orders []broker.Order, b broker.Broker, mktCfg broker.Mark
 
 	if broker.IsUSBroker(broker.BrokerName()) {
 		fmt.Println("\n--- Tax Warning (US Federal) ---")
+
+		// Enrich with real purchase dates + wash-sale flags from stored lots.
+		var openLots map[string][]tax.Lot
+		var recentBuys map[string]time.Time
+		if db := cache.GetDB(); db != nil {
+			openLots, _ = db.GetOpenLots(context.Background())
+			recentBuys, _ = db.LatestBuyDates(context.Background())
+		}
+
 		for _, o := range sells {
 			h := holdingMap[o.TradingSymbol]
 			price := o.Price
 			if price <= 0 {
 				price = o.Ltp
 			}
-			w := costs.ClassifyUSSell(o.TradingSymbol, o.Quantity, price, h.AveragePrice, time.Time{}, false)
+
+			key := o.Exchange + ":" + o.TradingSymbol
+			purchaseDate, costBasis := oldestLotBasis(openLots, key, h.AveragePrice)
+			washRisk := false
+			if bd, ok := recentBuys[key]; ok && !bd.IsZero() {
+				washRisk = int(time.Since(bd).Hours()/24) <= costs.USWashSaleDays
+			}
+
+			w := costs.ClassifyUSSell(o.TradingSymbol, o.Quantity, price, costBasis, purchaseDate, washRisk)
 			fmt.Println(" ", w.Note)
 			if w.EstimatedGain > 0 && w.EstimatedTax > 0 {
 				fmt.Printf("    Estimated gain: %s%.0f  |  Estimated tax: %s%.0f\n", mktCfg.Currency, w.EstimatedGain, mktCfg.Currency, w.EstimatedTax)
-			} else if w.EstimatedGain > 0 {
+			} else if w.EstimatedGain != 0 {
 				fmt.Printf("    Estimated gain: %s%.0f\n", mktCfg.Currency, w.EstimatedGain)
 			}
 		}
@@ -364,4 +434,17 @@ func cleanBasketArg(arg string) string {
 		arg = arg[1:]
 	}
 	return strings.TrimSpace(arg)
+}
+
+// oldestLotBasis returns the acquisition date and cost-per-share of the oldest
+// open lot for a ticker (FIFO — the lot that would be sold first). Falls back
+// to a zero date and the broker's blended average price when no lots exist.
+func oldestLotBasis(openLots map[string][]tax.Lot, key string, fallbackAvg float64) (time.Time, float64) {
+	lots := openLots[key]
+	if len(lots) == 0 {
+		return time.Time{}, fallbackAvg
+	}
+	// GetOpenLots returns lots oldest-first per ticker.
+	oldest := lots[0]
+	return oldest.AcquiredAt, oldest.CostPerShare
 }

@@ -106,6 +106,17 @@ Prints an order table (ticker, action, qty, estimated price, value), a cost summ
 
 Answers: "If I rebalance today, exactly what orders would I place, what would it cost in charges, and what are the tax consequences?" The micro-transaction filter silently drops orders where transaction costs exceed 0.5% of trade value — this is the primary guard against paying more in CDSL DP charges than the trade is worth.
 
+For US portfolios, `--tax-optimize` reorders the batch to execute loss-harvesting sells first (so the harvest is captured even if a later order fails), then gain sells, then buys, and flags any buy that would repurchase a loss-sold security (wash sale). It uses the FIFO lots from `tax import` to classify holding period and cost basis — so US sell warnings show real short/long-term status instead of "Unknown".
+
+### `tax` — Track lots and harvest losses (US)
+
+Three subcommands backed by FIFO lot tracking in `pkg/tax`:
+- `tax import --broker schwab` — pulls TRADE transaction history from Schwab, normalizes it, and rebuilds FIFO lots + realized gains in DuckDB.
+- `tax status` — open lots (with holding-period term) and realized gain/loss summary (YTD + all-time, split short/long-term).
+- `tax harvest` — loss-making positions worth harvesting, with estimated federal tax saving, same-sector substitute suggestions, and wash-sale risk flags.
+
+Answers: "Which of my losing positions can I sell to bank a tax deduction without triggering a wash sale, and what's it worth?" Lots and realized gains are derived state — recomputed from the stored transaction history on each import, so re-importing is safe and idempotent.
+
 ### `backtest` — How would this portfolio have performed historically
 
 Outputs to terminal: Total Return, CAGR, Max Drawdown, Sharpe, Sortino, Calmar, Alpha, Beta, and a year-by-year breakdown table.
@@ -149,16 +160,17 @@ Answers: "Run the quarterly rebalance without me babysitting 15 terminal prompts
 ```
 cmd/           — thin CLI wrappers; parse flags, call pkg functions
 pkg/           — domain logic; no CLI imports
-  stockpicker/ — scoring, hard filters, hysteresis, selection rationale
+  stockpicker/ — scoring, hard filters, hysteresis, selection rationale (fetches via injected DataFetcher: US→Schwab, India→Yahoo)
   optimizer/   — inverse-volatility, MFS weights, sector caps
   backtest/    — engine, metrics, portfolio valuation
   autopilot/   — non-interactive pipeline, proposal model, scheduling, alerts
   yfinance/    — price and fundamental data fetching
-  cache/       — DuckDB read/write for prices and fundamentals
+  cache/       — DuckDB read/write for prices, fundamentals, pipeline runs, tax lots
   broker/      — Broker interface; zerodha/, schwab/, and mock/ implementations
-  schwab/      — Schwab Trader API: OAuth2 auth, HTTP client, market data, US broker
+  schwab/      — Schwab Trader API: OAuth2 auth, HTTP client, market data, US broker, transaction history
   daemon/      — drift computation, alert dispatch
   costs/       — transaction cost model (India + US), tax classification
+  tax/         — FIFO lot tracking, tax-loss harvesting, wash-sale detection, order sequencing (US)
   monitoring/  — 4-pillar health scoring
   alert/       — Alerter interface; Telegram, Discord implementations
   executor/    — live order placement with retry logic
@@ -541,3 +553,15 @@ The drift daemon uses an in-process sleep-until loop for daily checks — accept
 ### D9 — Proposal State Decouples Pipeline from Confirmation
 
 After autopilot runs pick → optimize → report, it persists a `Proposal` JSON (`data/autopilot/pending_proposal.json`) containing proposed orders, cost breakdown, tax warnings, golden copy diff, and a 7-day expiry. The web dashboard reads this file to render the `/rebalance` confirmation page; the Telegram alert summarizes and links to it. This decouples the pipeline run from the confirmation step — they don't need to happen in the same process, and the investor can confirm hours or days later. Three server endpoints manage the lifecycle: `GET /api/autopilot/proposal`, `POST /api/autopilot/confirm`, `POST /api/autopilot/dismiss`.
+
+### D10 — Stockpicker Fetches via Injected DataFetcher, Not Direct yfinance Calls
+
+The stockpicker used to call `yfinance.FetchFundamentals` and friends directly, so US tickers always got Yahoo data even when Schwab was configured. It now depends on a `stockpicker.DataFetcher` interface set on `Options.DataFetcher`. Production callers pass a `*datafetcher.Router` (US→Schwab, India→Yahoo); when the field is nil the code falls back to direct yfinance calls, so tests and legacy paths keep working. The interface lives in the stockpicker package (not datafetcher) to avoid an import cycle; a compile-time assertion in `datafetcher` (`var _ stockpicker.DataFetcher = (*Router)(nil)`) catches signature drift. This also let `cmd/pick.go`'s `runPickWithOpts` collapse from a ~120-line duplicate of `stockpicker.RunWithResult` into a thin wrapper that wires the router and delegates — the `us_quality_momentum` branches (US hard filters, scoring, display) now live only in `RunWithResult`.
+
+### D11 — Tax Lots Are Derived State, Rebuilt from Transactions
+
+FIFO lots and realized gains are never edited in place — they are recomputed from the stored transaction history on every `tax import`. `tax_transactions` is the source of truth (idempotent on Schwab `activityId`); `tax_lots` and `realized_gains` are a full-replace projection produced by `tax.BuildLots`. This means a re-import can't double-count, a corrected/back-dated transaction is absorbed cleanly, and the FIFO engine (`pkg/tax`) stays a pure, unit-tested function with no DB coupling. The `pkg/tax` package imports only `pkg/broker` (for order sequencing types); `pkg/cache` and `pkg/broker/schwab` both import `pkg/tax`, keeping the dependency direction one-way and cycle-free. Schwab positions expose only a blended average price, so lot accuracy depends on the `/transactions` history — positions predating the account's transaction window can't be reconstructed, and oversells (a sell with no matching buy history) are recorded as warnings rather than fabricated zero-basis lots.
+
+### D12 — Order Sequencing Is How Tax-Optimization Takes Effect
+
+`executor.ExecuteBasketOrders` places orders in slice order. Rather than adding tax awareness inside the executor, `basket --tax-optimize` reorders the `[]broker.Order` slice before handing it off: loss-harvesting sells first (so the harvest is captured even if a later order fails and to free cash), then gain sells, then buys. Wash-sale detection is advisory — it flags a buy that would repurchase a security sold at a loss in the same batch, but does not block execution (the investor decides). This keeps the executor unchanged and makes the tax logic a self-contained, testable transform (`tax.TaxOptimizeOrders`).

@@ -13,6 +13,7 @@ Practical usage guide: common workflows, every command with realistic examples, 
 5. [Portfolio Health & Drift Monitoring](#5-portfolio-health--drift-monitoring)
 6. [Cache Management](#6-cache-management)
 7. [Pipeline (Full Automation)](#7-pipeline-full-automation)
+7b. [Tax-Loss Harvesting (US)](#7b-tax-loss-harvesting-us)
 8. [Web Dashboard Server](#8-web-dashboard-server)
 9. [Command Reference](#9-command-reference)
 
@@ -133,12 +134,17 @@ mycase basket --live data/microsmall
 
 # Use specific CSV path
 mycase basket --file data/candidates/my_new_basket.csv
+
+# US portfolio: sequence orders to harvest losses first, flag wash sales
+mycase basket --live --tax-optimize data/us_quality
 ```
 
 The basket command automatically:
 - Filters micro-transactions where `cost/value > 0.5%` (DP charge dominates small sell orders)
-- Prints STCG/LTCG warnings for sell orders based on Finance Act 2024 rates
+- Prints STCG/LTCG warnings for sell orders based on Finance Act 2024 rates (India) or federal ST/LT rates (US)
 - Shows total transaction cost summary
+
+With `--tax-optimize` (US only), it reorders the batch so loss-harvesting sells execute before gain sells and buys, and warns if a buy would repurchase a security sold at a loss (wash sale). This uses the FIFO lots from `mycase tax import` (see §7b), so US sell warnings show real short/long-term status and cost basis instead of "Unknown".
 
 ---
 
@@ -379,6 +385,37 @@ schedule:
 
 ---
 
+## 7b. Tax-Loss Harvesting (US)
+
+FIFO lot tracking and tax-loss harvesting for US portfolios. Requires Schwab auth (`mycase auth --broker schwab`).
+
+```bash
+# 1. Import transaction history and build FIFO lots (run after auth, then quarterly)
+mycase tax import --broker schwab --years 3
+
+# 2. Review open lots + realized gains (YTD and all-time, short/long-term split)
+mycase tax status
+
+# 3. Find harvestable losses with estimated tax saving + substitute suggestions
+mycase tax harvest --min-loss 50
+```
+
+Then, when rebalancing, add `--tax-optimize` to sequence loss sells first and flag wash sales:
+
+```bash
+mycase basket --live --tax-optimize data/us_quality
+```
+
+Notes:
+- **Lots are derived state.** `tax import` recomputes lots and realized gains from the full stored transaction history every run, so re-importing is safe and idempotent (keyed on Schwab `activityId`).
+- **Wash-sale rule.** A loss is disallowed if you buy the same (or substantially identical) security within 30 days before or after the loss sale. `tax harvest` flags at-risk positions; `basket --tax-optimize` warns if a buy in the batch would trigger one. The tool advises — it does not block.
+- **Substitutes.** Harvest suggestions propose a same-sector name from the universe that you don't already hold, to keep factor exposure without repurchasing the sold security.
+- **Coverage limits.** Schwab positions expose only a blended average price; accurate lots depend on the `/transactions` history. Positions older than the account's transaction window can't be reconstructed. Sells with no matching buy history are reported as warnings, not fabricated lots.
+
+The dashboard **Tax** tab (`#/tax`) shows the same data: realized gains (YTD + all-time), harvest candidates, a wash-sale calendar, and open lots with unrealized P&L.
+
+---
+
 ## 8. Web Dashboard Server
 
 Launch the web UI dashboard in your browser to visualize portfolio allocations, factor scores, backtest forms, drift timelines, and order previews:
@@ -401,6 +438,7 @@ Features included in the web dashboard:
 - Dynamic weight distribution donuts & comparison charts (powered by ECharts)
 - Real-time stock health & monitoring table
 - Basket order preview and tax impact breakdown
+- Tax tab (US): realized gains (YTD + all-time), harvest candidates, wash-sale calendar, open lots
 
 ---
 
@@ -418,7 +456,7 @@ Features included in the web dashboard:
 |------|---------|-------------|
 | `--index`, `-i` | `smallcap250` | Index to fetch constituents from |
 | `--file`, `-f` | — | Custom CSV with `ticker` column (overrides `--index`) |
-| `--method`, `-m` | `balanced` | Scoring strategy: `balanced`, `aggressive`, `conservative`, `multibagger` |
+| `--method`, `-m` | `balanced` | Scoring strategy: `balanced`, `aggressive`, `conservative`, `multibagger`, `value`, `us_quality_momentum` |
 | `--top` | `20` | Number of top-ranked stocks to select |
 | `--range` | `3mo` | Price history range for factor calculations |
 | `--golden` | — | Golden copy CSV; enables hysteresis and rebalancing bands |
@@ -454,7 +492,16 @@ Features included in the web dashboard:
 |------|---------|-------------|
 | `--live` | false | Use live Zerodha API (dry-run without this flag) |
 | `--file` | `data/basket.csv` | Portfolio CSV path |
+| `--tax-optimize` | false | US: sequence loss sells first, flag wash sales (needs `tax import`) |
 | positional arg | — | Portfolio name (shorthand for `data/{name}.csv`) |
+
+### `tax`
+
+| Command | Flags | Description |
+|---------|-------|-------------|
+| `mycase tax import` | `--broker` (`schwab`), `--years` (`3`) | Import broker transaction history and rebuild FIFO lots |
+| `mycase tax status` | — | Show open lots and YTD/all-time realized gains/losses |
+| `mycase tax harvest` | `--min-loss` (`50`), `--live` | Identify tax-loss harvesting candidates |
 
 ### `performance`
 

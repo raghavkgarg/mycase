@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/raghavkgarg/mycase/pkg/broker/schwab"
+	"github.com/raghavkgarg/mycase/pkg/stockpicker"
 	"github.com/raghavkgarg/mycase/pkg/yfinance"
 )
 
@@ -160,3 +161,6 @@ func (r *Router) FetchFundamentals(ctx context.Context, tickers []string) (map[s
 func (r *Router) GetBenchmarkSymbol(tickers []string) string {
 	return yfinance.GetBenchmarkSymbol(tickers)
 }
+
+// Compile-time assertion that *Router satisfies stockpicker.DataFetcher.
+var _ stockpicker.DataFetcher = (*Router)(nil)

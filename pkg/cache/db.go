@@ -118,6 +118,38 @@ CREATE TABLE IF NOT EXISTS selections (
     prev_weight  DOUBLE,
     PRIMARY KEY (run_id, ticker)
 );
+CREATE TABLE IF NOT EXISTS tax_transactions (
+    txn_id    VARCHAR PRIMARY KEY,
+    ticker    VARCHAR NOT NULL,
+    txn_type  VARCHAR NOT NULL,
+    quantity  DOUBLE  NOT NULL,
+    price     DOUBLE  NOT NULL,
+    fees      DOUBLE,
+    traded_at BIGINT  NOT NULL,
+    source    VARCHAR
+);
+CREATE TABLE IF NOT EXISTS tax_lots (
+    lot_id         VARCHAR PRIMARY KEY,
+    ticker         VARCHAR NOT NULL,
+    quantity       DOUBLE  NOT NULL,
+    cost_per_share DOUBLE  NOT NULL,
+    acquired_at    BIGINT  NOT NULL,
+    source         VARCHAR
+);
+CREATE TABLE IF NOT EXISTS realized_gains (
+    txn_id       VARCHAR NOT NULL,
+    lot_id       VARCHAR NOT NULL,
+    ticker       VARCHAR NOT NULL,
+    quantity     DOUBLE  NOT NULL,
+    proceeds     DOUBLE  NOT NULL,
+    cost_basis   DOUBLE  NOT NULL,
+    gain         DOUBLE  NOT NULL,
+    acquired_at  BIGINT,
+    sold_at      BIGINT  NOT NULL,
+    holding_days INTEGER,
+    long_term    BOOLEAN,
+    PRIMARY KEY (txn_id, lot_id)
+);
 `
 
 func (c *Cache) initSchema(ctx context.Context) error {

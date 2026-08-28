@@ -13,10 +13,12 @@ import (
 	"time"
 
 	"github.com/raghavkgarg/mycase/pkg/broker"
+	"github.com/raghavkgarg/mycase/pkg/broker/schwab"
 	"github.com/raghavkgarg/mycase/pkg/cache"
 	"github.com/raghavkgarg/mycase/pkg/config"
 	"github.com/raghavkgarg/mycase/pkg/costs"
 	"github.com/raghavkgarg/mycase/pkg/csvloader"
+	"github.com/raghavkgarg/mycase/pkg/datafetcher"
 	"github.com/raghavkgarg/mycase/pkg/optimizer"
 	"github.com/raghavkgarg/mycase/pkg/stockpicker"
 )
@@ -34,6 +36,33 @@ type RunResult struct {
 	ReportPath     string
 	SelectionPaths []string
 	GoldenCopyPath string
+}
+
+// newDataRouter builds a datafetcher.Router from the pipeline config's Schwab
+// credentials. If Schwab is not configured (or creds are missing), the router
+// falls back to Yahoo Finance for all tickers.
+func newDataRouter(cfg config.PipelineConfig) *datafetcher.Router {
+	if !strings.EqualFold(cfg.Broker, "schwab") {
+		return datafetcher.NewRouter(nil)
+	}
+
+	schwabConfigPath := cfg.SchwabConfig
+	if schwabConfigPath == "" {
+		schwabConfigPath = "config/schwab.json"
+	}
+	schwabTokenPath := cfg.SchwabToken
+	if schwabTokenPath == "" {
+		schwabTokenPath = "config/schwab_token.json"
+	}
+
+	app, err := schwab.LoadAppConfig(schwabConfigPath)
+	if err != nil {
+		fmt.Printf("[autopilot] Schwab config unavailable (%v); US tickers will use Yahoo Finance.\n", err)
+		return datafetcher.NewRouter(nil)
+	}
+
+	tokenMgr := schwab.NewTokenManager(app, schwabTokenPath)
+	return datafetcher.NewRouter(schwab.NewClient(tokenMgr))
 }
 
 // Run executes the full non-interactive pipeline:
@@ -59,6 +88,10 @@ func Run(ctx context.Context, rc RunConfig) (*RunResult, error) {
 	}
 
 	goldenBase := csvloader.GetUniverseName(cfg.GoldenCopyPath)
+
+	// Build a data router that routes US tickers to Schwab (if configured) and
+	// everything else to Yahoo Finance. Falls back to Yahoo if Schwab creds are absent.
+	dataFetcher := newDataRouter(cfg)
 
 	// Clean stale cache files from previous days
 	cleanStaleCache()
@@ -124,6 +157,7 @@ func Run(ctx context.Context, rc RunConfig) (*RunResult, error) {
 			RebalanceTolerance: cfg.RebalanceTolerancePct,
 			HysteresisBuffer:   cfg.HysteresisRankBuffer,
 			OutputFile:         outPath,
+			DataFetcher:        dataFetcher,
 		}
 		if src.isIndex {
 			opts.IndexName = src.name
@@ -202,6 +236,7 @@ func Run(ctx context.Context, rc RunConfig) (*RunResult, error) {
 			HysteresisBuffer:   cfg.HysteresisRankBuffer,
 			DisplayName:        goldenBase,
 			OutputFile:         proposalPath,
+			DataFetcher:        dataFetcher,
 		}
 		fmt.Printf("[autopilot] Running combined pick (top %d)...\n", proposalTopN)
 		draftResult, err := stockpicker.RunWithResult(ctx, opts)
@@ -228,6 +263,7 @@ func Run(ctx context.Context, rc RunConfig) (*RunResult, error) {
 			HysteresisBuffer:   cfg.HysteresisRankBuffer,
 			DisplayName:        goldenBase,
 			OutputFile:         optimPath,
+			DataFetcher:        dataFetcher,
 		}
 		if draftResult != nil && len(draftResult.SelectedKeys) > 0 {
 			pruneOpts.Tickers = draftResult.SelectedKeys
@@ -500,7 +536,6 @@ func cleanStaleCache() {
 		}
 	}
 }
-
 
 // pickResultToIndexPicks converts a stockpicker.PickResult into cache.IndexPick slice.
 func pickResultToIndexPicks(indexName string, r *stockpicker.PickResult) []cache.IndexPick {

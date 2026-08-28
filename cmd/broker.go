@@ -8,6 +8,7 @@ import (
 	"github.com/raghavkgarg/mycase/pkg/broker/schwab"
 	"github.com/raghavkgarg/mycase/pkg/broker/zerodha"
 	"github.com/raghavkgarg/mycase/pkg/config"
+	"github.com/raghavkgarg/mycase/pkg/datafetcher"
 )
 
 const defaultsPath = "config/defaults.json"
@@ -71,4 +72,38 @@ func newSchwabBroker() (broker.Broker, error) {
 	}
 
 	return schwab.NewBroker(client, hash), nil
+}
+
+// newSchwabClient creates just a *schwab.Client (no broker/account needed) for market data.
+// Returns nil if Schwab credentials are not configured or tokens are invalid (not an error —
+// the Router will fall back to Yahoo Finance).
+func newSchwabClient() *schwab.Client {
+	defaults := config.LoadUserDefaults(defaultsPath)
+
+	schwabConfigPath := "config/schwab.json"
+	schwabTokenPath := "config/schwab_token.json"
+
+	if defaults.PipelineConfig != "" {
+		if pipeCfg, err := config.LoadPipelineConfig(defaults.PipelineConfig); err == nil {
+			if pipeCfg.SchwabConfig != "" {
+				schwabConfigPath = pipeCfg.SchwabConfig
+			}
+			if pipeCfg.SchwabToken != "" {
+				schwabTokenPath = pipeCfg.SchwabToken
+			}
+		}
+	}
+
+	app, err := schwab.LoadAppConfig(schwabConfigPath)
+	if err != nil {
+		return nil
+	}
+
+	tokenMgr := schwab.NewTokenManager(app, schwabTokenPath)
+	return schwab.NewClient(tokenMgr)
+}
+
+// newDataRouter creates a datafetcher.Router, wiring Schwab if credentials are available.
+func newDataRouter() *datafetcher.Router {
+	return datafetcher.NewRouter(newSchwabClient())
 }

@@ -8,13 +8,14 @@ import './components/metrics-grid.js'
 import './components/backtest-form.js'
 import './components/order-preview.js'
 import './components/tax-warnings.js'
+import './components/tax-tab.js'
 import './components/monitor-table.js'
 import './components/drift-timeline.js'
 
 let currentPortfolio = null
 let sseSource = null
 
-const VIEWS = ['dashboard', 'backtest', 'rebalance', 'monitor', 'drift']
+const VIEWS = ['dashboard', 'backtest', 'rebalance', 'monitor', 'drift', 'tax']
 
 const routes = {
   '#/':          'dashboard',
@@ -22,6 +23,7 @@ const routes = {
   '#/rebalance': 'rebalance',
   '#/monitor':   'monitor',
   '#/drift':     'drift',
+  '#/tax':       'tax',
 }
 
 function showView(name) {
@@ -57,7 +59,7 @@ document.addEventListener('portfolio-changed', (e) => {
   const componentTags = [
     'holdings-table', 'weight-donut', 'weight-comparison',
     'backtest-form', 'order-preview', 'monitor-table', 'drift-timeline',
-    'equity-curve', 'drawdown-chart', 'metrics-grid', 'tax-warnings',
+    'equity-curve', 'drawdown-chart', 'metrics-grid', 'tax-warnings', 'tax-tab',
   ]
   for (const tag of componentTags) {
     const el = document.querySelector(tag)

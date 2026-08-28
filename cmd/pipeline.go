@@ -504,7 +504,7 @@ func runPipeline(ctx context.Context, c *cli.Command) error {
 		if execChoice == "" || execChoice == "y" || execChoice == "yes" {
 			goldenBase := csvloader.GetUniverseName(cfg.GoldenCopyPath)
 			basketFile := "data/" + goldenBase + ".csv"
-			if err := runBasketWithParams(ctx, true, basketFile); err != nil {
+			if err := runBasketWithParams(ctx, true, basketFile, false); err != nil {
 				return fmt.Errorf("step %d (basket): %w", stepCounter, err)
 			}
 		} else {
