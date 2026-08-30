@@ -17,6 +17,8 @@ data/
 # DOCS files
 docs/multibagger.md
 docs/value.md
+docs/*.local.md
+docs/StaticIP.local.md
 
 # Credentials containing API keys, API secrets, and access tokens
 config/config.json
