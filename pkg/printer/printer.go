@@ -8,6 +8,8 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/raghavkgarg/mycase/pkg/broker"
+	"github.com/raghavkgarg/mycase/pkg/costs"
 	"github.com/raghavkgarg/mycase/pkg/market"
 	"github.com/raghavkgarg/mycase/pkg/optimizer"
 	"github.com/raghavkgarg/mycase/pkg/portfolio"
@@ -31,13 +33,30 @@ func PadStringRight(s string, width int) string {
 	return res
 }
 
-// PrintPreviewTable generates the visual text table representing the basket's state and transaction cost.
+// SellReturnItem holds calculated metrics for selling/exiting a holding.
+type SellReturnItem struct {
+	Symbol      string
+	Action      string // "EXIT" (qty -> 0) or "TRIM" (partial reduction)
+	SellQty     int
+	AvgBuyPrice float64
+	LTP         float64
+	CostBasis   float64
+	GrossInflow float64
+	DPCharge    float64
+	NetInflow   float64
+	PnL         float64
+	PnLPct      float64
+	HasAvgPrice bool
+}
+
+// PrintPreviewTable generates the visual text table representing the basket's state, transaction costs, and realized returns on exits.
 func PrintPreviewTable(
 	basketKeys []string,
 	basket map[string]float64,
 	quoteData map[string]float64,
 	currentHoldings map[string]int,
 	finalQuantities []int,
+	holdingDetails map[string]broker.Holding,
 ) string {
 	var currentTotalValue float64
 	var finalTotalValue float64
@@ -61,6 +80,10 @@ func PrintPreviewTable(
 	sb.WriteString("---------------------------------------------------------------------------------------------------------------------------------------------\n")
 
 	var totalTxnCost float64
+	var sellItems []SellReturnItem
+	var totalSellCostBasis, totalSellGrossInflow, totalSellDPCharges, totalSellNetInflow, totalSellPnL float64
+	var anySellHasAvgPrice bool
+
 	for i, inst := range basketKeys {
 		parts := strings.Split(inst, ":")
 		symbol := parts[len(parts)-1]
@@ -119,6 +142,100 @@ func PrintPreviewTable(
 			PadStringRight(fmt.Sprintf("₹%.2f", limitPrice), 10),
 			PadStringRight(txnCostStr, 22),
 		))
+
+		// Collect sell details for return calculation based on real-time LTP and Zerodha DP charges
+		if qtyChange < 0 {
+			sellQty := int(math.Abs(float64(qtyChange)))
+			grossInflow := float64(sellQty) * ltp
+			dpCharge := costs.DPChargePerISIN
+			netInflow := grossInflow - dpCharge
+			actionType := "TRIM"
+			if finalQty == 0 {
+				actionType = "EXIT"
+			}
+
+			item := SellReturnItem{
+				Symbol:      symbol,
+				Action:      actionType,
+				SellQty:     sellQty,
+				LTP:         ltp,
+				GrossInflow: grossInflow,
+				DPCharge:    dpCharge,
+				NetInflow:   netInflow,
+			}
+
+			if h, ok := holdingDetails[symbol]; ok && h.AveragePrice > 0 {
+				item.AvgBuyPrice = h.AveragePrice
+				item.CostBasis = float64(sellQty) * h.AveragePrice
+				item.PnL = netInflow - item.CostBasis
+				if item.CostBasis > 0 {
+					item.PnLPct = (item.PnL / item.CostBasis) * 100.0
+				}
+				item.HasAvgPrice = true
+				anySellHasAvgPrice = true
+
+				totalSellCostBasis += item.CostBasis
+				totalSellPnL += item.PnL
+			}
+			totalSellGrossInflow += grossInflow
+			totalSellDPCharges += dpCharge
+			totalSellNetInflow += netInflow
+			sellItems = append(sellItems, item)
+		}
+	}
+
+	// Render Exits & Sell Orders Return Breakdown if any sells exist
+	if len(sellItems) > 0 {
+		sb.WriteString("\n---------------------------------------------------------------------------------------------------------------------------------------------\n")
+		sb.WriteString("EXITS & SELL ORDERS RETURN BREAKDOWN:\n")
+		sb.WriteString("---------------------------------------------------------------------------------------------------------------------------------------------\n")
+		sb.WriteString("Symbol          | Type     | Sell Qty | Avg Buy Price | LTP         | Cost Basis     | Gross Inflow   | DP Charge  | Realized PnL (Net) | Return %  \n")
+		sb.WriteString("---------------------------------------------------------------------------------------------------------------------------------------------\n")
+
+		for _, item := range sellItems {
+			avgPriceStr := "N/A"
+			costBasisStr := "N/A"
+			pnlStr := "N/A"
+			pnlPctStr := "N/A"
+
+			if item.HasAvgPrice {
+				avgPriceStr = fmt.Sprintf("₹%.2f", item.AvgBuyPrice)
+				costBasisStr = fmt.Sprintf("₹%.2f", item.CostBasis)
+				pnlStr = FormatPnL(item.PnL)
+				pnlPctStr = FormatPnLPct(item.PnLPct)
+			}
+
+			sb.WriteString(fmt.Sprintf("%s | %s | %s | %s | %s | %s | %s | %s | %s | %s\n",
+				PadString(item.Symbol, 15),
+				PadString(item.Action, 8),
+				PadString(fmt.Sprintf("%d", item.SellQty), 8),
+				PadStringRight(avgPriceStr, 13),
+				PadStringRight(fmt.Sprintf("₹%.2f", item.LTP), 11),
+				PadStringRight(costBasisStr, 14),
+				PadStringRight(fmt.Sprintf("₹%.2f", item.GrossInflow), 14),
+				PadStringRight(fmt.Sprintf("₹%.2f", item.DPCharge), 10),
+				PadStringRight(pnlStr, 18),
+				PadStringRight(pnlPctStr, 9),
+			))
+		}
+
+		var totalSellPnLPct float64
+		if totalSellCostBasis > 0 {
+			totalSellPnLPct = (totalSellPnL / totalSellCostBasis) * 100.0
+		}
+
+		sb.WriteString("---------------------------------------------------------------------------------------------------------------------------------------------\n")
+		if anySellHasAvgPrice {
+			sb.WriteString(fmt.Sprintf("Total Cost Basis of Sold Shares:       ₹%.2f\n", totalSellCostBasis))
+			sb.WriteString(fmt.Sprintf("Total Gross Inflow from Sells:         ₹%.2f\n", totalSellGrossInflow))
+			sb.WriteString(fmt.Sprintf("Total DP Charges (₹15.05/stock):       ₹%.2f\n", totalSellDPCharges))
+			sb.WriteString(fmt.Sprintf("Total Net Realized Inflow from Sells:  ₹%.2f\n", totalSellNetInflow))
+			sb.WriteString(fmt.Sprintf("Total Realized Gain/Loss (Net of DP):  %s (%s)\n", FormatPnL(totalSellPnL), FormatPnLPct(totalSellPnLPct)))
+		} else {
+			sb.WriteString(fmt.Sprintf("Total Gross Inflow from Sells:         ₹%.2f\n", totalSellGrossInflow))
+			sb.WriteString(fmt.Sprintf("Total DP Charges (₹15.05/stock):       ₹%.2f\n", totalSellDPCharges))
+			sb.WriteString(fmt.Sprintf("Total Net Realized Inflow from Sells:  ₹%.2f\n", totalSellNetInflow))
+		}
 	}
 
 	// Calculate total buys and sells for Net Cash Flow
@@ -154,6 +271,10 @@ func PrintPreviewTable(
 	sb.WriteString(fmt.Sprintf("Estimated Total Outflow (Sum of Buys): ₹%.2f\n", totalBuys))
 	sb.WriteString(fmt.Sprintf("Estimated Total Inflow (Sum of Sells): ₹%.2f\n", totalSells))
 	sb.WriteString(fmt.Sprintf("Net Cash Flow (Buys - Sells):          %s\n", netCashFlowStr))
+	if len(sellItems) > 0 && anySellHasAvgPrice && totalSellCostBasis > 0 {
+		totalSellPnLPct := (totalSellPnL / totalSellCostBasis) * 100.0
+		sb.WriteString(fmt.Sprintf("Estimated Realized PnL on Sells (Net): %s (%s)\n", FormatPnL(totalSellPnL), FormatPnLPct(totalSellPnLPct)))
+	}
 	sb.WriteString(fmt.Sprintf("Minimum Amount required to Match Proposed Weight: ₹%.2f\n", minTotalTxnCost))
 	sb.WriteString("---------------------------------------------------------------------------------------------------------------------------------------------\n")
 

@@ -3,6 +3,7 @@ package config
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -42,6 +43,7 @@ func fetchIPFromURLs(urls []string, network string) string {
 	client := &http.Client{
 		Timeout: 2 * time.Second,
 		Transport: &http.Transport{
+			Proxy: http.ProxyFromEnvironment,
 			DialContext: func(ctx context.Context, netName, addr string) (net.Conn, error) {
 				var d net.Dialer
 				return d.DialContext(ctx, network, addr)
@@ -81,11 +83,12 @@ func FetchPublicIP() string {
 	return ipv4
 }
 
-// Config represents Zerodha Kite API credentials
+// Config represents Zerodha Kite API credentials and proxy configuration
 type Config struct {
 	APIKey      string `json:"api_key"`
 	APISecret   string `json:"api_secret,omitempty"`
 	AccessToken string `json:"access_token"`
+	HTTPProxy   string `json:"http_proxy,omitempty"`
 }
 
 // LoadConfig reads configuration from config/config.json
@@ -101,10 +104,17 @@ func LoadConfig(filename string) (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	if cfg.HTTPProxy != "" {
+		os.Setenv("HTTP_PROXY", cfg.HTTPProxy)
+		os.Setenv("HTTPS_PROXY", cfg.HTTPProxy)
+		os.Setenv("ALL_PROXY", cfg.HTTPProxy)
+	}
+
 	return &cfg, nil
 }
 
-// SaveConfig writes config to the specified path
+// SaveConfig writes config to the specified path and synchronizes access_token across sibling projects.
 func SaveConfig(filename string, cfg *Config) error {
 	dir := filepath.Dir(filename)
 	if err := os.MkdirAll(dir, 0755); err != nil {
@@ -119,7 +129,57 @@ func SaveConfig(filename string, cfg *Config) error {
 
 	encoder := json.NewEncoder(file)
 	encoder.SetIndent("", "  ")
-	return encoder.Encode(cfg)
+	if err := encoder.Encode(cfg); err != nil {
+		return err
+	}
+
+	if cfg.AccessToken != "" && cfg.AccessToken != "your_access_token" {
+		SyncAccessTokenToAllConfigs(cfg.AccessToken)
+	}
+
+	return nil
+}
+
+// SyncAccessTokenToAllConfigs updates access_token in both mycase and myoption config.json files.
+func SyncAccessTokenToAllConfigs(newAccessToken string) {
+	if newAccessToken == "" || newAccessToken == "your_access_token" {
+		return
+	}
+
+	targets := []string{
+		"/Users/raghavgarg/Projects/myGo/mycase/config/config.json",
+		"/Users/raghavgarg/Projects/myGo/myoption/config/config.json",
+	}
+
+	for _, path := range targets {
+		if _, err := os.Stat(path); err == nil {
+			updateAccessTokenInFile(path, newAccessToken)
+		}
+	}
+}
+
+func updateAccessTokenInFile(filePath, newAccessToken string) {
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		return
+	}
+
+	var raw map[string]interface{}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return
+	}
+
+	// Update access_token field while preserving all other existing configuration settings
+	raw["access_token"] = newAccessToken
+
+	updatedData, err := json.MarshalIndent(raw, "", "  ")
+	if err != nil {
+		return
+	}
+
+	if err := os.WriteFile(filePath, updatedData, 0644); err == nil {
+		fmt.Printf("🔄 Synchronized access_token to: %s\n", filePath)
+	}
 }
 
 // ThemeConfig represents a configuration for a specific holdings theme/group
@@ -193,7 +253,8 @@ type HardFilters struct {
 	VolumeBreakoutLookbackDays  int      `json:"volume_breakout_lookback_days"`
 	VolumeBreakoutMultiplier    float64  `json:"volume_breakout_multiplier"`
 	MaxStocksPerSector          int      `json:"max_stocks_per_sector"`
-	MaxSectorWeightCap          float64  `json:"max_sector_weight_cap"`
+	MaxSectorWeightCap                 float64  `json:"max_sector_weight_cap"`
+	AllowCashOnSectorCapExhaustion     bool     `json:"allow_cash_on_sector_cap_exhaustion"`
 	PEGFloor                    float64  `json:"peg_floor"`
 	MaxPEG                      float64  `json:"max_peg"`
 	CheckGrossMargin            bool     `json:"check_gross_margin"`
@@ -220,6 +281,25 @@ type HardFilters struct {
 	ScoreWeightShareholderYield float64  `json:"score_weight_shareholder_yield"`
 	ScoreWeightSmartMoneyDelta  float64  `json:"score_weight_smart_money_delta"`
 	ScoreWeightMarginInflection float64  `json:"score_weight_margin_inflection"`
+	FundamentalsLagDays          int      `json:"fundamentals_lag_days"`
+	ShareholdingLagDays          int      `json:"shareholding_lag_days"`
+	DeliveryDataLagDays          int      `json:"delivery_data_lag_days"`
+	EarningsBlackoutDaysBefore   int      `json:"earnings_blackout_days_before"`
+	RegimeBenchmarkSMAPeriod     int      `json:"regime_benchmark_sma_period"`
+	RegimeMinConfidenceFloor     float64  `json:"regime_min_confidence_floor"`
+	MinEffectiveScoreThreshold   float64  `json:"min_effective_score_threshold"`
+	MinProximity52WHigh          float64  `json:"min_proximity_52w_high"`
+	MinBaseDurationWeeks         int      `json:"min_base_duration_weeks"`
+	RVOLWinsorizeMultiplier      float64  `json:"rvol_winsorize_multiplier"`
+	ScoreWeightIdiosyncraticRS   float64  `json:"score_weight_idiosyncratic_rs"`
+	ScoreWeightVCPTightness      float64  `json:"score_weight_vcp_tightness"`
+	ScoreWeightVolumeFootprint   float64  `json:"score_weight_volume_footprint"`
+	ScoreWeightDeliveryDelta     float64  `json:"score_weight_delivery_delta"`
+	ScoreWeightBaseVCP           float64  `json:"score_weight_base_vcp"`
+	ScoreWeightCompositeRS       float64  `json:"score_weight_composite_rs"`
+	ScoreWeightPocketPivot       float64  `json:"score_weight_pocket_pivot"`
+	ScoreWeightProximity52W      float64  `json:"score_weight_proximity_52w"`
+	ScoreWeightFundamentals      float64  `json:"score_weight_fundamentals"`
 }
 
 // MFSStrategies wrapper containing the mapping of strategies and filters
@@ -240,6 +320,10 @@ func LoadHardFilters(filename string, strategy string) (*HardFilters, error) {
 	err = json.NewDecoder(file).Decode(&wrapper)
 	if err != nil {
 		return nil, err
+	}
+
+	if strategy == "earlymb" {
+		strategy = "early_multibagger"
 	}
 
 	if f, ok := wrapper.Filters[strategy]; ok {
@@ -294,6 +378,10 @@ func LoadMFSConfig(filename string, strategy string) (*MFSConfig, error) {
 	err = json.NewDecoder(file).Decode(&wrapper)
 	if err != nil {
 		return nil, err
+	}
+
+	if strategy == "earlymb" {
+		strategy = "early_multibagger"
 	}
 
 	if cfg, ok := wrapper.Strategies[strategy]; ok {

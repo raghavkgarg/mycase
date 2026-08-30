@@ -263,7 +263,9 @@ alerts:
 
 ## 6. Cache Management
 
+
 ```bash
+
 # Show cache state: row counts and last fetch timestamps per ticker
 mycase cache status
 
@@ -284,16 +286,86 @@ The DuckDB cache (`data/cache.db`) stores:
 ## 7. Pipeline (Full Automation)
 
 ```bash
-# Run all steps configured in config/pipeline.yaml (supports indices, file, or files)
+# Go to Project
+cd /Users/raghavgarg/Projects/mygo/mycase
+
+# Run all steps configured in config/pipeline.yaml (default config path)
 mycase pipeline
 
-# Override specific params
+# Run with a custom configuration YAML path
+mycase pipeline --config config/pipeline.yaml
+
+# Run directly via go run (without installing the binary)
+go run main.go pipeline --config config/pipeline.yaml
+
+# Run via Makefile
+make run ARGS="pipeline"
+
+# Override specific params from pipeline.yaml via CLI flags
 mycase pipeline --index nifty500 --method aggressive --top 10 --capital 1000000
+
+# Start directly from execution steps (auth + basket execution)
+mycase pipeline --exec-only
 ```
 
 `config/pipeline.yaml` supports selecting constituents by `indices`, `file` (single custom CSV/XLSX), `files` (multiple custom files), or combining `indices` and `files` together.
 
-The pipeline runs: pick → optimize → report → performance → monitor, in sequence. Each step gets the output of the previous one. All steps share one process and one DuckDB connection.
+### 11-Step Automated Pipeline Architecture
+
+When running multi-index pipelines (e.g. `microcap250` + `small250` into `microsmall.csv`), the automated runner executes an 11-step end-to-end selection, pruning, report generation, and trade execution workflow:
+
+1. **Step 1/11 — Initial Candidate Pick (Primary Source)**:
+   - Downloads/loads universe constituents (e.g., `microcap250`).
+   - Fetches 1Y price history and Yahoo Finance fundamentals (ROCE, CROIC, DSO, Debt/Equity, Promoter Pledging).
+   - Applies Hard Safety Filters (`mfs.json`) to eliminate non-compliant stocks.
+   - Calculates 100-point Relative Scoring Matrix with Sector Caps and Hysteresis Buffer.
+   - Saves index pick results to `data/candidates/index_picks/<source>_<strategy>.csv` and selection reasons report to `report/<universe>/executions/<date>_01_selection_reasons.txt`.
+
+2. **Step 2/11 — Candidate Pick (Secondary Source)**:
+   - Evaluates second universe (e.g., `small250`) through identical safety filters and scoring models.
+   - Saves index pick results to `data/candidates/index_picks/<source>_<strategy>.csv`.
+
+3. **Step 3/11 — Multi-Source Candidate Combination**:
+   - Merges candidate sets from Steps 1 & 2 into temporary combined file `data/candidates/temp/combine_<goldenBase>.csv`.
+
+4. **Step 4/11 — Combined Proposal Selection (Top N + 5 Draft)**:
+   - Evaluates combined pool against golden copy holdings with hysteresis buffer.
+   - Selects draft Top $N+5$ proposal (e.g., Top 25) to allow manual review room.
+   - Saves draft proposal to `data/candidates/proposals/<date>_<goldenBase>_<strategy>.csv`.
+   - Prompts user if they want to manually remove any unwanted shares before weight optimization.
+
+5. **Step 5/11 — Proposal Pruning to Top N & Single Portfolio Comparison**:
+   - Prunes draft proposal down to exact Top $N$ target (e.g., Top 20).
+   - Calculates normalized target portfolio weights and saves optimized file `data/candidates/proposals/<date>_<goldenBase>_<strategy>_optim.csv`.
+   - Generates automated Scuttlebutt research check (`..._scuttlebutt.txt`).
+   - **Prints the single consolidated `PORTFOLIO COMPARISON REPORT` table to stdout** and saves it to `report/<goldenBase>_<strategy>/executions/<date>_02_comparison.txt`.
+
+6. **Step 6/11 — Golden Copy Update & Automated Backup**:
+   - Prompts user to open and review the saved comparison report.
+   - Upon confirmation (`y`), creates a timestamped safety backup in `data/backups/<goldenBase>/bk_<timestamp>.csv`.
+   - Merges newly selected candidates into golden copy (`data/<goldenBase>.csv`).
+   - Retains exited tickers at `0.0000` weight to trigger liquidation orders.
+
+7. **Step 7/11 — Explanation & Portfolio Report Generation**:
+   - Generates comprehensive portfolio breakdown and saves report to `report/<goldenBase>_<strategy>/executions/<date>_03_portfolio_report.txt`.
+
+8. **Step 8/11 — Capital & Purchase Performance Simulation**:
+   - Prompts for initial capital and purchase date.
+   - Simulates holding performance against market benchmarks (`^NSEI`).
+
+9. **Step 9/11 — 4-Pillar Health & Drift Monitoring Simulation**:
+   - Evaluates portfolio against historical backtest or custom date timeframe.
+   - Scores Capital Stall, Fundamental Drift, Valuation Stretch, and Volatility pillars.
+   - Saves simulation report to `report/<goldenBase>_<strategy>/simulations/<timestamp>_monitoring.txt`.
+
+10. **Step 10/11 — Zerodha Authentication Setup**:
+    - Launches browser OAuth flow via `mycase auth` if token expired (skipped automatically for US market portfolios).
+
+11. **Step 11/11 — Live / Dry-Run Basket Order Execution**:
+    - Previews or executes Zerodha basket orders via Kite API.
+    - Applies micro-transaction cost filter (`cost/value > 0.5%`) and prints STCG/LTCG tax alerts.
+
+The pipeline runs shared in-memory data fetching and one DuckDB connection across all 11 steps for maximum efficiency.
 
 ---
 
@@ -431,6 +503,22 @@ Features included in the web dashboard:
 |-----------|-----------|-------------|
 | `combine` | `<out_csv> <in1_csv> <in2_csv>...` | Combine multiple candidate CSV files into one |
 | `golden` | `<source_csv> <dest_csv>` | Merge source CSV into golden copy (preserves exited tickers at 0 weight) |
+
+### `pipeline`
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--config` | `config/pipeline.yaml` | Path to pipeline YAML configuration file |
+| `--exec-only` | `false` | Start directly from execution steps (auth + basket execution) |
+| `--index`, `-i` | — | Index to pick stocks from (e.g. `nifty50`, `smallcap250`) |
+| `--file`, `-f` | — | Path to custom CSV/XLSX file |
+| `--strategy`, `-m` | — | Scoring strategy (`balanced`, `aggressive`, `conservative`, `multibagger`, `value`) |
+| `--top`, `-n` | — | Number of top stocks to pick |
+| `--golden` | — | Path to golden copy CSV for hysteresis and rebalancing band |
+| `--capital` | — | Initial capital for performance simulation |
+| `--purchase-date`, `--date` | — | Purchase date for performance simulation (`YYYY-MM-DD`) |
+| `--rebalance-tolerance` | — | Rebalancing weight tolerance % (e.g. `0.10` for 0.10%) |
+| `--hysteresis-buffer` | — | Extra ranks to allow existing holdings to drift |
 
 ### `report`
 

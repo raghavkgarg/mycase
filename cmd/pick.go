@@ -11,6 +11,7 @@ import (
 	"github.com/urfave/cli/v3"
 
 	"github.com/raghavkgarg/mycase/pkg/csvloader"
+	"github.com/raghavkgarg/mycase/pkg/pithistory"
 	"github.com/raghavkgarg/mycase/pkg/selectiontracker"
 	"github.com/raghavkgarg/mycase/pkg/stockpicker"
 	"github.com/raghavkgarg/mycase/pkg/yfinance"
@@ -22,7 +23,7 @@ var PickCommand = &cli.Command{
 	Flags: []cli.Flag{
 		&cli.StringFlag{Name: "index", Aliases: []string{"i"}, Value: "smallcap250", Usage: "Index to pick stocks from"},
 		&cli.StringFlag{Name: "file", Aliases: []string{"f"}, Usage: "Path to custom CSV file (takes precedence over --index)"},
-		&cli.StringFlag{Name: "method", Aliases: []string{"m"}, Value: "balanced", Usage: "Scoring strategy (balanced, aggressive, conservative, multibagger, value)"},
+		&cli.StringFlag{Name: "method", Aliases: []string{"m"}, Value: "balanced", Usage: "Scoring strategy (balanced, aggressive, conservative, multibagger, earlymb, value)"},
 		&cli.IntFlag{Name: "top", Value: 20, Usage: "Number of top stocks to pick"},
 		&cli.StringFlag{Name: "range", Value: "3mo", Usage: "Historical data range (3mo, 6mo, 1y)"},
 		&cli.BoolFlag{Name: "skip-scuttlebutt", Usage: "Skip qualitative scuttlebutt checklist report"},
@@ -44,19 +45,16 @@ func pickOptsFromCmd(c *cli.Command) *stockpicker.Options {
 	if rangeStr == "1yr" || rangeStr == "1year" {
 		rangeStr = "1y"
 	}
-	if rangeStr != "3mo" && rangeStr != "6mo" && rangeStr != "1y" {
-		rangeStr = "3mo"
-	}
 	return &stockpicker.Options{
 		IndexName:          c.String("index"),
 		FilePath:           c.String("file"),
 		Method:             c.String("method"),
-		TopN:               c.Int("top"),
+		TopN:               int(c.Int("top")),
 		RangeStr:           rangeStr,
 		SkipScuttlebutt:    c.Bool("skip-scuttlebutt"),
 		GoldenPath:         c.String("golden"),
 		RebalanceTolerance: c.Float("rebalance-tolerance"),
-		HysteresisBuffer:   c.Int("hysteresis-buffer"),
+		HysteresisBuffer:   int(c.Int("hysteresis-buffer")),
 		DisplayName:        c.String("name"),
 		OutputFile:         c.String("out"),
 	}
@@ -140,6 +138,10 @@ func runPickWithOpts(ctx context.Context, opts *stockpicker.Options) error {
 		scores = stockpicker.ScoreValue(ctx, activeKeys, fundamentals, fullHistory, cfg.HardFilters)
 		selectedKeys = stockpicker.SelectTopNValue(activeKeys, scores, fundamentals, cfg.HardFilters, opts.TopN, goldenWeights, opts.HysteresisBuffer, tracker)
 		finalWeights = stockpicker.NormalizeValueWeights(selectedKeys, scores, fundamentals, cfg.HardFilters, goldenWeights, opts.RebalanceTolerance)
+	} else if opts.Method == "earlymb" || opts.Method == "early_multibagger" {
+		scores = stockpicker.ScoreEarlyMultibagger(ctx, activeKeys, fundamentals, fullHistory, cfg.HardFilters)
+		selectedKeys = stockpicker.SelectTopNEarlyMultibagger(activeKeys, scores, fundamentals, fullHistory, cfg.HardFilters, opts.TopN, goldenWeights, opts.HysteresisBuffer, tracker)
+		finalWeights = stockpicker.NormalizeEarlyMultibaggerWeights(selectedKeys, scores, fundamentals, cfg.HardFilters, goldenWeights, opts.RebalanceTolerance)
 	} else if opts.Method == "multibagger" {
 		scores = stockpicker.ScoreMultibagger(ctx, activeKeys, fundamentals, fullHistory, cfg.HardFilters)
 		selectedKeys = stockpicker.SelectTopNMultibagger(activeKeys, scores, fundamentals, cfg.HardFilters, opts.TopN, goldenWeights, opts.HysteresisBuffer, tracker)
@@ -153,7 +155,12 @@ func runPickWithOpts(ctx context.Context, opts *stockpicker.Options) error {
 		return finalWeights[selectedKeys[i]] > finalWeights[selectedKeys[j]]
 	})
 
-	if opts.Method == "value" || opts.Method == "multibagger" {
+	if opts.Method == "earlymb" || opts.Method == "early_multibagger" {
+		stockpicker.PrintEarlyMultibaggerTable(selectedKeys, finalWeights, scores, fundamentals, fullHistory, displayNameVal, opts.Method)
+		if !opts.SkipScuttlebutt {
+			stockpicker.PrintScuttlebutt(selectedKeys, fundamentals, displayNameVal, opts.Method)
+		}
+	} else if opts.Method == "value" || opts.Method == "multibagger" {
 		stockpicker.PrintMultibaggerTable(selectedKeys, finalWeights, scores, fundamentals, fullHistory, displayNameVal, opts.Method)
 		if !opts.SkipScuttlebutt {
 			stockpicker.PrintScuttlebutt(selectedKeys, fundamentals, displayNameVal, opts.Method)
@@ -168,6 +175,91 @@ func runPickWithOpts(ctx context.Context, opts *stockpicker.Options) error {
 		sectors[ticker] = fund.Sector
 		resultDates[ticker] = fund.ResultPrevComing
 	}
+
+	// 1. Structural Funnel Accounting Validation
+	if _, fErr := tracker.BuildFunnel(); fErr != nil {
+		fmt.Printf("⚠️  Funnel Validation Notice: %v\n", fErr)
+	}
+
+	// 2. PIT Snapshot Persistence & Run-to-Run Diffing (Priorities 2, 7 & 8)
+	todayStr := time.Now().Format("2006-01-02")
+	candidateMap := make(map[string]stockpicker.CandidateScoreDetail)
+	selectedSet := make(map[string]bool)
+	for _, s := range selectedKeys {
+		selectedSet[s] = true
+	}
+
+	rRegime := 1.0
+	if tracker.RegimeMultiplier > 0 {
+		rRegime = tracker.RegimeMultiplier
+	} else if len(benchmarkPrices) >= 50 {
+		rRegime = yfinance.CalculateSmoothedBenchmarkRegime(benchmarkPrices, 50, 0.20)
+	}
+
+	// Add all constituents to candidateMap
+	for _, t := range combinedTickers {
+		reason, isSafetyDrop := tracker.SafetyReasons[t]
+		rawScore, hasRaw := tracker.RawScores[t]
+		effScore, hasEff := tracker.EffectiveScores[t]
+		if !hasEff && hasRaw {
+			effScore = rawScore * rRegime
+		}
+
+		var compRS, vcpRatio, rvolZ, ppScore, delivDelta float64
+		if hist, ok := fullHistory[t]; ok && len(hist.Closes) >= 60 {
+			compRS, _, _, _ = yfinance.CalculateCompositeRS(hist.Closes, benchmarkPrices)
+			vcpRatio, _ = yfinance.CalculateVCPTightness(hist.Closes, hist.Opens)
+			rvolZ = yfinance.CalculateWinsorizedRVOLZScore(hist.Volumes, 5, 50, 4.0)
+			ppScore, _ = yfinance.CalculateDecayedPocketPivot(hist.Closes, hist.Opens, hist.Volumes, 10, 0.25)
+			delivDelta = (fundamentals[t].DeliveryPct / 100.0) - 0.35
+		}
+
+		candidateMap[t] = stockpicker.CandidateScoreDetail{
+			Ticker:          t,
+			PassedStage1:    !isSafetyDrop && hasRaw,
+			RejectionReason: reason,
+			RawScore:        rawScore,
+			EffectiveScore:  effScore,
+			CompositeRS:     compRS,
+			VCPRatio:        vcpRatio,
+			RVOLZScore:      rvolZ,
+			DecayedPP:       ppScore,
+			DeliveryDelta:   delivDelta,
+			Selected:        selectedSet[t],
+			FinalWeight:     finalWeights[t],
+			Sector:          sectors[t],
+		}
+	}
+
+	currentSnap := &stockpicker.PITRunSnapshot{
+		AsOfDate:          todayStr,
+		IndexName:         displayNameVal,
+		Method:            opts.Method,
+		RegimeMultiplier:  rRegime,
+		TotalConstituents: len(combinedTickers),
+		Stage1Count:       len(activeKeys),
+		SelectedCount:     len(selectedKeys),
+		Candidates:        candidateMap,
+	}
+
+	if prevSnap, pErr := stockpicker.LoadPreviousSnapshot(displayNameVal, opts.Method, todayStr); pErr == nil && prevSnap != nil {
+		diff := stockpicker.DiffSnapshots(prevSnap, currentSnap)
+		stockpicker.PrintDiffReport(diff)
+	}
+
+	if snapPath, sErr := stockpicker.SaveRunSnapshot(currentSnap); sErr == nil {
+		fmt.Printf("Saved PIT Run Snapshot to %s\n", snapPath)
+	}
+
+	if pitDB, err := pithistory.Open(""); err == nil {
+		if err := pitDB.SaveRunSnapshot(ctx, currentSnap); err == nil {
+			fmt.Printf("Persisted Point-in-Time Run Snapshot to DuckDB (%s)\n", pithistory.DefaultDBPath)
+		} else {
+			fmt.Printf("Warning: Failed to persist to DuckDB: %v\n", err)
+		}
+		pitDB.Close()
+	}
+
 	if err := tracker.SaveReport(displayNameVal, opts.Method, goldenWeights, sectors, finalWeights, resultDates); err != nil {
 		fmt.Printf("Warning: Failed to save selection reasons report: %v\n", err)
 	}

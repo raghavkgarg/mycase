@@ -1,4 +1,2 @@
-ticker,weight
-NSE:SWSOLAR,0.34
-NSE:ADVAIT,0.33
-NSE:INOXINDIA,0.33
+ticker,weight   
+NSE:INOXINDIA,1.00

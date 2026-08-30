@@ -262,22 +262,66 @@ func LoadConstituents(filePath, indexName string) (*TickersSource, error) {
 		return nil, fmt.Errorf("failed to load config/csvlinks.json: %w", err)
 	}
 
-	cleanIndex := strings.ToLower(strings.ReplaceAll(indexName, " ", ""))
-	url, ok := csvLinks[cleanIndex]
-	if !ok {
-		return nil, fmt.Errorf("unsupported index '%s'. Please check docs/stockpicker.md for the list of supported indices", indexName)
+	rawNames := strings.FieldsFunc(indexName, func(r rune) bool {
+		return r == ',' || r == '+'
+	})
+	if len(rawNames) == 0 {
+		return nil, fmt.Errorf("no index specified")
 	}
 
-	fmt.Printf("\nDownloading index constituents for %s...\n", indexName)
-	tickers, err := downloadConstituents(cleanIndex, url)
-	if err != nil {
-		return nil, fmt.Errorf("failed to download index: %w", err)
+	var allTickers []string
+	seen := make(map[string]bool)
+
+	for _, rawIdx := range rawNames {
+		rawIdx = strings.TrimSpace(rawIdx)
+		if rawIdx == "" {
+			continue
+		}
+
+		// Alias check: "microsmall" -> expand to microcap250 and smallcap250
+		var subIndices []string
+		cleanRaw := strings.ToLower(strings.ReplaceAll(rawIdx, " ", ""))
+		if cleanRaw == "microsmall" || cleanRaw == "microsmall250" || cleanRaw == "micro_small" {
+			subIndices = []string{"microcap250", "smallcap250"}
+		} else if cleanRaw == "midsmallmicro" || cleanRaw == "allcaps" {
+			subIndices = []string{"midcap150", "smallcap250", "microcap250"}
+		} else {
+			subIndices = []string{rawIdx}
+		}
+
+		for _, subIdx := range subIndices {
+			cleanIndex := strings.ToLower(strings.ReplaceAll(subIdx, " ", ""))
+			url, ok := csvLinks[cleanIndex]
+			if !ok {
+				return nil, fmt.Errorf("unsupported index '%s'. Please check docs/stockpicker.md for the list of supported indices", subIdx)
+			}
+
+			fmt.Printf("\nDownloading index constituents for %s...\n", subIdx)
+			tickers, err := downloadConstituents(cleanIndex, url)
+			if err != nil {
+				return nil, fmt.Errorf("failed to download index '%s': %w", subIdx, err)
+			}
+			fmt.Printf("Loaded %d constituents from %s.\n", len(tickers), subIdx)
+
+			for _, t := range tickers {
+				if !seen[t] {
+					seen[t] = true
+					allTickers = append(allTickers, t)
+				}
+			}
+		}
 	}
-	fmt.Printf("Loaded %d constituents from index.\n", len(tickers))
+
+	fmt.Printf("Total combined unique constituents: %d.\n", len(allTickers))
+
+	displayName := indexName
+	if len(rawNames) > 1 {
+		displayName = strings.Join(rawNames, "_")
+	}
 
 	return &TickersSource{
-		Name:    indexName,
-		Tickers: tickers,
+		Name:    displayName,
+		Tickers: allTickers,
 	}, nil
 }
 

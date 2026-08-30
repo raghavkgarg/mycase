@@ -2,6 +2,9 @@ package kiteclient
 
 import (
 	"fmt"
+	"net/http"
+	"net/url"
+	"time"
 
 	"github.com/raghavkgarg/mycase/pkg/config"
 	kiteconnect "github.com/zerodha/gokiteconnect/v4"
@@ -19,6 +22,16 @@ func InitKiteClient(cfg *config.Config, forceMock bool) (*kiteconnect.Client, bo
 
 	client := kiteconnect.New(cfg.APIKey)
 	client.SetAccessToken(cfg.AccessToken)
+	if cfg.HTTPProxy != "" {
+		if proxyURL, err := url.Parse(cfg.HTTPProxy); err == nil {
+			client.SetHTTPClient(&http.Client{
+				Timeout: 10 * time.Second,
+				Transport: &http.Transport{
+					Proxy: http.ProxyURL(proxyURL),
+				},
+			})
+		}
+	}
 	return client, false
 }
 

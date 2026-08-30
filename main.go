@@ -40,6 +40,8 @@ func main() {
 			mycmd.CacheCommand,
 			mycmd.DaemonCommand,
 			mycmd.BacktestCommand,
+			mycmd.CalibrateCommand,
+			mycmd.PitCommand,
 			mycmd.ServeCommand,
 			mycmd.ConvertCommand,
 			mycmd.RetryCommand,

@@ -280,7 +280,6 @@ func runPipeline(ctx context.Context, c *cli.Command) error {
 
 		// Update Golden Copy
 		fmt.Printf("\n[Step %d/%d] Updating the %s golden copy...\n", stepCounter, totalSteps, goldenCSV)
-		csvloader.PrintComparisonReport(sourceCSV, goldenCSV, cfg.Strategy)
 
 		comparisonReportPath := filepath.Join("report", fmt.Sprintf("%s_%s", goldenBase, cfg.Strategy), "executions", fmt.Sprintf("%s_02_comparison.txt", dateStr))
 		pipelineOfferToOpenReport(reader, comparisonReportPath)

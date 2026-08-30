@@ -18,8 +18,26 @@ When an existing portfolio holding (from the Golden Copy CSV, e.g., `data/micros
 - This guarantees that historical prices and fundamental metrics are fetched for all existing holdings even if they are not in the top index candidate feed.
 
 ### Filter & Drift Diagnostics
-1. **Hard Safety Filter Failure**: If an existing holding fails any hard filter (e.g., 200-Day SMA, ROCE floor, Debt/Equity, DSO deterioration), the exact metric failure is logged.
-   - *Example*: `Failed safety filter: Below 200-Day SMA (Downtrend)`
+1. **Hard Safety Filter Failure**: If an existing holding fails any hard filter (e.g., 200-Day SMA buffer ratio floor, 20-day SMA downward slope trend, ROCE floor, Debt/Equity, DSO deterioration), the exact metric failure is logged.
+   - *Example (Severe dip)*: `Failed safety filter: Below 200-Day SMA ratio floor (0.92 < 0.95 limit)`
+   - *Example (Downward trend)*: `Failed safety filter: Below 200-Day SMA with downward 200-SMA trend (Ratio 0.98 < 1.0, SMA 20d decline > 0.5%)`
+
+```text
+                              ┌─────────────────────────────────────────┐
+                              │  Price < 200-Day SMA (Single Day Dip)?  │
+                              └────────────────────┬────────────────────┘
+                                                   │
+                         ┌─────────────────────────┴─────────────────────────┐
+                         ▼                                                   ▼
+       Layer 1: Ratio Floor Check                           Layer 2: 200-SMA Slope Check
+       Is Price / 200-SMA >= 0.95?                          Is 200-SMA Line Sloping Down?
+       (Allows max 5% temporary dip)                       (Evaluated over 20 trading days)
+                         │                                                   │
+          ┌──────────────┴──────────────┐                     ┌──────────────┴──────────────┐
+          ▼                             ▼                     ▼                             ▼
+       FAIL (<0.95)                 PASS (>=0.95)           SLOPING DOWN (>0.5% drop)   FLAT OR UPTREND
+       ❌ Evicted: Severe Dip      Proceed to Slope Check   ❌ Evicted: Bear Trend       ✅ Retained: Temporary Blip
+```
 2. **Hysteresis Buffer Drift**: If a holding passes safety filters but its score rank drifts beyond the hysteresis threshold ($\text{Rank} > \text{TopN} + \text{HysteresisBuffer}$):
    - *Example*: `Removed: Rank 28 fell below hysteresis buffer limit (25)`
 3. **Sector Cap Exclusion**: If a holding is pushed out due to sector allocation limits:

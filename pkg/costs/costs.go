@@ -8,7 +8,7 @@ const (
 	STTSellRate      = 0.001    // 0.1% of sell trade value
 	StampDutyBuyRate = 0.00015  // 0.015% of buy trade value (sell: nil)
 	SEBIRate         = 0.000001 // 0.0001% of trade value (both sides)
-	DPChargePerISIN  = 15.93    // ₹15.93 flat per ISIN per sell day (CDSL)
+	DPChargePerISIN  = 15.05    // ₹15.05 flat per ISIN per sell day (Zerodha CDSL rate)
 )
 
 // DefaultZerodha is a zero-brokerage CostModel for Zerodha equity delivery.

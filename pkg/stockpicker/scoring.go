@@ -103,7 +103,7 @@ func ScoreMultibagger(
 		}
 
 		// ROCE (latest year)
-		roceVal, _ := getLatestROCE(&f)
+		roceVal, _ := GetLatestROCE(&f)
 		roces[t] = roceVal
 		if roceVal < minRoce {
 			minRoce = roceVal
@@ -114,6 +114,10 @@ func ScoreMultibagger(
 
 		// Breakout Volume Intensity
 		volMult := yfinance.GetVolumeBreakoutMultiplier(hist.Closes, hist.Opens, hist.Volumes, hardFilters.VolumeBreakoutLookbackDays)
+		if f.DeliveryPct > 0 {
+			dlyBoost := 1.0 + (f.DeliveryPct/100.0)*0.5
+			volMult = volMult * dlyBoost
+		}
 		vIntensities[t] = volMult
 		if volMult < minVInt {
 			minVInt = volMult
@@ -520,63 +524,89 @@ func SelectTopNValue(
 	return ApplyHysteresisSelection(sectorCapCandidates, existingHoldings, topN, bufferLimit, tracker)
 }
 
-// NormalizeAndCapWeights rescales weights to sum to 1.0 while enforcing stock and sector caps.
+// NormalizeAndCapWeights rescales weights to sum to 1.0 while strictly enforcing stock and sector caps.
 func NormalizeAndCapWeights(
 	selectedKeys []string,
 	weights map[string]float64,
 	fundamentals map[string]yfinance.Fundamentals,
 	stockCap float64,
 	sectorCap float64,
+	allowCashOnSectorCapExhaustion bool,
 ) {
 	if len(selectedKeys) == 0 {
 		return
 	}
-	if stockCap <= 0 {
-		stockCap = 0.10
-	}
 	if sectorCap <= 0 {
 		sectorCap = 0.25
 	}
+	minEqWeight := 1.0 / float64(len(selectedKeys))
+	if stockCap < minEqWeight {
+		stockCap = minEqWeight
+	}
 
-	for iter := 0; iter < 10; iter++ {
-		var total float64
+	if !allowCashOnSectorCapExhaustion {
+		uniqueSectors := make(map[string]bool)
 		for _, k := range selectedKeys {
-			total += weights[k]
+			sec := strings.TrimSpace(fundamentals[k].Sector)
+			if sec == "" {
+				sec = "Unknown"
+			}
+			uniqueSectors[sec] = true
 		}
-		if total > 0 {
-			for _, k := range selectedKeys {
-				weights[k] = weights[k] / total
+		if len(uniqueSectors) > 0 {
+			minSectorCap := 1.0 / float64(len(uniqueSectors))
+			if sectorCap < minSectorCap {
+				sectorCap = minSectorCap
 			}
 		}
+	}
 
-		hasCapViolation := false
+	// Normalize initial weights to sum to 1.0
+	var sum float64
+	for _, k := range selectedKeys {
+		sum += weights[k]
+	}
+	if sum > 0 {
+		for _, k := range selectedKeys {
+			weights[k] /= sum
+		}
+	}
+
+	// Iteratively enforce stockCap and sectorCap
+	for iter := 0; iter < 20; iter++ {
+		// 1. Enforce Stock Cap
 		for _, k := range selectedKeys {
 			if weights[k] > stockCap {
 				weights[k] = stockCap
-				hasCapViolation = true
 			}
 		}
 
+		// 2. Enforce Sector Cap
 		optimizer.EnforceSectorCaps(selectedKeys, weights, fundamentals, sectorCap)
 
-		if !hasCapViolation {
-			var checkSum float64
-			for _, k := range selectedKeys {
-				checkSum += weights[k]
+		// 3. Check if all constraints satisfied and sum is 1.0
+		var currentSum float64
+		hasViolation := false
+		sectorSums := make(map[string]float64)
+		for _, k := range selectedKeys {
+			currentSum += weights[k]
+			if weights[k] > stockCap+1e-5 {
+				hasViolation = true
 			}
-			if math.Abs(checkSum-1.0) < 1e-4 {
-				break
+			sec := strings.TrimSpace(fundamentals[k].Sector)
+			if sec == "" {
+				sec = "Unknown"
+			}
+			sectorSums[sec] += weights[k]
+		}
+		for _, secW := range sectorSums {
+			if secW > sectorCap+1e-5 {
+				hasViolation = true
 			}
 		}
-	}
 
-	var finalSum float64
-	for _, k := range selectedKeys {
-		finalSum += weights[k]
-	}
-	if finalSum > 0 {
-		for _, k := range selectedKeys {
-			weights[k] = weights[k] / finalSum
+		if !hasViolation && math.Abs(currentSum-1.0) < 1e-4 {
+			break
 		}
 	}
 }
@@ -613,7 +643,7 @@ func NormalizeValueWeights(
 		capVal = 0.25
 	}
 
-	NormalizeAndCapWeights(selectedKeys, finalWeights, fundamentals, stockCapVal, capVal)
+	NormalizeAndCapWeights(selectedKeys, finalWeights, fundamentals, stockCapVal, capVal, hardFilters.AllowCashOnSectorCapExhaustion)
 
 	// Apply rebalancing band/tolerance
 	finalWeights = ApplyRebalancingBand(selectedKeys, finalWeights, existingHoldings, rebalanceTolerance)
@@ -654,8 +684,11 @@ func SelectTopNMultibagger(
 		}
 
 		_, ttmGrowth, cagr3y := yfinance.CalculateSalesGrowth(&f)
-		roceVal, _ := getLatestROCE(&f)
+		roceVal, _ := GetLatestROCE(&f)
 		driverStr := fmt.Sprintf("TTM Growth: %+.1f%% (3Y: %+.1f%%), ROCE: %.1f%%, Inst Stake: %.1f%%", ttmGrowth*100.0, cagr3y*100.0, roceVal*100.0, f.HeldPercentInstitutions*100.0)
+		if f.DeliveryPct > 0 {
+			driverStr += fmt.Sprintf(", Delivery: %.1f%%", f.DeliveryPct)
+		}
 		tracker.RecordAdditionDriver(t, driverStr)
 
 		if sectorCounts[sec] >= maxPerSector {
@@ -697,14 +730,18 @@ func NormalizeMultibaggerWeights(
 	}
 	stockCapVal := hardFilters.MaxStockWeightCap
 	if stockCapVal <= 0 {
-		stockCapVal = 0.10
+		stockCapVal = 0.20
+	}
+	minEqWeight := 1.0 / float64(len(selectedKeys))
+	if stockCapVal < minEqWeight {
+		stockCapVal = minEqWeight
 	}
 	capVal := hardFilters.MaxSectorWeightCap
 	if capVal <= 0 {
 		capVal = 0.25
 	}
 
-	NormalizeAndCapWeights(selectedKeys, finalWeights, fundamentals, stockCapVal, capVal)
+	NormalizeAndCapWeights(selectedKeys, finalWeights, fundamentals, stockCapVal, capVal, hardFilters.AllowCashOnSectorCapExhaustion)
 
 	// Apply rebalancing band/tolerance
 	finalWeights = ApplyRebalancingBand(selectedKeys, finalWeights, existingHoldings, rebalanceTolerance)
@@ -961,3 +998,204 @@ func ApplyRebalancingBand(
 
 	return finalWeights
 }
+
+// ScoreEarlyMultibagger computes a 100-point invariant reference-bounded scoring matrix for early-stage / pre-breakout multibagger candidates.
+func ScoreEarlyMultibagger(
+	ctx context.Context,
+	activeKeys []string,
+	fundamentals map[string]yfinance.Fundamentals,
+	fullHistory map[string]*yfinance.HistoricalData,
+	hardFilters *config.HardFilters,
+) map[string]float64 {
+	fmt.Printf("Calculating 100-Point Early-Multibagger Invariant Scoring Matrix for %d candidates...\n", len(activeKeys))
+
+	// Fetch 1-year benchmark prices for Relative Strength calculation & Regime Sentry
+	benchSym := GetBenchmarkSymbolForIndex("", activeKeys)
+	benchHist, bErr := yfinance.FetchHistoricalDataWithTimestamps(ctx, benchSym, "1y")
+	var benchCloses []float64
+	if bErr == nil && benchHist != nil {
+		benchCloses = benchHist.Closes
+	}
+
+	scores := make(map[string]float64)
+	for _, t := range activeKeys {
+		f := fundamentals[t]
+		hist := fullHistory[t]
+
+		wIdioRS := 25.0
+		wVCP := 25.0
+		wVol := 25.0
+		wDeliv := 25.0
+
+		if hardFilters != nil {
+			if hardFilters.ScoreWeightIdiosyncraticRS > 0 {
+				wIdioRS = hardFilters.ScoreWeightIdiosyncraticRS
+			}
+			if hardFilters.ScoreWeightVCPTightness > 0 {
+				wVCP = hardFilters.ScoreWeightVCPTightness
+			}
+			if hardFilters.ScoreWeightVolumeFootprint > 0 {
+				wVol = hardFilters.ScoreWeightVolumeFootprint
+			}
+			if hardFilters.ScoreWeightDeliveryDelta > 0 {
+				wDeliv = hardFilters.ScoreWeightDeliveryDelta
+			}
+		}
+
+		// Pillar 1: Idiosyncratic Momentum (Composite RS in [-30%, +70%])
+		compRS, _, _, _ := yfinance.CalculateCompositeRS(hist.Closes, benchCloses)
+		p1 := NormScore(compRS, CompositeRSBounds, wIdioRS, false)
+
+		// Pillar 2: Pure Volatility Contraction Tightness (VCP ATR Ratio in [0.25, 0.75])
+		vcpRatio, _ := yfinance.CalculateVCPTightness(hist.Closes, hist.Opens)
+		p2 := NormScore(vcpRatio, VCPRatioBounds, wVCP, true)
+
+		// Pillar 3: Volume Footprint (Winsorized RVOL Z-Score + Bounded Decayed Pocket Pivot)
+		rvolMult := 4.0
+		if hardFilters != nil && hardFilters.RVOLWinsorizeMultiplier > 0 {
+			rvolMult = hardFilters.RVOLWinsorizeMultiplier
+		}
+		rvolZ := yfinance.CalculateWinsorizedRVOLZScore(hist.Volumes, 5, 50, rvolMult)
+		p3a := NormScore(rvolZ, RVOLZBounds, wVol*0.5, false)
+
+		decayedPPScore, _ := yfinance.CalculateDecayedPocketPivot(hist.Closes, hist.Opens, hist.Volumes, 10, 0.25)
+		p3b := NormScore(decayedPPScore, PocketPivotBounds, wVol*0.5, false)
+		p3 := p3a + p3b
+
+		// Pillar 4: Institutional Accumulation Delta (Delivery Delta in [-10%, +30%])
+		delivDelta := (f.DeliveryPct / 100.0) - 0.35 // 35% typical mid-float baseline
+		p4 := NormScore(delivDelta, DeliveryDeltaBounds, wDeliv, false)
+
+		scores[t] = p1 + p2 + p3 + p4
+	}
+
+	sort.Slice(activeKeys, func(i, j int) bool {
+		scoreI := scores[activeKeys[i]]
+		scoreJ := scores[activeKeys[j]]
+		if math.Abs(scoreI-scoreJ) < 1e-9 {
+			return fundamentals[activeKeys[i]].MarketCap < fundamentals[activeKeys[j]].MarketCap
+		}
+		return scoreI > scoreJ
+	})
+
+	if len(activeKeys) > 0 {
+		nSurv := len(activeKeys)
+		p90 := scores[activeKeys[int(float64(nSurv)*0.10)]]
+		p75 := scores[activeKeys[int(float64(nSurv)*0.25)]]
+		p50 := scores[activeKeys[int(float64(nSurv)*0.50)]]
+		p40 := scores[activeKeys[int(float64(nSurv)*0.60)]]
+		p25 := scores[activeKeys[int(float64(nSurv)*0.75)]]
+		fmt.Printf("Stage-1 Survivors Score Distribution (%d stocks): P90=%.1f, P75=%.1f, P50=%.1f, P40=%.1f, P25=%.1f\n",
+			nSurv, p90, p75, p50, p40, p25)
+	}
+
+	return scores
+}
+
+// SelectTopNEarlyMultibagger filters top N constituents applying market regime scaling, score cutoffs, and sector caps.
+func SelectTopNEarlyMultibagger(
+	activeKeys []string,
+	scores map[string]float64,
+	fundamentals map[string]yfinance.Fundamentals,
+	fullHistory map[string]*yfinance.HistoricalData,
+	hardFilters *config.HardFilters,
+	topN int,
+	existingHoldings map[string]float64,
+	hysteresisBuffer int,
+	tracker *selectiontracker.Tracker,
+) []string {
+	// 1. Calculate Market Regime Multiplier R_regime
+	regimePeriod := 50
+	regimeFloor := 0.20
+	minEffectiveScore := 30.0
+	if hardFilters != nil {
+		if hardFilters.RegimeBenchmarkSMAPeriod > 0 {
+			regimePeriod = hardFilters.RegimeBenchmarkSMAPeriod
+		}
+		if hardFilters.RegimeMinConfidenceFloor > 0 {
+			regimeFloor = hardFilters.RegimeMinConfidenceFloor
+		}
+		if hardFilters.MinEffectiveScoreThreshold > 0 {
+			minEffectiveScore = hardFilters.MinEffectiveScoreThreshold
+		}
+	}
+
+	benchSym := GetBenchmarkSymbolForIndex("", activeKeys)
+	benchHist, _ := yfinance.FetchHistoricalDataWithTimestamps(context.Background(), benchSym, "1y")
+	var benchCloses []float64
+	if benchHist != nil {
+		benchCloses = benchHist.Closes
+	}
+	rRegime := yfinance.CalculateSmoothedBenchmarkRegime(benchCloses, regimePeriod, regimeFloor)
+	fmt.Printf("Market Regime Sentry: R_regime = %.4f (Min Effective Score Cutoff: %.1f)\n", rRegime, minEffectiveScore)
+
+	maxPerSector := hardFilters.MaxStocksPerSector
+	if maxPerSector <= 0 {
+		maxPerSector = 5
+	}
+	fmt.Printf("Applying Sector Caps (max %d stocks per sector)...\n", maxPerSector)
+
+	var sectorCapCandidates []string
+	sectorCounts := make(map[string]int)
+	sectorTopTickers := make(map[string][]string)
+
+	tracker.RegimeMultiplier = rRegime
+	for rankIdx, t := range activeKeys {
+		rank := rankIdx + 1
+		rawScore := scores[t]
+		effectiveScore := rawScore * rRegime
+		tracker.RecordScore(t, rawScore, effectiveScore, rank)
+		if effectiveScore < minEffectiveScore {
+			tracker.RecordScoreThresholdDrop(t, fmt.Sprintf("Effective score %.1f below regime cutoff %.1f (Raw: %.1f, R_regime: %.4f)",
+				effectiveScore, minEffectiveScore, rawScore, rRegime))
+			continue
+		}
+
+		f := fundamentals[t]
+		sec := f.Sector
+		if sec == "" {
+			sec = "Unknown"
+		}
+
+		hist := fullHistory[t]
+		var vcpRatio float64
+		var prox52 float64
+		var weeksInBase int
+		var rvolZ float64
+		if hist != nil {
+			vcpRatio, _ = yfinance.CalculateVCPTightness(hist.Closes, hist.Opens)
+			prox52 = yfinance.CalculateProximity52W(hist.Closes)
+			weeksInBase, _ = yfinance.CalculateBaseDurationWeeks(hist.Closes, hardFilters.MinProximity52WHigh)
+			rvolZ = yfinance.CalculateWinsorizedRVOLZScore(hist.Volumes, 5, 50, 4.0)
+		}
+		delivDelta := (f.DeliveryPct / 100.0) - 0.35
+		driverStr := fmt.Sprintf("Pre-Breakout Setup: Base %dW (VCP %.2f), 52W Prox %.1f%%, RVOL Z %+.1f, Deliv Delta %+.1f%% (5D: %.1f%%)",
+			weeksInBase, vcpRatio, prox52*100.0, rvolZ, delivDelta*100.0, f.DeliveryPct)
+		tracker.RecordAdditionDriver(t, driverStr)
+
+		if sectorCounts[sec] >= maxPerSector {
+			tracker.RecordSectorCapDrop(t, sec, sectorTopTickers[sec])
+			continue
+		}
+		sectorCounts[sec]++
+		sectorTopTickers[sec] = append(sectorTopTickers[sec], t)
+		sectorCapCandidates = append(sectorCapCandidates, t)
+	}
+
+	bufferLimit := topN + hysteresisBuffer
+	fmt.Printf("Applying Hysteresis Buffer Zone (Top %d target, existing kept up to rank %d)...\n", topN, bufferLimit)
+	return ApplyHysteresisSelection(sectorCapCandidates, existingHoldings, topN, bufferLimit, tracker)
+}
+
+// NormalizeEarlyMultibaggerWeights normalizes weights proportionally to scores and enforces sector caps.
+func NormalizeEarlyMultibaggerWeights(
+	selectedKeys []string,
+	scores map[string]float64,
+	fundamentals map[string]yfinance.Fundamentals,
+	hardFilters *config.HardFilters,
+	existingHoldings map[string]float64,
+	rebalanceTolerance float64,
+) map[string]float64 {
+	return NormalizeMultibaggerWeights(selectedKeys, scores, fundamentals, hardFilters, existingHoldings, rebalanceTolerance)
+}
+

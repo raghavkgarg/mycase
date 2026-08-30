@@ -3,8 +3,11 @@ package zerodha
 import (
 	"fmt"
 	"math"
+	"net/http"
+	"net/url"
 	"regexp"
 	"strings"
+	"time"
 
 	kiteconnect "github.com/zerodha/gokiteconnect/v4"
 
@@ -51,6 +54,16 @@ func New(liveMode bool, configPath string) broker.Broker {
 	}
 	c := kiteconnect.New(cfg.APIKey)
 	c.SetAccessToken(cfg.AccessToken)
+	if cfg.HTTPProxy != "" {
+		if proxyURL, err := url.Parse(cfg.HTTPProxy); err == nil {
+			c.SetHTTPClient(&http.Client{
+				Timeout: 10 * time.Second,
+				Transport: &http.Transport{
+					Proxy: http.ProxyURL(proxyURL),
+				},
+			})
+		}
+	}
 	return &ZerodhaBroker{client: c}
 }
 
@@ -58,14 +71,46 @@ func (z *ZerodhaBroker) IsMock() bool { return false }
 
 func (z *ZerodhaBroker) GetQuotes(keys []string) (map[string]float64, error) {
 	kiteQuote, err := z.client.GetQuote(keys...)
-	if err != nil {
-		return nil, enrichIPError(fmt.Errorf("zerodha GetQuote: %w", err))
+	if err == nil {
+		result := make(map[string]float64, len(keys))
+		for _, k := range keys {
+			result[k] = kiteQuote[k].LastPrice
+		}
+		return result, nil
 	}
-	result := make(map[string]float64, len(keys))
-	for _, k := range keys {
-		result[k] = kiteQuote[k].LastPrice
+
+	// Fallback: try retrieving prices from holdings if Zerodha GetQuote fails (e.g. Insufficient permission)
+	result := make(map[string]float64)
+	if holdings, hErr := z.GetHoldings(); hErr == nil {
+		for _, h := range holdings {
+			sym := h.TradingSymbol
+			for _, k := range keys {
+				cleanK := strings.TrimPrefix(k, "NSE:")
+				cleanK = strings.TrimPrefix(cleanK, "BSE:")
+				if (cleanK == sym || k == sym) && h.LastPrice > 0 {
+					result[k] = h.LastPrice
+				}
+			}
+		}
 	}
-	return result, nil
+
+	if len(result) == len(keys) {
+		return result, nil
+	}
+
+	enrichedErr := err
+	if strings.Contains(strings.ToLower(err.Error()), "insufficient permission") {
+		enrichedErr = fmt.Errorf("zerodha GetQuote: Insufficient permission for Zerodha Quote API (requires Quote API subscription addon on Kite Connect). (%w)", err)
+	} else {
+		enrichedErr = fmt.Errorf("zerodha GetQuote: %w", err)
+	}
+
+	if len(result) > 0 {
+		fmt.Printf("Warning: Zerodha GetQuote failed (%v), but retrieved %d/%d prices from holdings.\n", enrichedErr, len(result), len(keys))
+		return result, nil
+	}
+
+	return nil, enrichIPError(enrichedErr)
 }
 
 // GetHoldings fetches holdings and CNC positions from Kite, merges them, and

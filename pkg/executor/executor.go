@@ -77,6 +77,7 @@ func ExecuteBasketOrders(
 	printedPreview bool,
 	snapshotTextIn string,
 	reader *bufio.Reader,
+	holdingDetails map[string]broker.Holding,
 ) {
 	snapshotText := snapshotTextIn
 	if len(basketOrders) == 0 {
@@ -85,7 +86,7 @@ func ExecuteBasketOrders(
 	}
 
 	if !printedPreview {
-		snapshotText = printer.PrintPreviewTable(basketKeys, basket, quoteData, currentHoldings, finalQuantities)
+		snapshotText = printer.PrintPreviewTable(basketKeys, basket, quoteData, currentHoldings, finalQuantities, holdingDetails)
 	}
 
 	if reader != nil {
@@ -158,6 +159,14 @@ func ExecuteBasketOrders(
 	if err != nil {
 		loc = time.FixedZone("IST", 5.5*60*60)
 	}
+
+	// Ensure SELL orders are placed first to free up capital before placing BUY orders
+	sort.SliceStable(basketOrders, func(i, j int) bool {
+		if strings.ToUpper(basketOrders[i].TransactionType) == "SELL" && strings.ToUpper(basketOrders[j].TransactionType) != "SELL" {
+			return true
+		}
+		return false
+	})
 
 	var successLines []string
 	var failedLines []string
@@ -364,6 +373,13 @@ func ExecuteRetryPayload(jsonPath string, b broker.Broker, reader *bufio.Reader)
 	if err != nil {
 		loc = time.FixedZone("IST", 5.5*60*60)
 	}
+
+	sort.SliceStable(payload.FailedOrders, func(i, j int) bool {
+		if strings.ToUpper(payload.FailedOrders[i].TransactionType) == "SELL" && strings.ToUpper(payload.FailedOrders[j].TransactionType) != "SELL" {
+			return true
+		}
+		return false
+	})
 
 	var remainingFailed []FailedOrderSpec
 	var successLines []string

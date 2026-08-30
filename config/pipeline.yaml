@@ -20,6 +20,7 @@ golden_copy_path:
   # -  data/qtum.csv
 strategy: 
    - multibagger
+  # - earlymb
   # - aggresive
   # - balance
   # - value
@@ -39,4 +40,4 @@ rebalance_tolerance_pct:
   - 0.25
 
 hysteresis_rank_buffer:
-  - 5
+  - 2

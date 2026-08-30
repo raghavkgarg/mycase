@@ -12,28 +12,34 @@ import (
 
 // Tracker records the lifecycle of tickers during the selection process.
 type Tracker struct {
-	InitialCount    int
-	SafetyReasons   map[string]string  // ticker -> reason
-	RawScores       map[string]float64 // ticker -> score
-	RawRanks        map[string]int     // ticker -> 1-based rank
-	SectorCapDrops  map[string]string  // ticker -> explanation
-	HysteresisDrops map[string]string  // ticker -> explanation
-	SelectedReasons map[string]string  // ticker -> explanation
-	AdditionDrivers map[string]string  // ticker -> positive driver summary
-	ResultDates     map[string]string  // ticker -> "24-04-26 ->  25-06-26"
+	InitialCount        int
+	SafetyReasons       map[string]string  // ticker -> reason
+	ScoreThresholdDrops map[string]string  // ticker -> reason
+	RawScores           map[string]float64 // ticker -> raw score
+	EffectiveScores     map[string]float64 // ticker -> effective score (raw * regime)
+	RawRanks            map[string]int     // ticker -> 1-based rank
+	SectorCapDrops      map[string]string  // ticker -> explanation
+	HysteresisDrops     map[string]string  // ticker -> explanation
+	SelectedReasons     map[string]string  // ticker -> explanation
+	AdditionDrivers     map[string]string  // ticker -> positive driver summary
+	ResultDates         map[string]string  // ticker -> "24-04-26 ->  25-06-26"
+	RegimeMultiplier    float64
 }
 
 // New initializes and returns a new Tracker instance.
 func New() *Tracker {
 	return &Tracker{
-		SafetyReasons:   make(map[string]string),
-		RawScores:       make(map[string]float64),
-		RawRanks:        make(map[string]int),
-		SectorCapDrops:  make(map[string]string),
-		HysteresisDrops: make(map[string]string),
-		SelectedReasons: make(map[string]string),
-		AdditionDrivers: make(map[string]string),
-		ResultDates:     make(map[string]string),
+		SafetyReasons:       make(map[string]string),
+		ScoreThresholdDrops: make(map[string]string),
+		RawScores:           make(map[string]float64),
+		EffectiveScores:     make(map[string]float64),
+		RawRanks:            make(map[string]int),
+		SectorCapDrops:      make(map[string]string),
+		HysteresisDrops:     make(map[string]string),
+		SelectedReasons:     make(map[string]string),
+		AdditionDrivers:     make(map[string]string),
+		ResultDates:         make(map[string]string),
+		RegimeMultiplier:    1.0,
 	}
 }
 
@@ -42,9 +48,22 @@ func (t *Tracker) RecordSafetyDrop(ticker, reason string) {
 	t.SafetyReasons[ticker] = reason
 }
 
-// RecordRawScore saves the score and rank for a ticker that passed safety filters.
+// RecordScoreThresholdDrop saves a regime score cutoff rejection reason.
+func (t *Tracker) RecordScoreThresholdDrop(ticker, reason string) {
+	t.ScoreThresholdDrops[ticker] = reason
+}
+
+// RecordRawScore saves the raw score and rank for a ticker that passed safety filters.
 func (t *Tracker) RecordRawScore(ticker string, score float64, rank int) {
 	t.RawScores[ticker] = score
+	t.EffectiveScores[ticker] = score * t.RegimeMultiplier
+	t.RawRanks[ticker] = rank
+}
+
+// RecordScore saves both raw and effective score for a ticker.
+func (t *Tracker) RecordScore(ticker string, rawScore, effectiveScore float64, rank int) {
+	t.RawScores[ticker] = rawScore
+	t.EffectiveScores[ticker] = effectiveScore
 	t.RawRanks[ticker] = rank
 }
 
@@ -79,6 +98,58 @@ func (t *Tracker) RecordSelected(ticker string, rank, limit int, isExisting bool
 	} else {
 		t.SelectedReasons[ticker] = fmt.Sprintf("New addition (Rank %d)", rank)
 	}
+}
+
+// SelectionFunnel structurally models and validates exact constituent conservation across funnel stages.
+type SelectionFunnel struct {
+	InitialPool     int      `json:"initial_pool"`
+	Stage1Survivors []string `json:"stage1_survivors"`
+	RegimeRejected  []string `json:"regime_rejected"`
+	SectorCapped    []string `json:"sector_capped"`
+	RankLimited     []string `json:"rank_limited"`
+	FinalSelected   []string `json:"final_selected"`
+}
+
+// Validate asserts that every Stage-1 survivor is strictly accounted for.
+func (f SelectionFunnel) Validate() error {
+	totalAccounted := len(f.RegimeRejected) + len(f.SectorCapped) + len(f.RankLimited) + len(f.FinalSelected)
+	if totalAccounted != len(f.Stage1Survivors) {
+		return fmt.Errorf("funnel conservation mismatch: %d accounted (RegimeRejected:%d + SectorCapped:%d + RankLimited:%d + FinalSelected:%d) vs %d Stage-1 survivors",
+			totalAccounted, len(f.RegimeRejected), len(f.SectorCapped), len(f.RankLimited), len(f.FinalSelected), len(f.Stage1Survivors))
+	}
+	return nil
+}
+
+// BuildFunnel constructs and validates the selection funnel from tracker state.
+func (t *Tracker) BuildFunnel() (SelectionFunnel, error) {
+	var survivors []string
+	for sym := range t.RawScores {
+		survivors = append(survivors, sym)
+	}
+
+	var regimeRej, sectorCap, rankLim, finalSel []string
+	for sym := range t.ScoreThresholdDrops {
+		regimeRej = append(regimeRej, sym)
+	}
+	for sym := range t.SectorCapDrops {
+		sectorCap = append(sectorCap, sym)
+	}
+	for sym := range t.HysteresisDrops {
+		rankLim = append(rankLim, sym)
+	}
+	for sym := range t.SelectedReasons {
+		finalSel = append(finalSel, sym)
+	}
+
+	f := SelectionFunnel{
+		InitialPool:     t.InitialCount,
+		Stage1Survivors: survivors,
+		RegimeRejected:  regimeRej,
+		SectorCapped:    sectorCap,
+		RankLimited:     rankLim,
+		FinalSelected:   finalSel,
+	}
+	return f, f.Validate()
 }
 
 type parsedDriverMetrics struct {
@@ -122,32 +193,45 @@ func parseDriverString(s string) parsedDriverMetrics {
 	return m
 }
 
-func formatDriverDelta(prevStr, currStr string) string {
-	if currStr == "" {
+func formatValOrDelta(prevVal, currVal, unit string) string {
+	if currVal == "" {
 		return ""
 	}
-	if prevStr == "" {
-		prevStr = currStr
+	if prevVal == "" || prevVal == currVal {
+		return currVal + unit
+	}
+	return prevVal + unit + " -> " + currVal + unit
+}
+
+func formatDriverDelta(prevStr, currStr string) string {
+	if currStr == "" || prevStr == "" || prevStr == currStr {
+		return ""
 	}
 	p := parseDriverString(prevStr)
 	c := parseDriverString(currStr)
 
-	if c.isMulti && p.isMulti && p.ttmGrowth != "" {
-		ttmStr := p.ttmGrowth + "% to " + c.ttmGrowth + "%"
-		cagrStr := p.cagr3y + "% to " + c.cagr3y + "%"
-		roceStr := p.roce + "% to " + c.roce + "%"
-		instStr := p.instStake + "% to " + c.instStake + "%"
+	if c.isMulti && p.isMulti {
+		if p.ttmGrowth == c.ttmGrowth && p.cagr3y == c.cagr3y && p.roce == c.roce && p.instStake == c.instStake {
+			return ""
+		}
+		ttmStr := formatValOrDelta(p.ttmGrowth, c.ttmGrowth, "%")
+		cagrStr := formatValOrDelta(p.cagr3y, c.cagr3y, "%")
+		roceStr := formatValOrDelta(p.roce, c.roce, "%")
+		instStr := formatValOrDelta(p.instStake, c.instStake, "%")
 		return fmt.Sprintf("TTM Growth: %s (3Y: %s), ROCE: %s, Inst Stake: %s", ttmStr, cagrStr, roceStr, instStr)
 	}
 
-	if c.isValue && p.isValue && p.forwardPE != "" {
-		peStr := p.forwardPE + " to " + c.forwardPE
-		fcfStr := p.fcfYield + "% to " + c.fcfYield + "%"
-		instStr := p.instStake + "% to " + c.instStake + "%"
+	if c.isValue && p.isValue {
+		if p.forwardPE == c.forwardPE && p.fcfYield == c.fcfYield && p.instStake == c.instStake {
+			return ""
+		}
+		peStr := formatValOrDelta(p.forwardPE, c.forwardPE, "")
+		fcfStr := formatValOrDelta(p.fcfYield, c.fcfYield, "%")
+		instStr := formatValOrDelta(p.instStake, c.instStake, "%")
 		return fmt.Sprintf("Forward PE: %s, FCF Yield: %s, Inst Stake: %s", peStr, fcfStr, instStr)
 	}
 
-	return currStr
+	return ""
 }
 
 // RecordResultDates logs the quarterly result dates (prev -> coming) for a ticker.
@@ -221,6 +305,7 @@ func (t *Tracker) SaveReport(displayName, method string, existingHoldings map[st
 	// Compute summary statistics
 	selectedCount := len(t.SelectedReasons)
 	safetyCount := len(t.SafetyReasons)
+	scoreCutoffCount := len(t.ScoreThresholdDrops)
 	sectorCapCount := len(t.SectorCapDrops)
 	hysteresisCount := len(t.HysteresisDrops)
 	passedSafetyCount := t.InitialCount - safetyCount
@@ -241,41 +326,51 @@ func (t *Tracker) SaveReport(displayName, method string, existingHoldings map[st
 	writeLine("====================================================================\n\n")
 
 	writeLine("--- SUMMARY ---\n")
-	writeLine("Initial pool size:              %d constituents\n", t.InitialCount)
-	writeLine("Passed Safety/Hard Filters:     %d stocks\n", passedSafetyCount)
-	writeLine("Eliminated by Safety Filters:   %d stocks\n", safetyCount)
-	writeLine("Eliminated by Sector Caps:      %d stocks\n", sectorCapCount)
-	writeLine("Eliminated by Rank Limits:      %d stocks\n", hysteresisCount)
-	writeLine("Final Selected Stocks:          %d stocks\n\n", selectedCount)
+	writeLine("Initial pool size:                     %d constituents\n", t.InitialCount)
+	writeLine("Passed Stage 1 Safety/Hard Filters:    %d stocks\n", passedSafetyCount)
+	writeLine("Eliminated by Stage 1 Safety Filters:  %d stocks\n", safetyCount)
+	if scoreCutoffCount > 0 {
+		writeLine("Eliminated by Regime Score Cutoff:     %d stocks\n", scoreCutoffCount)
+	}
+	writeLine("Eliminated by Sector Caps:             %d stocks\n", sectorCapCount)
+	writeLine("Eliminated by Rank Limits:             %d stocks\n", hysteresisCount)
+	writeLine("Final Selected Stocks:                 %d stocks\n\n", selectedCount)
 
 	// 1. Selected Stocks Section
-	writeLine("=============================================================================================================\n")
+	writeLine("===================================================================================================================================\n")
 	writeLine("                                               SELECTED STOCKS\n")
-	writeLine("=============================================================================================================\n")
+	writeLine("===================================================================================================================================\n")
 	if len(t.SelectedReasons) == 0 {
 		writeLine("No stocks were selected.\n")
 	} else {
 		type selectedRow struct {
-			ticker string
-			score  float64
-			rank   int
-			reason string
+			ticker         string
+			rawScore       float64
+			effectiveScore float64
+			rank           int
+			reason         string
 		}
 		var sRows []selectedRow
 		for ticker, reason := range t.SelectedReasons {
+			rawS := t.RawScores[ticker]
+			effS := t.EffectiveScores[ticker]
+			if effS == 0 && rawS > 0 && t.RegimeMultiplier > 0 {
+				effS = rawS * t.RegimeMultiplier
+			}
 			sRows = append(sRows, selectedRow{
-				ticker: ticker,
-				score:  t.RawScores[ticker],
-				rank:   t.RawRanks[ticker],
-				reason: reason,
+				ticker:         ticker,
+				rawScore:       rawS,
+				effectiveScore: effS,
+				rank:           t.RawRanks[ticker],
+				reason:         reason,
 			})
 		}
 		sort.Slice(sRows, func(i, j int) bool {
 			return sRows[i].rank < sRows[j].rank
 		})
 
-		writeLine("%-16s | %-20s | %-6s | %-8s | %-14s | %-21s | %s\n", "Ticker", "Sector", "Score", "Raw Rank", "Weight Decided", "Result Prev -> Coming", "Selection Reason")
-		writeLine("---------------------------------------------------------------------------------------------------------------------------------------------\n")
+		writeLine("%-16s | %-20s | %-9s | %-9s | %-8s | %-14s | %-21s | %s\n", "Ticker", "Sector", "Raw Score", "Eff Score", "Raw Rank", "Weight Decided", "Result Prev -> Coming", "Selection Reason")
+		writeLine("-------------------------------------------------------------------------------------------------------------------------------------------------------------------\n")
 		for _, r := range sRows {
 			sec := sectors[r.ticker]
 			if sec == "" {
@@ -325,20 +420,21 @@ func (t *Tracker) SaveReport(displayName, method string, existingHoldings map[st
 				reasonStr = fmt.Sprintf("No Change (Retained Rank %d <= 25)", r.rank)
 			}
 
-			writeLine("%-16s | %-20s | %5.1f  | %-8d | %-14s | %-21s | %s\n", r.ticker, sec, r.score, r.rank, weightStr, resDates, reasonStr)
+			writeLine("%-16s | %-20s | %9.1f | %9.1f | %-8d | %-14s | %-21s | %s\n", r.ticker, sec, r.rawScore, r.effectiveScore, r.rank, weightStr, resDates, reasonStr)
 		}
 	}
 	writeLine("\n")
 
 	// 2. Removed Active Holdings (Exits) Section
-	writeLine("=============================================================================================\n")
+	writeLine("=========================================================================================================\n")
 	writeLine("                               REMOVED ACTIVE HOLDINGS (EXITS)\n")
-	writeLine("=============================================================================================\n")
+	writeLine("=========================================================================================================\n")
 	var removedRows []struct {
-		ticker string
-		score  float64
-		rank   int
-		reason string
+		ticker         string
+		rawScore       float64
+		effectiveScore float64
+		rank           int
+		reason         string
 	}
 
 	for ticker := range existingHoldings {
@@ -352,21 +448,28 @@ func (t *Tracker) SaveReport(displayName, method string, existingHoldings map[st
 				reason = r
 			}
 
-			score := 0.0
+			rawScore := 0.0
+			effScore := 0.0
 			rank := 999
 			if s, ok := t.RawScores[ticker]; ok {
-				score = s
+				rawScore = s
+			}
+			if s, ok := t.EffectiveScores[ticker]; ok {
+				effScore = s
+			} else if rawScore > 0 && t.RegimeMultiplier > 0 {
+				effScore = rawScore * t.RegimeMultiplier
 			}
 			if r, ok := t.RawRanks[ticker]; ok {
 				rank = r
 			}
 
 			removedRows = append(removedRows, struct {
-				ticker string
-				score  float64
-				rank   int
-				reason string
-			}{ticker, score, rank, reason})
+				ticker         string
+				rawScore       float64
+				effectiveScore float64
+				rank           int
+				reason         string
+			}{ticker, rawScore, effScore, rank, reason})
 		}
 	}
 
@@ -376,55 +479,86 @@ func (t *Tracker) SaveReport(displayName, method string, existingHoldings map[st
 		sort.Slice(removedRows, func(i, j int) bool {
 			return removedRows[i].ticker < removedRows[j].ticker
 		})
-		writeLine("%-16s | %-20s | %-6s | %-8s | %s\n", "Ticker", "Sector", "Score", "Raw Rank", "Exit Reason")
-		writeLine("---------------------------------------------------------------------------------------------\n")
+		writeLine("%-16s | %-20s | %-9s | %-9s | %-8s | %s\n", "Ticker", "Sector", "Raw Score", "Eff Score", "Raw Rank", "Exit Reason")
+		writeLine("---------------------------------------------------------------------------------------------------------\n")
 		for _, r := range removedRows {
 			rankStr := fmt.Sprintf("%d", r.rank)
 			if r.rank == 999 {
 				rankStr = "N/A"
 			}
-			scoreStr := fmt.Sprintf("%5.1f", r.score)
+			rawScoreStr := fmt.Sprintf("%9.1f", r.rawScore)
+			effScoreStr := fmt.Sprintf("%9.1f", r.effectiveScore)
 			if r.rank == 999 {
-				scoreStr = "N/A"
+				rawScoreStr = "      N/A"
+				effScoreStr = "      N/A"
 			}
 			sec := sectors[r.ticker]
 			if sec == "" {
 				sec = "Unknown"
 			}
-			writeLine("%-16s | %-20s | %-6s | %-8s | %s\n", r.ticker, sec, scoreStr, rankStr, r.reason)
+			writeLine("%-16s | %-20s | %s | %s | %-8s | %s\n", r.ticker, sec, rawScoreStr, effScoreStr, rankStr, r.reason)
 		}
 	}
 	writeLine("\n")
 
 	// 3. Rejected Candidates (Not in previous holdings, but failed caps or rankings)
-	writeLine("=============================================================================================\n")
+	writeLine("=========================================================================================================\n")
 	writeLine("                                  REJECTED NEW CANDIDATES\n")
-	writeLine("=============================================================================================\n")
+	writeLine("=========================================================================================================\n")
 	var rejectedCandidates []struct {
-		ticker string
-		score  float64
-		rank   int
-		reason string
+		ticker         string
+		rawScore       float64
+		effectiveScore float64
+		rank           int
+		reason         string
 	}
 
 	for ticker, reason := range t.SectorCapDrops {
 		if _, ok := existingHoldings[ticker]; !ok {
+			rawS := t.RawScores[ticker]
+			effS := t.EffectiveScores[ticker]
+			if effS == 0 && rawS > 0 && t.RegimeMultiplier > 0 {
+				effS = rawS * t.RegimeMultiplier
+			}
 			rejectedCandidates = append(rejectedCandidates, struct {
-				ticker string
-				score  float64
-				rank   int
-				reason string
-			}{ticker, t.RawScores[ticker], t.RawRanks[ticker], reason})
+				ticker         string
+				rawScore       float64
+				effectiveScore float64
+				rank           int
+				reason         string
+			}{ticker, rawS, effS, t.RawRanks[ticker], reason})
+		}
+	}
+	for ticker, reason := range t.ScoreThresholdDrops {
+		if _, ok := existingHoldings[ticker]; !ok {
+			rawS := t.RawScores[ticker]
+			effS := t.EffectiveScores[ticker]
+			if effS == 0 && rawS > 0 && t.RegimeMultiplier > 0 {
+				effS = rawS * t.RegimeMultiplier
+			}
+			rejectedCandidates = append(rejectedCandidates, struct {
+				ticker         string
+				rawScore       float64
+				effectiveScore float64
+				rank           int
+				reason         string
+			}{ticker, rawS, effS, t.RawRanks[ticker], reason})
 		}
 	}
 	for ticker, reason := range t.HysteresisDrops {
 		if _, ok := existingHoldings[ticker]; !ok {
+			rawS := t.RawScores[ticker]
+			effS := t.EffectiveScores[ticker]
+			if effS == 0 && rawS > 0 && t.RegimeMultiplier > 0 {
+				effS = rawS * t.RegimeMultiplier
+			}
 			rejectedCandidates = append(rejectedCandidates, struct {
-				ticker string
-				score  float64
-				rank   int
-				reason string
-			}{ticker, t.RawScores[ticker], t.RawRanks[ticker], reason})
+				ticker         string
+				rawScore       float64
+				effectiveScore float64
+				rank           int
+				reason         string
+			}{ticker, rawS, effS, t.RawRanks[ticker], reason})
 		}
 	}
 
@@ -434,14 +568,14 @@ func (t *Tracker) SaveReport(displayName, method string, existingHoldings map[st
 		sort.Slice(rejectedCandidates, func(i, j int) bool {
 			return rejectedCandidates[i].rank < rejectedCandidates[j].rank
 		})
-		writeLine("%-16s | %-20s | %-6s | %-8s | %s\n", "Ticker", "Sector", "Score", "Raw Rank", "Rejection Reason")
-		writeLine("---------------------------------------------------------------------------------------------\n")
+		writeLine("%-16s | %-20s | %-9s | %-9s | %-8s | %s\n", "Ticker", "Sector", "Raw Score", "Eff Score", "Raw Rank", "Rejection Reason")
+		writeLine("---------------------------------------------------------------------------------------------------------\n")
 		for _, r := range rejectedCandidates {
 			sec := sectors[r.ticker]
 			if sec == "" {
 				sec = "Unknown"
 			}
-			writeLine("%-16s | %-20s | %5.1f  | %-8d | %s\n", r.ticker, sec, r.score, r.rank, r.reason)
+			writeLine("%-16s | %-20s | %9.1f | %9.1f | %-8d | %s\n", r.ticker, sec, r.rawScore, r.effectiveScore, r.rank, r.reason)
 		}
 	}
 	writeLine("\n")

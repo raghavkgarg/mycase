@@ -172,6 +172,55 @@ IsAuthenticated() bool
 
 `zerodha.New()` falls back to `MockBroker` when credentials are absent. This makes every command work in dry-run mode without special flags.
 
+### Multi-Tier Data Fetching Architecture
+
+Data fetching across price quotes, corporate filings, and fundamentals is organized into a resilient multi-tier pipeline:
+
+```mermaid
+graph TD
+    subgraph Client["mycase Core Pipeline"]
+        DF["pkg/datafetcher"]
+        YF["pkg/yfinance"]
+        CACHE["pkg/cache (DuckDB)"]
+    end
+
+    subgraph Tier1["Tier 1: Real-time Prices"]
+        KITE["Zerodha Kite Quote API"]
+        YFQ["Yahoo Finance Chart API"]
+    end
+
+    subgraph Tier2["Tier 2: Official NSE Exchange Engine"]
+        PY_NSE["scripts/fetch_nse_data.py (nselib)"]
+        NSE_CAL["NSE Event Calendar (Board Meetings & Result Dates)"]
+        NSE_DEL["NSE Deliverable Position Data (% Delivery & Vol)"]
+        NSE_FIN["NSE XBRL Quarterly Financial Results"]
+        NSE_CA["NSE Corporate Actions (Dividends & Splits)"]
+    end
+
+    subgraph Tier3["Tier 3: Secondary Aggregators (Fallback)"]
+        SCR["Screener.in Direct HTML Scraper"]
+        YF_SUM["Yahoo Finance quoteSummary API"]
+    end
+
+    DF -->|Cache Check / Store| CACHE
+    DF -->|Primary Realtime Quotes| YFQ
+    YFQ -.->|Fallback Quote Source| KITE
+
+    YF -->|1. Try Official NSE Engine| PY_NSE
+    PY_NSE --> NSE_CAL
+    PY_NSE --> NSE_DEL
+    PY_NSE --> NSE_FIN
+    PY_NSE --> NSE_CA
+
+    YF -->|2. Fallback if Python / nselib fails| SCR
+    YF -->|3. Fundamental Metrics & Ratio Summary| YF_SUM
+```
+
+1. **Tier 1 (Real-time Prices)**: `pkg/datafetcher` requests live quotes via Yahoo Finance, with automatic fallback to Zerodha Kite API.
+2. **Tier 2 (Official Exchange Engine)**: `pkg/yfinance` invokes `scripts/fetch_nse_data.py` (`nselib`) to fetch official board meeting/earnings dates, delivery volume stats, quarterly XBRL results, and corporate actions directly from the National Stock Exchange.
+3. **Tier 3 (Secondary Aggregators & Fallback)**: Direct HTTP HTML parsing of `screener.in` serves as a fallback if `nselib` is unavailable; Yahoo Finance `quoteSummary` fills general fundamental ratio summaries.
+4. **DuckDB Persistent Cache**: `pkg/cache` caches quotes and fundamental payloads to eliminate redundant network round-trips across pipeline commands.
+
 ### In-Process Pipeline
 
 All pipeline steps share one Go process: one DuckDB connection, one Yahoo Finance session, one broker client. `mycase pipeline` incurs zero inter-process overhead. The only coordination is sequential function calls — no channels, no goroutines across steps.
@@ -179,6 +228,7 @@ All pipeline steps share one Go process: one DuckDB connection, one Yahoo Financ
 Concurrency happens within individual commands: `backtest` fetches all tickers concurrently via goroutines + buffered channel; `pick` fetches fundamentals for 250 stocks in parallel with a semaphore.
 
 ---
+
 
 ## 5. Stock Selection Algorithm
 

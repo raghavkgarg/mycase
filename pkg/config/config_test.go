@@ -143,6 +143,26 @@ func TestSaveAndLoadConfig_RoundTrip(t *testing.T) {
 	}
 }
 
+func TestLoadConfig_HTTPProxy(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	original := &Config{APIKey: "key123", APISecret: "secret456", AccessToken: "token789", HTTPProxy: "http://proxy.example.com:8080"}
+
+	if err := SaveConfig(path, original); err != nil {
+		t.Fatalf("SaveConfig: %v", err)
+	}
+	loaded, err := LoadConfig(path)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	if loaded.HTTPProxy != "http://proxy.example.com:8080" {
+		t.Errorf("expected HTTPProxy=http://proxy.example.com:8080, got %s", loaded.HTTPProxy)
+	}
+	if os.Getenv("HTTP_PROXY") != "http://proxy.example.com:8080" {
+		t.Errorf("expected HTTP_PROXY env var to be set, got %s", os.Getenv("HTTP_PROXY"))
+	}
+}
+
 func TestLoadConfig_MissingFile(t *testing.T) {
 	_, err := LoadConfig("/nonexistent/config.json")
 	if err == nil {

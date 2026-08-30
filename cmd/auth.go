@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"strings"
@@ -68,6 +69,16 @@ func runAuthCmd(ctx context.Context) error {
 	}
 
 	client := kiteconnect.New(apiKey)
+	if cfg != nil && cfg.HTTPProxy != "" {
+		if proxyURL, err := url.Parse(cfg.HTTPProxy); err == nil {
+			client.SetHTTPClient(&http.Client{
+				Timeout: 10 * time.Second,
+				Transport: &http.Transport{
+					Proxy: http.ProxyURL(proxyURL),
+				},
+			})
+		}
+	}
 	loginURL := client.GetLoginURL()
 	fmt.Println("\nInitializing authorization flow...")
 
@@ -137,6 +148,9 @@ p{font-size:16px;line-height:1.5;margin-bottom:30px}
 	newCfg := &config.Config{
 		APIKey:      apiKey,
 		AccessToken: session.AccessToken,
+	}
+	if cfg != nil && cfg.HTTPProxy != "" {
+		newCfg.HTTPProxy = cfg.HTTPProxy
 	}
 
 	if saveCreds {

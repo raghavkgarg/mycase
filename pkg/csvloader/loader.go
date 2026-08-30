@@ -51,6 +51,7 @@ func ParseBasket(r io.Reader) (map[string]float64, []string, error) {
 		}
 
 		ticker := strings.TrimSpace(record[tickerIdx])
+		ticker = strings.ReplaceAll(ticker, "::", ":")
 		if ticker == "" {
 			continue
 		}
@@ -162,6 +163,9 @@ func GetUniverseName(filePath string) string {
 		"aggressive":       true,
 		"conservative":     true,
 		"multibagger":      true,
+		"early_multibagger":true,
+		"earlymb":          true,
+		"value":            true,
 		"volatility":       true,
 		"multifactor":      true,
 		"moderate":         true,

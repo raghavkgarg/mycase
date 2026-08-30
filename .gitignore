@@ -1,6 +1,12 @@
 # Compiled binaries
+mycase
+*.exe
 bin/
 dist/
+
+# Logs
+logs/
+*.log
 
 # Cached data & Yahoo Finance historical price cache
 data/.cache/
@@ -31,3 +37,4 @@ report/
 # OS-specific files
 .DS_Store
 Thumbs.db
+.venv
