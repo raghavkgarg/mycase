@@ -331,13 +331,23 @@ func LoadCSVLinks(filename string) (map[string]string, error) {
 // UserDefaults holds user-level preference defaults loaded from config/defaults.json.
 // These provide convenience defaults for CLI flags; explicit flags always override.
 type UserDefaults struct {
-	Broker         string `json:"broker"`
-	Market         string `json:"market"`
-	Index          string `json:"index"`
-	Method         string `json:"method"`
-	TopN           int    `json:"top_n"`
-	Range          string `json:"range"`
-	PipelineConfig string `json:"pipeline_config"`
+	Broker         string        `json:"broker"`
+	Market         string        `json:"market"`
+	Index          string        `json:"index"`
+	Method         string        `json:"method"`
+	TopN           int           `json:"top_n"`
+	Range          string        `json:"range"`
+	PipelineConfig string        `json:"pipeline_config"`
+	Logging        LoggingConfig `json:"logging"`
+}
+
+// LoggingConfig holds structured-logging defaults. CLI flags and env vars
+// (MYCASE_LOG_LEVEL, MYCASE_LOG_DIR) override these; see main.go wiring.
+type LoggingConfig struct {
+	Dir        string `json:"dir"`         // directory for JSON log files (default: data/logs)
+	Level      string `json:"level"`       // debug | info | warn | error (default: info)
+	File       *bool  `json:"file"`        // write JSON log file (default: true; pointer so absence != false)
+	RetainDays int    `json:"retain_days"` // days to keep log files (default: 14)
 }
 
 // LoadUserDefaults reads config/defaults.json and returns user preferences.

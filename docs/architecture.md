@@ -468,6 +468,18 @@ The DP charge is flat, not percentage-based. It makes small sell trades dispropo
 
 `ClassifySell` returns `TaxUnknown` when the purchase date is not available from the broker (Zerodha API does not expose purchase dates in holdings). The basket command prints "check manually" warnings for these — it does not guess or default to a wrong classification.
 
+### US Cost Model (Schwab, `pkg/costs/us.go`)
+
+US equity trading on Schwab is effectively free, so the US cost model returns near-zero charges and the micro-transaction filter is unnecessary (no per-ISIN DP charge to avoid):
+
+| Charge | Rate | Direction |
+|--------|------|-----------|
+| Commission | $0 | — (Schwab eliminated equity commissions) |
+| SEC fee | ~$8.00 per $1M | Sell only — negligible |
+| TAF (FINRA) | $0.000166/share, max $0.01/share | Sell only |
+
+US tax classification: short-term (< 1 year, up to 37% federal) vs long-term (≥ 1 year, 15/20%), with a 30-day wash-sale window. Unlike Zerodha, Schwab exposes purchase history via `/transactions`, so US sells get real short/long-term classification from the FIFO lots (`pkg/tax`) instead of `TaxUnknown`. See §`tax` command and design decisions D11–D12.
+
 ---
 
 ## 10. Data Infrastructure
@@ -565,3 +577,14 @@ FIFO lots and realized gains are never edited in place — they are recomputed f
 ### D12 — Order Sequencing Is How Tax-Optimization Takes Effect
 
 `executor.ExecuteBasketOrders` places orders in slice order. Rather than adding tax awareness inside the executor, `basket --tax-optimize` reorders the `[]broker.Order` slice before handing it off: loss-harvesting sells first (so the harvest is captured even if a later order fails and to free cash), then gain sells, then buys. Wash-sale detection is advisory — it flags a buy that would repurchase a security sold at a loss in the same batch, but does not block execution (the investor decides). This keeps the executor unchanged and makes the tax logic a self-contained, testable transform (`tax.TaxOptimizeOrders`).
+
+### D13 — Schwab: OAuth2 with Auto-Refresh, No GTT
+
+Schwab's Trader API (`pkg/broker/schwab`) uses OAuth2 `authorization_code` flow, unlike Zerodha's API-key + daily-login model. The tradeoffs that shaped the implementation:
+
+- **Token lifetimes**: access token ~30 min (auto-refreshed before each call when within 60s of expiry), refresh token ~7 days (requires re-running `mycase auth --broker schwab`). Tokens live in `config/schwab_token.json` (gitignored); app credentials in `config/schwab.json` (gitignored).
+- **Dual-purpose API**: the same authenticated client serves both market data (`marketdata/v1/` — quotes, price history, fundamentals) and brokerage (`trader/v1/` — accounts, positions, orders, transactions). Accounts are addressed by hashed ID, not raw number.
+- **Rate limit**: 120 req/min ceiling, enforced client-side by a sliding window. Batch via `/quotes?symbols=A,B,C`; cache aggressively.
+- **No GTT**: Schwab has no server-side Good-Till-Triggered order (a Zerodha/Kite innovation). `PlaceGTT` returns an error directing the caller to a GTC stop-limit via `PlaceOrder` instead. GTT is India-specific and stays in the Zerodha implementation only.
+- **T+1 settlement, no buckets**: US settles T+1 with no visible T1/T2 quantity split, so `Holding.T1Quantity`/`T2Quantity` stay 0 (Zerodha exposes both).
+- **Custom HTTP client**: there is no official Go SDK for Schwab (unlike `gokiteconnect/v4` for Zerodha), so `pkg/broker/schwab` is a hand-rolled `net/http` client. Broker factory (`cmd/broker.go`) selects Schwab or Zerodha from `config/defaults.json`; both satisfy the `broker.Broker` interface (D6), so commands are broker-agnostic.

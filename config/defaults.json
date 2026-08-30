@@ -5,5 +5,11 @@
   "method": "us_quality_momentum",
   "top_n": 20,
   "range": "3mo",
-  "pipeline_config": "config/pipeline_us.yaml"
+  "pipeline_config": "config/pipeline_us.yaml",
+  "logging": {
+    "dir": "data/logs",
+    "level": "info",
+    "file": true,
+    "retain_days": 14
+  }
 }

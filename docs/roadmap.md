@@ -285,6 +285,11 @@ Implemented as the `pkg/tax` package (FIFO engine + TLH logic, broker-agnostic a
 
 **Effort**: ~2 weeks. The hard part is getting consistent NAV history; the math is standard.
 
+**Implementation split** (see `docs/refactor.md` Phase 5 for full design):
+- **Phase 5a** (in progress) — NAV foundation: `pkg/attribution` (daily NAV via `datafetcher.Router`, alpha/beta/information ratio vs benchmark), `nav_history` DuckDB table, `mycase performance --vs-benchmark`. Written slog-native (R14.3).
+- **Phase 5b** — return decomposition (selection/rebalancing/tax), dashboard performance tab, negative-alpha alert nudge.
+- **Benchmark**: `US:SPY` (the actual ETF, routed through Schwab) rather than the `^GSPC` index the backtest uses — SPY is the honest "you-could-have-bought-this" baseline. Configurable.
+
 ---
 
 ### Phase 6: Options Overlay (Post-Maturity)
@@ -316,7 +321,7 @@ Implemented as the `pkg/tax` package (FIFO engine + TLH logic, broker-agnostic a
 | ~~4. Asset Allocation~~ | — | — | ~~India+US portfolio~~ | ❌ Dropped |
 | 7. DuckDB Pipeline Migration | Sep 2026 | None | Atomic pipeline, run history, query-based diffs | ✅ Done |
 | 4. Tax-Loss Harvesting | ~~Oct 2026~~ | Phase 7 ✅ | 0.5-1.5% tax alpha | ✅ Done |
-| 5. Performance Attribution | Nov 2026 | Phase 3 ✅ | Know if system works | ⬜ Next |
+| 5. Performance Attribution | Nov 2026 | Phase 3 ✅ | Know if system works | 🟡 5a in progress |
 | 6. Options Overlay | H2 2027 | Phase 5 + 6mo live data | Income optimization | ⬜ |
 
 ---
