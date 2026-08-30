@@ -36,11 +36,17 @@ func CalcMaxDrawdown(values []float64) float64 {
 
 // CalcSharpe returns the annualized Sharpe ratio using indiaRiskFreeRate.
 func CalcSharpe(navValues []float64) float64 {
+	return CalcSharpeRF(navValues, indiaRiskFreeRate)
+}
+
+// CalcSharpeRF returns the annualized Sharpe ratio using the given annual
+// risk-free rate (fraction, e.g. 0.045 = 4.5%).
+func CalcSharpeRF(navValues []float64, riskFree float64) float64 {
 	rets := dailyReturns(navValues)
 	if len(rets) == 0 {
 		return 0
 	}
-	dailyRF := indiaRiskFreeRate / 252
+	dailyRF := riskFree / 252
 	excess := make([]float64, len(rets))
 	for i, r := range rets {
 		excess[i] = r - dailyRF
@@ -56,11 +62,17 @@ func CalcSharpe(navValues []float64) float64 {
 // CalcSortino returns the annualized Sortino ratio using indiaRiskFreeRate.
 // Downside deviation uses all n returns in the denominator (standard Sortino formula).
 func CalcSortino(navValues []float64) float64 {
+	return CalcSortinoRF(navValues, indiaRiskFreeRate)
+}
+
+// CalcSortinoRF returns the annualized Sortino ratio using the given annual
+// risk-free rate. Downside deviation uses all n returns in the denominator.
+func CalcSortinoRF(navValues []float64, riskFree float64) float64 {
 	rets := dailyReturns(navValues)
 	if len(rets) == 0 {
 		return 0
 	}
-	dailyRF := indiaRiskFreeRate / 252
+	dailyRF := riskFree / 252
 	m := mean(rets) - dailyRF
 
 	var downsideVar float64
@@ -114,7 +126,12 @@ func CalcBeta(portValues, benchValues []float64) float64 {
 
 // CalcAlpha computes Jensen's alpha: portCAGR − (rf + β*(benchCAGR − rf)).
 func CalcAlpha(portCAGR, benchCAGR, beta float64) float64 {
-	return portCAGR - (indiaRiskFreeRate + beta*(benchCAGR-indiaRiskFreeRate))
+	return CalcAlphaRF(portCAGR, benchCAGR, beta, indiaRiskFreeRate)
+}
+
+// CalcAlphaRF computes Jensen's alpha with an explicit annual risk-free rate.
+func CalcAlphaRF(portCAGR, benchCAGR, beta, riskFree float64) float64 {
+	return portCAGR - (riskFree + beta*(benchCAGR-riskFree))
 }
 
 // dailyReturns computes day-over-day fractional returns from a NAV series.

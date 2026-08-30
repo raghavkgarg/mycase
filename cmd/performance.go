@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"database/sql"
 	"encoding/csv"
 	"fmt"
 	"os"
@@ -9,9 +10,14 @@ import (
 	"strings"
 	"time"
 
+	"log/slog"
+
 	"github.com/urfave/cli/v3"
 
+	"github.com/raghavkgarg/mycase/pkg/attribution"
 	"github.com/raghavkgarg/mycase/pkg/backtest"
+	"github.com/raghavkgarg/mycase/pkg/cache"
+	"github.com/raghavkgarg/mycase/pkg/csvloader"
 )
 
 var PerformanceCommand = &cli.Command{
@@ -22,11 +28,17 @@ var PerformanceCommand = &cli.Command{
 		&cli.FloatFlag{Name: "capital", Value: 100000.0, Usage: "Total capital invested"},
 		&cli.StringFlag{Name: "date", Usage: "Purchase date in YYYY-MM-DD or YYYYMMDD format (IST, default: today)"},
 		&cli.StringFlag{Name: "time", Value: "09:30", Usage: "Purchase time in HH:MM format (IST)"},
+		&cli.BoolFlag{Name: "vs-benchmark", Usage: "Build a daily NAV series and report alpha / information ratio vs a passive benchmark, persisting the series to the cache"},
+		&cli.StringFlag{Name: "benchmark", Usage: "Benchmark ticker for --vs-benchmark (default: US:SPY)"},
+		&cli.StringFlag{Name: "since", Usage: "Start date for --vs-benchmark NAV series in YYYY-MM-DD or YYYYMMDD (default: 1 year ago)"},
 	},
 	Action: runPerformance,
 }
 
 func runPerformance(ctx context.Context, c *cli.Command) error {
+	if c.Bool("vs-benchmark") {
+		return runVsBenchmark(ctx, c.String("file"), c.Float("capital"), c.String("since"), c.String("benchmark"))
+	}
 	return runPerfWithParams(ctx, c.String("file"), c.Float("capital"), c.String("date"), c.String("time"))
 }
 
@@ -176,4 +188,105 @@ func parsePerfDate(dateStr string, loc *time.Location) (time.Time, error) {
 		return t, nil
 	}
 	return time.Time{}, fmt.Errorf("invalid date format: %s. Use YYYY-MM-DD or YYYYMMDD", dateStr)
+}
+
+// runVsBenchmark builds a daily NAV series for the portfolio versus a passive
+// benchmark (default US:SPY), reports vs-benchmark metrics (alpha, beta,
+// information ratio, tracking error), and persists the NAV series to the cache.
+func runVsBenchmark(ctx context.Context, filePath string, capital float64, sinceStr, benchmark string) error {
+	if filePath == "" {
+		return fmt.Errorf("--file parameter is required")
+	}
+
+	weights, tickers, err := csvloader.LoadBasketCSV(filePath)
+	if err != nil {
+		return fmt.Errorf("loading portfolio %s: %w", filePath, err)
+	}
+	var holdings []attribution.Holding
+	for _, tk := range tickers {
+		if w := weights[tk]; w > 0 {
+			holdings = append(holdings, attribution.Holding{Ticker: tk, Weight: w})
+		}
+	}
+	if len(holdings) == 0 {
+		return fmt.Errorf("no holdings with positive weight in %s", filePath)
+	}
+
+	// Range: [since, today]. Default since = 1 year ago.
+	nyLoc, err := time.LoadLocation("America/New_York")
+	if err != nil {
+		nyLoc = time.UTC
+	}
+	to := time.Now().In(nyLoc)
+	var from time.Time
+	if sinceStr != "" {
+		from, err = parsePerfDate(sinceStr, nyLoc)
+		if err != nil {
+			return err
+		}
+	} else {
+		from = to.AddDate(-1, 0, 0)
+	}
+
+	portfolioName := csvloader.GetUniverseName(filePath)
+
+	tracker := attribution.NewTracker(newDataRouter(), slog.Default())
+	cfg := attribution.Config{
+		InitialCapital: capital,
+		From:           from,
+		To:             to,
+		Benchmark:      benchmark, // "" → DefaultBenchmark (US:SPY)
+		Location:       nyLoc,
+	}
+
+	slog.InfoContext(ctx, "performance.vs_benchmark.start",
+		"portfolio", portfolioName, "holdings", len(holdings),
+		"from", from.Format("2006-01-02"), "to", to.Format("2006-01-02"),
+		"benchmark", cfg.Benchmark)
+
+	points, err := tracker.BuildNAVSeries(ctx, holdings, cfg)
+	if err != nil {
+		return fmt.Errorf("building NAV series: %w", err)
+	}
+
+	res := attribution.Attribution(points, cfg.RiskFree)
+
+	// Persist best-effort — a cache failure should not fail the report.
+	if store := attribution.NewStore(cacheConn()); store != nil {
+		if perr := store.InsertNAVPoints(ctx, portfolioName, points); perr != nil {
+			slog.WarnContext(ctx, "performance.nav_persist_failed", "error", perr.Error())
+		} else {
+			slog.InfoContext(ctx, "performance.nav_persisted", "portfolio", portfolioName, "points", len(points))
+		}
+	}
+
+	printAttribution(portfolioName, cfg.Benchmark, res)
+	return nil
+}
+
+// cacheConn returns the global cache's *sql.DB, or nil if the cache is unset.
+func cacheConn() *sql.DB {
+	if c := cache.GetDB(); c != nil {
+		return c.Conn()
+	}
+	return nil
+}
+
+func printAttribution(portfolio, benchmark string, r attribution.Result) {
+	fmt.Printf("\n--- Performance vs %s ---\n", benchmark)
+	fmt.Printf("Portfolio:            %s\n", portfolio)
+	fmt.Printf("Period:               %s → %s (%d trading days)\n",
+		r.From.Format("2006-01-02"), r.To.Format("2006-01-02"), r.TradingDays)
+	fmt.Printf("Initial Capital:      $%.2f\n", r.InitialCapital)
+	fmt.Printf("Portfolio Final:      $%.2f  (%+.2f%%)\n", r.FinalValue, r.TotalReturn*100)
+	fmt.Printf("Benchmark Final:      $%.2f  (%+.2f%%)\n", r.BenchmarkFinal, r.BenchmarkReturn*100)
+	fmt.Println(strings.Repeat("-", 48))
+	fmt.Printf("Portfolio CAGR:       %+.2f%%\n", r.CAGR*100)
+	fmt.Printf("Benchmark CAGR:       %+.2f%%\n", r.BenchmarkCAGR*100)
+	fmt.Printf("Alpha (annualized):   %+.2f%%\n", r.Alpha*100)
+	fmt.Printf("Beta:                 %.3f\n", r.Beta)
+	fmt.Printf("Information Ratio:    %.3f\n", r.InformationRatio)
+	fmt.Printf("Tracking Error:       %.2f%%\n", r.TrackingError*100)
+	fmt.Printf("Max Drawdown:         %.2f%%\n", r.MaxDrawdown*100)
+	fmt.Printf("Sharpe Ratio:         %.3f\n", r.Sharpe)
 }

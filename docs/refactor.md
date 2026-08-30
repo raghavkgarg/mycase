@@ -21,7 +21,8 @@ A one-line ledger of completed refactor phases is kept at the bottom for git-arc
 | R14 | Structured logging (slog) | 🟡 R14.1+R14.2 done; R14.3–R14.7 pending | none |
 | Phase 5a | Live perf attribution — NAV foundation + CLI | ⬜ Next | R14 (slog-native) |
 | Phase 5b | Live perf attribution — decomposition + dashboard | ⬜ | Phase 5a |
-| R15 | Test strategy & E2E testing | ⬜ Design | none (R14 recommended first) |
+| R16 | Dependency untangling (break cycle-magnet packages) | ⬜ Design | none (do after Phase 5) |
+| R15 | Test strategy & E2E testing | ⬜ Design | R16 (seams land there) |
 
 **R14 progress**: `pkg/logging` package (fanout handler, req_id tracing, timing/HTTP/DB helpers, rotation) + `main.go` wiring (global flags `--log-level`/`--log-dir`/`--quiet`/`--verbose`, `Before`/`After` hooks, `slog.SetDefault`) + `config/defaults.json` `logging` block are **done and verified** (92.6% coverage, clean build/vet/staticcheck, stdout stays clean). Remaining: R14.3 (Phase 5 code written slog-native — folded into Phase 5a below), R14.4–R14.7 (incremental `fmt`→slog migration of existing packages), and the `.kiro/steering/logging.md` conventions file.
 
@@ -215,9 +216,11 @@ Existing `CalcSharpe`/`CalcSortino`/`CalcAlpha` delegate to these with `indiaRis
 - `NAVPoint{Date time.Time; PortfolioValue, BenchmarkValue float64}` — the persisted unit.
 - All operational events logged: `slog.InfoContext(ctx, "nav.built", "days", n, "from", ..., "to", ...)`, per-ticker fetch failures as `Warn` (skip, don't abort — API discipline rule).
 
-**3. `pkg/cache` — `nav_history` table + `nav.go`**:
-- Append to `ddl` const in `db.go`: `nav_history(portfolio TEXT, ts BIGINT, nav DOUBLE, benchmark DOUBLE, PRIMARY KEY(portfolio, ts))` — append-only source-of-truth series → idempotent `ON CONFLICT (portfolio, ts) DO UPDATE`.
-- `pkg/cache/nav.go`: `InsertNAVPoints(ctx, portfolio string, points []attribution.NAVPoint) error` and `GetNAVHistory(ctx, portfolio string, since time.Time) ([]attribution.NAVPoint, error)` — following the `tax.go` tx / optional-`since`-filter patterns, BIGINT-Unix timestamps.
+**3. `pkg/cache` — `nav_history` table, owned by `pkg/attribution`**:
+- To avoid deepening the `cache → domain` coupling (R16 problem P4), **`attribution` owns its persistence** rather than `cache` importing `attribution`. `attribution` takes a `*cache.Cache` (or `*sql.DB`) handle and defines its own table + access methods:
+  - Table `nav_history(portfolio TEXT, ts BIGINT, nav DOUBLE, benchmark DOUBLE, PRIMARY KEY(portfolio, ts))` — append-only source-of-truth series → idempotent `ON CONFLICT (portfolio, ts) DO UPDATE`. Created lazily via `CREATE TABLE IF NOT EXISTS` on first write (or appended to the cache `ddl` const — but the Insert/Get methods live in `pkg/attribution`, not `pkg/cache`).
+  - `pkg/attribution/store.go`: `InsertNAVPoints(ctx, db, portfolio, points)` and `GetNAVHistory(ctx, db, portfolio, since)` — following the `tax.go` tx / optional-`since`-filter patterns, BIGINT-Unix timestamps.
+- This means **no `cache → attribution` edge** — `attribution` imports `cache` (one-way, correct direction), consistent with the R16 target shape. (The existing `cache → tax` edge stays until R16 fix D migrates it.)
 
 **4. CLI — `mycase performance --vs-benchmark`**:
 - Extend the existing `PerformanceCommand` with a `--vs-benchmark` flag (and `--benchmark` override, `--since`).
@@ -241,6 +244,87 @@ Existing `CalcSharpe`/`CalcSortino`/`CalcAlpha` delegate to these with `indiaRis
 - No intraday NAV — daily close granularity only (quarterly rebalance system; intraday is noise).
 - No performance persistence beyond the NAV series in 5a — decomposition tables come in 5b.
 - Not mutating the `backtest` engine's IST/RF hardcoding in place — attribution parameterizes its own copy of the alignment logic to avoid destabilizing backtest tests. (A future refactor could unify them; out of scope here.)
+
+---
+
+---
+
+## Phase R16 — Dependency Untangling — DESIGN
+
+**Status**: ⬜ Design — do after Phase 5 (Phase 5a/5b apply its principles locally already).
+**Motivation**: The internal package graph is **currently acyclic** (it compiles), but a handful of low-level packages have become *hubs* that mix type definitions with behavior and configuration. Every new feature package risks closing a loop against one of them — this is why Phase 5a had to invent a local `PriceFetcher` interface and have `attribution` own its cache table. The pain is not existing cycles; it's that the shape *invites* them, making the system progressively harder to understand, test, and extend.
+
+### The dependency graph (measured `go list`, Aug 2026)
+
+Layers, arrows point to dependencies (downward):
+
+```
+L4  cmd (composition root — imports ~20 pkgs)   server (imports 13)
+        │                                            │
+L3  autopilot   daemon   executor   printer          │
+        │           │        │         │             │
+L2  stockpicker ─► optimizer, csvloader, excel, selectiontracker
+    datafetcher ─► broker/schwab, stockpicker (!back-edge), broker, yfinance
+    backtest    monitoring
+        │
+L1  broker ─► config, costs        optimizer ─► broker, costs, market
+    broker/schwab ─► broker, tax, yfinance
+        │
+L0  yfinance ─► cache ─► tax ─► broker ─► config, costs   (!leaf-that-isn't)
+    market   alert   config   costs   excel   selectiontracker
+```
+
+Fan-in (most depended-upon): `broker` 11, `yfinance` 10, `config` 8, `optimizer` 5, `csvloader` 5, `costs` 5, `tax` 4, `cache` 4.
+
+### The four cycle-magnet problems
+
+**P1 — `yfinance → cache` inverts the natural direction (root wart).**
+`yfinance` looks like a low-level data package, but it imports `cache` (for its price/fundamentals store), which imports `tax`, which imports `broker`, which imports `config`+`costs`. So importing `yfinance` — which nearly every package does — transitively drags in `broker`/`tax`/`cache`/`config`/`costs`. A data-fetch package caching *itself* is the inversion. This is the single biggest source of latent cycles.
+
+**P2 — `datafetcher → stockpicker` is a back-edge.**
+`datafetcher` (L2 data routing) imports `stockpicker` (L2 strategy) solely to satisfy `stockpicker.DataFetcher` (compile-time assert `var _ stockpicker.DataFetcher = (*Router)(nil)`). The low-level router depends on the high-level strategy purely for an interface the strategy defined. This is the edge that forced `attribution` to define its own `PriceFetcher` rather than import `datafetcher`.
+
+**P3 — `broker` is an 11-way hub mixing types + behavior + config.**
+One package holds the `Broker` interface, the pure DTOs (`Holding`, `Order`, `OrderResult`), *and* `MarketConfig`, *and* imports `config`+`costs`. Anything wanting just a `Holding` struct (e.g. `tax → broker`, `attribution`, `printer`, `optimizer`) pulls in `config` and `costs` too. `tax → broker` exists only for order-sequencing *types*.
+
+**P4 — `cache → tax` couples the generic store to one domain.**
+The DuckDB cache imports `tax` for lot/gain types. Adding `nav_history` naïvely would make `cache → attribution` too — and since `yfinance → cache` and everything imports `yfinance`, that closes a cycle the moment any price-fetching package also reads NAV. (Phase 5a sidesteps this: `attribution` owns its table via a DB handle.)
+
+**Unifying diagnosis**: a package should either **define** types or **consume** them — not both, when it sits low in the stack. `yfinance`, `broker`, and `stockpicker` all do both, which is precisely why they act as cycle magnets.
+
+### Fixes
+
+The remedy is the standard Go pattern: **extract shared types into leaf packages with zero internal imports, and invert interface ownership to the consumer side.** No package collapsing — that would lose good separation. Four independent fixes:
+
+| # | Problem | Fix | Effort |
+|---|---------|-----|--------|
+| **A** | P1 `yfinance→cache` | Invert the edge. Introduce `pkg/marketdata` (leaf: `HistoricalData`, `Fundamentals`, `Quote` types — zero imports). `cache` imports `marketdata`; `yfinance` imports `marketdata` + `cache`, or better: `yfinance` returns `marketdata` types and a thin caching wrapper lives above. Goal: `yfinance` (or a `marketdata/fetch` pkg) becomes a true leaf that pulls in nothing heavy. | Medium |
+| **B** | P2 `datafetcher→stockpicker` | Move the `DataFetcher` interface to the consumer or a leaf. Either define it in `datafetcher` (and have `stockpicker` consume `datafetcher`'s interface), or put it in `pkg/marketdata`. Drop the back-edge + the compile-time assert. | Small |
+| **C** | P3 `broker` hub | Split `pkg/broker/types` (pure `Holding`/`Order`/`OrderResult`/`MarketConfig` — zero imports) from `pkg/broker` (the `Broker` interface + `config`/`costs` wiring). `tax`, `attribution`, `printer`, `optimizer` import only `broker/types`. | Medium |
+| **D** | P4 `cache→tax` | Cache should not import domain packages. Preferred: each domain package owns its persistence — it takes a `*cache.Cache`/`*sql.DB` handle and defines its own tables + Insert/Get (this is exactly what Phase 5a's `attribution` does). Migrate `tax`'s tables the same way, removing `cache → tax`. Alternative: a shared `pkg/store` types package. | Medium |
+
+### Target shape after R16
+
+```
+L0 leaves (zero internal imports):  marketdata (types+iface)   broker/types   config   costs   market   alert
+L1 stores/impls:                    cache(→marketdata)   yfinance(→marketdata,cache)   broker(→broker/types,config,costs)
+L2 domains own their persistence:   tax(→cache,broker/types)   attribution(→cache,marketdata)
+...                                 datafetcher(→marketdata,broker/schwab)  [no →stockpicker]
+```
+
+No package both defines widely-shared types and imports heavy dependencies. New feature packages depend on leaf type packages, never on hubs.
+
+### Verification & guard rail
+
+- After each fix (A–D independently shippable), `go build ./...` + `go test ./...` must stay green — these are pure move-and-reimport refactors, no behavior change.
+- Add a CI/`make` check that fails on new cycles or on a package importing above its layer. Candidate: a small `go list`-based script (the one used to produce the graph above) asserting the layer ordering, or adopt an existing import-linter. Codify the layer rules in `.kiro/steering/`.
+- **Relationship to R15**: the testability seams R15 wants (injectable data dir, injectable broker, mock fetcher) are cleaner once B and C land — mocks target leaf interfaces, not hubs. Hence R15 depends on R16.
+
+### Non-goals
+
+- Not collapsing packages — the separation is good; the problem is *type placement*, not too many packages.
+- Not rewriting logic — R16 is move-and-reimport only. Any behavior change is out of scope and would be a separate phase.
+- Not introducing a DI framework — plain constructor injection + leaf interfaces, consistent with the existing "no DI frameworks" constraint.
 
 ---
 
