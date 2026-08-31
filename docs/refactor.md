@@ -21,9 +21,9 @@ A one-line ledger of completed refactor phases is kept at the bottom for git-arc
 | Phase | What | Status | Depends on |
 |-------|------|--------|-----------|
 | Loose ends | Wire-or-delete L1–L8 (~~render~~✅, ~~selections~~✅, ~~config_json~~✅, ~~final stage~~→P9, server paths, ~~tax effect~~✅, ~~EmailAlerter~~✅, ~~skip-masking test~~✅) | 🟢 L1–L3+L6+L7+L8 done, L4 deferred→roadmap P9; only L5 remains (deferred to R15) | none |
-| R16 | Dependency untangling (break cycle-magnet packages) | ⬜ Next | none |
-| R14 | Structured logging (slog) — R14.4–R14.7 migration + steering | 🟡 R14.1+R14.2+R14.3 done | none |
-| R15 | Test strategy & E2E testing | ⬜ Design | R16 (seams land there) |
+| R16 | Dependency untangling (break cycle-magnet packages) | ✅ Done | none |
+| R14 | Structured logging (slog) — R14.5–R14.7 migration | 🟡 R14.1–R14.4 + steering done | none |
+| R15 | Test strategy & E2E testing | ⬜ Next (unblocked — R16 seams landed) | R16 ✅ |
 
 **R14 progress**: `pkg/logging` package (fanout handler, req_id tracing, timing/HTTP/DB helpers, rotation) + `main.go` wiring (global flags `--log-level`/`--log-dir`/`--quiet`/`--verbose`, `Before`/`After` hooks, `slog.SetDefault`) + `config/defaults.json` `logging` block are **done and verified**. R14.3 (new Phase 5 code written slog-native) shipped with Phase 5a/5b. Remaining: R14.4–R14.7 (incremental `fmt`→slog migration of existing packages), and the `.kiro/steering/logging.md` conventions file.
 
@@ -261,7 +261,13 @@ Existing `CalcSharpe`/`CalcSortino`/`CalcAlpha` delegate to these with `indiaRis
 
 ## Phase R16 — Dependency Untangling — DESIGN
 
-**Status**: ⬜ Design — do after Phase 5 (Phase 5a/5b apply its principles locally already).
+**Status**: ✅ Done. All four cycle-magnet edges broken (verified by `go list`):
+- **P1** `yfinance→cache` inversion → extracted `pkg/marketdata` leaf; type-only consumers (`broker/schwab`, `optimizer`, `attribution`) import it instead of `yfinance`, so `broker/schwab` no longer pulls `yfinance`/`cache`. The `yfinance→cache` edge itself remains (transparent read-through caching is behavior, out of scope for a move-only refactor), but `cache` is now a leaf so it closes no cycle. *(Fix D below already severed P1's transitive-drag chain; the remaining work was type placement.)*
+- **P2** `datafetcher→stockpicker` back-edge → removed the redundant compile-time assert + import; the `DataFetcher` interface stays defined by its consumer (`stockpicker`), the assert moved to `pkg/autopilot` (imports both).
+- **P3** `broker` hub → extracted `pkg/broker/types` leaf (`Holding`/`Order`/`OrderResult`/`MarketConfig`); `broker` re-exports via aliases. `tax` now depends only on `broker/types` (was `tax→broker→config/costs`); `printer`/`optimizer` likewise off the hub.
+- **P4** `cache→tax` → moved tax persistence into `pkg/tax.Store` (owns its DDL via a `*sql.DB` handle, mirroring `attribution.Store`). `pkg/cache` now has **zero internal imports**.
+
+Guard: `scripts/checkdeps` (a `go list`-based layer checker, run by `make check-deps` + `make cleanup`) enforces downward-only imports and leaf-ness. Rules codified in `.kiro/steering/architecture.md`. See the Completed Phases ledger for commits.
 **Motivation**: The internal package graph is **currently acyclic** (it compiles), but a handful of low-level packages have become *hubs* that mix type definitions with behavior and configuration. Every new feature package risks closing a loop against one of them — this is why Phase 5a had to invent a local `PriceFetcher` interface and have `attribution` own its cache table. The pain is not existing cycles; it's that the shape *invites* them, making the system progressively harder to understand, test, and extend.
 
 ### The dependency graph (measured `go list`, Aug 2026)
@@ -522,3 +528,4 @@ Durable design/algorithm details live in `docs/architecture.md`; this is a chron
 | **R14.1–R14.2** | Structured logging foundation — `pkg/logging` (fanout handler, req_id tracing, timing/HTTP/DB helpers, rotation), `main.go` Before/After wiring + global flags, `config/defaults.json` logging block | `db6e046` |
 | **Phase 5a** | Live perf attribution (NAV foundation) — `pkg/attribution` (NAV series, alpha/IR/beta/tracking-error vs `US:SPY`), attribution-owned `nav_history` DuckDB table, RF-parameterized backtest metrics, `mycase performance --vs-benchmark`; R14.3 slog-native | `ed49161` |
 | **Phase 5b** | Live perf attribution (decomposition + dashboard + nudge) — `attribution.Decompose` (selection/rebalancing/tax) + `LoadRebalanceHistory`, dashboard Performance tab (`performance_handler.go` + `performance-tab.js` + `WithFetcher` option), trailing-alpha strategy-review nudge (`AssessNudge` + autopilot dispatch); first tests for `pkg/server` + `pkg/autopilot`; removed dead code (`isNumeric`, `newTestClient`) | — |
+| **R16** | Dependency untangling — broke all 4 cycle-magnet edges. Fix D: tax persistence → `pkg/tax.Store` (`cache` now a zero-import leaf). Fix B: dropped `datafetcher→stockpicker` back-edge. Fix C: extracted `pkg/broker/types` leaf (DTOs) + aliases; type-only consumers off the hub. Fix A: extracted `pkg/marketdata` leaf; `broker/schwab`/`optimizer`/`attribution` off `yfinance`. Guard: `scripts/checkdeps` + `.kiro/steering/architecture.md`. Move-and-reimport only, all tests + race green. | `31e5b3f`, `0ca0762`, `d52d205`, `bbf5a4d`, `5a2e4f9` |
