@@ -6,6 +6,7 @@ export const api = {
   orders: (name, freshCash = 0) => fetch(`/api/portfolio/${name}/orders?fresh_cash=${freshCash}`).then(r => r.json()),
   monitor: (name, style = 'moderate') => fetch(`/api/portfolio/${name}/monitor?style=${style}`).then(r => r.json()),
   tax: (name) => fetch(`/api/portfolio/${name}/tax`).then(r => r.json()),
+  performance: (name) => fetch(`/api/portfolio/${name}/performance`).then(r => r.json()),
   cacheStatus: () => fetch('/api/cache/status').then(r => r.json()),
   daemonHistory: () => fetch('/api/daemon/history').then(r => r.json()),
 

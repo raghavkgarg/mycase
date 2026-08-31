@@ -4,7 +4,10 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"sort"
 	"time"
+
+	"github.com/raghavkgarg/mycase/pkg/cache"
 )
 
 // navHistoryDDL creates the append-only NAV series table. Owned by this package
@@ -116,4 +119,64 @@ func (s *Store) GetNAVHistory(ctx context.Context, portfolio string, since time.
 		})
 	}
 	return out, rows.Err()
+}
+
+// runReader is the subset of *cache.Cache the rebalance-history loader needs.
+// Declaring it here keeps attribution testable with a fake and documents the
+// exact coupling (attribution → cache, one-way).
+type runReader interface {
+	ListRunsByPortfolio(ctx context.Context, portfolio string, limit int) ([]cache.PipelineRun, error)
+	GetProposals(ctx context.Context, runID, stage string) ([]cache.Proposal, error)
+}
+
+// LoadRebalanceHistory reconstructs a portfolio's target-weight history from the
+// pipeline_runs + proposals(stage="optimized") tables. Each completed run
+// becomes one RebalanceEvent timestamped at the run's start. Runs with no
+// optimized proposals are skipped (an interrupted or draft-only run is not a
+// rebalance). Results are returned oldest-first.
+//
+// The portfolio name here is the pipeline "portfolio"/universe name (e.g.
+// "us_sp500"), which is what pipeline_runs stores — the same value
+// csvloader.GetUniverseName yields for the basket CSV.
+func LoadRebalanceHistory(ctx context.Context, r runReader, portfolio string, since time.Time) ([]RebalanceEvent, error) {
+	if r == nil {
+		return nil, nil
+	}
+	runs, err := r.ListRunsByPortfolio(ctx, portfolio, 0)
+	if err != nil {
+		return nil, fmt.Errorf("list runs for %s: %w", portfolio, err)
+	}
+	var events []RebalanceEvent
+	for _, run := range runs {
+		if run.Status != cache.RunStatusCompleted {
+			continue
+		}
+		if !since.IsZero() && run.StartedAt.Before(since) {
+			continue
+		}
+		props, perr := r.GetProposals(ctx, run.RunID, "optimized")
+		if perr != nil {
+			return nil, fmt.Errorf("get proposals for %s: %w", run.RunID, perr)
+		}
+		if len(props) == 0 {
+			continue
+		}
+		weights := make(map[string]float64, len(props))
+		for _, p := range props {
+			if p.Weight > 0 {
+				weights[p.Ticker] = p.Weight
+			}
+		}
+		if len(weights) == 0 {
+			continue
+		}
+		events = append(events, RebalanceEvent{
+			When:    run.StartedAt,
+			RunID:   run.RunID,
+			Weights: weights,
+		})
+	}
+	// ListRunsByPortfolio returns newest-first; decomposition wants oldest-first.
+	sort.Slice(events, func(i, j int) bool { return events[i].When.Before(events[j].When) })
+	return events, nil
 }

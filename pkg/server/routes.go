@@ -21,6 +21,7 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("GET /api/portfolio/{name}/orders", s.handleOrders)
 	s.mux.HandleFunc("GET /api/portfolio/{name}/monitor", s.handleMonitor)
 	s.mux.HandleFunc("GET /api/portfolio/{name}/tax", s.handleTax)
+	s.mux.HandleFunc("GET /api/portfolio/{name}/performance", s.handlePerformance)
 	s.mux.HandleFunc("POST /api/portfolio/{name}/backtest", s.handleBacktest)
 	s.mux.HandleFunc("POST /api/portfolio/{name}/execute", s.handleExecute)
 	s.mux.HandleFunc("POST /api/portfolio/{name}/retry", s.handleRetry)

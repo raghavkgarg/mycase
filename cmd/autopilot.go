@@ -132,6 +132,19 @@ func runAutopilotRun(ctx context.Context, c *cli.Command) error {
 		} else {
 			fmt.Println("[autopilot] Alerts sent successfully.")
 		}
+
+		// Trailing-alpha nudge: if the strategy is materially lagging the
+		// benchmark, suggest a review. Best-effort — never abort the run.
+		assessment, benchmark, aerr := autopilot.AssessPortfolioAlpha(ctx, newDataRouter(), result.Proposal.Portfolio)
+		if aerr != nil {
+			fmt.Printf("[autopilot] Trailing-alpha check skipped: %v\n", aerr)
+		} else if assessment.Nudge {
+			fmt.Printf("[autopilot] Trailing alpha %+.2f%% ≤ %+.2f%% — sending strategy-review nudge.\n",
+				assessment.Alpha*100, assessment.Threshold*100)
+			if err := autopilot.SendAlphaNudgeAlerts(result.Proposal.Portfolio, benchmark, assessment, cfg.Schedule, alertCfg); err != nil {
+				fmt.Printf("[autopilot] Warning: nudge delivery issue: %v\n", err)
+			}
+		}
 	}
 
 	// Print summary

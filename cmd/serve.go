@@ -38,7 +38,7 @@ var ServeCommand = &cli.Command{
 		addr := ":" + c.String("port")
 		fmt.Printf("Dashboard running at http://localhost%s\n", addr)
 
-		srv := server.New(b, dc, alertCfg)
+		srv := server.New(b, dc, alertCfg, server.WithFetcher(newDataRouter()))
 		return srv.ListenAndServe(ctx, addr)
 	},
 }

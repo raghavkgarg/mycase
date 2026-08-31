@@ -9,31 +9,6 @@ import (
 	"time"
 )
 
-func newTestClient(t *testing.T, handler http.Handler) *Client {
-	t.Helper()
-	server := httptest.NewServer(handler)
-	t.Cleanup(server.Close)
-
-	// Create a token manager with a valid token that won't expire
-	dir := t.TempDir()
-	tokenPath := dir + "/token.json"
-	SaveToken(tokenPath, &Token{
-		AccessToken:      "test_token",
-		RefreshToken:     "test_refresh",
-		ExpiresAt:        time.Now().Add(1 * time.Hour).Unix(),
-		RefreshExpiresAt: time.Now().Add(7 * 24 * time.Hour).Unix(),
-	})
-	app := &AppConfig{ClientID: "test", ClientSecret: "test"}
-	tm := NewTokenManager(app, tokenPath)
-
-	client := NewClient(tm)
-	// Override the HTTP client to use the test server
-	client.httpClient = server.Client()
-	// We need to override the base URLs — use a custom transport
-	// Instead, we'll test the helper functions directly
-	return client
-}
-
 func TestStripUSPrefix(t *testing.T) {
 	tests := []struct {
 		input string

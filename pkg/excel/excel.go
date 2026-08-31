@@ -348,8 +348,3 @@ func ConvertXLSXToCSV(inputPath, outputPath string) (int, error) {
 
 	return writtenCount, nil
 }
-
-func isNumeric(s string) bool {
-	_, err := strconv.ParseFloat(s, 64)
-	return err == nil
-}

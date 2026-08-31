@@ -16,21 +16,24 @@ A one-line ledger of completed refactor phases is kept at the bottom for git-arc
 
 ## Active Work
 
+**Next session theme: fix before feature.** Close the "Known Loose Ends" (L1–L8 below) and complete R16 before starting any new feature. The recurring problem is *build-it-then-never-wire-it*; the remedy for each item is **either wire it or delete it**.
+
 | Phase | What | Status | Depends on |
 |-------|------|--------|-----------|
-| R14 | Structured logging (slog) | 🟡 R14.1+R14.2 done; R14.3–R14.7 pending | none |
-| Phase 5a | Live perf attribution — NAV foundation + CLI | ⬜ Next | R14 (slog-native) |
-| Phase 5b | Live perf attribution — decomposition + dashboard | ⬜ | Phase 5a |
-| R16 | Dependency untangling (break cycle-magnet packages) | ⬜ Design | none (do after Phase 5) |
+| Loose ends | Wire-or-delete L1–L8 (render, selections, config_json, final stage, server paths, tax effect, EmailAlerter, skip-masking test) | ⬜ Next | none |
+| R16 | Dependency untangling (break cycle-magnet packages) | ⬜ Next | none |
+| R14 | Structured logging (slog) — R14.4–R14.7 migration + steering | 🟡 R14.1+R14.2+R14.3 done | none |
 | R15 | Test strategy & E2E testing | ⬜ Design | R16 (seams land there) |
 
-**R14 progress**: `pkg/logging` package (fanout handler, req_id tracing, timing/HTTP/DB helpers, rotation) + `main.go` wiring (global flags `--log-level`/`--log-dir`/`--quiet`/`--verbose`, `Before`/`After` hooks, `slog.SetDefault`) + `config/defaults.json` `logging` block are **done and verified** (92.6% coverage, clean build/vet/staticcheck, stdout stays clean). Remaining: R14.3 (Phase 5 code written slog-native — folded into Phase 5a below), R14.4–R14.7 (incremental `fmt`→slog migration of existing packages), and the `.kiro/steering/logging.md` conventions file.
+**R14 progress**: `pkg/logging` package (fanout handler, req_id tracing, timing/HTTP/DB helpers, rotation) + `main.go` wiring (global flags `--log-level`/`--log-dir`/`--quiet`/`--verbose`, `Before`/`After` hooks, `slog.SetDefault`) + `config/defaults.json` `logging` block are **done and verified**. R14.3 (new Phase 5 code written slog-native) shipped with Phase 5a/5b. Remaining: R14.4–R14.7 (incremental `fmt`→slog migration of existing packages), and the `.kiro/steering/logging.md` conventions file.
+
+**Phase 5 shipped** (5a commit `ed49161`; 5b this branch): full live performance attribution. `pkg/attribution` provides NAV series, vs-benchmark metrics (alpha/IR/beta/tracking-error vs `US:SPY`), return decomposition (selection/rebalancing/tax), and a trailing-alpha strategy-review nudge. Surfaced via `mycase performance --vs-benchmark [--decompose]`, the dashboard Performance tab, and an autopilot alert. See "Completed Phases" ledger.
 
 ---
 
 ## Phase R14 — Structured Logging (slog) — DESIGN
 
-**Status**: ⬜ Design — not yet implemented
+**Status**: 🟡 R14.1–R14.3 shipped (`pkg/logging` + `main.go` wiring + slog-native Phase 5); R14.4–R14.7 (migrate existing packages) + steering file pending
 **Motivation**: The codebase has **no structured logging**. All diagnostic output is ad-hoc `fmt.Print*`/`fmt.Fprint*` to stdout/stderr (verified: zero imports of `log/slog`, `log`, `logrus`, or `zap` across 112 source files). Operational events — daemon lifecycle, Schwab API errors, cache warnings, pipeline stage transitions — are indistinguishable from user-facing CLI output and cannot be filtered, leveled, traced, or persisted. The API steering rules mandate "Log API errors, don't panic" but there is no logging primitive to do so consistently.
 
 Phase 5 (Live Performance Attribution) introduces a **background NAV tracker** and **alert nudges** that need proper leveled, persistable logging. Rather than bolt logging onto that one package, R14 standardizes the pattern for the whole codebase now.
@@ -161,7 +164,7 @@ Rollout order (each independently shippable, tests stay green throughout):
 
 ## Phase 5 — Live Performance Attribution — DESIGN
 
-**Status**: ⬜ Phase 5a next (Phase 5b follows)
+**Status**: ✅ Shipped (5a commit `ed49161`; 5b this branch)
 **Roadmap**: this is roadmap Phase 5 ("know if the system works"). Prerequisites (Phase 3 US factor, Phase 4 TLH, Phase 7 DuckDB) are all ✅.
 
 **Goal**: continuously track the live portfolio's NAV against a passive benchmark and decompose returns into their sources, so "I think I'm beating the market" becomes "beating SPY by X% annualized with an information ratio of Y".
@@ -201,6 +204,8 @@ The roadmap says "SPY". The existing backtest uses `^GSPC` (the index). Phase 5 
 
 ### Phase 5a deliverables
 
+**Status: ✅ shipped (commit `ed49161`).** All five delivered — RF-parameterized metrics, `pkg/attribution` package, attribution-owned `nav_history` table, `mycase performance --vs-benchmark`, and tests.
+
 **1. RF-parameterized metrics (`pkg/backtest/metrics.go`)** — non-breaking additions:
 ```go
 func CalcSharpeRF(nav []float64, riskFree float64) float64
@@ -233,11 +238,16 @@ Existing `CalcSharpe`/`CalcSortino`/`CalcAlpha` delegate to these with `indiaRis
 - `pkg/backtest`: RF-variant equivalence (`CalcSharpeRF(x, 0.06) == CalcSharpe(x)`), US-RF sanity.
 - `pkg/cache`: `nav_history` round-trip, upsert idempotency, `since` filter.
 
-### Phase 5b deliverables (deferred)
+### Phase 5b deliverables (shipped)
 
-- **Return decomposition** — selection effect (did factor picks beat SPY?), rebalancing effect (vs buy-and-hold counterfactual), tax effect (TLH savings vs no-TLH baseline). Needs rebalance-event history (from `pipeline_runs`/proposals) and counterfactual NAV series.
-- **Dashboard performance tab** — `pkg/server/performance_handler.go` (`GET /api/portfolio/{name}/performance`, nil-cache-guard + `available` flag, mirroring `tax_handler.go`) + `performance-tab.js` (equity curve overlaid with SPY, rolling 1Y alpha; reuse existing `equity-curve.js` echarts pattern) + the 4 frontend wiring edits (`index.html`, `api.js`, `app.js`).
-- **Alert nudge** — if trailing-12-month alpha is significantly negative, dispatch a "review your strategy" alert via the existing `pkg/alert` `Alerter` interface (feeds the roadmap's "when to simplify to index funds" failure conditions).
+**Status: ✅ shipped (this branch).**
+
+- **Return decomposition** — `pkg/attribution/decompose.go`: `Tracker.Decompose` splits active return into **selection** (buy-and-hold-first-basket vs benchmark), **rebalancing** (actual vs buy-and-hold-first-basket), and **tax** (realized TLH saving / initial capital, reported alongside). Identity: `ActiveReturn = Selection + Rebalancing`. Rebalance history is reconstructed from `pipeline_runs` + `proposals(stage="optimized")` via `LoadRebalanceHistory` (`store.go`), oldest-first, one completed run = one rebalance. Buy-and-hold counterfactual reuses `BuildNAVSeries` with the earliest in-window basket held untouched. Exposed on the CLI via `mycase performance --vs-benchmark --decompose`.
+- **Dashboard performance tab** — `pkg/server/performance_handler.go` (`GET /api/portfolio/{name}/performance`, nil-fetcher guard + `available` flag, mirrors `tax_handler.go`) + `performance-tab.js` (echarts equity curve portfolio vs SPY, metrics table, decomposition table) + the 4 frontend wiring edits (`api.js`, `app.js` import/VIEWS/routes/componentTags, `index.html` tab+view). `Server` gained a `WithFetcher(attribution.PriceFetcher)` option (variadic `New`, backward-compatible); `cmd/serve.go` wires the router. First tests for `pkg/server`.
+- **Alert nudge** — `pkg/attribution/nudge.go`: pure `AssessNudge(Result, threshold)` (default threshold −2% annualized alpha, ≥60 trading days required). `pkg/autopilot/alert.go`: `FormatAlphaNudgeAlert` + `SendAlphaNudgeAlerts` (no-op unless nudging) + `AssessPortfolioAlpha` (builds 1y NAV series, best-effort). Wired into `cmd/autopilot.go` after proposal alerts — logged and non-fatal. First tests for `pkg/autopilot`.
+
+**Deviation from original design**: output uses `fmt.Printf` (consistent with every sibling `cmd/*` command), **not** `pkg/render` — because `pkg/render` (R12) is currently imported by zero packages and was never adopted. Migrating to it is a codebase-wide task tracked under "Known Loose Ends" below, not Phase 5b scope.
+
 
 ### Non-goals (Phase 5)
 
@@ -455,7 +465,27 @@ E2E tests double as logging-integration checks: assert that a full command run p
 
 ---
 
-## Ongoing Guard Rails
+## Known Loose Ends (tracked debt)
+
+Half-finished or orphaned pieces discovered during Phase 5b. None are urgent, but they should be closed rather than left to accumulate. Listed so they are visible and can be scheduled.
+
+| # | Loose end | Evidence | Suggested fix / phase |
+|---|-----------|----------|----------------------|
+| L1 | **`pkg/render` is imported by zero packages.** Built in R12 (86% coverage) as the intended user-output layer, but never adopted — every `cmd/*` and `pkg/server` handler prints via `fmt.Printf`. The R14 design section still describes `render` as if it's in use. | `grep -r pkg/render` → no importers | Either adopt `render` across `cmd/*` (a focused "R12.5" pass) or delete it. Decide before R15 so E2E tests assert against the real output layer. |
+| L2 | **`selections` table + `InsertSelections` never called in production.** Only tests populate it; the live pipeline writes `index_picks` + `proposals(draft,optimized)` only. `GetPreviousSelections`/driver-metric columns are dead in practice. | `cmd/pipeline.go` writes no selections; only `*_test.go` calls `InsertSelections` | Either wire selection persistence into the pipeline (the richer cross-run diff it was built for) or drop the table + methods. |
+| L3 | **`pipeline_runs.config_json` is always empty.** Column + struct field exist; nothing writes a config snapshot. | `InsertRun` passes `run.ConfigJSON` but callers leave it "" | Populate it (snapshot the `PipelineConfig` per run — useful for reproducibility/decomposition provenance) or remove the column. |
+| L4 | **Proposal `"final"` stage is defined but unused.** Only `draft` and `optimized` stages are ever written. | `GetProposals(runID, "final")` returns nothing in practice | Clarify the stage lifecycle: either write a `final` stage post-confirmation (closes the loop with executed orders) or document `optimized` as terminal. |
+| L5 | **Server data paths are hardcoded relative (`data/<name>.csv`, `data/cache.db`).** Blocks in-process E2E tests and made the Phase 5b performance handler untestable end-to-end. | `pkg/server/handlers.go`, `performance_handler.go` | Injectable data dir (`MYCASE_DATA_DIR`) — already called out as an R15 prerequisite. Do it with R15. |
+| L6 | **`pkg/attribution` tax effect is always 0 on the live paths.** `Decompose` accepts a `TaxSaving` but both the CLI and dashboard pass 0 (tax is surfaced separately by `mycase tax`). The decomposition's tax line only appears in tests. | `cmd/performance.go`, `performance_handler.go` pass `TaxSaving: 0` | Wire realized TLH saving from `pkg/tax` into the decomposition input, or drop the tax line from the live decomposition and keep it purely in the Tax tab. |
+| L7 | **`alert.EmailAlerter` is an unimplemented stub.** `Send` always returns "not yet implemented", and `sendToChannels` only wires telegram/discord — nothing constructs an `EmailAlerter`. Dead orphan. | `pkg/alert/email.go`; `autopilot/alert.go` `sendToChannels` switch | Implement SMTP + add an `"email"` channel case, or delete the file. |
+| L8 | **`monitoring/simulator_test.go` masks failures with `t.Skip`.** On a simulation error it skips the NaN check rather than failing — a real error would pass silently. | `pkg/monitoring/simulator_test.go:136` | Assert no error (or a specific expected error) instead of skipping. |
+
+**Meta-observation**: the recurring shape is *build-it-then-never-wire-it* — `render`, `selections`, `config_json`, the `final` stage, `EmailAlerter` were all constructed with intent and left unconnected. The next session's theme (fix before feature) should bias toward **either wire it or delete it** for each, so the codebase stops carrying aspirational surface area.
+
+
+---
+
+
 
 - All `pkg/` packages should have tests. Run `go test ./...` before and after any change — zero regressions.
 - `mfs.json` and `pipeline.yaml` config file formats must stay backward-compatible.
@@ -488,3 +518,6 @@ Durable design/algorithm details live in `docs/architecture.md`; this is a chron
 | **R12** | CLI rendering layer — `pkg/render` (tabwriter tables, formatters, TTY-aware color, panic-safe). See `docs/render.md` | — |
 | **R13** | Stockpicker `DataFetcher` injection — interface seam, router wiring, `runPickWithOpts` collapsed. See architecture D10 | — |
 | **Phase 4** | Tax-loss harvesting — `pkg/tax` (FIFO, TLH, sequencing), Schwab transactions, DuckDB tax tables, `mycase tax`, dashboard Tax tab. See architecture D11–D12 | — |
+| **R14.1–R14.2** | Structured logging foundation — `pkg/logging` (fanout handler, req_id tracing, timing/HTTP/DB helpers, rotation), `main.go` Before/After wiring + global flags, `config/defaults.json` logging block | `db6e046` |
+| **Phase 5a** | Live perf attribution (NAV foundation) — `pkg/attribution` (NAV series, alpha/IR/beta/tracking-error vs `US:SPY`), attribution-owned `nav_history` DuckDB table, RF-parameterized backtest metrics, `mycase performance --vs-benchmark`; R14.3 slog-native | `ed49161` |
+| **Phase 5b** | Live perf attribution (decomposition + dashboard + nudge) — `attribution.Decompose` (selection/rebalancing/tax) + `LoadRebalanceHistory`, dashboard Performance tab (`performance_handler.go` + `performance-tab.js` + `WithFetcher` option), trailing-alpha strategy-review nudge (`AssessNudge` + autopilot dispatch); first tests for `pkg/server` + `pkg/autopilot`; removed dead code (`isNumeric`, `newTestClient`) | — |

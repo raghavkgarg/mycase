@@ -1,13 +1,19 @@
 package autopilot
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"strings"
+	"time"
+
+	"log/slog"
 
 	"github.com/raghavkgarg/mycase/pkg/alert"
+	"github.com/raghavkgarg/mycase/pkg/attribution"
 	"github.com/raghavkgarg/mycase/pkg/broker"
 	"github.com/raghavkgarg/mycase/pkg/config"
+	"github.com/raghavkgarg/mycase/pkg/csvloader"
 )
 
 // FormatProposalAlert builds a rich alert message summarizing the autopilot proposal.
@@ -123,9 +129,84 @@ func FormatConfirmationAlert(p *Proposal) alert.Alert {
 	}
 }
 
+// AssessPortfolioAlpha builds a trailing (default: 1-year) NAV series for the
+// portfolio's current basket versus the passive benchmark and evaluates whether
+// its risk-adjusted performance warrants a strategy-review nudge. It is
+// best-effort: any data/fetch failure yields a no-nudge assessment plus the
+// error, so callers can log and continue (the roadmap's "fail gracefully" rule).
+//
+// basketPath is the golden-copy CSV (Proposal.Portfolio). fetcher is typically
+// the same *datafetcher.Router the pipeline uses.
+func AssessPortfolioAlpha(ctx context.Context, fetcher attribution.PriceFetcher, basketPath string) (attribution.NudgeAssessment, string, error) {
+	weights, tickers, err := csvloader.LoadBasketCSV(basketPath)
+	if err != nil {
+		return attribution.NudgeAssessment{}, "", fmt.Errorf("loading basket %s: %w", basketPath, err)
+	}
+	var holdings []attribution.Holding
+	for _, tk := range tickers {
+		if w := weights[tk]; w > 0 {
+			holdings = append(holdings, attribution.Holding{Ticker: tk, Weight: w})
+		}
+	}
+	if len(holdings) == 0 {
+		return attribution.NudgeAssessment{}, "", fmt.Errorf("no holdings with positive weight in %s", basketPath)
+	}
+
+	nyLoc, err := time.LoadLocation("America/New_York")
+	if err != nil {
+		nyLoc = time.UTC
+	}
+	to := time.Now().In(nyLoc)
+	cfg := attribution.Config{
+		From:     to.AddDate(-1, 0, 0),
+		To:       to,
+		Location: nyLoc,
+	}
+
+	tracker := attribution.NewTracker(fetcher, slog.Default())
+	points, err := tracker.BuildNAVSeries(ctx, holdings, cfg)
+	if err != nil {
+		return attribution.NudgeAssessment{}, cfg.Benchmark, fmt.Errorf("building NAV series: %w", err)
+	}
+	res := attribution.Attribution(points, cfg.RiskFree)
+	benchmark := attribution.DefaultBenchmark
+	return attribution.AssessNudge(res, 0), benchmark, nil
+}
+
 // SendProposalAlerts sends the proposal alert to all configured channels.
 func SendProposalAlerts(p *Proposal, cfg config.ScheduleConfig, alertCfg config.AlertConfig) error {
 	a := FormatProposalAlert(p)
+	return sendToChannels(a, cfg.Notify, alertCfg)
+}
+
+// FormatAlphaNudgeAlert builds a "review your strategy" alert from a trailing
+// performance assessment. Only meaningful when assessment.Nudge is true.
+func FormatAlphaNudgeAlert(portfolio, benchmark string, assessment attribution.NudgeAssessment) alert.Alert {
+	var body strings.Builder
+	body.WriteString(fmt.Sprintf("*Portfolio*: %s\n", portfolio))
+	body.WriteString(fmt.Sprintf("*Benchmark*: %s\n", benchmark))
+	body.WriteString(fmt.Sprintf("*Trailing alpha*: %+.2f%% (annualized, over %d trading days)\n",
+		assessment.Alpha*100, assessment.TradingDays))
+	body.WriteString(fmt.Sprintf("*Threshold*: %+.2f%%\n\n", assessment.Threshold*100))
+	body.WriteString("The active strategy has trailed the passive benchmark on a risk-adjusted basis. ")
+	body.WriteString("Consider whether the factor tilt is still working, or whether simplifying to a low-cost index fund is the better call.\n\n")
+	body.WriteString("👉 Review performance: http://localhost:8080/#/performance\n")
+
+	return alert.Alert{
+		Title: "🧭 Strategy Review Suggested",
+		Body:  body.String(),
+		Level: "warn",
+	}
+}
+
+// SendAlphaNudgeAlerts dispatches the strategy-review nudge to the configured
+// channels. It is a no-op (returns nil) when the assessment does not warrant a
+// nudge, so callers can invoke it unconditionally.
+func SendAlphaNudgeAlerts(portfolio, benchmark string, assessment attribution.NudgeAssessment, cfg config.ScheduleConfig, alertCfg config.AlertConfig) error {
+	if !assessment.Nudge {
+		return nil
+	}
+	a := FormatAlphaNudgeAlert(portfolio, benchmark, assessment)
 	return sendToChannels(a, cfg.Notify, alertCfg)
 }
 

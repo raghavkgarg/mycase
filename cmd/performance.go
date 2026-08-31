@@ -29,6 +29,7 @@ var PerformanceCommand = &cli.Command{
 		&cli.StringFlag{Name: "date", Usage: "Purchase date in YYYY-MM-DD or YYYYMMDD format (IST, default: today)"},
 		&cli.StringFlag{Name: "time", Value: "09:30", Usage: "Purchase time in HH:MM format (IST)"},
 		&cli.BoolFlag{Name: "vs-benchmark", Usage: "Build a daily NAV series and report alpha / information ratio vs a passive benchmark, persisting the series to the cache"},
+		&cli.BoolFlag{Name: "decompose", Usage: "With --vs-benchmark: decompose active return into selection (picks vs index) and rebalancing (re-selection vs holding the first basket) effects"},
 		&cli.StringFlag{Name: "benchmark", Usage: "Benchmark ticker for --vs-benchmark (default: US:SPY)"},
 		&cli.StringFlag{Name: "since", Usage: "Start date for --vs-benchmark NAV series in YYYY-MM-DD or YYYYMMDD (default: 1 year ago)"},
 	},
@@ -37,7 +38,7 @@ var PerformanceCommand = &cli.Command{
 
 func runPerformance(ctx context.Context, c *cli.Command) error {
 	if c.Bool("vs-benchmark") {
-		return runVsBenchmark(ctx, c.String("file"), c.Float("capital"), c.String("since"), c.String("benchmark"))
+		return runVsBenchmark(ctx, c.String("file"), c.Float("capital"), c.String("since"), c.String("benchmark"), c.Bool("decompose"))
 	}
 	return runPerfWithParams(ctx, c.String("file"), c.Float("capital"), c.String("date"), c.String("time"))
 }
@@ -193,7 +194,11 @@ func parsePerfDate(dateStr string, loc *time.Location) (time.Time, error) {
 // runVsBenchmark builds a daily NAV series for the portfolio versus a passive
 // benchmark (default US:SPY), reports vs-benchmark metrics (alpha, beta,
 // information ratio, tracking error), and persists the NAV series to the cache.
-func runVsBenchmark(ctx context.Context, filePath string, capital float64, sinceStr, benchmark string) error {
+// runVsBenchmark builds a daily NAV series for the portfolio versus a passive
+// benchmark (default US:SPY), reports vs-benchmark metrics (alpha, beta,
+// information ratio, tracking error), persists the NAV series to the cache, and
+// optionally decomposes active return into selection/rebalancing effects.
+func runVsBenchmark(ctx context.Context, filePath string, capital float64, sinceStr, benchmark string, decompose bool) error {
 	if filePath == "" {
 		return fmt.Errorf("--file parameter is required")
 	}
@@ -242,7 +247,7 @@ func runVsBenchmark(ctx context.Context, filePath string, capital float64, since
 	slog.InfoContext(ctx, "performance.vs_benchmark.start",
 		"portfolio", portfolioName, "holdings", len(holdings),
 		"from", from.Format("2006-01-02"), "to", to.Format("2006-01-02"),
-		"benchmark", cfg.Benchmark)
+		"benchmark", cfg.Benchmark, "decompose", decompose)
 
 	points, err := tracker.BuildNAVSeries(ctx, holdings, cfg)
 	if err != nil {
@@ -261,7 +266,57 @@ func runVsBenchmark(ctx context.Context, filePath string, capital float64, since
 	}
 
 	printAttribution(portfolioName, cfg.Benchmark, res)
+
+	if decompose {
+		if derr := printDecomposition(ctx, tracker, holdings, portfolioName, cfg); derr != nil {
+			// Decomposition is additive insight; a failure should not fail the
+			// whole report (the core attribution above already printed).
+			slog.WarnContext(ctx, "performance.decompose_failed", "error", derr.Error())
+			fmt.Printf("\n(return decomposition unavailable: %v)\n", derr)
+		}
+	}
 	return nil
+}
+
+// printDecomposition loads the portfolio's rebalance history from the cache and
+// prints the selection/rebalancing breakdown of active return.
+func printDecomposition(ctx context.Context, tracker *attribution.Tracker, holdings []attribution.Holding, portfolioName string, cfg attribution.Config) error {
+	var history []attribution.RebalanceEvent
+	if db := cache.GetDB(); db != nil {
+		h, err := attribution.LoadRebalanceHistory(ctx, db, portfolioName, cfg.From)
+		if err != nil {
+			return err
+		}
+		history = h
+	}
+
+	d, err := tracker.Decompose(ctx, attribution.DecomposeInput{
+		Holdings: holdings,
+		History:  history,
+		// TaxSaving is left 0 here: harvest realization is surfaced by the
+		// `mycase tax` command, not recomputed on the performance path.
+	}, cfg)
+	if err != nil {
+		return err
+	}
+	printDecompositionResult(d)
+	return nil
+}
+
+func printDecompositionResult(d attribution.Decomposition) {
+	fmt.Printf("\n--- Return Decomposition ---\n")
+	fmt.Printf("Period:               %s → %s (%d trading days, %d rebalances)\n",
+		d.From.Format("2006-01-02"), d.To.Format("2006-01-02"), d.TradingDays, d.Rebalances)
+	fmt.Printf("Portfolio return:     %+.2f%%\n", d.PortfolioReturn*100)
+	fmt.Printf("Benchmark return:     %+.2f%%\n", d.BenchmarkReturn*100)
+	fmt.Printf("Active return:        %+.2f%%\n", d.ActiveReturn*100)
+	fmt.Println(strings.Repeat("-", 48))
+	fmt.Printf("  Selection effect:   %+.2f%%   (picks vs index, first basket held)\n", d.Selection*100)
+	fmt.Printf("  Rebalancing effect: %+.2f%%   (re-selection vs holding first basket)\n", d.Rebalancing*100)
+	if d.Tax != 0 {
+		fmt.Printf("  Tax effect:         %+.2f%%   (realized TLH saving / initial capital)\n", d.Tax*100)
+	}
+	fmt.Printf("  (Selection + Rebalancing = Active return)\n")
 }
 
 // cacheConn returns the global cache's *sql.DB, or nil if the cache is unset.

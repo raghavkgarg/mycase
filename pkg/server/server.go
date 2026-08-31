@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/raghavkgarg/mycase/pkg/attribution"
 	"github.com/raghavkgarg/mycase/pkg/broker"
 	"github.com/raghavkgarg/mycase/pkg/cache"
 	"github.com/raghavkgarg/mycase/pkg/config"
@@ -16,18 +17,32 @@ type Server struct {
 	broker      broker.Broker
 	cache       *cache.Cache
 	alertCfg    config.AlertConfig
+	fetcher     attribution.PriceFetcher // nil → performance tab reports "unavailable"
 	mux         *http.ServeMux
 	broadcaster *SSEBroadcaster
 }
 
+// Option configures a Server at construction.
+type Option func(*Server)
+
+// WithFetcher supplies the price fetcher used by the performance tab (typically
+// a *datafetcher.Router). Without it, the performance endpoint returns
+// available=false rather than fabricating a NAV series.
+func WithFetcher(f attribution.PriceFetcher) Option {
+	return func(s *Server) { s.fetcher = f }
+}
+
 // New creates a Server, wires up all routes, and returns it ready to serve.
-func New(b broker.Broker, c *cache.Cache, alertCfg config.AlertConfig) *Server {
+func New(b broker.Broker, c *cache.Cache, alertCfg config.AlertConfig, opts ...Option) *Server {
 	s := &Server{
 		broker:      b,
 		cache:       c,
 		alertCfg:    alertCfg,
 		mux:         http.NewServeMux(),
 		broadcaster: newSSEBroadcaster(),
+	}
+	for _, opt := range opts {
+		opt(s)
 	}
 	s.registerRoutes()
 	return s
