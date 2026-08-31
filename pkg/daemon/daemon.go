@@ -7,6 +7,8 @@ import (
 	"os"
 	"time"
 
+	"log/slog"
+
 	"github.com/raghavkgarg/mycase/pkg/alert"
 	"github.com/raghavkgarg/mycase/pkg/broker"
 	"github.com/raghavkgarg/mycase/pkg/config"
@@ -77,7 +79,8 @@ func RunCheck(ctx context.Context, b broker.Broker, cfg config.AlertConfig, port
 		}
 		for _, a := range buildAlerters(cfg) {
 			if err := a.Send(msg); err != nil {
-				fmt.Fprintf(os.Stderr, "alert error: %v\n", err)
+				slog.WarnContext(ctx, "daemon.alert_failed",
+					"portfolio", portfolioFile, "err", err)
 			}
 		}
 		state.AlertsSent++
@@ -90,7 +93,7 @@ func RunCheck(ctx context.Context, b broker.Broker, cfg config.AlertConfig, port
 // RunLoop blocks, running RunCheck at market close each day until ctx is cancelled.
 func RunLoop(ctx context.Context, b broker.Broker, cfg config.AlertConfig, portfolioFile string) error {
 	if err := writePID(); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: could not write PID file: %v\n", err)
+		slog.WarnContext(ctx, "daemon.pid_write_failed", "path", PIDFile, "err", err)
 	}
 	defer os.Remove(PIDFile)
 
@@ -98,7 +101,8 @@ func RunLoop(ctx context.Context, b broker.Broker, cfg config.AlertConfig, portf
 
 	for {
 		next := nextMarketClose(mktCfg)
-		fmt.Printf("Next drift check at %s\n", next.Local().Format("2006-01-02 15:04:05 MST"))
+		slog.InfoContext(ctx, "daemon.next_check_scheduled",
+			"at", next.Local().Format("2006-01-02 15:04:05 MST"))
 
 		select {
 		case <-ctx.Done():
@@ -108,16 +112,17 @@ func RunLoop(ctx context.Context, b broker.Broker, cfg config.AlertConfig, portf
 
 		result, err := RunCheck(ctx, b, cfg, portfolioFile)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "drift check error: %v\n", err)
+			slog.ErrorContext(ctx, "daemon.check_failed", "portfolio", portfolioFile, "err", err)
 			continue
 		}
-		level := "OK"
-		if result.DriftIndex > cfg.DriftThreshold {
-			level = "DRIFT"
-		}
-		fmt.Printf("[%s] %s drift=%.4f threshold=%.4f value=%s%.0f\n",
-			result.CheckedAt.Format("2006-01-02 15:04:05"),
-			level, result.DriftIndex, cfg.DriftThreshold, mktCfg.Currency, result.TotalValue)
+		exceeded := result.DriftIndex > cfg.DriftThreshold
+		slog.InfoContext(ctx, "daemon.check_completed",
+			"checked_at", result.CheckedAt.Format("2006-01-02 15:04:05"),
+			"drift_exceeded", exceeded,
+			"drift", result.DriftIndex,
+			"threshold", cfg.DriftThreshold,
+			"currency", mktCfg.Currency,
+			"total_value", result.TotalValue)
 	}
 }
 
