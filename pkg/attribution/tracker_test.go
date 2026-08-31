@@ -10,16 +10,16 @@ import (
 
 	"log/slog"
 
-	"github.com/raghavkgarg/mycase/pkg/yfinance"
+	"github.com/raghavkgarg/mycase/pkg/marketdata"
 )
 
 // mockFetcher returns canned HistoricalData per ticker, or an error.
 type mockFetcher struct {
-	data map[string]*yfinance.HistoricalData
+	data map[string]*marketdata.HistoricalData
 	errs map[string]error
 }
 
-func (m *mockFetcher) FetchHistoricalByDateRange(_ context.Context, ticker string, _, _ time.Time) (*yfinance.HistoricalData, error) {
+func (m *mockFetcher) FetchHistoricalByDateRange(_ context.Context, ticker string, _, _ time.Time) (*marketdata.HistoricalData, error) {
 	if e, ok := m.errs[ticker]; ok {
 		return nil, e
 	}
@@ -40,7 +40,7 @@ func TestBuildNAVSeries_BasicTwoTicker(t *testing.T) {
 	// AAA: 100 → 110 → 121 (+10%/day). BBB: 50 → 50 → 50 (flat).
 	// Benchmark SPY: 400 → 404 → 408.
 	ts := []int64{day(2026, time.January, 5), day(2026, time.January, 6), day(2026, time.January, 7)}
-	f := &mockFetcher{data: map[string]*yfinance.HistoricalData{
+	f := &mockFetcher{data: map[string]*marketdata.HistoricalData{
 		"US:AAA": {Timestamps: ts, Closes: []float64{100, 110, 121}},
 		"US:BBB": {Timestamps: ts, Closes: []float64{50, 50, 50}},
 		"US:SPY": {Timestamps: ts, Closes: []float64{400, 404, 408}},
@@ -85,7 +85,7 @@ func TestBuildNAVSeries_BasicTwoTicker(t *testing.T) {
 func TestBuildNAVSeries_SkipsFailedTickerAndRenormalizes(t *testing.T) {
 	ts := []int64{day(2026, time.January, 5), day(2026, time.January, 6)}
 	f := &mockFetcher{
-		data: map[string]*yfinance.HistoricalData{
+		data: map[string]*marketdata.HistoricalData{
 			"US:AAA": {Timestamps: ts, Closes: []float64{100, 110}},
 			"US:SPY": {Timestamps: ts, Closes: []float64{400, 404}},
 		},
@@ -108,7 +108,7 @@ func TestBuildNAVSeries_SkipsFailedTickerAndRenormalizes(t *testing.T) {
 
 func TestBuildNAVSeries_IntersectionOfTradingDays(t *testing.T) {
 	// AAA trades on days 5,6,7; SPY only on 5,6. Intersection = {5,6}.
-	f := &mockFetcher{data: map[string]*yfinance.HistoricalData{
+	f := &mockFetcher{data: map[string]*marketdata.HistoricalData{
 		"US:AAA": {Timestamps: []int64{day(2026, 1, 5), day(2026, 1, 6), day(2026, 1, 7)}, Closes: []float64{100, 110, 120}},
 		"US:SPY": {Timestamps: []int64{day(2026, 1, 5), day(2026, 1, 6)}, Closes: []float64{400, 404}},
 	}}
@@ -124,7 +124,7 @@ func TestBuildNAVSeries_IntersectionOfTradingDays(t *testing.T) {
 }
 
 func TestBuildNAVSeries_Errors(t *testing.T) {
-	tr := NewTracker(&mockFetcher{data: map[string]*yfinance.HistoricalData{}}, quietLogger())
+	tr := NewTracker(&mockFetcher{data: map[string]*marketdata.HistoricalData{}}, quietLogger())
 	base := Config{From: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), To: time.Date(2026, 1, 31, 0, 0, 0, 0, time.UTC), Location: time.UTC}
 
 	// No holdings.
@@ -234,7 +234,7 @@ func TestConfig_WithDefaults(t *testing.T) {
 func TestBuildNAVSeries_SkipsNonPositiveCloses(t *testing.T) {
 	// A zero/negative close on a day is skipped; that day then isn't in the
 	// ticker's map, so it drops out of the intersection.
-	f := &mockFetcher{data: map[string]*yfinance.HistoricalData{
+	f := &mockFetcher{data: map[string]*marketdata.HistoricalData{
 		"US:AAA": {Timestamps: []int64{day(2026, 1, 5), day(2026, 1, 6), day(2026, 1, 7)}, Closes: []float64{100, 0, 120}},
 		"US:SPY": {Timestamps: []int64{day(2026, 1, 5), day(2026, 1, 6), day(2026, 1, 7)}, Closes: []float64{400, 404, 408}},
 	}}

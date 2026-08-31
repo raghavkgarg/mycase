@@ -1,6 +1,6 @@
 package yfinance
 
-import "time"
+import "github.com/raghavkgarg/mycase/pkg/marketdata"
 
 // ChartResponse matches the Yahoo Finance chart endpoint response structure
 type ChartResponse struct {
@@ -156,74 +156,17 @@ type QuoteSummaryResponse struct {
 	} `json:"quoteSummary"`
 }
 
-// AnnualFinancial holds annual revenue and earnings
-type AnnualFinancial struct {
-	Year     int
-	Revenue  float64
-	Earnings float64
-}
-
-// Fundamentals represents key fundamental metrics retrieved from Yahoo Finance
-type Fundamentals struct {
-	PEGRatio                 float64
-	ROE                      float64
-	ForwardPE                float64
-	OperatingMargins         float64
-	PBRatio                  float64
-	NetDebtEBITDA            float64
-	MarketCap                float64
-	InsidersPercent          float64
-	HeldPercentInstitutions  float64
-	TTMRevenue               float64
-	OperatingCashflow        float64
-	FreeCashflow             float64
-	AverageVolume            float64
-	RegularPrice             float64
-	NetIncome                float64
-	Sector                   string
-	EarningsHistory          []AnnualFinancial
-	AnnualRevenue            []AnnualMetric
-	AnnualGrossProfit        []AnnualMetric
-	AnnualNetPPE             []AnnualMetric
-	AnnualAccountsReceivable []AnnualMetric
-	AnnualCapEx              []AnnualMetric
-	DebtToEquity             float64
-	TotalDebt                float64
-	PledgedPercent           float64
-	AnnualOperatingIncome    []AnnualMetric
-	AnnualTotalAssets        []AnnualMetric
-	AnnualCurrentLiabilities []AnnualMetric
-	AnnualInterestExpense    []AnnualMetric
-	ResultPrevComing         string
-
-	// US-specific fields (populated from Schwab)
-	DividendYield   float64 // Annual dividend yield as decimal (e.g., 0.02 = 2%)
-	ReturnOnAssets  float64 // ROA as decimal
-	Beta            float64 // Stock beta vs market
-	NetProfitMargin float64 // Net profit margin as decimal
-	GrossMarginTTM  float64 // Gross margin TTM as decimal
-}
-
-// AnnualMetric holds historical value with its date
-type AnnualMetric struct {
-	Date  string
-	Value float64
-}
-
-// IntradayData holds timestamp, open, and close prices for a stock
-type IntradayData struct {
-	Timestamps []int64
-	Opens      []float64
-	Closes     []float64
-}
-
-// HistoricalData holds daily timestamp, close, open, and volume data
-type HistoricalData struct {
-	Timestamps []int64
-	Closes     []float64
-	Opens      []float64
-	Volumes    []float64
-}
+// AnnualFinancial, AnnualMetric, Fundamentals, IntradayData, and HistoricalData
+// are the provider-agnostic market data types. They live in pkg/marketdata (a
+// zero-import leaf) so type-only consumers need not import yfinance (and thus the
+// cache) — see R16 P1. These aliases keep existing yfinance.* call sites working.
+type (
+	AnnualFinancial = marketdata.AnnualFinancial
+	AnnualMetric    = marketdata.AnnualMetric
+	Fundamentals    = marketdata.Fundamentals
+	IntradayData    = marketdata.IntradayData
+	HistoricalData  = marketdata.HistoricalData
+)
 
 // TimeseriesResponse matches Yahoo Finance ws/fundamentals-timeseries JSON structure
 type TimeseriesResponse struct {
@@ -291,35 +234,4 @@ type TimeseriesResponse struct {
 		} `json:"result"`
 		Error any `json:"error"`
 	} `json:"timeseries"`
-}
-
-// CleanIntradayNoise discards the last day's price/volume from the slice if it is today's date during market hours (before 15:30 IST).
-func (h *HistoricalData) CleanIntradayNoise() {
-	if h == nil || len(h.Closes) == 0 || len(h.Timestamps) == 0 {
-		return
-	}
-	istLoc, err := time.LoadLocation("Asia/Kolkata")
-	if err != nil {
-		istLoc = time.UTC
-	}
-	now := time.Now().In(istLoc)
-	lastTs := time.Unix(h.Timestamps[len(h.Timestamps)-1], 0).In(istLoc)
-
-	// If the last timestamp is today, and it is before market close (15:30)
-	if lastTs.Year() == now.Year() && lastTs.YearDay() == now.YearDay() {
-		// Market is open from 9:15 to 15:30.
-		// If current time is before 15:30, discard the live updating day
-		cutoffTime := time.Date(now.Year(), now.Month(), now.Day(), 15, 30, 0, 0, istLoc)
-		if now.Before(cutoffTime) {
-			// Discard the last element
-			h.Closes = h.Closes[:len(h.Closes)-1]
-			if len(h.Opens) > 0 {
-				h.Opens = h.Opens[:len(h.Opens)-1]
-			}
-			if len(h.Volumes) > 0 {
-				h.Volumes = h.Volumes[:len(h.Volumes)-1]
-			}
-			h.Timestamps = h.Timestamps[:len(h.Timestamps)-1]
-		}
-	}
 }

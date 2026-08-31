@@ -7,13 +7,13 @@ import (
 	"strings"
 	"time"
 
-	"github.com/raghavkgarg/mycase/pkg/yfinance"
+	"github.com/raghavkgarg/mycase/pkg/marketdata"
 )
 
 // FetchHistoricalDataWithTimestamps retrieves daily price history for a US ticker
-// and returns data in the same format as yfinance.HistoricalData.
+// and returns data in the same format as marketdata.HistoricalData.
 // rangeStr supports: "1mo", "3mo", "6mo", "1y", "2y", "5y", "10y", "max"
-func (c *Client) FetchHistoricalDataWithTimestamps(ctx context.Context, symbol string, rangeStr string) (*yfinance.HistoricalData, error) {
+func (c *Client) FetchHistoricalDataWithTimestamps(ctx context.Context, symbol string, rangeStr string) (*marketdata.HistoricalData, error) {
 	periodType, period := mapRangeToPeriod(rangeStr)
 
 	params := url.Values{
@@ -38,7 +38,7 @@ func (c *Client) FetchHistoricalDataWithTimestamps(ctx context.Context, symbol s
 		return nil, fmt.Errorf("schwab returned no price history for %s", symbol)
 	}
 
-	hist := &yfinance.HistoricalData{
+	hist := &marketdata.HistoricalData{
 		Timestamps: make([]int64, len(candles.Candles)),
 		Closes:     make([]float64, len(candles.Candles)),
 		Opens:      make([]float64, len(candles.Candles)),
@@ -57,7 +57,7 @@ func (c *Client) FetchHistoricalDataWithTimestamps(ctx context.Context, symbol s
 }
 
 // FetchHistoricalByDateRange retrieves daily price history between two dates.
-func (c *Client) FetchHistoricalByDateRange(ctx context.Context, symbol string, from, to time.Time) (*yfinance.HistoricalData, error) {
+func (c *Client) FetchHistoricalByDateRange(ctx context.Context, symbol string, from, to time.Time) (*marketdata.HistoricalData, error) {
 	params := url.Values{
 		"symbol":        {symbol},
 		"periodType":    {"month"},
@@ -81,7 +81,7 @@ func (c *Client) FetchHistoricalByDateRange(ctx context.Context, symbol string, 
 		return nil, fmt.Errorf("schwab returned no data for %s [%s – %s]", symbol, from.Format("2006-01-02"), to.Format("2006-01-02"))
 	}
 
-	hist := &yfinance.HistoricalData{
+	hist := &marketdata.HistoricalData{
 		Timestamps: make([]int64, len(candles.Candles)),
 		Closes:     make([]float64, len(candles.Candles)),
 		Opens:      make([]float64, len(candles.Candles)),
@@ -145,9 +145,9 @@ func (c *Client) FetchQuotes(ctx context.Context, symbols []string) (map[string]
 }
 
 // FetchFundamentals retrieves fundamental data for US symbols and maps them
-// to the existing yfinance.Fundamentals struct used by downstream code.
-func (c *Client) FetchFundamentals(ctx context.Context, symbols []string) (map[string]yfinance.Fundamentals, error) {
-	result := make(map[string]yfinance.Fundamentals, len(symbols))
+// to the shared marketdata.Fundamentals struct used by downstream code.
+func (c *Client) FetchFundamentals(ctx context.Context, symbols []string) (map[string]marketdata.Fundamentals, error) {
+	result := make(map[string]marketdata.Fundamentals, len(symbols))
 
 	for _, fullSymbol := range symbols {
 		raw := StripUSPrefix(fullSymbol)
@@ -179,10 +179,10 @@ func (c *Client) FetchFundamentals(ctx context.Context, symbols []string) (map[s
 	return result, nil
 }
 
-// mapSchwabFundamentals converts Schwab's Fundamental struct to the existing
-// yfinance.Fundamentals that downstream scoring/filtering code expects.
-func mapSchwabFundamentals(f *Fundamental) yfinance.Fundamentals {
-	return yfinance.Fundamentals{
+// mapSchwabFundamentals converts Schwab's Fundamental struct to the shared
+// marketdata.Fundamentals that downstream scoring/filtering code expects.
+func mapSchwabFundamentals(f *Fundamental) marketdata.Fundamentals {
+	return marketdata.Fundamentals{
 		PEGRatio:         f.PegRatio,
 		ROE:              f.ReturnOnEquity / 100.0, // Schwab returns %; yfinance uses decimal
 		ForwardPE:        f.PeRatio,                // closest available (trailing PE)

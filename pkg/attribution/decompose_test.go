@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/raghavkgarg/mycase/pkg/cache"
-	"github.com/raghavkgarg/mycase/pkg/yfinance"
+	"github.com/raghavkgarg/mycase/pkg/marketdata"
 )
 
 // decomposeConfig is a shared window for the decompose tests.
@@ -25,7 +25,7 @@ func TestDecompose_SelectionAndRebalancingIdentity(t *testing.T) {
 	// Two tickers, three trading days.
 	// AAA: 100 → 110 → 121   BBB: 50 → 55 → 60   SPY: 400 → 404 → 408
 	ts := []int64{day(2026, 1, 5), day(2026, 1, 6), day(2026, 1, 7)}
-	f := &mockFetcher{data: map[string]*yfinance.HistoricalData{
+	f := &mockFetcher{data: map[string]*marketdata.HistoricalData{
 		"US:AAA": {Timestamps: ts, Closes: []float64{100, 110, 121}},
 		"US:BBB": {Timestamps: ts, Closes: []float64{50, 55, 60}},
 		"US:SPY": {Timestamps: ts, Closes: []float64{400, 404, 408}},
@@ -68,7 +68,7 @@ func TestDecompose_RebalancingEffectNonZero(t *testing.T) {
 	// The buy-and-hold-first basket differs from the current basket, producing a
 	// measurable rebalancing effect.
 	ts := []int64{day(2026, 1, 5), day(2026, 1, 6), day(2026, 1, 7)}
-	f := &mockFetcher{data: map[string]*yfinance.HistoricalData{
+	f := &mockFetcher{data: map[string]*marketdata.HistoricalData{
 		"US:WIN": {Timestamps: ts, Closes: []float64{100, 130, 160}}, // strong
 		"US:LAG": {Timestamps: ts, Closes: []float64{100, 100, 100}}, // flat
 		"US:SPY": {Timestamps: ts, Closes: []float64{400, 404, 408}},
@@ -102,7 +102,7 @@ func TestDecompose_RebalancingEffectNonZero(t *testing.T) {
 
 func TestDecompose_TaxEffect(t *testing.T) {
 	ts := []int64{day(2026, 1, 5), day(2026, 1, 6)}
-	f := &mockFetcher{data: map[string]*yfinance.HistoricalData{
+	f := &mockFetcher{data: map[string]*marketdata.HistoricalData{
 		"US:AAA": {Timestamps: ts, Closes: []float64{100, 110}},
 		"US:SPY": {Timestamps: ts, Closes: []float64{400, 404}},
 	}}
@@ -124,7 +124,7 @@ func TestDecompose_EmptyHistoryUsesCurrentAsFirstBasket(t *testing.T) {
 	// With no history, buy-and-hold == actual (both use current holdings) →
 	// rebalancing must be ~0 and selection == active.
 	ts := []int64{day(2026, 1, 5), day(2026, 1, 6), day(2026, 1, 7)}
-	f := &mockFetcher{data: map[string]*yfinance.HistoricalData{
+	f := &mockFetcher{data: map[string]*marketdata.HistoricalData{
 		"US:AAA": {Timestamps: ts, Closes: []float64{100, 110, 120}},
 		"US:SPY": {Timestamps: ts, Closes: []float64{400, 404, 408}},
 	}}

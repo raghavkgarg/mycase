@@ -3,7 +3,7 @@ package optimizer
 import (
 	"strings"
 
-	"github.com/raghavkgarg/mycase/pkg/yfinance"
+	"github.com/raghavkgarg/mycase/pkg/marketdata"
 )
 
 type fundamentalAverages struct {
@@ -18,7 +18,7 @@ type fundamentalAverages struct {
 }
 
 // computeAverages calculates fallback average values for fundamentals imputation
-func computeAverages(tickers []string, fundamentals map[string]yfinance.Fundamentals) fundamentalAverages {
+func computeAverages(tickers []string, fundamentals map[string]marketdata.Fundamentals) fundamentalAverages {
 	var sumPEG, sumROE, sumFwdPE, sumOpMargins, sumPB, sumNetDebtEbitda, sumMarketCap, sumInsidersPercent float64
 	var countPEG, countROE, countFwdPE, countOpMargins, countPB, countNetDebtEbitda, countMarketCap, countInsidersPercent int
 
@@ -101,7 +101,7 @@ func computeAverages(tickers []string, fundamentals map[string]yfinance.Fundamen
 }
 
 // EnforceSectorCaps enforces a sector weight cap limit iteratively
-func EnforceSectorCaps(tickers []string, weights map[string]float64, fundamentals map[string]yfinance.Fundamentals, sectorCap float64) {
+func EnforceSectorCaps(tickers []string, weights map[string]float64, fundamentals map[string]marketdata.Fundamentals, sectorCap float64) {
 	if sectorCap <= 0 {
 		sectorCap = 0.25
 	}

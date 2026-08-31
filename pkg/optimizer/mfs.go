@@ -3,7 +3,7 @@ package optimizer
 import (
 	"math"
 
-	"github.com/raghavkgarg/mycase/pkg/yfinance"
+	"github.com/raghavkgarg/mycase/pkg/marketdata"
 )
 
 // OptimizeMultiFactor computes weights based on multi-factor scores including fundamental metrics
@@ -11,7 +11,7 @@ func OptimizeMultiFactor(
 	tickers []string,
 	priceHistory map[string][]float64,
 	benchmarkPrices []float64,
-	fundamentals map[string]yfinance.Fundamentals,
+	fundamentals map[string]marketdata.Fundamentals,
 	w MFSWeights,
 ) map[string]float64 {
 	weights := make(map[string]float64)

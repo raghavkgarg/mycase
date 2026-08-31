@@ -17,7 +17,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/raghavkgarg/mycase/pkg/yfinance"
+	"github.com/raghavkgarg/mycase/pkg/marketdata"
 )
 
 // DefaultBenchmark is the passive baseline for US portfolios: the SPY ETF,
@@ -36,7 +36,7 @@ const DefaultInitialCapital = 100000.0
 // Kept minimal (and defined here) so pkg/attribution does not import
 // pkg/datafetcher, avoiding an import cycle and keeping the tracker mockable.
 type PriceFetcher interface {
-	FetchHistoricalByDateRange(ctx context.Context, ticker string, from, to time.Time) (*yfinance.HistoricalData, error)
+	FetchHistoricalByDateRange(ctx context.Context, ticker string, from, to time.Time) (*marketdata.HistoricalData, error)
 }
 
 // Holding is a ticker + target weight pair (weights should sum to 1.0).
