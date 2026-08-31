@@ -102,28 +102,29 @@ func runTaxImport(ctx context.Context, c *cli.Command) error {
 		return nil
 	}
 
-	if err := db.InsertTransactions(ctx, txns); err != nil {
+	store := tax.NewStore(db.Conn())
+	if err := store.InsertTransactions(ctx, txns); err != nil {
 		return fmt.Errorf("storing transactions: %w", err)
 	}
 
 	// Rebuild FIFO lots and realized gains from the full stored history.
-	return rebuildLots(ctx, db)
+	return rebuildLots(ctx, store)
 }
 
 // rebuildLots replays all stored transactions via FIFO and persists the
 // resulting open lots and realized gains.
-func rebuildLots(ctx context.Context, db *cache.Cache) error {
-	allTxns, err := db.GetTransactions(ctx)
+func rebuildLots(ctx context.Context, store *tax.Store) error {
+	allTxns, err := store.GetTransactions(ctx)
 	if err != nil {
 		return fmt.Errorf("loading transactions: %w", err)
 	}
 
 	result := tax.BuildLots(allTxns)
 
-	if err := db.ReplaceOpenLots(ctx, result.OpenLots); err != nil {
+	if err := store.ReplaceOpenLots(ctx, result.OpenLots); err != nil {
 		return fmt.Errorf("storing lots: %w", err)
 	}
-	if err := db.ReplaceRealizedGains(ctx, result.RealizedGains); err != nil {
+	if err := store.ReplaceRealizedGains(ctx, result.RealizedGains); err != nil {
 		return fmt.Errorf("storing realized gains: %w", err)
 	}
 
@@ -146,12 +147,13 @@ func runTaxStatus(ctx context.Context, c *cli.Command) error {
 		return fmt.Errorf("DuckDB cache not available")
 	}
 
-	openLots, err := db.GetOpenLots(ctx)
+	store := tax.NewStore(db.Conn())
+	openLots, err := store.GetOpenLots(ctx)
 	if err != nil {
 		return fmt.Errorf("loading lots: %w", err)
 	}
 
-	realized, err := db.GetRealizedGains(ctx, time.Time{})
+	realized, err := store.GetRealizedGains(ctx, time.Time{})
 	if err != nil {
 		return fmt.Errorf("loading realized gains: %w", err)
 	}
@@ -221,7 +223,8 @@ func runTaxHarvest(ctx context.Context, c *cli.Command) error {
 		return fmt.Errorf("DuckDB cache not available")
 	}
 
-	openLots, err := db.GetOpenLots(ctx)
+	store := tax.NewStore(db.Conn())
+	openLots, err := store.GetOpenLots(ctx)
 	if err != nil {
 		return fmt.Errorf("loading lots: %w", err)
 	}
@@ -241,7 +244,7 @@ func runTaxHarvest(ctx context.Context, c *cli.Command) error {
 		return fmt.Errorf("fetching quotes: %w", err)
 	}
 
-	recentBuys, err := db.LatestBuyDates(ctx)
+	recentBuys, err := store.LatestBuyDates(ctx)
 	if err != nil {
 		return fmt.Errorf("loading buy dates: %w", err)
 	}

@@ -1,26 +1,41 @@
-package cache
+package tax_test
 
 import (
 	"context"
+	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/raghavkgarg/mycase/pkg/cache"
 	"github.com/raghavkgarg/mycase/pkg/tax"
 )
 
+// newTestStore opens a fresh DuckDB cache in t.TempDir() and returns a tax.Store
+// backed by its connection. The Store lazily creates its own tables (R16 P4:
+// the tax domain owns its persistence, not pkg/cache).
+func newTestStore(t *testing.T) *tax.Store {
+	t.Helper()
+	c, err := cache.Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatalf("cache.Open: %v", err)
+	}
+	t.Cleanup(func() { c.Close() })
+	return tax.NewStore(c.Conn())
+}
+
 func TestInsertTransactions_RoundTrip(t *testing.T) {
-	c := openTestCache(t)
+	s := newTestStore(t)
 	ctx := context.Background()
 
 	txns := []tax.Transaction{
 		{ID: "schwab_1", Ticker: "US:AAPL", Type: tax.TxnBuy, Quantity: 10, Price: 100, Fees: 0.5, TradedAt: time.Unix(1700000000, 0)},
 		{ID: "schwab_2", Ticker: "US:AAPL", Type: tax.TxnSell, Quantity: 5, Price: 120, TradedAt: time.Unix(1700100000, 0)},
 	}
-	if err := c.InsertTransactions(ctx, txns); err != nil {
+	if err := s.InsertTransactions(ctx, txns); err != nil {
 		t.Fatalf("InsertTransactions: %v", err)
 	}
 
-	got, err := c.GetTransactions(ctx)
+	got, err := s.GetTransactions(ctx)
 	if err != nil {
 		t.Fatalf("GetTransactions: %v", err)
 	}
@@ -37,24 +52,24 @@ func TestInsertTransactions_RoundTrip(t *testing.T) {
 }
 
 func TestInsertTransactions_Idempotent(t *testing.T) {
-	c := openTestCache(t)
+	s := newTestStore(t)
 	ctx := context.Background()
 
 	txn := []tax.Transaction{{ID: "x", Ticker: "US:AAPL", Type: tax.TxnBuy, Quantity: 1, Price: 100, TradedAt: time.Unix(1700000000, 0)}}
-	if err := c.InsertTransactions(ctx, txn); err != nil {
+	if err := s.InsertTransactions(ctx, txn); err != nil {
 		t.Fatal(err)
 	}
-	if err := c.InsertTransactions(ctx, txn); err != nil {
+	if err := s.InsertTransactions(ctx, txn); err != nil {
 		t.Fatal(err)
 	}
-	got, _ := c.GetTransactions(ctx)
+	got, _ := s.GetTransactions(ctx)
 	if len(got) != 1 {
 		t.Errorf("expected 1 (idempotent on txn_id), got %d", len(got))
 	}
 }
 
 func TestReplaceOpenLots_RoundTrip(t *testing.T) {
-	c := openTestCache(t)
+	s := newTestStore(t)
 	ctx := context.Background()
 
 	lots := map[string][]tax.Lot{
@@ -62,11 +77,11 @@ func TestReplaceOpenLots_RoundTrip(t *testing.T) {
 			{ID: "US:AAPL_20240101_1", Ticker: "US:AAPL", Quantity: 10, CostPerShare: 100, AcquiredAt: time.Unix(1700000000, 0), Source: "schwab_txn"},
 		},
 	}
-	if err := c.ReplaceOpenLots(ctx, lots); err != nil {
+	if err := s.ReplaceOpenLots(ctx, lots); err != nil {
 		t.Fatalf("ReplaceOpenLots: %v", err)
 	}
 
-	got, err := c.GetOpenLots(ctx)
+	got, err := s.GetOpenLots(ctx)
 	if err != nil {
 		t.Fatalf("GetOpenLots: %v", err)
 	}
@@ -79,28 +94,28 @@ func TestReplaceOpenLots_RoundTrip(t *testing.T) {
 	}
 
 	// Replace with fewer lots — old ones should be gone.
-	if err := c.ReplaceOpenLots(ctx, map[string][]tax.Lot{}); err != nil {
+	if err := s.ReplaceOpenLots(ctx, map[string][]tax.Lot{}); err != nil {
 		t.Fatal(err)
 	}
-	got2, _ := c.GetOpenLots(ctx)
+	got2, _ := s.GetOpenLots(ctx)
 	if len(got2) != 0 {
 		t.Errorf("expected lots cleared, got %d tickers", len(got2))
 	}
 }
 
 func TestReplaceRealizedGains_AndSince(t *testing.T) {
-	c := openTestCache(t)
+	s := newTestStore(t)
 	ctx := context.Background()
 
 	gains := []tax.RealizedGain{
 		{TransactionID: "s1", LotID: "l1", Ticker: "US:AAPL", Quantity: 5, Proceeds: 600, CostBasis: 500, Gain: 100, SoldAt: time.Unix(1690000000, 0), LongTerm: false},
 		{TransactionID: "s2", LotID: "l2", Ticker: "US:MSFT", Quantity: 3, Proceeds: 300, CostBasis: 360, Gain: -60, SoldAt: time.Unix(1700000000, 0), LongTerm: true},
 	}
-	if err := c.ReplaceRealizedGains(ctx, gains); err != nil {
+	if err := s.ReplaceRealizedGains(ctx, gains); err != nil {
 		t.Fatalf("ReplaceRealizedGains: %v", err)
 	}
 
-	all, err := c.GetRealizedGains(ctx, time.Time{})
+	all, err := s.GetRealizedGains(ctx, time.Time{})
 	if err != nil {
 		t.Fatalf("GetRealizedGains: %v", err)
 	}
@@ -110,14 +125,14 @@ func TestReplaceRealizedGains_AndSince(t *testing.T) {
 
 	// Filter to only the later sale.
 	since := time.Unix(1695000000, 0)
-	recent, _ := c.GetRealizedGains(ctx, since)
+	recent, _ := s.GetRealizedGains(ctx, since)
 	if len(recent) != 1 || recent[0].TransactionID != "s2" {
 		t.Errorf("since filter wrong: %+v", recent)
 	}
 }
 
 func TestLatestBuyDates(t *testing.T) {
-	c := openTestCache(t)
+	s := newTestStore(t)
 	ctx := context.Background()
 
 	txns := []tax.Transaction{
@@ -125,11 +140,11 @@ func TestLatestBuyDates(t *testing.T) {
 		{ID: "b2", Ticker: "US:AAPL", Type: tax.TxnBuy, Quantity: 1, Price: 110, TradedAt: time.Unix(1700000000, 0)}, // later
 		{ID: "s1", Ticker: "US:AAPL", Type: tax.TxnSell, Quantity: 1, Price: 120, TradedAt: time.Unix(1705000000, 0)},
 	}
-	if err := c.InsertTransactions(ctx, txns); err != nil {
+	if err := s.InsertTransactions(ctx, txns); err != nil {
 		t.Fatal(err)
 	}
 
-	dates, err := c.LatestBuyDates(ctx)
+	dates, err := s.LatestBuyDates(ctx)
 	if err != nil {
 		t.Fatalf("LatestBuyDates: %v", err)
 	}

@@ -267,13 +267,14 @@ func applyTaxOptimization(ctx context.Context, orders []broker.Order, quotes map
 		return orders
 	}
 
-	openLots, err := db.GetOpenLots(ctx)
+	store := tax.NewStore(db.Conn())
+	openLots, err := store.GetOpenLots(ctx)
 	if err != nil || len(openLots) == 0 {
 		fmt.Println("\n[tax-optimize] Skipped: no tax lots found. Run 'mycase tax import --broker schwab' first.")
 		return orders
 	}
 
-	recentBuys, _ := db.LatestBuyDates(ctx)
+	recentBuys, _ := store.LatestBuyDates(ctx)
 
 	plan := tax.TaxOptimizeOrders(orders, quotes, tax.SequenceParams{
 		OpenLots:   openLots,
@@ -382,8 +383,9 @@ func printTaxWarnings(orders []broker.Order, b broker.Broker, mktCfg broker.Mark
 		var openLots map[string][]tax.Lot
 		var recentBuys map[string]time.Time
 		if db := cache.GetDB(); db != nil {
-			openLots, _ = db.GetOpenLots(context.Background())
-			recentBuys, _ = db.LatestBuyDates(context.Background())
+			store := tax.NewStore(db.Conn())
+			openLots, _ = store.GetOpenLots(context.Background())
+			recentBuys, _ = store.LatestBuyDates(context.Background())
 		}
 
 		for _, o := range sells {

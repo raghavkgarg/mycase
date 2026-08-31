@@ -67,8 +67,9 @@ func (s *Server) handleTax(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
+	store := tax.NewStore(s.cache.Conn())
 
-	openLots, err := s.cache.GetOpenLots(ctx)
+	openLots, err := store.GetOpenLots(ctx)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "loading lots: "+err.Error())
 		return
@@ -115,7 +116,7 @@ func (s *Server) handleTax(w http.ResponseWriter, r *http.Request) {
 	})
 
 	// Realized summaries.
-	realized, err := s.cache.GetRealizedGains(ctx, time.Time{})
+	realized, err := store.GetRealizedGains(ctx, time.Time{})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "loading realized gains: "+err.Error())
 		return
@@ -125,7 +126,7 @@ func (s *Server) handleTax(w http.ResponseWriter, r *http.Request) {
 	allTime := toRealizedJSON(tax.SummarizeRealized(realized, time.Time{}))
 
 	// Harvest candidates.
-	recentBuys, _ := s.cache.LatestBuyDates(ctx)
+	recentBuys, _ := store.LatestBuyDates(ctx)
 	params := tax.DefaultHarvestParams()
 	params.AsOf = asOf
 	params.RecentBuys = recentBuys
