@@ -197,10 +197,11 @@ func runPipeline(ctx context.Context, c *cli.Command) error {
 		db = cache.GetDB()
 		if db != nil {
 			pipelineRun := cache.PipelineRun{
-				RunID:     runID,
-				StartedAt: time.Now(),
-				Portfolio: goldenBase,
-				Method:    cfg.Strategy,
+				RunID:      runID,
+				StartedAt:  time.Now(),
+				Portfolio:  goldenBase,
+				Method:     cfg.Strategy,
+				ConfigJSON: cfg.Snapshot(),
 			}
 			if err := db.InsertRun(ctx, pipelineRun); err != nil {
 				fmt.Printf("[pipeline] Warning: failed to record pipeline run: %v\n", err)

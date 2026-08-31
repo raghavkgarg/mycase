@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/json"
 	"testing"
 
 	"gopkg.in/yaml.v3"
@@ -75,5 +76,34 @@ file: data/qtum.csv
 				t.Errorf("expected file %q, got %q", tt.expectFile, cfg.File)
 			}
 		})
+	}
+}
+
+func TestPipelineConfig_Snapshot(t *testing.T) {
+	cfg := PipelineConfig{
+		Strategy:       "us_quality_momentum",
+		TopN:           20,
+		GoldenCopyPath: "data/us_sp500.csv",
+		Capital:        100000,
+		Broker:         "schwab",
+	}
+	snap := cfg.Snapshot()
+	if snap == "" {
+		t.Fatal("Snapshot() returned empty string")
+	}
+
+	// Snapshot must round-trip back into an equivalent config.
+	var got PipelineConfig
+	if err := json.Unmarshal([]byte(snap), &got); err != nil {
+		t.Fatalf("Snapshot() produced invalid JSON: %v", err)
+	}
+	if got.Strategy != cfg.Strategy {
+		t.Errorf("Strategy: got %q, want %q", got.Strategy, cfg.Strategy)
+	}
+	if got.TopN != cfg.TopN {
+		t.Errorf("TopN: got %d, want %d", got.TopN, cfg.TopN)
+	}
+	if got.Broker != cfg.Broker {
+		t.Errorf("Broker: got %q, want %q", got.Broker, cfg.Broker)
 	}
 }

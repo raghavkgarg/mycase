@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/json"
 	"os"
 
 	"gopkg.in/yaml.v3"
@@ -32,6 +33,17 @@ type PipelineConfig struct {
 	Broker                string         `yaml:"broker"`        // "zerodha" or "schwab"
 	SchwabConfig          string         `yaml:"schwab_config"` // path to schwab.json
 	SchwabToken           string         `yaml:"schwab_token"`  // path to schwab_token.json
+}
+
+// Snapshot returns a compact JSON snapshot of the resolved config, for recording
+// against a pipeline run (reproducibility / decomposition provenance). On the
+// unlikely marshal failure it returns "" so callers can treat it as best-effort.
+func (cfg PipelineConfig) Snapshot() string {
+	b, err := json.Marshal(cfg)
+	if err != nil {
+		return ""
+	}
+	return string(b)
 }
 
 type rawPipelineConfig struct {

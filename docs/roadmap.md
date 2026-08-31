@@ -322,6 +322,33 @@ Implemented as the `pkg/tax` package (FIFO engine + TLH logic, broker-agnostic a
 
 ---
 
+### Phase 9: Proposal `final` Stage Lifecycle
+
+**Status**: ⬜ Deferred (defined-but-unimplemented — loose end **L4**, kicked to roadmap for hindsight)
+
+**Origin**: The DuckDB `proposals` table carries a `stage` column, and the pipeline writes two stages: `draft` (raw pick) and `optimized` (post weight-optimization + sector caps). A third stage, `"final"`, is *referenced* on the read side — `mycase pipeline show` iterates `draft/optimized/final`, and `pipeline diff`'s `--stage` flag lists `final` as a valid value — but **nothing ever writes it**. `GetProposals(runID, "final")` always returns empty. It is aspirational surface area with no consumer, so rather than invent a lifecycle speculatively during the "fix before feature" cleanup (loose end **L4**), the intent is captured here to be built deliberately (or dropped) with hindsight.
+
+**What it would be**: A `final` stage closes the loop between *what the system proposed* and *what actually executed*. After the investor confirms a proposal and orders fire (`mycase basket --live` / autopilot execution), the executed basket — real fill quantities and prices, post micro-transaction filtering and any manual edits — is written back as the `final` stage for that run. This makes the run record a complete audit trail: proposed (`optimized`) vs executed (`final`).
+
+**Why it's worth building** (when prioritized):
+- **Honest audit trail**: today the DB records what was *proposed*, never what was *executed*. Drift between the two (partial fills, skipped micro-transactions, manual removals) is invisible after the fact.
+- **Feeds performance attribution (Phase 5)**: the selection/rebalancing decomposition currently reconstructs history from `optimized` proposals — i.e. intended weights, not realized ones. A `final` stage lets attribution use *actual* executed weights, tightening the "did rebalancing add value" measurement.
+- **Removes a misleading affordance**: `pipeline show`/`diff` currently advertise a `final` stage that never has data — either back it with real data or trim the references.
+
+**Deliverables**:
+- Define the trigger: write `final` at execution confirmation (`pkg/executor` / autopilot post-confirm path), sourced from executed order results rather than the proposal.
+- Persist executed quantities/prices (may need a richer `Proposal` shape or a sibling table if fill data doesn't fit the current `{ticker, weight, score, rank, sector}`).
+- Update attribution's `LoadRebalanceHistory` to prefer `final` when present, falling back to `optimized` for runs that predate the stage.
+- Restore/confirm the `pipeline show` + `diff` `final` references now that they have data.
+
+**Alternative (if not built)**: drop `"final"` from the `pipeline_show` loop and the `pipeline diff --stage` usage string, and document `optimized` as the terminal stage — so the code stops implying a feature that doesn't exist.
+
+**Effort**: ~2–3 days. The persistence is easy; the real work is threading executed fill data out of the executor and deciding the schema for realized (vs proposed) weights.
+
+**Dependency**: Best done with or after Phase 5 (the primary consumer of realized rebalance history). Independent of Phase 8.
+
+---
+
 ### Phase 6: Options Overlay (Post-Maturity)
 
 **What**: Once the portfolio is stable and well-tracked (6+ months live), add an options overlay for income generation and tail-risk hedging.
@@ -351,8 +378,9 @@ Implemented as the `pkg/tax` package (FIFO engine + TLH logic, broker-agnostic a
 | ~~4. Asset Allocation~~ | — | — | ~~India+US portfolio~~ | ❌ Dropped |
 | 7. DuckDB Pipeline Migration | Sep 2026 | None | Atomic pipeline, run history, query-based diffs | ✅ Done |
 | 4. Tax-Loss Harvesting | ~~Oct 2026~~ | Phase 7 ✅ | 0.5-1.5% tax alpha | ✅ Done |
-| 5. Performance Attribution | Nov 2026 | Phase 3 ✅ | Know if system works | 🟡 5a in progress |
+| 5. Performance Attribution | ~~Nov 2026~~ | Phase 3 ✅ | Know if system works | ✅ Done (5a+5b) |
 | 8. Structured Selection History | Post Phase 5 | Phase 7 ✅ | Queryable "why held + what changed" audit trail | ⬜ Deferred (replaces removed L2 dead code) |
+| 9. Proposal `final` Stage | Post Phase 5 | Phase 7 ✅ | Executed-vs-proposed audit trail | ⬜ Deferred (defined-but-unimplemented, ex-L4) |
 | 6. Options Overlay | H2 2027 | Phase 5 + 6mo live data | Income optimization | ⬜ |
 
 ---

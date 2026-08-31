@@ -101,10 +101,11 @@ func Run(ctx context.Context, rc RunConfig) (*RunResult, error) {
 	db := cache.GetDB()
 	if db != nil {
 		pipelineRun := cache.PipelineRun{
-			RunID:     runID,
-			StartedAt: now,
-			Portfolio: goldenBase,
-			Method:    cfg.Strategy,
+			RunID:      runID,
+			StartedAt:  now,
+			Portfolio:  goldenBase,
+			Method:     cfg.Strategy,
+			ConfigJSON: cfg.Snapshot(),
 		}
 		if err := db.InsertRun(ctx, pipelineRun); err != nil {
 			fmt.Printf("[autopilot] Warning: failed to record pipeline run: %v\n", err)
