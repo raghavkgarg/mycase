@@ -1,5 +1,5 @@
 .PHONY: build build-linux-arm64 build-linux-amd64 build-darwin-arm64 build-darwin-amd64
-.PHONY: install run test test-verbose test-race test-integration test-coverage cleanup clean fetch-echarts help
+.PHONY: install run test test-verbose test-race test-integration test-coverage cleanup clean fetch-echarts check-deps help
 
 UNAME_S := $(shell uname -s)
 ifeq ($(UNAME_S),Darwin)
@@ -90,7 +90,12 @@ cleanup:
 	@staticcheck ./...
 	@echo "=== Vulnerabilities ==="
 	@govulncheck ./...
+	@echo "=== Dependency layering ==="
+	@go run ./scripts/checkdeps
 	@echo "=== All clean ==="
+
+check-deps:
+	@go run ./scripts/checkdeps
 
 clean:
 	@rm -f dist/mycase dist/mycase-arm64 dist/mycase-amd64 dist/mycase-darwin-arm64 dist/mycase-darwin-amd64
@@ -116,6 +121,7 @@ help:
 	@echo "  test-race          - Run tests with race detector"
 	@echo "  test-integration   - Run integration tests (requires network)"
 	@echo "  test-coverage      - Run tests and generate coverage.html"
-	@echo "  cleanup            - gofmt + go fix + go vet + staticcheck + govulncheck"
+	@echo "  cleanup            - gofmt + go fix + go vet + staticcheck + govulncheck + check-deps"
+	@echo "  check-deps         - Enforce R16 package layering (leaves + downward imports)"
 	@echo "  clean              - Remove build artifacts"
 	@echo "  fetch-echarts      - Download ECharts 5.6.0 into pkg/server/static/vendor/"
