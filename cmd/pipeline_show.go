@@ -76,6 +76,7 @@ func runPipelineShow(ctx context.Context, c *cli.Command) error {
 	}
 
 	// --- Proposals ---
+	hadProposals := false
 	for _, stage := range []string{"draft", "optimized", "final"} {
 		proposals, err := db.GetProposals(ctx, runID, stage)
 		if err != nil {
@@ -84,6 +85,7 @@ func runPipelineShow(ctx context.Context, c *cli.Command) error {
 		if len(proposals) == 0 {
 			continue
 		}
+		hadProposals = true
 		render.Section(out, fmt.Sprintf("Proposals — %s (%d stocks)", stage, len(proposals)))
 		rows := make([][]string, 0, len(proposals))
 		for _, p := range proposals {
@@ -100,33 +102,7 @@ func runPipelineShow(ctx context.Context, c *cli.Command) error {
 		fmt.Fprintln(out)
 	}
 
-	// --- Selections ---
-	selections, err := db.GetSelections(ctx, runID)
-	if err != nil {
-		return fmt.Errorf("reading selections: %w", err)
-	}
-	if len(selections) > 0 {
-		render.Section(out, fmt.Sprintf("Final Selections (%d stocks)", len(selections)))
-		rows := make([][]string, 0, len(selections))
-		for _, s := range selections {
-			prevStr := "—"
-			if s.PrevRank > 0 {
-				prevStr = fmt.Sprintf("#%d", s.PrevRank)
-			}
-			rows = append(rows, []string{
-				s.Ticker, fmt.Sprintf("%d", s.Rank),
-				scoreOrDash(s.Score), weightPct(s.Weight), dashIfEmpty(s.Action), prevStr,
-			})
-		}
-		render.TableWithOpts(out, render.TableOpts{
-			Headers: []string{"Ticker", "Rank", "Score", "Weight", "Action", "Prev Rank"},
-			Rows:    rows,
-			Align:   []render.Alignment{render.AlignLeft, render.AlignRight, render.AlignRight, render.AlignRight, render.AlignLeft, render.AlignRight},
-		})
-		fmt.Fprintln(out)
-	}
-
-	if len(allPicks) == 0 && len(selections) == 0 {
+	if len(allPicks) == 0 && !hadProposals {
 		fmt.Println("  No data recorded for this run (pipeline may have been interrupted).")
 	}
 

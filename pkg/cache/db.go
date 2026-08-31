@@ -107,24 +107,6 @@ CREATE TABLE IF NOT EXISTS proposals (
     sector VARCHAR,
     PRIMARY KEY (run_id, stage, ticker)
 );
-CREATE TABLE IF NOT EXISTS selections (
-    run_id       VARCHAR NOT NULL,
-    ticker       VARCHAR NOT NULL,
-    weight       DOUBLE  NOT NULL,
-    score        DOUBLE,
-    rank         INTEGER,
-    ttm_growth   DOUBLE,
-    revenue_cagr DOUBLE,
-    dso_delta    DOUBLE,
-    rsi          DOUBLE,
-    momentum_1y  DOUBLE,
-    fcf_yield    DOUBLE,
-    roic         DOUBLE,
-    action       VARCHAR,
-    prev_rank    INTEGER,
-    prev_weight  DOUBLE,
-    PRIMARY KEY (run_id, ticker)
-);
 CREATE TABLE IF NOT EXISTS tax_transactions (
     txn_id    VARCHAR PRIMARY KEY,
     ticker    VARCHAR NOT NULL,

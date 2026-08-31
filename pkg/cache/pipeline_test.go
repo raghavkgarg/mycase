@@ -198,123 +198,6 @@ func TestInsertProposals_Empty(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Selections
-// ---------------------------------------------------------------------------
-
-func TestInsertSelections_RoundTrip(t *testing.T) {
-	c := openTestCache(t)
-	ctx := context.Background()
-	insertTestRun(t, c, "run_test_sel")
-
-	selections := []Selection{
-		{
-			Ticker: "AAPL", Weight: 0.08, Score: 85.2, Rank: 1,
-			TTMGrowth: 12.5, RevenueCagr: 8.3, DSODelta: -2.1,
-			RSI: 55.0, Momentum1Y: 0.22, FCFYield: 0.035, ROIC: 0.28,
-			Action: "retained", PrevRank: 2, PrevWeight: 0.07,
-		},
-		{
-			Ticker: "NVDA", Weight: 0.06, Score: 80.0, Rank: 2,
-			TTMGrowth: 45.0, RevenueCagr: 30.0, DSODelta: 1.5,
-			RSI: 62.0, Momentum1Y: 0.55, FCFYield: 0.02, ROIC: 0.35,
-			Action: "new", PrevRank: 0, PrevWeight: 0,
-		},
-	}
-	if err := c.InsertSelections(ctx, "run_test_sel", selections); err != nil {
-		t.Fatalf("InsertSelections: %v", err)
-	}
-
-	got, err := c.GetSelections(ctx, "run_test_sel")
-	if err != nil {
-		t.Fatalf("GetSelections: %v", err)
-	}
-	if len(got) != 2 {
-		t.Fatalf("expected 2 selections, got %d", len(got))
-	}
-
-	// First one (rank 1).
-	s := got[0]
-	if s.Ticker != "AAPL" {
-		t.Errorf("Ticker: got %q, want AAPL", s.Ticker)
-	}
-	if s.Action != "retained" {
-		t.Errorf("Action: got %q, want retained", s.Action)
-	}
-	if s.PrevRank != 2 {
-		t.Errorf("PrevRank: got %d, want 2", s.PrevRank)
-	}
-	if s.ROIC != 0.28 {
-		t.Errorf("ROIC: got %v, want 0.28", s.ROIC)
-	}
-
-	// Second one (rank 2, new stock).
-	s2 := got[1]
-	if s2.Action != "new" {
-		t.Errorf("Action: got %q, want new", s2.Action)
-	}
-	if s2.PrevRank != 0 {
-		t.Errorf("PrevRank for new stock: got %d, want 0", s2.PrevRank)
-	}
-}
-
-func TestInsertSelections_Empty(t *testing.T) {
-	c := openTestCache(t)
-	ctx := context.Background()
-
-	if err := c.InsertSelections(ctx, "run_empty", nil); err != nil {
-		t.Fatalf("InsertSelections(nil): %v", err)
-	}
-}
-
-func TestGetPreviousSelections(t *testing.T) {
-	c := openTestCache(t)
-	ctx := context.Background()
-
-	// Insert a run and mark it as completed.
-	run := PipelineRun{
-		RunID:     "run_20260826_090000",
-		StartedAt: time.Now(),
-		Status:    RunStatusRunning,
-		Portfolio: "us_sp500",
-		Method:    "us_quality_momentum",
-	}
-	if err := c.InsertRun(ctx, run); err != nil {
-		t.Fatalf("InsertRun: %v", err)
-	}
-	if err := c.CompleteRun(ctx, run.RunID); err != nil {
-		t.Fatalf("CompleteRun: %v", err)
-	}
-
-	sels := []Selection{
-		{Ticker: "AAPL", Weight: 0.08, Score: 85.0, Rank: 1, Action: "retained"},
-	}
-	if err := c.InsertSelections(ctx, run.RunID, sels); err != nil {
-		t.Fatalf("InsertSelections: %v", err)
-	}
-
-	got, err := c.GetPreviousSelections(ctx, "us_sp500", "us_quality_momentum")
-	if err != nil {
-		t.Fatalf("GetPreviousSelections: %v", err)
-	}
-	if len(got) != 1 {
-		t.Fatalf("expected 1 selection, got %d", len(got))
-	}
-	if got[0].Ticker != "AAPL" {
-		t.Errorf("Ticker: got %q, want AAPL", got[0].Ticker)
-	}
-}
-
-func TestGetPreviousSelections_NoneExists(t *testing.T) {
-	c := openTestCache(t)
-	ctx := context.Background()
-
-	_, err := c.GetPreviousSelections(ctx, "us_sp500", "us_quality_momentum")
-	if err == nil {
-		t.Fatal("expected error when no previous selections exist")
-	}
-}
-
-// ---------------------------------------------------------------------------
 // DeleteRunData
 // ---------------------------------------------------------------------------
 
@@ -330,9 +213,6 @@ func TestDeleteRunData(t *testing.T) {
 	c.InsertProposals(ctx, "run_to_delete", "draft", []Proposal{
 		{Ticker: "AAPL", Weight: 0.08, Score: 85.0, Rank: 1, Sector: "Tech"},
 	})
-	c.InsertSelections(ctx, "run_to_delete", []Selection{
-		{Ticker: "AAPL", Weight: 0.08, Score: 85.0, Rank: 1, Action: "new"},
-	})
 
 	if err := c.DeleteRunData(ctx, "run_to_delete"); err != nil {
 		t.Fatalf("DeleteRunData: %v", err)
@@ -343,7 +223,6 @@ func TestDeleteRunData(t *testing.T) {
 		`SELECT COUNT(*) FROM pipeline_runs WHERE run_id = 'run_to_delete'`,
 		`SELECT COUNT(*) FROM index_picks WHERE run_id = 'run_to_delete'`,
 		`SELECT COUNT(*) FROM proposals WHERE run_id = 'run_to_delete'`,
-		`SELECT COUNT(*) FROM selections WHERE run_id = 'run_to_delete'`,
 	} {
 		var n int
 		c.db.QueryRowContext(ctx, q).Scan(&n)

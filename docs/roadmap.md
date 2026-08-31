@@ -292,6 +292,36 @@ Implemented as the `pkg/tax` package (FIFO engine + TLH logic, broker-agnostic a
 
 ---
 
+### Phase 8: Structured Selection History & Cross-Run Attribution Trail
+
+**Status**: ⬜ Not started (deferred feature — replaces removed dead code)
+
+**Origin**: Phase 7 (DuckDB migration) created a `selections` table + `Selection` struct + `InsertSelections`/`GetSelections`/`GetPreviousSelections` methods intended to hold a **structured, queryable audit trail of the final portfolio with per-stock driver metrics and cross-run deltas**. That persistence was never wired into the pipeline (nothing ever called `InsertSelections`), so `pipeline show`'s "Final Selections" section always rendered empty. During the "fix before feature" cleanup (loose end **L2**) the unused scaffolding was **deleted** rather than left as dead code — with the design intent captured here so it can be built deliberately when it earns priority.
+
+**What it is**: Today the pipeline persists `index_picks` and `proposals(draft/optimized)` — but proposals only carry `{ticker, weight, score, rank, sector}`. The richer picture of *why* each stock was selected and *how the roster changed vs last quarter* lives only in the human-readable text report produced by `pkg/selectiontracker` (`report/*/executions/*_01_selection_reasons.txt`), which the tracker then re-parses from text to compute deltas — brittle. This phase makes that a first-class structured record.
+
+**Why it's worth building** (when prioritized):
+- **Behavioral discipline** (the core thesis): a durable, queryable answer to "why is this stock in my portfolio and what changed since last rebalance?" — reviewable without re-running anything.
+- **Feeds performance attribution (Phase 5)**: the selection effect decomposition benefits from knowing which stocks were newly added vs retained, and their entry driver metrics.
+- **Kills the text-parsing hack**: `selectiontracker.SaveReport()` currently parses its own prior `.txt` output to compute cross-run deltas. A `selections` table makes `GetPreviousSelections` the clean source of truth.
+
+**Data model** (what the richer record captures beyond `proposals`):
+- Per-stock driver metrics at selection time: `ttm_growth`, `revenue_cagr`, `dso_delta`, `rsi`, `momentum_1y`, `fcf_yield`, `roic`
+- Cross-run delta fields: `action` ("new" / "retained" / "removed"), `prev_rank`, `prev_weight`
+
+**Deliverables**:
+- Re-add the `selections` table DDL (`pkg/cache/db.go`), `Selection` struct, and `Insert/Get/GetPrevious` methods (the deleted code is recoverable from git history — commit that closed L2).
+- **Wire the write path**: at pipeline finalization, build `[]cache.Selection` from the in-memory `selectiontracker.Tracker` state + the fundamentals already fetched during scoring, compute `action`/`prev_rank`/`prev_weight` via `GetPreviousSelections(portfolio, method)`, and call `InsertSelections`. This is the missing step that was never built.
+- Rewire `selectiontracker.SaveReport()` to source previous-run deltas from `GetPreviousSelections` instead of parsing the prior text file.
+- Restore the "Final Selections" section in `mycase pipeline show` (driver metrics + action/prev-rank columns) — now backed by real data.
+- Optionally extend `mycase pipeline diff` to compare selection-level driver metrics between runs (today it diffs proposals only).
+
+**Effort**: ~3–4 days. The schema and methods are trivial to restore; the real work is (1) assembling `Selection` records from tracker + fundamentals at the right pipeline stage, and (2) migrating the tracker's delta computation off text parsing.
+
+**Dependency**: Best sequenced with or after Phase 5 (Performance Attribution), which is the primary consumer of the structured selection history.
+
+---
+
 ### Phase 6: Options Overlay (Post-Maturity)
 
 **What**: Once the portfolio is stable and well-tracked (6+ months live), add an options overlay for income generation and tail-risk hedging.
@@ -322,6 +352,7 @@ Implemented as the `pkg/tax` package (FIFO engine + TLH logic, broker-agnostic a
 | 7. DuckDB Pipeline Migration | Sep 2026 | None | Atomic pipeline, run history, query-based diffs | ✅ Done |
 | 4. Tax-Loss Harvesting | ~~Oct 2026~~ | Phase 7 ✅ | 0.5-1.5% tax alpha | ✅ Done |
 | 5. Performance Attribution | Nov 2026 | Phase 3 ✅ | Know if system works | 🟡 5a in progress |
+| 8. Structured Selection History | Post Phase 5 | Phase 7 ✅ | Queryable "why held + what changed" audit trail | ⬜ Deferred (replaces removed L2 dead code) |
 | 6. Options Overlay | H2 2027 | Phase 5 + 6mo live data | Income optimization | ⬜ |
 
 ---
