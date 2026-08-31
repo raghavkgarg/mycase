@@ -4,7 +4,7 @@ import (
 	"sort"
 	"time"
 
-	"github.com/raghavkgarg/mycase/pkg/broker"
+	brokertypes "github.com/raghavkgarg/mycase/pkg/broker/types"
 )
 
 // SequencePlan is the result of tax-optimizing a set of orders. It reorders the
@@ -14,7 +14,7 @@ import (
 type SequencePlan struct {
 	// Orders is the reordered slice, ready to hand to the executor (which
 	// executes in slice order).
-	Orders []broker.Order
+	Orders []brokertypes.Order
 	// HarvestSells lists tickers being sold at a loss (tax-beneficial).
 	HarvestSells []string
 	// WashSaleWarnings flags buys that violate the wash-sale rule against a
@@ -35,7 +35,7 @@ type SequenceParams struct {
 }
 
 // key builds the full ticker key (EXCHANGE:SYMBOL) used across lot maps.
-func orderKey(o broker.Order) string {
+func orderKey(o brokertypes.Order) string {
 	if o.Exchange == "" {
 		return o.TradingSymbol
 	}
@@ -52,7 +52,7 @@ func orderKey(o broker.Order) string {
 // if a later order fails; it also front-loads cash for the buys. A BUY of a
 // ticker sold at a loss within 30 days is flagged as a wash-sale violation
 // (which would disallow the harvested loss).
-func TaxOptimizeOrders(orders []broker.Order, prices map[string]float64, p SequenceParams) SequencePlan {
+func TaxOptimizeOrders(orders []brokertypes.Order, prices map[string]float64, p SequenceParams) SequencePlan {
 	if p.AsOf.IsZero() {
 		p.AsOf = time.Now()
 	}
@@ -66,7 +66,7 @@ func TaxOptimizeOrders(orders []broker.Order, prices map[string]float64, p Seque
 	plan := SequencePlan{}
 
 	type classified struct {
-		order    broker.Order
+		order    brokertypes.Order
 		isSell   bool
 		isLoss   bool
 		lossAmt  float64 // negative
@@ -142,7 +142,7 @@ func TaxOptimizeOrders(orders []broker.Order, prices map[string]float64, p Seque
 			seqRank(classifiedOrders[j].isSell, classifiedOrders[j].isLoss)
 	})
 
-	plan.Orders = make([]broker.Order, len(classifiedOrders))
+	plan.Orders = make([]brokertypes.Order, len(classifiedOrders))
 	for i, c := range classifiedOrders {
 		plan.Orders[i] = c.order
 	}

@@ -3,21 +3,16 @@ package broker
 import (
 	"strings"
 
+	"github.com/raghavkgarg/mycase/pkg/broker/types"
 	"github.com/raghavkgarg/mycase/pkg/config"
 )
 
 const defaultsPath = "config/defaults.json"
 
-// MarketConfig provides market-specific defaults derived from config/defaults.json.
-type MarketConfig struct {
-	Benchmark string // "^GSPC" for US, "^NSEI" for India
-	Exchange  string // "US" or "NSE"
-	Currency  string // "$" or "₹"
-	CloseHour int    // 16 (US ET) or 15 (India IST)
-	CloseMin  int    // 0 (US) or 30 (India)
-	Timezone  string // "America/New_York" or "Asia/Kolkata"
-	Market    string // "us" or "india"
-}
+// MarketConfig is the market-defaults DTO; it lives in pkg/broker/types (a
+// zero-import leaf, R16 P3). This alias keeps broker.MarketConfig call sites
+// unchanged. The Load/For-name constructors below populate it from config.
+type MarketConfig = types.MarketConfig
 
 // LoadMarketConfig returns market-specific configuration based on config/defaults.json.
 func LoadMarketConfig() MarketConfig {

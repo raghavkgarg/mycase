@@ -3,7 +3,7 @@ package tax
 import (
 	"testing"
 
-	"github.com/raghavkgarg/mycase/pkg/broker"
+	brokertypes "github.com/raghavkgarg/mycase/pkg/broker/types"
 )
 
 func TestTaxOptimizeOrders_SequencesLossSellsFirst(t *testing.T) {
@@ -13,7 +13,7 @@ func TestTaxOptimizeOrders_SequencesLossSellsFirst(t *testing.T) {
 		// XOM held at 50, sold at a gain (price 100).
 		"US:XOM": {{ID: "x1", Ticker: "US:XOM", Quantity: 10, CostPerShare: 50, AcquiredAt: date(2024, 1, 1)}},
 	}
-	orders := []broker.Order{
+	orders := []brokertypes.Order{
 		{TradingSymbol: "NVDA", Exchange: "US", TransactionType: "BUY", Quantity: 5, Price: 300},
 		{TradingSymbol: "XOM", Exchange: "US", TransactionType: "SELL", Quantity: 10, Price: 100},  // gain
 		{TradingSymbol: "AAPL", Exchange: "US", TransactionType: "SELL", Quantity: 10, Price: 150}, // loss
@@ -48,7 +48,7 @@ func TestTaxOptimizeOrders_DetectsWashSaleInBatch(t *testing.T) {
 		"US:AAPL": {{ID: "a1", Ticker: "US:AAPL", Quantity: 10, CostPerShare: 200, AcquiredAt: date(2024, 1, 1)}},
 	}
 	// Sell AAPL at a loss AND buy AAPL in the same batch → wash sale.
-	orders := []broker.Order{
+	orders := []brokertypes.Order{
 		{TradingSymbol: "AAPL", Exchange: "US", TransactionType: "SELL", Quantity: 5, Price: 150},
 		{TradingSymbol: "AAPL", Exchange: "US", TransactionType: "BUY", Quantity: 5, Price: 150},
 	}
@@ -64,7 +64,7 @@ func TestTaxOptimizeOrders_NoLossNoHarvest(t *testing.T) {
 	openLots := map[string][]Lot{
 		"US:XOM": {{ID: "x1", Ticker: "US:XOM", Quantity: 10, CostPerShare: 50, AcquiredAt: date(2024, 1, 1)}},
 	}
-	orders := []broker.Order{
+	orders := []brokertypes.Order{
 		{TradingSymbol: "XOM", Exchange: "US", TransactionType: "SELL", Quantity: 10, Price: 100}, // gain
 	}
 	prices := map[string]float64{"US:XOM": 100}

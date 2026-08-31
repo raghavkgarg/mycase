@@ -1,36 +1,19 @@
 package broker
 
-// Holding is a single stock holding across all settlement buckets.
-type Holding struct {
-	TradingSymbol string
-	Exchange      string
-	Quantity      int
-	T1Quantity    int
-	T2Quantity    int
-	AveragePrice  float64
-	LastPrice     float64
-	PnL           float64
-	PnLPct        float64
-}
+import "github.com/raghavkgarg/mycase/pkg/broker/types"
 
-// Order is a single equity delivery order.
-type Order struct {
-	TradingSymbol   string
-	Exchange        string
-	TransactionType string // "BUY" or "SELL"
-	Quantity        int
-	OrderType       string  // "LIMIT", "MARKET"
-	Product         string  // "CNC"
-	Price           float64 // limit price; for GTT orders this is the GTT limit price
-	Ltp             float64 // raw last traded price
-	TriggerPrice    float64 // for GTT orders only; zero for regular/AMO
-}
-
-// OrderResult holds identifiers returned after placing an order.
-type OrderResult struct {
-	OrderID   string // non-empty for regular/AMO orders
-	TriggerID int    // non-zero for GTT orders
-}
+// The broker-agnostic DTOs live in pkg/broker/types (a zero-import leaf) so that
+// type-only consumers need not pull in config/costs (R16 P3). These aliases keep
+// existing broker.Holding / broker.Order / broker.OrderResult call sites and the
+// Broker interface unchanged.
+type (
+	// Holding is a single stock holding across all settlement buckets.
+	Holding = types.Holding
+	// Order is a single equity delivery order.
+	Order = types.Order
+	// OrderResult holds identifiers returned after placing an order.
+	OrderResult = types.OrderResult
+)
 
 // Broker abstracts broker-specific operations for market data and order placement.
 type Broker interface {

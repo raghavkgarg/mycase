@@ -3,13 +3,13 @@ package optimizer
 import (
 	"testing"
 
-	"github.com/raghavkgarg/mycase/pkg/broker"
+	brokertypes "github.com/raghavkgarg/mycase/pkg/broker/types"
 	"github.com/raghavkgarg/mycase/pkg/costs"
 )
 
 func TestFilterMicroTransactions_LargeOrderKept(t *testing.T) {
 	// 1000 shares × ₹1000 BUY: trade=₹1,000,000; cost≈₹1151 (0.115%) < 0.5% → kept
-	orders := []broker.Order{
+	orders := []brokertypes.Order{
 		{TradingSymbol: "TCS", Exchange: "NSE", TransactionType: "BUY", Quantity: 1000, Price: 1000},
 	}
 	quotes := map[string]float64{"NSE:TCS": 1000}
@@ -21,7 +21,7 @@ func TestFilterMicroTransactions_LargeOrderKept(t *testing.T) {
 
 func TestFilterMicroTransactions_MicroOrderFiltered(t *testing.T) {
 	// 1 share × ₹50 SELL: DP=₹15.93 alone makes ratio ≈ 32% >> 0.5% → filtered
-	orders := []broker.Order{
+	orders := []brokertypes.Order{
 		{TradingSymbol: "XYZ", Exchange: "NSE", TransactionType: "SELL", Quantity: 1, Price: 50},
 	}
 	quotes := map[string]float64{"NSE:XYZ": 50}
@@ -33,7 +33,7 @@ func TestFilterMicroTransactions_MicroOrderFiltered(t *testing.T) {
 
 func TestFilterMicroTransactions_ZeroThresholdDisabled(t *testing.T) {
 	// Zero threshold → filter is disabled; all orders returned as kept
-	orders := []broker.Order{
+	orders := []brokertypes.Order{
 		{TradingSymbol: "XYZ", Exchange: "NSE", TransactionType: "SELL", Quantity: 1, Price: 50},
 		{TradingSymbol: "TCS", Exchange: "NSE", TransactionType: "BUY", Quantity: 1000, Price: 1000},
 	}
@@ -44,7 +44,7 @@ func TestFilterMicroTransactions_ZeroThresholdDisabled(t *testing.T) {
 }
 
 func TestFilterMicroTransactions_MixedOrders(t *testing.T) {
-	orders := []broker.Order{
+	orders := []brokertypes.Order{
 		{TradingSymbol: "TCS", Exchange: "NSE", TransactionType: "BUY", Quantity: 500, Price: 3000},  // large → kept
 		{TradingSymbol: "TINY", Exchange: "NSE", TransactionType: "SELL", Quantity: 1, Price: 10},    // micro → filtered
 		{TradingSymbol: "INFY", Exchange: "NSE", TransactionType: "BUY", Quantity: 100, Price: 1500}, // medium → kept

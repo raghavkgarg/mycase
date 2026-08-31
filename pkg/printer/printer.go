@@ -3,7 +3,7 @@
 // primitives in pkg/render.
 //
 // Layering: cmd / executor → printer → render. printer owns the mapping from
-// domain types (broker.Holding, basket weights) to report structure; render
+// domain types (brokertypes.Holding, basket weights) to report structure; render
 // owns the actual table/section/currency rendering. printer contains no
 // hand-rolled padding or table code — that all lives in render.
 package printer
@@ -15,7 +15,7 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/raghavkgarg/mycase/pkg/broker"
+	brokertypes "github.com/raghavkgarg/mycase/pkg/broker/types"
 	"github.com/raghavkgarg/mycase/pkg/market"
 	"github.com/raghavkgarg/mycase/pkg/optimizer"
 	"github.com/raghavkgarg/mycase/pkg/render"
@@ -30,7 +30,7 @@ type ThemeGroup struct {
 	CSVPath      string
 	TargetWeight float64
 	Tickers      map[string]bool
-	Holdings     []broker.Holding
+	Holdings     []brokertypes.Holding
 }
 
 // PrintPreviewTable builds the basket transaction-preview report, prints it to
@@ -132,9 +132,9 @@ func PrintPreviewTable(
 
 // RenderHoldingsSnapshot builds the full holdings report as a string.
 func RenderHoldingsSnapshot(
-	rawHoldings []broker.Holding,
+	rawHoldings []brokertypes.Holding,
 	groups []ThemeGroup,
-	uncategorized []broker.Holding,
+	uncategorized []brokertypes.Holding,
 ) string {
 	var totalCurrent float64
 	for _, h := range rawHoldings {
@@ -157,13 +157,13 @@ func RenderHoldingsSnapshot(
 	return sb.String()
 }
 
-func renderHoldingSection(r render.Renderer, title, labelPrefix string, holdings []broker.Holding, totalCurrentAll float64) {
+func renderHoldingSection(r render.Renderer, title, labelPrefix string, holdings []brokertypes.Holding, totalCurrentAll float64) {
 	if len(holdings) == 0 {
 		return
 	}
 	w := r.Writer()
 
-	slices.SortFunc(holdings, func(a, b broker.Holding) int {
+	slices.SortFunc(holdings, func(a, b brokertypes.Holding) int {
 		return cmp.Compare(a.PnLPct, b.PnLPct)
 	})
 
@@ -223,7 +223,7 @@ func renderHoldingSection(r render.Renderer, title, labelPrefix string, holdings
 	fmt.Fprintln(w)
 }
 
-func renderThemeAllocationSummary(r render.Renderer, groups []ThemeGroup, uncategorized []broker.Holding, totalCurrent float64) {
+func renderThemeAllocationSummary(r render.Renderer, groups []ThemeGroup, uncategorized []brokertypes.Holding, totalCurrent float64) {
 	r.Banner("THEME TARGET VS ACTUAL WEIGHT ALLOCATION SUMMARY")
 
 	var totalInvested, totalCurrentAll, totalPnL, totalTargetWt float64
@@ -317,7 +317,7 @@ func themeRow(name string, invested, current, pnl, pnlPct, actualWt, targetWt, d
 	}
 }
 
-func renderDiscrepancies(r render.Renderer, rawHoldings []broker.Holding, groups []ThemeGroup, uncategorized []broker.Holding) {
+func renderDiscrepancies(r render.Renderer, rawHoldings []brokertypes.Holding, groups []ThemeGroup, uncategorized []brokertypes.Holding) {
 	w := r.Writer()
 	r.Banner("DISCREPANCIES & VERIFICATION")
 
@@ -347,7 +347,7 @@ func renderDiscrepancies(r render.Renderer, rawHoldings []broker.Holding, groups
 	}
 }
 
-func findMissingTickers(tickers map[string]bool, holdings []broker.Holding) []string {
+func findMissingTickers(tickers map[string]bool, holdings []brokertypes.Holding) []string {
 	holdingSymbols := make(map[string]bool)
 	for _, h := range holdings {
 		holdingSymbols[h.TradingSymbol] = true
@@ -367,7 +367,7 @@ func findMissingTickers(tickers map[string]bool, holdings []broker.Holding) []st
 	return missing
 }
 
-func holdingDisplaySymbol(h broker.Holding) string {
+func holdingDisplaySymbol(h brokertypes.Holding) string {
 	if h.Quantity != 0 {
 		return h.TradingSymbol
 	}
@@ -383,7 +383,7 @@ func holdingDisplaySymbol(h broker.Holding) string {
 	}
 }
 
-func currentValue(h broker.Holding) float64 {
+func currentValue(h brokertypes.Holding) float64 {
 	totalQty := h.Quantity + h.T1Quantity + h.T2Quantity
 	return float64(totalQty) * h.LastPrice
 }

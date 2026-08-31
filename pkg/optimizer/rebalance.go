@@ -3,7 +3,7 @@ package optimizer
 import (
 	"slices"
 
-	"github.com/raghavkgarg/mycase/pkg/broker"
+	brokertypes "github.com/raghavkgarg/mycase/pkg/broker/types"
 	"github.com/raghavkgarg/mycase/pkg/costs"
 )
 
@@ -25,23 +25,23 @@ func DetectExits(goldenWeights map[string]float64, newSelectionKeys []string) []
 // e.g. thresholdPct=0.005 rejects trades where costs > 0.5% of the order value.
 // A zero thresholdPct disables filtering (all orders are kept).
 func FilterMicroTransactions(
-	orders []broker.Order,
+	orders []brokertypes.Order,
 	quotes map[string]float64,
 	model costs.CostModel,
 	thresholdPct float64,
-) (kept, filtered []broker.Order) {
+) (kept, filtered []brokertypes.Order) {
 	return FilterMicroTransactionsWithExits(orders, quotes, model, thresholdPct, nil)
 }
 
 // FilterMicroTransactionsWithExits partitions orders into kept and filtered slices,
 // preserving full exit orders (where target weight <= 0) regardless of transaction cost ratio.
 func FilterMicroTransactionsWithExits(
-	orders []broker.Order,
+	orders []brokertypes.Order,
 	quotes map[string]float64,
 	model costs.CostModel,
 	thresholdPct float64,
 	basket map[string]float64,
-) (kept, filtered []broker.Order) {
+) (kept, filtered []brokertypes.Order) {
 	if thresholdPct <= 0 {
 		return orders, nil
 	}
