@@ -3,11 +3,12 @@ package cmd
 import (
 	"context"
 	"fmt"
-	"strings"
+	"os"
 
 	"github.com/urfave/cli/v3"
 
 	"github.com/raghavkgarg/mycase/pkg/cache"
+	"github.com/raghavkgarg/mycase/pkg/render"
 )
 
 var CacheCommand = &cli.Command{
@@ -46,13 +47,19 @@ func runCacheStatus(ctx context.Context, _ *cli.Command) error {
 		return nil
 	}
 
-	fmt.Printf("%-14s %-20s %-10s %-8s %-26s\n", "Type", "Ticker", "Range", "Rows", "Fetched At (UTC)")
-	fmt.Println(strings.Repeat("-", 82))
+	rows := make([][]string, 0, len(entries))
 	for _, e := range entries {
-		fmt.Printf("%-14s %-20s %-10s %-8d %-26s\n",
-			e.Kind, e.Ticker, e.RangeKey, e.Rows,
-			e.FetchedAt.UTC().Format("2006-01-02 15:04:05"))
+		rows = append(rows, []string{
+			string(e.Kind), e.Ticker, e.RangeKey,
+			fmt.Sprintf("%d", e.Rows),
+			e.FetchedAt.UTC().Format("2006-01-02 15:04:05"),
+		})
 	}
+	render.TableWithOpts(os.Stdout, render.TableOpts{
+		Headers: []string{"Type", "Ticker", "Range", "Rows", "Fetched At (UTC)"},
+		Rows:    rows,
+		Align:   []render.Alignment{render.AlignLeft, render.AlignLeft, render.AlignLeft, render.AlignRight, render.AlignLeft},
+	})
 	return nil
 }
 

@@ -1,3 +1,11 @@
+// Package printer builds the domain-specific financial reports (holdings
+// snapshot, basket transaction preview) by composing the generic presentation
+// primitives in pkg/render.
+//
+// Layering: cmd / executor → printer → render. printer owns the mapping from
+// domain types (broker.Holding, basket weights) to report structure; render
+// owns the actual table/section/currency rendering. printer contains no
+// hand-rolled padding or table code — that all lives in render.
 package printer
 
 import (
@@ -6,280 +14,16 @@ import (
 	"math"
 	"slices"
 	"strings"
-	"unicode/utf8"
 
 	"github.com/raghavkgarg/mycase/pkg/broker"
 	"github.com/raghavkgarg/mycase/pkg/market"
 	"github.com/raghavkgarg/mycase/pkg/optimizer"
+	"github.com/raghavkgarg/mycase/pkg/render"
 )
 
-// PadString pads a string with spaces on the right to reach the target width in runes
-func PadString(s string, width int) string {
-	res := s
-	for utf8.RuneCountInString(res) < width {
-		res += " "
-	}
-	return res
-}
+const rupee = "₹"
 
-// PadStringRight pads a string with spaces on the left to reach the target width in runes
-func PadStringRight(s string, width int) string {
-	res := s
-	for utf8.RuneCountInString(res) < width {
-		res = " " + res
-	}
-	return res
-}
-
-// PrintPreviewTable generates the visual text table representing the basket's state and transaction cost.
-func PrintPreviewTable(
-	basketKeys []string,
-	basket map[string]float64,
-	quoteData map[string]float64,
-	currentHoldings map[string]int,
-	finalQuantities []int,
-) string {
-	var currentTotalValue float64
-	var finalTotalValue float64
-
-	for i, inst := range basketKeys {
-		parts := strings.Split(inst, ":")
-		symbol := parts[len(parts)-1]
-		ltp := quoteData[inst]
-
-		currentQty := currentHoldings[symbol]
-		finalQty := finalQuantities[i]
-
-		currentTotalValue += float64(currentQty) * ltp
-		finalTotalValue += float64(finalQty) * ltp
-	}
-
-	var sb strings.Builder
-	sb.WriteString("\nPORTFOLIO SNAPSHOT:\n")
-	sb.WriteString("---------------------------------------------------------------------------------------------------------------------------------------------\n")
-	sb.WriteString("Symbol          | Action | Qty Change | Current Qty | Final Qty | Current Wt | Final Wt | Target Wt | Limit Price | Total Transaction Cost\n")
-	sb.WriteString("---------------------------------------------------------------------------------------------------------------------------------------------\n")
-
-	var totalTxnCost float64
-	for i, inst := range basketKeys {
-		parts := strings.Split(inst, ":")
-		symbol := parts[len(parts)-1]
-		ltp := quoteData[inst]
-
-		limitPrice := market.CalculateBufferedLimitPrice(ltp)
-
-		currentQty := currentHoldings[symbol]
-		finalQty := finalQuantities[i]
-		qtyChange := finalQty - currentQty
-
-		action := "HOLD"
-		if qtyChange > 0 {
-			action = "BUY"
-		} else if qtyChange < 0 {
-			action = "SELL"
-		}
-
-		var currentWt float64
-		if currentTotalValue > 0 {
-			currentWt = (float64(currentQty) * ltp) / currentTotalValue
-		}
-
-		var finalWt float64
-		if finalTotalValue > 0 {
-			finalWt = (float64(finalQty) * ltp) / finalTotalValue
-		}
-
-		targetWeight := basket[inst]
-
-		currentWtStr := fmt.Sprintf("%.1f%%", currentWt*100)
-		finalWtStr := fmt.Sprintf("%.1f%%", finalWt*100)
-		targetWtStr := fmt.Sprintf("%.1f%%", targetWeight*100)
-
-		txnCost := math.Abs(float64(qtyChange)) * limitPrice
-		if qtyChange > 0 {
-			totalTxnCost += txnCost // keep for compatibility if needed
-		}
-
-		txnCostStr := "₹0.00"
-		if qtyChange > 0 {
-			txnCostStr = fmt.Sprintf("₹%.2f", txnCost)
-		} else if qtyChange < 0 {
-			txnCostStr = fmt.Sprintf("-₹%.2f", txnCost)
-		}
-
-		sb.WriteString(fmt.Sprintf("%s | %s | %s | %s | %s | %s | %s | %s | %s  | %s  \n",
-			PadString(symbol, 14),
-			PadString(action, 6),
-			PadString(fmt.Sprintf("%d", qtyChange), 10),
-			PadString(fmt.Sprintf("%d", currentQty), 11),
-			PadString(fmt.Sprintf("%d", finalQty), 9),
-			PadString(currentWtStr, 10),
-			PadString(finalWtStr, 8),
-			PadString(targetWtStr, 9),
-			PadStringRight(fmt.Sprintf("₹%.2f", limitPrice), 10),
-			PadStringRight(txnCostStr, 22),
-		))
-	}
-
-	// Calculate total buys and sells for Net Cash Flow
-	var totalBuys, totalSells float64
-	for i, inst := range basketKeys {
-		parts := strings.Split(inst, ":")
-		symbol := parts[len(parts)-1]
-		ltp := quoteData[inst]
-		limitPrice := market.CalculateBufferedLimitPrice(ltp)
-		currentQty := currentHoldings[symbol]
-		finalQty := finalQuantities[i]
-		qtyChange := finalQty - currentQty
-
-		if qtyChange > 0 {
-			totalBuys += float64(qtyChange) * limitPrice
-		} else if qtyChange < 0 {
-			totalSells += math.Abs(float64(qtyChange)) * limitPrice
-		}
-	}
-
-	netCashFlow := totalBuys - totalSells
-	var netCashFlowStr string
-	if netCashFlow >= 0 {
-		netCashFlowStr = fmt.Sprintf("₹%.2f (Additional cash needed)", netCashFlow)
-	} else {
-		netCashFlowStr = fmt.Sprintf("-₹%.2f (Cash inflow / Refund to ledger)", math.Abs(netCashFlow))
-	}
-
-	// Calculate Minimum Amount required to Match Proposed Weight using optimizer package
-	minTotalTxnCost := optimizer.CalculateMinimumRequiredOutflow(basketKeys, basket, quoteData, currentHoldings)
-
-	sb.WriteString("---------------------------------------------------------------------------------------------------------------------------------------------\n")
-	sb.WriteString(fmt.Sprintf("Estimated Total Outflow (Sum of Buys): ₹%.2f\n", totalBuys))
-	sb.WriteString(fmt.Sprintf("Estimated Total Inflow (Sum of Sells): ₹%.2f\n", totalSells))
-	sb.WriteString(fmt.Sprintf("Net Cash Flow (Buys - Sells):          %s\n", netCashFlowStr))
-	sb.WriteString(fmt.Sprintf("Minimum Amount required to Match Proposed Weight: ₹%.2f\n", minTotalTxnCost))
-	sb.WriteString("---------------------------------------------------------------------------------------------------------------------------------------------\n")
-
-	fmt.Print(sb.String())
-	return sb.String()
-}
-
-// FormatPnL formats currency PnL with standard sign indicators
-func FormatPnL(val float64) string {
-	sign := ""
-	if val < 0 {
-		sign = "-"
-	} else if val > 0 {
-		sign = "+"
-	}
-	return fmt.Sprintf("%s₹%.2f", sign, math.Abs(val))
-}
-
-// FormatPnLPct formats percentage PnL with standard sign indicators
-func FormatPnLPct(val float64) string {
-	sign := ""
-	if val < 0 {
-		sign = "-"
-	} else if val > 0 {
-		sign = "+"
-	}
-	return fmt.Sprintf("%s%.2f%%", sign, math.Abs(val))
-}
-
-func renderSection(title string, labelPrefix string, holdings []broker.Holding, totalCurrentAll float64) string {
-	if len(holdings) == 0 {
-		return ""
-	}
-	// Sort by PnL% ascending
-	slices.SortFunc(holdings, func(a, b broker.Holding) int {
-		return cmp.Compare(a.PnLPct, b.PnLPct)
-	})
-
-	header := "=======================================================================================================================\n"
-	cols := "Symbol            | Exchange | Quantity | Avg Price  | LTP        | Current Value | Weight | PnL          | PnL %    \n"
-	sep := "-----------------------------------------------------------------------------------------------------------------------\n"
-
-	var sb strings.Builder
-	sb.WriteString(header)
-
-	// Dynamic centering of title
-	titleLen := len(title)
-	padding := max((119-titleLen)/2, 0)
-	centeredTitle := strings.Repeat(" ", padding) + title
-	sb.WriteString(centeredTitle + strings.Repeat(" ", max(0, 119-len(centeredTitle))) + "\n")
-
-	sb.WriteString(header + cols + sep)
-
-	var invested, current, pnl float64
-	for _, h := range holdings {
-		totalQty := h.Quantity + h.T1Quantity + h.T2Quantity
-		invested += float64(totalQty) * h.AveragePrice
-		current += float64(totalQty) * h.LastPrice
-		pnl += h.PnL
-	}
-
-	for _, h := range holdings {
-		displaySym := h.TradingSymbol
-		totalQty := h.Quantity + h.T1Quantity + h.T2Quantity
-		if h.Quantity == 0 {
-			if h.T1Quantity > 0 && h.T2Quantity > 0 {
-				displaySym = h.TradingSymbol + "(T+1/2)"
-			} else if h.T1Quantity > 0 {
-				displaySym = h.TradingSymbol + "(T+1)"
-			} else if h.T2Quantity > 0 {
-				displaySym = h.TradingSymbol + "(T+2)"
-			}
-		}
-
-		currentVal := float64(totalQty) * h.LastPrice
-		var weightPct float64
-		if current > 0 {
-			weightPct = (currentVal / current) * 100.0
-		}
-
-		sb.WriteString(renderHoldingRow(displaySym, h.Exchange, totalQty, h.AveragePrice, h.LastPrice, currentVal, weightPct, h.PnL, h.PnLPct))
-	}
-
-	var pnlPct float64
-	if invested > 0 {
-		pnlPct = (pnl / invested) * 100.0
-	}
-
-	groupWeightStr := ""
-	if totalCurrentAll > 0 {
-		groupWeightPct := (current / totalCurrentAll) * 100.0
-		groupWeightStr = fmt.Sprintf(" (%.2f%% of Total Portfolio)", groupWeightPct)
-	}
-
-	sb.WriteString(sep)
-	sb.WriteString(fmt.Sprintf("%s  ₹%.2f\n", PadString(labelPrefix+" Invested Value:", 28), invested))
-	sb.WriteString(fmt.Sprintf("%s  ₹%.2f%s\n", PadString(labelPrefix+" Current Value:", 28), current, groupWeightStr))
-	sb.WriteString(fmt.Sprintf("%s  %s (%s)\n", PadString(labelPrefix+" Portfolio PnL:", 28), FormatPnL(pnl), FormatPnLPct(pnlPct)))
-	sb.WriteString(header + "\n")
-
-	return sb.String()
-}
-
-func findMissingTickers(tickers map[string]bool, holdings []broker.Holding) []string {
-	holdingSymbols := make(map[string]bool)
-	for _, h := range holdings {
-		holdingSymbols[h.TradingSymbol] = true
-	}
-	var missing []string
-	var keys []string
-	for t := range tickers {
-		keys = append(keys, t)
-	}
-	slices.Sort(keys)
-
-	for _, t := range keys {
-		parts := strings.Split(t, ":")
-		symbol := parts[len(parts)-1]
-		if !holdingSymbols[symbol] {
-			missing = append(missing, t)
-		}
-	}
-	return missing
-}
-
-// ThemeGroup holds categorized holdings and configuration for a specific theme group
+// ThemeGroup holds categorized holdings and configuration for a theme group.
 type ThemeGroup struct {
 	Name         string
 	Prefix       string
@@ -289,220 +33,362 @@ type ThemeGroup struct {
 	Holdings     []broker.Holding
 }
 
-func renderThemeAllocationSummary(groups []ThemeGroup, uncategorizedHoldings []broker.Holding, totalCurrent float64) string {
-	header := "=======================================================================================================================\n"
-	cols := "Theme              | Invested Value | Current Value | PnL           | PnL %     | Actual Wt   | Target Wt   | Drift    \n"
-	sep := "-----------------------------------------------------------------------------------------------------------------------\n"
+// PrintPreviewTable builds the basket transaction-preview report, prints it to
+// stdout, and returns the same content as a string (for reuse by the caller).
+func PrintPreviewTable(
+	basketKeys []string,
+	basket map[string]float64,
+	quoteData map[string]float64,
+	currentHoldings map[string]int,
+	finalQuantities []int,
+) string {
+	var currentTotalValue, finalTotalValue float64
+	for i, inst := range basketKeys {
+		symbol := lastSegment(inst)
+		ltp := quoteData[inst]
+		currentTotalValue += float64(currentHoldings[symbol]) * ltp
+		finalTotalValue += float64(finalQuantities[i]) * ltp
+	}
 
 	var sb strings.Builder
-	sb.WriteString(header)
+	r := render.New(&sb)
+	fmt.Fprintln(&sb)
+	r.Section("PORTFOLIO SNAPSHOT")
 
-	title := "THEME TARGET VS ACTUAL WEIGHT ALLOCATION SUMMARY"
-	titleLen := len(title)
-	padding := max((119-titleLen)/2, 0)
-	centeredTitle := strings.Repeat(" ", padding) + title
-	sb.WriteString(centeredTitle + strings.Repeat(" ", max(0, 119-len(centeredTitle))) + "\n")
-	sb.WriteString(header + cols + sep)
+	var totalBuys, totalSells float64
+	rows := make([][]string, 0, len(basketKeys))
+	for i, inst := range basketKeys {
+		symbol := lastSegment(inst)
+		ltp := quoteData[inst]
+		limitPrice := market.CalculateBufferedLimitPrice(ltp)
+		currentQty := currentHoldings[symbol]
+		finalQty := finalQuantities[i]
+		qtyChange := finalQty - currentQty
 
-	var totalInvestedAll, totalCurrentAll, totalPnLAll, totalTargetWt float64
+		action := "HOLD"
+		switch {
+		case qtyChange > 0:
+			action = "BUY"
+			totalBuys += float64(qtyChange) * limitPrice
+		case qtyChange < 0:
+			action = "SELL"
+			totalSells += math.Abs(float64(qtyChange)) * limitPrice
+		}
+
+		var currentWt, finalWt float64
+		if currentTotalValue > 0 {
+			currentWt = (float64(currentQty) * ltp) / currentTotalValue
+		}
+		if finalTotalValue > 0 {
+			finalWt = (float64(finalQty) * ltp) / finalTotalValue
+		}
+
+		txnCost := math.Abs(float64(qtyChange)) * limitPrice
+		txnCostStr := rupee + "0.00"
+		if qtyChange > 0 {
+			txnCostStr = render.Currency(txnCost, rupee)
+		} else if qtyChange < 0 {
+			txnCostStr = "-" + render.Currency(txnCost, rupee)
+		}
+
+		rows = append(rows, []string{
+			symbol, action,
+			fmt.Sprintf("%d", qtyChange), fmt.Sprintf("%d", currentQty), fmt.Sprintf("%d", finalQty),
+			fmt.Sprintf("%.1f%%", currentWt*100), fmt.Sprintf("%.1f%%", finalWt*100), fmt.Sprintf("%.1f%%", basket[inst]*100),
+			render.Currency(limitPrice, rupee), txnCostStr,
+		})
+	}
+
+	r.Table(render.TableOpts{
+		Headers: []string{"Symbol", "Action", "Qty Change", "Current Qty", "Final Qty", "Current Wt", "Final Wt", "Target Wt", "Limit Price", "Total Transaction Cost"},
+		Rows:    rows,
+		Align: []render.Alignment{
+			render.AlignLeft, render.AlignLeft, render.AlignRight, render.AlignRight, render.AlignRight,
+			render.AlignRight, render.AlignRight, render.AlignRight, render.AlignRight, render.AlignRight,
+		},
+		Border: render.BorderPipe,
+	})
+
+	netCashFlow := totalBuys - totalSells
+	var netStr string
+	if netCashFlow >= 0 {
+		netStr = render.Currency(netCashFlow, rupee) + " (Additional cash needed)"
+	} else {
+		netStr = "-" + render.Currency(math.Abs(netCashFlow), rupee) + " (Cash inflow / Refund to ledger)"
+	}
+	minTotalTxnCost := optimizer.CalculateMinimumRequiredOutflow(basketKeys, basket, quoteData, currentHoldings)
+
+	render.KV(&sb, []render.KVPair{
+		{Key: "Estimated Total Outflow (Sum of Buys)", Value: render.Currency(totalBuys, rupee)},
+		{Key: "Estimated Total Inflow (Sum of Sells)", Value: render.Currency(totalSells, rupee)},
+		{Key: "Net Cash Flow (Buys - Sells)", Value: netStr},
+		{Key: "Minimum Amount required to Match Proposed Weight", Value: render.Currency(minTotalTxnCost, rupee)},
+	})
+
+	out := sb.String()
+	fmt.Print(out)
+	return out
+}
+
+// RenderHoldingsSnapshot builds the full holdings report as a string.
+func RenderHoldingsSnapshot(
+	rawHoldings []broker.Holding,
+	groups []ThemeGroup,
+	uncategorized []broker.Holding,
+) string {
+	var totalCurrent float64
+	for _, h := range rawHoldings {
+		totalCurrent += currentValue(h)
+	}
+
+	var sb strings.Builder
+	r := render.New(&sb)
+	fmt.Fprintln(&sb)
+
+	renderThemeAllocationSummary(r, groups, uncategorized, totalCurrent)
+	for _, g := range groups {
+		title := fmt.Sprintf("%s HOLDINGS SNAPSHOT", strings.ToUpper(g.Name))
+		renderHoldingSection(r, title, g.Prefix, g.Holdings, totalCurrent)
+	}
+	renderHoldingSection(r, "UNCATEGORIZED HOLDINGS SNAPSHOT", "Uncategorized", uncategorized, totalCurrent)
+	renderHoldingSection(r, "OVERALL HOLDING SNAPSHOT", "Total", rawHoldings, 0)
+	renderDiscrepancies(r, rawHoldings, groups, uncategorized)
+
+	return sb.String()
+}
+
+func renderHoldingSection(r render.Renderer, title, labelPrefix string, holdings []broker.Holding, totalCurrentAll float64) {
+	if len(holdings) == 0 {
+		return
+	}
+	w := r.Writer()
+
+	slices.SortFunc(holdings, func(a, b broker.Holding) int {
+		return cmp.Compare(a.PnLPct, b.PnLPct)
+	})
+
+	r.Banner(title)
+
+	var invested, current, pnl float64
+	for _, h := range holdings {
+		totalQty := h.Quantity + h.T1Quantity + h.T2Quantity
+		invested += float64(totalQty) * h.AveragePrice
+		current += currentValue(h)
+		pnl += h.PnL
+	}
+
+	rows := make([][]string, 0, len(holdings))
+	for _, h := range holdings {
+		totalQty := h.Quantity + h.T1Quantity + h.T2Quantity
+		curVal := float64(totalQty) * h.LastPrice
+		var weightPct float64
+		if current > 0 {
+			weightPct = (curVal / current) * 100.0
+		}
+		rows = append(rows, []string{
+			holdingDisplaySymbol(h),
+			h.Exchange,
+			fmt.Sprintf("%d", totalQty),
+			render.Currency(h.AveragePrice, rupee),
+			render.Currency(h.LastPrice, rupee),
+			render.Currency(curVal, rupee),
+			fmt.Sprintf("%.2f%%", weightPct),
+			render.PnL(h.PnL, rupee),
+			render.PnLPct(h.PnLPct),
+		})
+	}
+	r.Table(render.TableOpts{
+		Headers: []string{"Symbol", "Exchange", "Quantity", "Avg Price", "LTP", "Current Value", "Weight", "PnL", "PnL %"},
+		Rows:    rows,
+		Align: []render.Alignment{
+			render.AlignLeft, render.AlignLeft, render.AlignRight, render.AlignRight,
+			render.AlignRight, render.AlignRight, render.AlignRight, render.AlignRight, render.AlignRight,
+		},
+		Border: render.BorderPipe,
+	})
+
+	var pnlPct float64
+	if invested > 0 {
+		pnlPct = (pnl / invested) * 100.0
+	}
+	groupWeight := ""
+	if totalCurrentAll > 0 {
+		groupWeight = fmt.Sprintf(" (%.2f%% of Total Portfolio)", (current/totalCurrentAll)*100.0)
+	}
+	render.KV(w, []render.KVPair{
+		{Key: labelPrefix + " Invested Value", Value: render.Currency(invested, rupee)},
+		{Key: labelPrefix + " Current Value", Value: render.Currency(current, rupee) + groupWeight},
+		{Key: labelPrefix + " Portfolio PnL", Value: fmt.Sprintf("%s (%s)", render.PnL(pnl, rupee), render.PnLPct(pnlPct))},
+	})
+	fmt.Fprintln(w)
+}
+
+func renderThemeAllocationSummary(r render.Renderer, groups []ThemeGroup, uncategorized []broker.Holding, totalCurrent float64) {
+	r.Banner("THEME TARGET VS ACTUAL WEIGHT ALLOCATION SUMMARY")
+
+	var totalInvested, totalCurrentAll, totalPnL, totalTargetWt float64
+	rows := make([][]string, 0, len(groups)+1)
 
 	for _, g := range groups {
 		var invested, current, pnl float64
 		for _, h := range g.Holdings {
 			totalQty := h.Quantity + h.T1Quantity + h.T2Quantity
 			invested += float64(totalQty) * h.AveragePrice
-			current += float64(totalQty) * h.LastPrice
+			current += currentValue(h)
 			pnl += h.PnL
 		}
-
 		if len(g.Holdings) == 0 && g.TargetWeight == 0 {
 			continue
 		}
-
 		var pnlPct float64
 		if invested > 0 {
 			pnlPct = (pnl / invested) * 100.0
 		}
-
 		var actualWt float64
 		if totalCurrent > 0 {
 			actualWt = (current / totalCurrent) * 100.0
 		}
 		targetWt := g.TargetWeight * 100.0
-		drift := actualWt - targetWt
-
 		cleanName := strings.TrimSpace(strings.TrimPrefix(g.Name, "Theme"))
 
-		totalInvestedAll += invested
+		totalInvested += invested
 		totalCurrentAll += current
-		totalPnLAll += pnl
+		totalPnL += pnl
 		totalTargetWt += targetWt
 
-		driftStr := FormatPnLPct(drift)
-		if drift == 0 {
-			driftStr = "0.00%"
-		}
-
-		sb.WriteString(fmt.Sprintf("%s | %s | %s | %s | %s | %s | %s | %s\n",
-			PadString(cleanName, 18),
-			PadStringRight(fmt.Sprintf("₹%.2f", invested), 14),
-			PadStringRight(fmt.Sprintf("₹%.2f", current), 14),
-			PadStringRight(FormatPnL(pnl), 13),
-			PadStringRight(FormatPnLPct(pnlPct), 9),
-			PadStringRight(fmt.Sprintf("%.2f%%", actualWt), 11),
-			PadStringRight(fmt.Sprintf("%.2f%%", targetWt), 11),
-			PadStringRight(driftStr, 9),
-		))
+		rows = append(rows, themeRow(cleanName, invested, current, pnl, pnlPct, actualWt, targetWt, actualWt-targetWt))
 	}
 
-	if len(uncategorizedHoldings) > 0 {
+	if len(uncategorized) > 0 {
 		var invested, current, pnl float64
-		for _, h := range uncategorizedHoldings {
+		for _, h := range uncategorized {
 			totalQty := h.Quantity + h.T1Quantity + h.T2Quantity
 			invested += float64(totalQty) * h.AveragePrice
-			current += float64(totalQty) * h.LastPrice
+			current += currentValue(h)
 			pnl += h.PnL
 		}
-
 		var pnlPct float64
 		if invested > 0 {
 			pnlPct = (pnl / invested) * 100.0
 		}
-
 		var actualWt float64
 		if totalCurrent > 0 {
 			actualWt = (current / totalCurrent) * 100.0
 		}
-		drift := actualWt
-
-		totalInvestedAll += invested
+		totalInvested += invested
 		totalCurrentAll += current
-		totalPnLAll += pnl
-
-		driftStr := FormatPnLPct(drift)
-		if drift == 0 {
-			driftStr = "0.00%"
-		}
-
-		sb.WriteString(fmt.Sprintf("%s | %s | %s | %s | %s | %s | %s | %s\n",
-			PadString("Uncategorized", 18),
-			PadStringRight(fmt.Sprintf("₹%.2f", invested), 14),
-			PadStringRight(fmt.Sprintf("₹%.2f", current), 14),
-			PadStringRight(FormatPnL(pnl), 13),
-			PadStringRight(FormatPnLPct(pnlPct), 9),
-			PadStringRight(fmt.Sprintf("%.2f%%", actualWt), 11),
-			PadStringRight(fmt.Sprintf("%.2f%%", 0.0), 11),
-			PadStringRight(driftStr, 9),
-		))
+		totalPnL += pnl
+		rows = append(rows, themeRow("Uncategorized", invested, current, pnl, pnlPct, actualWt, 0.0, actualWt))
 	}
 
 	var totalPnLPct float64
-	if totalInvestedAll > 0 {
-		totalPnLPct = (totalPnLAll / totalInvestedAll) * 100.0
+	if totalInvested > 0 {
+		totalPnLPct = (totalPnL / totalInvested) * 100.0
 	}
-
 	var totalActualWt float64
 	if totalCurrent > 0 {
 		totalActualWt = (totalCurrentAll / totalCurrent) * 100.0
 	}
-	totalDrift := totalActualWt - totalTargetWt
-	totalDriftStr := FormatPnLPct(totalDrift)
-	if totalDrift == 0 {
-		totalDriftStr = "0.00%"
-	}
+	footer := themeRow("Total", totalInvested, totalCurrentAll, totalPnL, totalPnLPct, totalActualWt, totalTargetWt, totalActualWt-totalTargetWt)
 
-	sb.WriteString(sep)
-	sb.WriteString(fmt.Sprintf("%s | %s | %s | %s | %s | %s | %s | %s\n",
-		PadString("Total", 18),
-		PadStringRight(fmt.Sprintf("₹%.2f", totalInvestedAll), 14),
-		PadStringRight(fmt.Sprintf("₹%.2f", totalCurrentAll), 14),
-		PadStringRight(FormatPnL(totalPnLAll), 13),
-		PadStringRight(FormatPnLPct(totalPnLPct), 9),
-		PadStringRight(fmt.Sprintf("%.2f%%", totalActualWt), 11),
-		PadStringRight(fmt.Sprintf("%.2f%%", totalTargetWt), 11),
-		PadStringRight(totalDriftStr, 9),
-	))
-	sb.WriteString(header + "\n")
-
-	return sb.String()
+	r.Table(render.TableOpts{
+		Headers: []string{"Theme", "Invested Value", "Current Value", "PnL", "PnL %", "Actual Wt", "Target Wt", "Drift"},
+		Rows:    rows,
+		Footer:  footer,
+		Align: []render.Alignment{
+			render.AlignLeft, render.AlignRight, render.AlignRight, render.AlignRight,
+			render.AlignRight, render.AlignRight, render.AlignRight, render.AlignRight,
+		},
+		Border: render.BorderPipe,
+	})
+	fmt.Fprintln(r.Writer())
 }
 
-// RenderHoldingsSnapshot formats and constructs the holdings layout snapshot.
-func RenderHoldingsSnapshot(
-	rawHoldings []broker.Holding,
-	groups []ThemeGroup,
-	uncategorizedHoldings []broker.Holding,
-) string {
-	// Calculate totalCurrent for weights
-	var totalCurrent float64
-	for _, h := range rawHoldings {
-		totalQty := h.Quantity + h.T1Quantity + h.T2Quantity
-		totalCurrent += float64(totalQty) * h.LastPrice
+func themeRow(name string, invested, current, pnl, pnlPct, actualWt, targetWt, drift float64) []string {
+	return []string{
+		name,
+		render.Currency(invested, rupee),
+		render.Currency(current, rupee),
+		render.PnL(pnl, rupee),
+		render.PnLPct(pnlPct),
+		fmt.Sprintf("%.2f%%", actualWt),
+		fmt.Sprintf("%.2f%%", targetWt),
+		render.PnLPct(drift),
 	}
+}
 
-	var sb strings.Builder
-	sb.WriteString("\n")
+func renderDiscrepancies(r render.Renderer, rawHoldings []broker.Holding, groups []ThemeGroup, uncategorized []broker.Holding) {
+	w := r.Writer()
+	r.Banner("DISCREPANCIES & VERIFICATION")
 
-	// Render Theme Target vs Actual Weight Allocation Summary
-	sb.WriteString(renderThemeAllocationSummary(groups, uncategorizedHoldings, totalCurrent))
-
-	// Render configured groups
+	anyDiscrepancy := len(uncategorized) > 0
 	for _, g := range groups {
-		title := fmt.Sprintf("%s HOLDINGS SNAPSHOT", strings.ToUpper(g.Name))
-		sb.WriteString(renderSection(title, g.Prefix, g.Holdings, totalCurrent))
-	}
-
-	// Render Uncategorized if any
-	sb.WriteString(renderSection("UNCATEGORIZED HOLDINGS SNAPSHOT", "Uncategorized", uncategorizedHoldings, totalCurrent))
-
-	// Render Overall (Total)
-	sb.WriteString(renderSection("OVERALL HOLDING SNAPSHOT", "Total", rawHoldings, 0))
-
-	// Render Verification
-	sb.WriteString("=======================================================================================================================\n")
-	sb.WriteString("                                            DISCREPANCIES & VERIFICATION                                               \n")
-	sb.WriteString("=======================================================================================================================\n")
-
-	anyDiscrepancy := len(uncategorizedHoldings) > 0
-	for _, g := range groups {
-		missing := findMissingTickers(g.Tickers, rawHoldings)
-		if len(missing) > 0 {
+		if len(findMissingTickers(g.Tickers, rawHoldings)) > 0 {
 			anyDiscrepancy = true
 		}
 	}
 
 	if !anyDiscrepancy {
-		sb.WriteString("✓ All holdings are correctly categorized, and all group tickers are present in holdings.\n")
-	} else {
-		if len(uncategorizedHoldings) > 0 {
-			var uncSymbols []string
-			for _, h := range uncategorizedHoldings {
-				uncSymbols = append(uncSymbols, h.TradingSymbol)
-			}
-			sb.WriteString(fmt.Sprintf("⚠ Holdings not categorized in any group: %s\n", strings.Join(uncSymbols, ", ")))
+		fmt.Fprintln(w, "✓ All holdings are correctly categorized, and all group tickers are present in holdings.")
+		return
+	}
+	if len(uncategorized) > 0 {
+		syms := make([]string, 0, len(uncategorized))
+		for _, h := range uncategorized {
+			syms = append(syms, h.TradingSymbol)
 		}
-		for _, g := range groups {
-			missing := findMissingTickers(g.Tickers, rawHoldings)
-			if len(missing) > 0 {
-				sb.WriteString(fmt.Sprintf("⚠ Tickers in %s not present in holdings: %s\n", g.CSVPath, strings.Join(missing, ", ")))
-			}
+		fmt.Fprintf(w, "⚠ Holdings not categorized in any group: %s\n", strings.Join(syms, ", "))
+	}
+	for _, g := range groups {
+		missing := findMissingTickers(g.Tickers, rawHoldings)
+		if len(missing) > 0 {
+			fmt.Fprintf(w, "⚠ Tickers in %s not present in holdings: %s\n", g.CSVPath, strings.Join(missing, ", "))
 		}
 	}
-	sb.WriteString("=======================================================================================================================\n")
-
-	return sb.String()
 }
 
-func renderHoldingRow(sym, exchange string, qty int, avgP, ltp, currentVal, weightPct, pnl, pnlPct float64) string {
-	return fmt.Sprintf("%s | %s | %s | %s | %s | %s | %s | %s | %s\n",
-		PadString(sym, 17),
-		PadString(exchange, 8),
-		PadString(fmt.Sprintf("%d", qty), 8),
-		PadStringRight(fmt.Sprintf("₹%.2f", avgP), 10),
-		PadStringRight(fmt.Sprintf("₹%.2f", ltp), 10),
-		PadStringRight(fmt.Sprintf("₹%.2f", currentVal), 13),
-		PadStringRight(fmt.Sprintf("%.2f%%", weightPct), 6),
-		PadStringRight(FormatPnL(pnl), 12),
-		PadStringRight(FormatPnLPct(pnlPct), 8),
-	)
+func findMissingTickers(tickers map[string]bool, holdings []broker.Holding) []string {
+	holdingSymbols := make(map[string]bool)
+	for _, h := range holdings {
+		holdingSymbols[h.TradingSymbol] = true
+	}
+	keys := make([]string, 0, len(tickers))
+	for t := range tickers {
+		keys = append(keys, t)
+	}
+	slices.Sort(keys)
+
+	var missing []string
+	for _, t := range keys {
+		if !holdingSymbols[lastSegment(t)] {
+			missing = append(missing, t)
+		}
+	}
+	return missing
+}
+
+func holdingDisplaySymbol(h broker.Holding) string {
+	if h.Quantity != 0 {
+		return h.TradingSymbol
+	}
+	switch {
+	case h.T1Quantity > 0 && h.T2Quantity > 0:
+		return h.TradingSymbol + "(T+1/2)"
+	case h.T1Quantity > 0:
+		return h.TradingSymbol + "(T+1)"
+	case h.T2Quantity > 0:
+		return h.TradingSymbol + "(T+2)"
+	default:
+		return h.TradingSymbol
+	}
+}
+
+func currentValue(h broker.Holding) float64 {
+	totalQty := h.Quantity + h.T1Quantity + h.T2Quantity
+	return float64(totalQty) * h.LastPrice
+}
+
+func lastSegment(inst string) string {
+	parts := strings.Split(inst, ":")
+	return parts[len(parts)-1]
 }

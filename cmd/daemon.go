@@ -17,6 +17,7 @@ import (
 	"github.com/raghavkgarg/mycase/pkg/broker"
 	"github.com/raghavkgarg/mycase/pkg/config"
 	"github.com/raghavkgarg/mycase/pkg/daemon"
+	"github.com/raghavkgarg/mycase/pkg/render"
 )
 
 var DaemonCommand = &cli.Command{
@@ -138,10 +139,12 @@ func runDaemonStatus(_ context.Context, _ *cli.Command) error {
 	} else if state.LastDrift > 0.05 {
 		level = "WARN"
 	}
-	fmt.Printf("Last check:  %s\n", state.LastCheckAt.Local().Format("2006-01-02 15:04:05 MST"))
-	fmt.Printf("Drift index: %.4f  [%s]\n", state.LastDrift, level)
-	fmt.Printf("Portfolio:   %s\n", state.PortfolioFile)
-	fmt.Printf("Alerts sent: %d\n", state.AlertsSent)
+	render.KV(os.Stdout, []render.KVPair{
+		{Key: "Last check", Value: state.LastCheckAt.Local().Format("2006-01-02 15:04:05 MST")},
+		{Key: "Drift index", Value: fmt.Sprintf("%.4f  [%s]", state.LastDrift, level)},
+		{Key: "Portfolio", Value: state.PortfolioFile},
+		{Key: "Alerts sent", Value: fmt.Sprintf("%d", state.AlertsSent)},
+	})
 	return nil
 }
 

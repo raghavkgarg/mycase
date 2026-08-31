@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"os"
 	"sort"
 	"time"
 
@@ -10,6 +11,7 @@ import (
 
 	"github.com/raghavkgarg/mycase/pkg/broker/schwab"
 	"github.com/raghavkgarg/mycase/pkg/cache"
+	"github.com/raghavkgarg/mycase/pkg/render"
 	"github.com/raghavkgarg/mycase/pkg/tax"
 )
 
@@ -154,9 +156,8 @@ func runTaxStatus(ctx context.Context, c *cli.Command) error {
 		return fmt.Errorf("loading realized gains: %w", err)
 	}
 
-	fmt.Println("====================================================================")
-	fmt.Println("                     Tax Lot Status                                 ")
-	fmt.Println("====================================================================")
+	out := os.Stdout
+	render.Banner(out, "Tax Lot Status")
 
 	if len(openLots) == 0 {
 		fmt.Println("No open lots. Run 'mycase tax import --broker schwab' first.")
@@ -167,20 +168,30 @@ func runTaxStatus(ctx context.Context, c *cli.Command) error {
 		}
 		sort.Strings(tickers)
 
-		fmt.Printf("\nOpen Lots (%d tickers):\n", len(tickers))
-		fmt.Printf("  %-12s %-12s %10s %12s %12s  %s\n", "TICKER", "ACQUIRED", "QTY", "COST/SH", "BASIS", "TERM")
+		render.Section(out, fmt.Sprintf("Open Lots (%d tickers)", len(tickers)))
 		asOf := time.Now()
+		rows := make([][]string, 0, len(tickers))
 		for _, t := range tickers {
 			for _, lot := range openLots[t] {
 				term := "short"
 				if lot.IsLongTerm(asOf) {
 					term = "long"
 				}
-				fmt.Printf("  %-12s %-12s %10.2f %12.2f %12.2f  %s\n",
-					lot.Ticker, lot.AcquiredAt.Format("2006-01-02"),
-					lot.Quantity, lot.CostPerShare, lot.CostBasis(), term)
+				rows = append(rows, []string{
+					lot.Ticker,
+					lot.AcquiredAt.Format("2006-01-02"),
+					fmt.Sprintf("%.2f", lot.Quantity),
+					render.Currency(lot.CostPerShare, "$"),
+					render.Currency(lot.CostBasis(), "$"),
+					term,
+				})
 			}
 		}
+		render.TableWithOpts(out, render.TableOpts{
+			Headers: []string{"Ticker", "Acquired", "Qty", "Cost/Sh", "Basis", "Term"},
+			Rows:    rows,
+			Align:   []render.Alignment{render.AlignLeft, render.AlignLeft, render.AlignRight, render.AlignRight, render.AlignRight, render.AlignLeft},
+		})
 	}
 
 	// YTD summary.
@@ -188,20 +199,20 @@ func runTaxStatus(ctx context.Context, c *cli.Command) error {
 	ytd := tax.SummarizeRealized(realized, yearStart)
 	allTime := tax.SummarizeRealized(realized, time.Time{})
 
-	fmt.Printf("\nRealized Gains/Losses (YTD %d):\n", time.Now().Year())
+	render.Section(out, fmt.Sprintf("Realized Gains/Losses (YTD %d)", time.Now().Year()))
 	printSummary(ytd)
-	fmt.Printf("\nRealized Gains/Losses (all time):\n")
+	render.Section(out, "Realized Gains/Losses (all time)")
 	printSummary(allTime)
 
 	return nil
 }
 
 func printSummary(s tax.RealizedSummary) {
-	fmt.Printf("  Short-term:  gains $%.2f, losses $%.2f, net $%.2f\n",
-		s.ShortTermGain, s.ShortTermLoss, s.NetShortTerm)
-	fmt.Printf("  Long-term:   gains $%.2f, losses $%.2f, net $%.2f\n",
-		s.LongTermGain, s.LongTermLoss, s.NetLongTerm)
-	fmt.Printf("  Net total:   $%.2f  (%d realized lots)\n", s.NetTotal, s.Count)
+	render.KV(os.Stdout, []render.KVPair{
+		{Key: "Short-term", Value: fmt.Sprintf("gains %s, losses %s, net %s", render.Currency(s.ShortTermGain, "$"), render.Currency(s.ShortTermLoss, "$"), render.Currency(s.NetShortTerm, "$"))},
+		{Key: "Long-term", Value: fmt.Sprintf("gains %s, losses %s, net %s", render.Currency(s.LongTermGain, "$"), render.Currency(s.LongTermLoss, "$"), render.Currency(s.NetLongTerm, "$"))},
+		{Key: "Net total", Value: fmt.Sprintf("%s  (%d realized lots)", render.Currency(s.NetTotal, "$"), s.Count)},
+	})
 }
 
 func runTaxHarvest(ctx context.Context, c *cli.Command) error {
@@ -241,16 +252,15 @@ func runTaxHarvest(ctx context.Context, c *cli.Command) error {
 
 	candidates := tax.FindHarvestCandidates(openLots, prices, tickers, params)
 
-	fmt.Println("====================================================================")
-	fmt.Println("               Tax-Loss Harvesting Candidates                       ")
-	fmt.Println("====================================================================")
+	out := os.Stdout
+	render.Banner(out, "Tax-Loss Harvesting Candidates")
 	if len(candidates) == 0 {
 		fmt.Println("No harvestable losses above the minimum threshold.")
 		return nil
 	}
 
 	var totalSaving float64
-	fmt.Printf("\n  %-12s %10s %12s %12s %10s %s\n", "TICKER", "QTY", "LOSS", "TAX SAVING", "TERM", "WASH?")
+	rows := make([][]string, 0, len(candidates))
 	for _, h := range candidates {
 		term := "ST"
 		if h.LongTerm {
@@ -260,11 +270,22 @@ func runTaxHarvest(ctx context.Context, c *cli.Command) error {
 		if h.WashSaleRisk {
 			wash = "⚠️ RISK"
 		}
-		fmt.Printf("  %-12s %10.2f %12.2f %12.2f %10s %s\n",
-			h.Ticker, h.Quantity, h.UnrealizedLoss, h.EstTaxSaving, term, wash)
+		rows = append(rows, []string{
+			h.Ticker,
+			fmt.Sprintf("%.2f", h.Quantity),
+			render.Currency(h.UnrealizedLoss, "$"),
+			render.Currency(h.EstTaxSaving, "$"),
+			term,
+			wash,
+		})
 		totalSaving += h.EstTaxSaving
 	}
-	fmt.Printf("\nTotal estimated tax saving if all harvested: $%.2f\n", totalSaving)
+	render.TableWithOpts(out, render.TableOpts{
+		Headers: []string{"Ticker", "Qty", "Loss", "Tax Saving", "Term", "Wash?"},
+		Rows:    rows,
+		Align:   []render.Alignment{render.AlignLeft, render.AlignRight, render.AlignRight, render.AlignRight, render.AlignLeft, render.AlignLeft},
+	})
+	fmt.Printf("\nTotal estimated tax saving if all harvested: %s\n", render.Currency(totalSaving, "$"))
 	fmt.Println("\nNote: verify wash-sale windows before selling. Losses on positions")
 	fmt.Println("bought within 30 days (flagged ⚠️) may be disallowed.")
 

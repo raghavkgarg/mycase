@@ -3,11 +3,12 @@ package cmd
 import (
 	"context"
 	"fmt"
-	"strings"
+	"os"
 
 	"github.com/urfave/cli/v3"
 
 	"github.com/raghavkgarg/mycase/pkg/cache"
+	"github.com/raghavkgarg/mycase/pkg/render"
 )
 
 var pipelineShowCmd = &cli.Command{
@@ -35,17 +36,22 @@ func runPipelineShow(ctx context.Context, c *cli.Command) error {
 		return fmt.Errorf("run %q: %w", runID, err)
 	}
 
-	fmt.Println("====================================================================")
-	fmt.Printf("  Pipeline Run: %s\n", run.RunID)
-	fmt.Println("====================================================================")
-	fmt.Printf("  Status:     %s %s\n", statusIcon(run.Status), run.Status)
-	fmt.Printf("  Portfolio:  %s\n", run.Portfolio)
-	fmt.Printf("  Method:     %s\n", run.Method)
-	fmt.Printf("  Started:    %s\n", run.StartedAt.Format("2006-01-02 15:04:05"))
-	if !run.CompletedAt.IsZero() {
-		fmt.Printf("  Completed:  %s (%.0fs)\n", run.CompletedAt.Format("2006-01-02 15:04:05"), run.CompletedAt.Sub(run.StartedAt).Seconds())
+	out := os.Stdout
+	render.Section(out, "Pipeline Run: "+run.RunID)
+	meta := []render.KVPair{
+		{Key: "Status", Value: fmt.Sprintf("%s %s", statusIcon(run.Status), run.Status)},
+		{Key: "Portfolio", Value: run.Portfolio},
+		{Key: "Method", Value: run.Method},
+		{Key: "Started", Value: run.StartedAt.Format("2006-01-02 15:04:05")},
 	}
-	fmt.Println()
+	if !run.CompletedAt.IsZero() {
+		meta = append(meta, render.KVPair{
+			Key:   "Completed",
+			Value: fmt.Sprintf("%s (%.0fs)", run.CompletedAt.Format("2006-01-02 15:04:05"), run.CompletedAt.Sub(run.StartedAt).Seconds()),
+		})
+	}
+	render.KV(out, meta)
+	fmt.Fprintln(out)
 
 	// --- Index picks ---
 	allPicks, err := db.GetAllIndexPicks(ctx, runID)
@@ -53,23 +59,20 @@ func runPipelineShow(ctx context.Context, c *cli.Command) error {
 		return fmt.Errorf("reading index picks: %w", err)
 	}
 	if len(allPicks) > 0 {
-		fmt.Printf("  Index Picks (%d total)\n", len(allPicks))
-		fmt.Println("  " + strings.Repeat("-", 70))
-		fmt.Printf("  %-12s %-10s %6s %6s %8s  %s\n", "Index", "Ticker", "Rank", "Score", "Weight", "Sector")
-		fmt.Println("  " + strings.Repeat("-", 70))
+		render.Section(out, fmt.Sprintf("Index Picks (%d total)", len(allPicks)))
+		rows := make([][]string, 0, len(allPicks))
 		for _, p := range allPicks {
-			scoreStr := "—"
-			if p.Score != 0 {
-				scoreStr = fmt.Sprintf("%.1f", p.Score)
-			}
-			sectorStr := p.Sector
-			if sectorStr == "" {
-				sectorStr = "—"
-			}
-			fmt.Printf("  %-12s %-10s %6d %6s %7.2f%%  %s\n",
-				p.IndexName, p.Ticker, p.Rank, scoreStr, p.Weight*100, sectorStr)
+			rows = append(rows, []string{
+				p.IndexName, p.Ticker, fmt.Sprintf("%d", p.Rank),
+				scoreOrDash(p.Score), weightPct(p.Weight), dashIfEmpty(p.Sector),
+			})
 		}
-		fmt.Println()
+		render.TableWithOpts(out, render.TableOpts{
+			Headers: []string{"Index", "Ticker", "Rank", "Score", "Weight", "Sector"},
+			Rows:    rows,
+			Align:   []render.Alignment{render.AlignLeft, render.AlignLeft, render.AlignRight, render.AlignRight, render.AlignRight, render.AlignLeft},
+		})
+		fmt.Fprintln(out)
 	}
 
 	// --- Proposals ---
@@ -81,23 +84,20 @@ func runPipelineShow(ctx context.Context, c *cli.Command) error {
 		if len(proposals) == 0 {
 			continue
 		}
-		fmt.Printf("  Proposals — %s (%d stocks)\n", stage, len(proposals))
-		fmt.Println("  " + strings.Repeat("-", 56))
-		fmt.Printf("  %-10s %6s %6s %8s  %s\n", "Ticker", "Rank", "Score", "Weight", "Sector")
-		fmt.Println("  " + strings.Repeat("-", 56))
+		render.Section(out, fmt.Sprintf("Proposals — %s (%d stocks)", stage, len(proposals)))
+		rows := make([][]string, 0, len(proposals))
 		for _, p := range proposals {
-			scoreStr := "—"
-			if p.Score != 0 {
-				scoreStr = fmt.Sprintf("%.1f", p.Score)
-			}
-			sectorStr := p.Sector
-			if sectorStr == "" {
-				sectorStr = "—"
-			}
-			fmt.Printf("  %-10s %6d %6s %7.2f%%  %s\n",
-				p.Ticker, p.Rank, scoreStr, p.Weight*100, sectorStr)
+			rows = append(rows, []string{
+				p.Ticker, fmt.Sprintf("%d", p.Rank),
+				scoreOrDash(p.Score), weightPct(p.Weight), dashIfEmpty(p.Sector),
+			})
 		}
-		fmt.Println()
+		render.TableWithOpts(out, render.TableOpts{
+			Headers: []string{"Ticker", "Rank", "Score", "Weight", "Sector"},
+			Rows:    rows,
+			Align:   []render.Alignment{render.AlignLeft, render.AlignRight, render.AlignRight, render.AlignRight, render.AlignLeft},
+		})
+		fmt.Fprintln(out)
 	}
 
 	// --- Selections ---
@@ -106,27 +106,24 @@ func runPipelineShow(ctx context.Context, c *cli.Command) error {
 		return fmt.Errorf("reading selections: %w", err)
 	}
 	if len(selections) > 0 {
-		fmt.Printf("  Final Selections (%d stocks)\n", len(selections))
-		fmt.Println("  " + strings.Repeat("-", 72))
-		fmt.Printf("  %-10s %6s %6s %8s %-10s %s\n", "Ticker", "Rank", "Score", "Weight", "Action", "Prev Rank")
-		fmt.Println("  " + strings.Repeat("-", 72))
+		render.Section(out, fmt.Sprintf("Final Selections (%d stocks)", len(selections)))
+		rows := make([][]string, 0, len(selections))
 		for _, s := range selections {
-			scoreStr := "—"
-			if s.Score != 0 {
-				scoreStr = fmt.Sprintf("%.1f", s.Score)
-			}
-			actionStr := s.Action
-			if actionStr == "" {
-				actionStr = "—"
-			}
 			prevStr := "—"
 			if s.PrevRank > 0 {
 				prevStr = fmt.Sprintf("#%d", s.PrevRank)
 			}
-			fmt.Printf("  %-10s %6d %6s %7.2f%% %-10s %s\n",
-				s.Ticker, s.Rank, scoreStr, s.Weight*100, actionStr, prevStr)
+			rows = append(rows, []string{
+				s.Ticker, fmt.Sprintf("%d", s.Rank),
+				scoreOrDash(s.Score), weightPct(s.Weight), dashIfEmpty(s.Action), prevStr,
+			})
 		}
-		fmt.Println()
+		render.TableWithOpts(out, render.TableOpts{
+			Headers: []string{"Ticker", "Rank", "Score", "Weight", "Action", "Prev Rank"},
+			Rows:    rows,
+			Align:   []render.Alignment{render.AlignLeft, render.AlignRight, render.AlignRight, render.AlignRight, render.AlignLeft, render.AlignRight},
+		})
+		fmt.Fprintln(out)
 	}
 
 	if len(allPicks) == 0 && len(selections) == 0 {
@@ -134,4 +131,26 @@ func runPipelineShow(ctx context.Context, c *cli.Command) error {
 	}
 
 	return nil
+}
+
+// scoreOrDash formats a score, showing "—" when zero (unscored).
+func scoreOrDash(score float64) string {
+	if score == 0 {
+		return "—"
+	}
+	return fmt.Sprintf("%.1f", score)
+}
+
+// weightPct formats a fractional weight (0.08) as a plain percentage ("8.00%").
+// Unlike render.Pct, it emits no sign — weights are non-negative magnitudes.
+func weightPct(w float64) string {
+	return fmt.Sprintf("%.2f%%", w*100)
+}
+
+// dashIfEmpty returns "—" for empty strings, else the string unchanged.
+func dashIfEmpty(s string) string {
+	if s == "" {
+		return "—"
+	}
+	return s
 }

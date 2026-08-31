@@ -16,6 +16,7 @@ import (
 
 	"github.com/raghavkgarg/mycase/pkg/config"
 	"github.com/raghavkgarg/mycase/pkg/csvloader"
+	"github.com/raghavkgarg/mycase/pkg/render"
 	"github.com/raghavkgarg/mycase/pkg/stockpicker"
 	"github.com/raghavkgarg/mycase/pkg/yfinance"
 )
@@ -101,14 +102,14 @@ func runReportWithParams(ctx context.Context, filePath, method string) error {
 	defer reportFile.Close()
 	var writer io.Writer = reportFile
 
-	fmt.Fprintf(writer, "====================================================================\n")
-	fmt.Fprintf(writer, "             Portfolio Selection Explanation Report                 \n")
-	fmt.Fprintf(writer, "====================================================================\n")
-	fmt.Fprintf(writer, "File:        %s\n", filePath)
-	fmt.Fprintf(writer, "Strategy:    %s Preset\n", strings.ToUpper(method[:1])+method[1:])
-	fmt.Fprintf(writer, "Stocks:      %d\n", len(tickers))
-	fmt.Fprintf(writer, "Report File: %s\n", outReportPath)
-	fmt.Fprintf(writer, "====================================================================\n\n")
+	render.Banner(writer, "Portfolio Selection Explanation Report")
+	render.KV(writer, []render.KVPair{
+		{Key: "File", Value: filePath},
+		{Key: "Strategy", Value: strings.ToUpper(method[:1]) + method[1:] + " Preset"},
+		{Key: "Stocks", Value: fmt.Sprintf("%d", len(tickers))},
+		{Key: "Report File", Value: outReportPath},
+	})
+	fmt.Fprintln(writer)
 
 	price3mo := make(map[string][]float64)
 	hist1y := make(map[string]*yfinance.HistoricalData)
@@ -150,12 +151,9 @@ func runReportWithParams(ctx context.Context, filePath, method string) error {
 	}
 
 	if method == "multibagger" {
-		fmt.Fprintf(writer, "=========================================================================================\n")
-		fmt.Fprintf(writer, "             Portfolio Overview Table (Multibagger Metrics)                             \n")
-		fmt.Fprintf(writer, "=========================================================================================\n")
-		fmt.Fprintf(writer, "%-16s | %-10s | %-8s | %-10s | %-5s | %-7s | %-12s\n", "Ticker", "TTM Growth", "3Y CAGR", "DSO (L/P)", "RSI", "Inst %", "Final Weight")
-		fmt.Fprintf(writer, "-----------------------------------------------------------------------------------------\n")
+		render.Banner(writer, "Portfolio Overview Table (Multibagger Metrics)")
 		var totalWeight float64
+		rows := make([][]string, 0, len(portfolio))
 		for _, s := range portfolio {
 			t := s.ticker
 			weight := s.weight
@@ -167,21 +165,28 @@ func runReportWithParams(ctx context.Context, filePath, method string) error {
 			if hData := hist1y[t]; hData != nil {
 				rsiVal = yfinance.CalculateRSI(hData.Closes)
 			}
-			fmt.Fprintf(writer, "%-16s | %-10.1f%% | %-8.1f%% | %-10s | %-5.1f | %-7.1f%% | %-12.4f\n",
-				t, ttmGrowth*100.0, cagr3y*100.0,
+			rows = append(rows, []string{
+				t,
+				fmt.Sprintf("%.1f%%", ttmGrowth*100.0),
+				fmt.Sprintf("%.1f%%", cagr3y*100.0),
 				fmt.Sprintf("%.0f/%.0f", dsoLatest, dsoPrev),
-				rsiVal, f.HeldPercentInstitutions*100.0, weight)
+				fmt.Sprintf("%.1f", rsiVal),
+				fmt.Sprintf("%.1f%%", f.HeldPercentInstitutions*100.0),
+				fmt.Sprintf("%.4f", weight),
+			})
 		}
-		fmt.Fprintf(writer, "-----------------------------------------------------------------------------------------\n")
-		fmt.Fprintf(writer, "%-16s | %-10s | %-8s | %-10s | %-5s | %-7s | %-12.4f\n", "Total Weight", "", "", "", "", "", totalWeight)
-		fmt.Fprintf(writer, "=========================================================================================\n\n")
+		render.TableWithOpts(writer, render.TableOpts{
+			Headers: []string{"Ticker", "TTM Growth", "3Y CAGR", "DSO (L/P)", "RSI", "Inst %", "Final Weight"},
+			Rows:    rows,
+			Footer:  []string{"Total Weight", "", "", "", "", "", fmt.Sprintf("%.4f", totalWeight)},
+			Align:   []render.Alignment{render.AlignLeft, render.AlignRight, render.AlignRight, render.AlignRight, render.AlignRight, render.AlignRight, render.AlignRight},
+			Border:  render.BorderPipe,
+		})
+		fmt.Fprintln(writer)
 	} else {
-		fmt.Fprintf(writer, "=========================================================================\n")
-		fmt.Fprintf(writer, "             Portfolio Overview Table                                    \n")
-		fmt.Fprintf(writer, "=========================================================================\n")
-		fmt.Fprintf(writer, "%-16s | %-12s | %-12s\n", "Ticker", "Final Weight", "1Y Return")
-		fmt.Fprintf(writer, "-------------------------------------------------------------------------\n")
+		render.Banner(writer, "Portfolio Overview Table")
 		var totalWeight float64
+		rows := make([][]string, 0, len(portfolio))
 		for _, s := range portfolio {
 			t := s.ticker
 			weight := s.weight
@@ -190,11 +195,16 @@ func runReportWithParams(ctx context.Context, filePath, method string) error {
 			if hData := hist1y[t]; hData != nil && len(hData.Closes) >= 2 {
 				ret1y = (hData.Closes[len(hData.Closes)-1] - hData.Closes[0]) / hData.Closes[0] * 100.0
 			}
-			fmt.Fprintf(writer, "%-16s | %-12.4f | %+.1f%%\n", t, weight, ret1y)
+			rows = append(rows, []string{t, fmt.Sprintf("%.4f", weight), render.PnLPct(ret1y)})
 		}
-		fmt.Fprintf(writer, "-------------------------------------------------------------------------\n")
-		fmt.Fprintf(writer, "%-16s | %-12.4f | %-12s\n", "Total Weight", totalWeight, "")
-		fmt.Fprintf(writer, "=========================================================================\n\n")
+		render.TableWithOpts(writer, render.TableOpts{
+			Headers: []string{"Ticker", "Final Weight", "1Y Return"},
+			Rows:    rows,
+			Footer:  []string{"Total Weight", fmt.Sprintf("%.4f", totalWeight), ""},
+			Align:   []render.Alignment{render.AlignLeft, render.AlignRight, render.AlignRight},
+			Border:  render.BorderPipe,
+		})
+		fmt.Fprintln(writer)
 	}
 
 	for i, s := range portfolio {

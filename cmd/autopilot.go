@@ -16,6 +16,7 @@ import (
 	"github.com/raghavkgarg/mycase/pkg/autopilot"
 	"github.com/raghavkgarg/mycase/pkg/broker"
 	"github.com/raghavkgarg/mycase/pkg/config"
+	"github.com/raghavkgarg/mycase/pkg/render"
 )
 
 var AutopilotCommand = &cli.Command{
@@ -76,9 +77,7 @@ func runAutopilotRun(ctx context.Context, c *cli.Command) error {
 	live := c.Bool("live")
 	skipTradingDayCheck := c.Bool("skip-trading-day-check")
 
-	fmt.Println("====================================================================")
-	fmt.Println("             Mycase Autopilot — Non-Interactive Pipeline             ")
-	fmt.Println("====================================================================")
+	render.Banner(os.Stdout, "Mycase Autopilot — Non-Interactive Pipeline")
 
 	// Check trading day
 	if !skipTradingDayCheck {
@@ -148,18 +147,19 @@ func runAutopilotRun(ctx context.Context, c *cli.Command) error {
 	}
 
 	// Print summary
-	fmt.Println("\n====================================================================")
-	fmt.Println("                      Autopilot Run Complete                        ")
-	fmt.Println("====================================================================")
-	fmt.Printf("Proposal ID:    %s\n", result.Proposal.ID)
-	fmt.Printf("Portfolio:      %s\n", result.Proposal.Portfolio)
-	fmt.Printf("Strategy:       %s\n", result.Proposal.Strategy)
-	fmt.Printf("Entries:        %d new stocks\n", len(result.Proposal.Entries))
 	mktCfg := broker.LoadMarketConfig()
-	fmt.Printf("Exits:          %d removed\n", len(result.Proposal.Exits))
-	fmt.Printf("Orders:         %d (%d filtered)\n", len(result.Proposal.Orders), len(result.Proposal.FilteredOut))
-	fmt.Printf("Est. cost:      %s%.0f\n", mktCfg.Currency, result.Proposal.EstimatedCost)
-	fmt.Printf("Expires:        %s\n", result.Proposal.ExpiresAt.Format("2006-01-02 15:04 MST"))
+	fmt.Println()
+	render.Banner(os.Stdout, "Autopilot Run Complete")
+	render.KV(os.Stdout, []render.KVPair{
+		{Key: "Proposal ID", Value: result.Proposal.ID},
+		{Key: "Portfolio", Value: result.Proposal.Portfolio},
+		{Key: "Strategy", Value: result.Proposal.Strategy},
+		{Key: "Entries", Value: fmt.Sprintf("%d new stocks", len(result.Proposal.Entries))},
+		{Key: "Exits", Value: fmt.Sprintf("%d removed", len(result.Proposal.Exits))},
+		{Key: "Orders", Value: fmt.Sprintf("%d (%d filtered)", len(result.Proposal.Orders), len(result.Proposal.FilteredOut))},
+		{Key: "Est. cost", Value: render.Currency(result.Proposal.EstimatedCost, mktCfg.Currency)},
+		{Key: "Expires", Value: result.Proposal.ExpiresAt.Format("2006-01-02 15:04 MST")},
+	})
 	fmt.Printf("\nConfirm via:    mycase serve → http://localhost:8080/#/rebalance\n")
 	fmt.Printf("Or dismiss:     mycase autopilot dismiss\n")
 

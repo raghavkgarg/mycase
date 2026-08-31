@@ -18,6 +18,7 @@ import (
 	"github.com/raghavkgarg/mycase/pkg/backtest"
 	"github.com/raghavkgarg/mycase/pkg/cache"
 	"github.com/raghavkgarg/mycase/pkg/csvloader"
+	"github.com/raghavkgarg/mycase/pkg/render"
 )
 
 var PerformanceCommand = &cli.Command{
@@ -149,32 +150,48 @@ func runPerfWithParams(ctx context.Context, filePath string, capital float64, ta
 
 	results := backtest.ValuatePortfolio(ctx, portfolio, capital, targetTime, useDailyClose, rangeStr, istLoc)
 
-	fmt.Printf("%-15s %-8s %-12s %-12s %-22s %-12s %-12s %-10s\n", "Ticker", "Weight", "Allocated", "Buy Price", "Buy Time/Date (IST)", "Close Price", "Final Value", "Return")
-	fmt.Println(strings.Repeat("-", 112))
-
+	out := os.Stdout
 	var totalInitial, totalFinal float64
+	rows := make([][]string, 0, len(results))
 	for _, res := range results {
 		if res.Err != nil {
-			fmt.Printf("%-15s ERROR: %v\n", res.Ticker, res.Err)
+			rows = append(rows, []string{res.Ticker, "ERROR", res.Err.Error(), "", "", "", "", ""})
 			continue
 		}
-		fmt.Printf("%-15s %-8.4f Rs. %-8.2f Rs. %-8.2f %-22s Rs. %-8.2f Rs. %-8.2f %+.2f%%\n",
-			res.Ticker, res.Weight, res.Allocated, res.BuyPrice, res.BuyTime, res.ClosePrice, res.FinalValue, res.PctReturn)
+		rows = append(rows, []string{
+			res.Ticker,
+			fmt.Sprintf("%.4f", res.Weight),
+			render.Currency(res.Allocated, "Rs. "),
+			render.Currency(res.BuyPrice, "Rs. "),
+			res.BuyTime,
+			render.Currency(res.ClosePrice, "Rs. "),
+			render.Currency(res.FinalValue, "Rs. "),
+			render.PctRaw(res.PctReturn),
+		})
 		totalInitial += res.Allocated
 		totalFinal += res.FinalValue
 	}
+	render.TableWithOpts(out, render.TableOpts{
+		Headers: []string{"Ticker", "Weight", "Allocated", "Buy Price", "Buy Time/Date (IST)", "Close Price", "Final Value", "Return"},
+		Rows:    rows,
+		Align: []render.Alignment{
+			render.AlignLeft, render.AlignRight, render.AlignRight, render.AlignRight,
+			render.AlignLeft, render.AlignRight, render.AlignRight, render.AlignRight,
+		},
+	})
 
-	fmt.Println(strings.Repeat("-", 112))
 	netReturn := totalFinal - totalInitial
 	pctReturn := (netReturn / totalInitial) * 100.0
 	unallocated := capital - totalInitial
 
-	fmt.Printf("\n--- Portfolio Performance ---\n")
-	fmt.Printf("Total Allocated Capital:  Rs. %.2f\n", totalInitial)
-	fmt.Printf("Unallocated Cash:         Rs. %.2f\n", unallocated)
-	fmt.Printf("Total End of Day Value:   Rs. %.2f\n", totalFinal+unallocated)
-	fmt.Printf("Net Profit/Loss:          Rs. %+.2f\n", netReturn)
-	fmt.Printf("Percentage Return:        %+.2f%%\n", pctReturn)
+	render.Section(out, "Portfolio Performance")
+	render.KV(out, []render.KVPair{
+		{Key: "Total Allocated Capital", Value: render.Currency(totalInitial, "Rs. ")},
+		{Key: "Unallocated Cash", Value: render.Currency(unallocated, "Rs. ")},
+		{Key: "Total End of Day Value", Value: render.Currency(totalFinal+unallocated, "Rs. ")},
+		{Key: "Net Profit/Loss", Value: render.PnL(netReturn, "Rs. ")},
+		{Key: "Percentage Return", Value: render.PnLPct(pctReturn)},
+	})
 	return nil
 }
 
@@ -304,19 +321,23 @@ func printDecomposition(ctx context.Context, tracker *attribution.Tracker, holdi
 }
 
 func printDecompositionResult(d attribution.Decomposition) {
-	fmt.Printf("\n--- Return Decomposition ---\n")
-	fmt.Printf("Period:               %s → %s (%d trading days, %d rebalances)\n",
-		d.From.Format("2006-01-02"), d.To.Format("2006-01-02"), d.TradingDays, d.Rebalances)
-	fmt.Printf("Portfolio return:     %+.2f%%\n", d.PortfolioReturn*100)
-	fmt.Printf("Benchmark return:     %+.2f%%\n", d.BenchmarkReturn*100)
-	fmt.Printf("Active return:        %+.2f%%\n", d.ActiveReturn*100)
-	fmt.Println(strings.Repeat("-", 48))
-	fmt.Printf("  Selection effect:   %+.2f%%   (picks vs index, first basket held)\n", d.Selection*100)
-	fmt.Printf("  Rebalancing effect: %+.2f%%   (re-selection vs holding first basket)\n", d.Rebalancing*100)
-	if d.Tax != 0 {
-		fmt.Printf("  Tax effect:         %+.2f%%   (realized TLH saving / initial capital)\n", d.Tax*100)
+	out := os.Stdout
+	render.Section(out, "Return Decomposition")
+	render.KV(out, []render.KVPair{
+		{Key: "Period", Value: fmt.Sprintf("%s → %s (%d trading days, %d rebalances)", d.From.Format("2006-01-02"), d.To.Format("2006-01-02"), d.TradingDays, d.Rebalances)},
+		{Key: "Portfolio return", Value: render.PnLPct(d.PortfolioReturn * 100)},
+		{Key: "Benchmark return", Value: render.PnLPct(d.BenchmarkReturn * 100)},
+		{Key: "Active return", Value: render.PnLPct(d.ActiveReturn * 100)},
+	})
+	pairs := []render.KVPair{
+		{Key: "Selection effect", Value: fmt.Sprintf("%s   (picks vs index, first basket held)", render.PnLPct(d.Selection*100))},
+		{Key: "Rebalancing effect", Value: fmt.Sprintf("%s   (re-selection vs holding first basket)", render.PnLPct(d.Rebalancing*100))},
 	}
-	fmt.Printf("  (Selection + Rebalancing = Active return)\n")
+	if d.Tax != 0 {
+		pairs = append(pairs, render.KVPair{Key: "Tax effect", Value: fmt.Sprintf("%s   (realized TLH saving / initial capital)", render.PnLPct(d.Tax*100))})
+	}
+	render.KV(out, pairs)
+	fmt.Println("  (Selection + Rebalancing = Active return)")
 }
 
 // cacheConn returns the global cache's *sql.DB, or nil if the cache is unset.
@@ -328,20 +349,23 @@ func cacheConn() *sql.DB {
 }
 
 func printAttribution(portfolio, benchmark string, r attribution.Result) {
-	fmt.Printf("\n--- Performance vs %s ---\n", benchmark)
-	fmt.Printf("Portfolio:            %s\n", portfolio)
-	fmt.Printf("Period:               %s → %s (%d trading days)\n",
-		r.From.Format("2006-01-02"), r.To.Format("2006-01-02"), r.TradingDays)
-	fmt.Printf("Initial Capital:      $%.2f\n", r.InitialCapital)
-	fmt.Printf("Portfolio Final:      $%.2f  (%+.2f%%)\n", r.FinalValue, r.TotalReturn*100)
-	fmt.Printf("Benchmark Final:      $%.2f  (%+.2f%%)\n", r.BenchmarkFinal, r.BenchmarkReturn*100)
-	fmt.Println(strings.Repeat("-", 48))
-	fmt.Printf("Portfolio CAGR:       %+.2f%%\n", r.CAGR*100)
-	fmt.Printf("Benchmark CAGR:       %+.2f%%\n", r.BenchmarkCAGR*100)
-	fmt.Printf("Alpha (annualized):   %+.2f%%\n", r.Alpha*100)
-	fmt.Printf("Beta:                 %.3f\n", r.Beta)
-	fmt.Printf("Information Ratio:    %.3f\n", r.InformationRatio)
-	fmt.Printf("Tracking Error:       %.2f%%\n", r.TrackingError*100)
-	fmt.Printf("Max Drawdown:         %.2f%%\n", r.MaxDrawdown*100)
-	fmt.Printf("Sharpe Ratio:         %.3f\n", r.Sharpe)
+	out := os.Stdout
+	render.Section(out, "Performance vs "+benchmark)
+	render.KV(out, []render.KVPair{
+		{Key: "Portfolio", Value: portfolio},
+		{Key: "Period", Value: fmt.Sprintf("%s → %s (%d trading days)", r.From.Format("2006-01-02"), r.To.Format("2006-01-02"), r.TradingDays)},
+		{Key: "Initial Capital", Value: render.Currency(r.InitialCapital, "$")},
+		{Key: "Portfolio Final", Value: fmt.Sprintf("%s  (%s)", render.Currency(r.FinalValue, "$"), render.PnLPct(r.TotalReturn*100))},
+		{Key: "Benchmark Final", Value: fmt.Sprintf("%s  (%s)", render.Currency(r.BenchmarkFinal, "$"), render.PnLPct(r.BenchmarkReturn*100))},
+	})
+	render.KV(out, []render.KVPair{
+		{Key: "Portfolio CAGR", Value: render.PnLPct(r.CAGR * 100)},
+		{Key: "Benchmark CAGR", Value: render.PnLPct(r.BenchmarkCAGR * 100)},
+		{Key: "Alpha (annualized)", Value: render.PnLPct(r.Alpha * 100)},
+		{Key: "Beta", Value: fmt.Sprintf("%.3f", r.Beta)},
+		{Key: "Information Ratio", Value: fmt.Sprintf("%.3f", r.InformationRatio)},
+		{Key: "Tracking Error", Value: fmt.Sprintf("%.2f%%", r.TrackingError*100)},
+		{Key: "Max Drawdown", Value: fmt.Sprintf("%.2f%%", r.MaxDrawdown*100)},
+		{Key: "Sharpe Ratio", Value: fmt.Sprintf("%.3f", r.Sharpe)},
+	})
 }

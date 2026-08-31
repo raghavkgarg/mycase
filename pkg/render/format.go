@@ -50,6 +50,34 @@ func Currency(v float64, sym string) string {
 	return sym + intPart + "." + decPart
 }
 
+// PnL formats a signed currency amount with an explicit +/- sign, e.g.
+// PnL(1234.5, "$") → "+$1,234.50", PnL(-500, "₹") → "-₹500.00", PnL(0, "$") → "$0.00".
+// Unlike Currency, positive values carry a leading "+" (profit/loss convention).
+func PnL(v float64, sym string) string {
+	switch {
+	case v > 0:
+		return "+" + Currency(v, sym)
+	case v < 0:
+		return "-" + Currency(math.Abs(v), sym)
+	default:
+		return Currency(0, sym)
+	}
+}
+
+// PnLPct formats an already-multiplied percentage as a signed P&L percentage:
+// PnLPct(12.34) → "+12.34%", PnLPct(-4.1) → "-4.10%", PnLPct(0) → "0.00%".
+// Zero carries no sign (unlike PctRaw, which emits "+0.00%").
+func PnLPct(v float64) string {
+	switch {
+	case v > 0:
+		return fmt.Sprintf("+%.2f%%", v)
+	case v < 0:
+		return fmt.Sprintf("-%.2f%%", math.Abs(v))
+	default:
+		return "0.00%"
+	}
+}
+
 // Change formats a value as a colored percentage — green for positive, red for negative.
 // When output is not a TTY, returns the same as Pct().
 func Change(v float64) string {

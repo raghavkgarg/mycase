@@ -3,11 +3,13 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/urfave/cli/v3"
 
 	"github.com/raghavkgarg/mycase/pkg/cache"
+	"github.com/raghavkgarg/mycase/pkg/render"
 )
 
 var pipelineDiffCmd = &cli.Command{
@@ -94,42 +96,44 @@ func runPipelineDiff(ctx context.Context, c *cli.Command) error {
 		}
 	}
 
-	// Print header.
-	fmt.Println("====================================================================")
-	fmt.Printf("  Pipeline Diff: %s stage\n", stage)
-	fmt.Println("====================================================================")
-	fmt.Printf("  Run A: %s (%s, %s)\n", run1.RunID, run1.Portfolio, run1.StartedAt.Format("2006-01-02"))
-	fmt.Printf("  Run B: %s (%s, %s)\n", run2.RunID, run2.Portfolio, run2.StartedAt.Format("2006-01-02"))
-	fmt.Printf("  Stocks in A: %d | Stocks in B: %d\n", len(proposals1), len(proposals2))
-	fmt.Println()
+	out := os.Stdout
+	render.Section(out, fmt.Sprintf("Pipeline Diff: %s stage", stage))
+	render.KV(out, []render.KVPair{
+		{Key: "Run A", Value: fmt.Sprintf("%s (%s, %s)", run1.RunID, run1.Portfolio, run1.StartedAt.Format("2006-01-02"))},
+		{Key: "Run B", Value: fmt.Sprintf("%s (%s, %s)", run2.RunID, run2.Portfolio, run2.StartedAt.Format("2006-01-02"))},
+		{Key: "Stocks", Value: fmt.Sprintf("%d in A | %d in B", len(proposals1), len(proposals2))},
+	})
+	fmt.Fprintln(out)
 
 	if len(entries) == 0 {
 		fmt.Println("  No differences found between the two runs.")
 		return nil
 	}
 
-	// Print diff table.
-	fmt.Printf("  %-10s %-9s %12s %12s %12s\n", "Ticker", "Change", "Rank A→B", "Wt A", "Wt B")
-	fmt.Println("  " + strings.Repeat("-", 60))
-
+	rows := make([][]string, 0, len(entries))
 	for _, e := range entries {
 		var rankStr, wt1Str, wt2Str string
 		switch e.action {
 		case "added":
 			rankStr = fmt.Sprintf("— → #%d", e.rank2)
 			wt1Str = "—"
-			wt2Str = fmt.Sprintf("%.2f%%", e.weight2*100)
+			wt2Str = weightPct(e.weight2)
 		case "removed":
 			rankStr = fmt.Sprintf("#%d → —", e.rank1)
-			wt1Str = fmt.Sprintf("%.2f%%", e.weight1*100)
+			wt1Str = weightPct(e.weight1)
 			wt2Str = "—"
 		case "changed":
 			rankStr = fmt.Sprintf("#%d → #%d", e.rank1, e.rank2)
-			wt1Str = fmt.Sprintf("%.2f%%", e.weight1*100)
-			wt2Str = fmt.Sprintf("%.2f%%", e.weight2*100)
+			wt1Str = weightPct(e.weight1)
+			wt2Str = weightPct(e.weight2)
 		}
-		fmt.Printf("  %-10s %-9s %12s %12s %12s\n", e.ticker, e.action, rankStr, wt1Str, wt2Str)
+		rows = append(rows, []string{e.ticker, e.action, rankStr, wt1Str, wt2Str})
 	}
+	render.TableWithOpts(out, render.TableOpts{
+		Headers: []string{"Ticker", "Change", "Rank A→B", "Wt A", "Wt B"},
+		Rows:    rows,
+		Align:   []render.Alignment{render.AlignLeft, render.AlignLeft, render.AlignRight, render.AlignRight, render.AlignRight},
+	})
 
 	// Summary.
 	added, removed, changed := 0, 0, 0
@@ -171,12 +175,13 @@ func diffIndexPicks(ctx context.Context, db *cache.Cache, run1, run2 cache.Pipel
 		set2[p.Ticker] = true
 	}
 
-	fmt.Println("====================================================================")
-	fmt.Printf("  Pipeline Diff: index picks (no proposals available)\n")
-	fmt.Println("====================================================================")
-	fmt.Printf("  Run A: %s (%d picks)\n", run1.RunID, len(picks1))
-	fmt.Printf("  Run B: %s (%d picks)\n", run2.RunID, len(picks2))
-	fmt.Println()
+	out := os.Stdout
+	render.Section(out, "Pipeline Diff: index picks (no proposals available)")
+	render.KV(out, []render.KVPair{
+		{Key: "Run A", Value: fmt.Sprintf("%s (%d picks)", run1.RunID, len(picks1))},
+		{Key: "Run B", Value: fmt.Sprintf("%s (%d picks)", run2.RunID, len(picks2))},
+	})
+	fmt.Fprintln(out)
 
 	var added, removed []string
 	for _, p := range picks2 {

@@ -16,6 +16,7 @@ import (
 	"github.com/raghavkgarg/mycase/pkg/config"
 	"github.com/raghavkgarg/mycase/pkg/market"
 	"github.com/raghavkgarg/mycase/pkg/printer"
+	"github.com/raghavkgarg/mycase/pkg/render"
 	"github.com/raghavkgarg/mycase/pkg/yfinance"
 )
 
@@ -91,9 +92,7 @@ func ExecuteBasketOrders(
 	if reader != nil {
 		if !b.IsMock() {
 			ipv4, ipv6 := config.FetchPublicIPs()
-			fmt.Println("\n====================================================================")
-			fmt.Println("               IP WHITELIST PRE-EXECUTION CHECK                     ")
-			fmt.Println("====================================================================")
+			render.Banner(os.Stdout, "IP WHITELIST PRE-EXECUTION CHECK")
 			if ipv6 != "" {
 				fmt.Printf("Current IPv6: %s\n", ipv6)
 			}
@@ -105,7 +104,6 @@ func ExecuteBasketOrders(
 			}
 			fmt.Println("👉 Please make sure your IP is whitelisted under App Settings on:")
 			fmt.Println("   https://developers.kite.trade/profile")
-			fmt.Println("====================================================================")
 		}
 		fmt.Print("Do you want to execute these orders? (y/n): ")
 		confirmInput, _ := reader.ReadString('\n')

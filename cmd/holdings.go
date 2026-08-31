@@ -13,6 +13,7 @@ import (
 	"github.com/raghavkgarg/mycase/pkg/config"
 	"github.com/raghavkgarg/mycase/pkg/csvloader"
 	"github.com/raghavkgarg/mycase/pkg/printer"
+	"github.com/raghavkgarg/mycase/pkg/render"
 )
 
 var HoldingsCommand = &cli.Command{
@@ -27,14 +28,11 @@ var HoldingsCommand = &cli.Command{
 func runHoldings(ctx context.Context, c *cli.Command) error {
 	liveMode := c.Bool("live")
 
-	fmt.Println("====================================================================")
-	fmt.Println("                 Go Mycase Holdings Snapshot                     ")
+	mode := "DRY RUN / MOCK MODE"
 	if liveMode {
-		fmt.Println("                 [LIVE MODE]                                        ")
-	} else {
-		fmt.Println("                 [DRY RUN / MOCK MODE]                              ")
+		mode = "LIVE MODE"
 	}
-	fmt.Println("====================================================================")
+	render.Section(os.Stdout, fmt.Sprintf("Go Mycase Holdings Snapshot [%s]", mode))
 
 	b, err := newBroker(liveMode)
 	if err != nil {

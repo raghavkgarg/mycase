@@ -20,6 +20,7 @@ import (
 	"github.com/raghavkgarg/mycase/pkg/executor"
 	"github.com/raghavkgarg/mycase/pkg/optimizer"
 	"github.com/raghavkgarg/mycase/pkg/printer"
+	"github.com/raghavkgarg/mycase/pkg/render"
 	"github.com/raghavkgarg/mycase/pkg/stockpicker"
 	"github.com/raghavkgarg/mycase/pkg/tax"
 )
@@ -52,14 +53,11 @@ var BasketCommand = &cli.Command{
 func runBasketWithParams(ctx context.Context, liveMode bool, basketFilename string, taxOptimize bool) error {
 	mktCfg := broker.LoadMarketConfig()
 
-	fmt.Println("====================================================================")
-	fmt.Println("                 Go Mycase Basket Engine                         ")
+	mode := "DRY RUN / MOCK MODE"
 	if liveMode {
-		fmt.Println("                 [LIVE MODE]                                        ")
-	} else {
-		fmt.Println("                 [DRY RUN / MOCK MODE]                              ")
+		mode = "LIVE MODE"
 	}
-	fmt.Println("====================================================================")
+	render.Banner(os.Stdout, fmt.Sprintf("Go Mycase Basket Engine [%s]", mode))
 	fmt.Printf("Loading basket configuration: %s\n", basketFilename)
 
 	b, err := newBroker(liveMode)

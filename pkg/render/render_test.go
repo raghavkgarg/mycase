@@ -397,3 +397,142 @@ func TestAddThousandsSep(t *testing.T) {
 		}
 	}
 }
+
+// --- New capabilities: Banner, footer, pipe border, PnL ---
+
+func TestBanner_NoColor(t *testing.T) {
+	ForceColor(false)
+	defer ForceColor(false)
+
+	var buf bytes.Buffer
+	Banner(&buf, "Holdings Snapshot")
+	out := buf.String()
+
+	lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
+	if len(lines) != 3 {
+		t.Fatalf("banner should be 3 lines, got %d: %q", len(lines), out)
+	}
+	if !strings.Contains(lines[1], "Holdings Snapshot") {
+		t.Errorf("middle line should contain title, got %q", lines[1])
+	}
+	// Top and bottom rules should be equal-length "=" bars (no-color).
+	if lines[0] != lines[2] {
+		t.Errorf("top/bottom rules differ:\n%q\n%q", lines[0], lines[2])
+	}
+	if !strings.HasPrefix(lines[0], "===") {
+		t.Errorf("rule should be = chars when not TTY, got %q", lines[0])
+	}
+	// Title should be roughly centered: some leading space.
+	if !strings.HasPrefix(lines[1], "  ") {
+		t.Errorf("title should be centered (leading space), got %q", lines[1])
+	}
+}
+
+func TestTable_Footer(t *testing.T) {
+	var buf bytes.Buffer
+	TableWithOpts(&buf, TableOpts{
+		Headers: []string{"Ticker", "Weight"},
+		Rows:    [][]string{{"AAPL", "0.5000"}, {"MSFT", "0.5000"}},
+		Footer:  []string{"Total", "1.0000"},
+	})
+	out := buf.String()
+	if !strings.Contains(out, "Total") {
+		t.Error("footer row should render")
+	}
+	if !strings.Contains(out, "1.0000") {
+		t.Error("footer value should render")
+	}
+}
+
+func TestTable_PipeBorder(t *testing.T) {
+	var buf bytes.Buffer
+	TableWithOpts(&buf, TableOpts{
+		Headers: []string{"Symbol", "Qty", "Value"},
+		Rows: [][]string{
+			{"AAPL", "10", "₹1,500.00"},
+			{"MSFT", "5", "₹2,000.00"},
+		},
+		Footer: []string{"Total", "15", "₹3,500.00"},
+		Align:  []Alignment{AlignLeft, AlignRight, AlignRight},
+		Border: BorderPipe,
+	})
+	out := buf.String()
+
+	if !strings.Contains(out, " | ") {
+		t.Error("pipe border should separate columns with ' | '")
+	}
+	// Header, rule, 2 rows, rule, footer = 6 lines.
+	lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
+	if len(lines) != 6 {
+		t.Fatalf("expected 6 lines (header,rule,2 rows,rule,footer), got %d:\n%s", len(lines), out)
+	}
+	// Columns must align: every non-rule line has the same display width.
+	want := len([]rune(lines[0]))
+	for i, ln := range lines {
+		if strings.Trim(ln, "-") == "" {
+			continue // rule line
+		}
+		if got := len([]rune(ln)); got != want {
+			t.Errorf("line %d width %d != header width %d:\n%q", i, got, want, ln)
+		}
+	}
+	// ₹ (multibyte) should not corrupt alignment — value column right-aligned.
+	if !strings.Contains(out, "₹1,500.00") {
+		t.Error("multibyte currency cell should survive")
+	}
+}
+
+func TestPnL(t *testing.T) {
+	tests := []struct {
+		v    float64
+		sym  string
+		want string
+	}{
+		{1234.5, "$", "+$1,234.50"},
+		{-500, "₹", "-₹500.00"},
+		{0, "$", "$0.00"},
+		{1000000, "$", "+$1,000,000.00"},
+	}
+	for _, tt := range tests {
+		if got := PnL(tt.v, tt.sym); got != tt.want {
+			t.Errorf("PnL(%v, %q) = %q, want %q", tt.v, tt.sym, got, tt.want)
+		}
+	}
+}
+
+func TestPnLPct(t *testing.T) {
+	tests := []struct {
+		in   float64
+		want string
+	}{
+		{12.34, "+12.34%"},
+		{-4.1, "-4.10%"},
+		{0, "0.00%"},
+	}
+	for _, tt := range tests {
+		if got := PnLPct(tt.in); got != tt.want {
+			t.Errorf("PnLPct(%v) = %q, want %q", tt.in, got, tt.want)
+		}
+	}
+}
+
+func TestRenderer_Interface(t *testing.T) {
+	ForceColor(false)
+	defer ForceColor(false)
+
+	var buf bytes.Buffer
+	r := New(&buf)
+	r.Banner("Report")
+	r.Section("Holdings")
+	r.KV([]KVPair{{"Portfolio", "sp500"}})
+	r.Table(TableOpts{Headers: []string{"A", "B"}, Rows: [][]string{{"1", "2"}}})
+	if r.Writer() != &buf {
+		t.Error("Writer() should return the underlying writer")
+	}
+	out := buf.String()
+	for _, want := range []string{"Report", "Holdings", "Portfolio:", "sp500", "A", "B", "1", "2"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("renderer output missing %q", want)
+		}
+	}
+}

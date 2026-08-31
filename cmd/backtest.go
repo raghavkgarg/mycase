@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -11,6 +12,7 @@ import (
 	"github.com/raghavkgarg/mycase/pkg/backtest"
 	"github.com/raghavkgarg/mycase/pkg/broker"
 	"github.com/raghavkgarg/mycase/pkg/csvloader"
+	"github.com/raghavkgarg/mycase/pkg/render"
 	"github.com/raghavkgarg/mycase/pkg/yfinance"
 )
 
@@ -161,42 +163,40 @@ func runBacktest(ctx context.Context, c *cli.Command) error {
 }
 
 func printBacktestResults(res backtest.SimResult, capital float64, benchmark string, freq backtest.RebalanceFreq, slippage float64) {
-	div := strings.Repeat("─", 52)
-	fmt.Println(div)
-	fmt.Printf("  BACKTEST RESULTS\n")
-	fmt.Println(div)
+	out := os.Stdout
+	render.Banner(out, "BACKTEST RESULTS")
 
+	meta := []render.KVPair{}
 	if len(res.Snapshots) > 0 {
 		first := res.Snapshots[0]
 		last := res.Snapshots[len(res.Snapshots)-1]
-		fmt.Printf("  Period:       %s → %s (%d trading days)\n",
-			first.Date.Format("2006-01-02"), last.Date.Format("2006-01-02"), res.TradingDays)
+		meta = append(meta, render.KVPair{Key: "Period", Value: fmt.Sprintf("%s → %s (%d trading days)", first.Date.Format("2006-01-02"), last.Date.Format("2006-01-02"), res.TradingDays)})
 	}
-	fmt.Printf("  Rebalance:    %s (%d times, slippage %.2f%%)\n",
-		freq, res.RebalanceCount, slippage*100)
-	fmt.Println(div)
+	meta = append(meta, render.KVPair{Key: "Rebalance", Value: fmt.Sprintf("%s (%d times, slippage %.2f%%)", freq, res.RebalanceCount, slippage*100)})
+	render.KV(out, meta)
 
-	fmt.Printf("  %-22s  %+8.2f%%   vs  %+8.2f%%  (%s)\n",
-		"Total Return", res.TotalReturn*100, res.BenchmarkReturn*100, benchmark)
-	fmt.Printf("  %-22s  %+8.2f%%   vs  %+8.2f%%\n",
-		"CAGR", res.CAGR*100, res.BenchmarkCAGR*100)
-	fmt.Printf("  %-22s  %8.2f%%\n", "Max Drawdown", res.MaxDrawdown*100)
-	fmt.Println(div)
-	fmt.Printf("  %-22s  %8.2f\n", "Sharpe Ratio", res.SharpeRatio)
-	fmt.Printf("  %-22s  %8.2f\n", "Sortino Ratio", res.SortinoRatio)
-	fmt.Printf("  %-22s  %8.2f\n", "Calmar Ratio", res.CalmarRatio)
-	fmt.Printf("  %-22s  %+8.2f%%\n", "Alpha (Jensen)", res.Alpha*100)
-	fmt.Printf("  %-22s  %8.2f\n", "Beta", res.Beta)
-	fmt.Println(div)
+	render.KV(out, []render.KVPair{
+		{Key: "Total Return", Value: fmt.Sprintf("%s   vs  %s  (%s)", render.PnLPct(res.TotalReturn*100), render.PnLPct(res.BenchmarkReturn*100), benchmark)},
+		{Key: "CAGR", Value: fmt.Sprintf("%s   vs  %s", render.PnLPct(res.CAGR*100), render.PnLPct(res.BenchmarkCAGR*100))},
+		{Key: "Max Drawdown", Value: fmt.Sprintf("%.2f%%", res.MaxDrawdown*100)},
+	})
+	render.KV(out, []render.KVPair{
+		{Key: "Sharpe Ratio", Value: fmt.Sprintf("%.2f", res.SharpeRatio)},
+		{Key: "Sortino Ratio", Value: fmt.Sprintf("%.2f", res.SortinoRatio)},
+		{Key: "Calmar Ratio", Value: fmt.Sprintf("%.2f", res.CalmarRatio)},
+		{Key: "Alpha (Jensen)", Value: render.PnLPct(res.Alpha * 100)},
+		{Key: "Beta", Value: fmt.Sprintf("%.2f", res.Beta)},
+	})
 
 	if len(res.Snapshots) > 0 {
 		finalPort := res.Snapshots[len(res.Snapshots)-1].PortfolioValue
 		finalBench := capital * (1 + res.BenchmarkReturn)
-		fmt.Printf("  %-22s  Rs. %12.2f\n", "Initial Capital", capital)
-		fmt.Printf("  %-22s  Rs. %12.2f\n", "Final Portfolio", finalPort)
-		fmt.Printf("  %-22s  Rs. %12.2f\n", "Final Benchmark", finalBench)
+		render.KV(out, []render.KVPair{
+			{Key: "Initial Capital", Value: render.Currency(capital, "Rs. ")},
+			{Key: "Final Portfolio", Value: render.Currency(finalPort, "Rs. ")},
+			{Key: "Final Benchmark", Value: render.Currency(finalBench, "Rs. ")},
+		})
 	}
-	fmt.Println(div)
 
 	// Year-by-year breakdown when period spans multiple years
 	printYearlyBreakdown(res.Snapshots)
@@ -211,9 +211,6 @@ func printYearlyBreakdown(snapshots []backtest.DailySnapshot) {
 	if lastYear == firstYear {
 		return
 	}
-
-	fmt.Printf("\n  %-8s  %10s  %10s  %10s\n", "Year", "Portfolio", "Benchmark", "Excess")
-	fmt.Println("  " + strings.Repeat("─", 42))
 
 	// Find year-start snapshot (first snapshot of each year)
 	type yearMark struct {
@@ -231,6 +228,7 @@ func printYearlyBreakdown(snapshots []backtest.DailySnapshot) {
 	}
 	marks = append(marks, yearMark{year: -1, snap: snapshots[len(snapshots)-1]})
 
+	rows := make([][]string, 0, len(marks))
 	for i := 0; i+1 < len(marks); i++ {
 		start := marks[i].snap
 		end := marks[i+1].snap
@@ -244,8 +242,14 @@ func printYearlyBreakdown(snapshots []backtest.DailySnapshot) {
 		if marks[i+1].year == -1 {
 			yearLabel += "*"
 		}
-		fmt.Printf("  %-8s  %+9.2f%%  %+9.2f%%  %+9.2f%%\n",
-			yearLabel, portRet, benchRet, excess)
+		rows = append(rows, []string{yearLabel, render.PnLPct(portRet), render.PnLPct(benchRet), render.PnLPct(excess)})
 	}
+
+	render.Section(os.Stdout, "Year-by-Year")
+	render.TableWithOpts(os.Stdout, render.TableOpts{
+		Headers: []string{"Year", "Portfolio", "Benchmark", "Excess"},
+		Rows:    rows,
+		Align:   []render.Alignment{render.AlignLeft, render.AlignRight, render.AlignRight, render.AlignRight},
+	})
 	fmt.Println("  (* partial year)")
 }

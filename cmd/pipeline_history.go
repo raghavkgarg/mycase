@@ -3,11 +3,12 @@ package cmd
 import (
 	"context"
 	"fmt"
-	"strings"
+	"os"
 
 	"github.com/urfave/cli/v3"
 
 	"github.com/raghavkgarg/mycase/pkg/cache"
+	"github.com/raghavkgarg/mycase/pkg/render"
 )
 
 var pipelineHistoryCmd = &cli.Command{
@@ -46,12 +47,8 @@ func runPipelineHistory(ctx context.Context, c *cli.Command) error {
 		return nil
 	}
 
-	fmt.Printf("%-22s %-10s %-16s %-24s %-12s %-20s\n",
-		"Run ID", "Status", "Portfolio", "Method", "Duration", "Started")
-	fmt.Println(strings.Repeat("-", 108))
-
+	rows := make([][]string, 0, len(runs))
 	for _, r := range runs {
-		status := statusIcon(r.Status) + " " + string(r.Status)
 		duration := "—"
 		if !r.CompletedAt.IsZero() {
 			d := r.CompletedAt.Sub(r.StartedAt)
@@ -61,15 +58,20 @@ func runPipelineHistory(ctx context.Context, c *cli.Command) error {
 				duration = fmt.Sprintf("%.0fs", d.Seconds())
 			}
 		}
-		fmt.Printf("%-22s %-10s %-16s %-24s %-12s %-20s\n",
+		rows = append(rows, []string{
 			r.RunID,
-			status,
+			statusIcon(r.Status) + " " + string(r.Status),
 			r.Portfolio,
 			r.Method,
 			duration,
 			r.StartedAt.Format("2006-01-02 15:04:05"),
-		)
+		})
 	}
+
+	render.Table(os.Stdout,
+		[]string{"Run ID", "Status", "Portfolio", "Method", "Duration", "Started"},
+		rows,
+	)
 
 	fmt.Printf("\n%d run(s) shown. Use 'mycase pipeline show <run_id>' for details.\n", len(runs))
 	return nil

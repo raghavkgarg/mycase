@@ -19,6 +19,7 @@ import (
 	"github.com/raghavkgarg/mycase/pkg/cache"
 	"github.com/raghavkgarg/mycase/pkg/config"
 	"github.com/raghavkgarg/mycase/pkg/csvloader"
+	"github.com/raghavkgarg/mycase/pkg/render"
 	"github.com/raghavkgarg/mycase/pkg/stockpicker"
 )
 
@@ -50,9 +51,7 @@ func runPipeline(ctx context.Context, c *cli.Command) error {
 	execOnly := c.Bool("exec-only")
 	configPath := c.String("config")
 
-	fmt.Println("====================================================================")
-	fmt.Println("             Go Mycase Automated Pipeline Runner                 ")
-	fmt.Println("====================================================================")
+	render.Banner(os.Stdout, "Go Mycase Automated Pipeline Runner")
 
 	var cfg config.PipelineConfig
 	configFile, err := os.Open(configPath)
@@ -514,9 +513,8 @@ func runPipeline(ctx context.Context, c *cli.Command) error {
 
 	if !execOnly {
 		goldenBase := csvloader.GetUniverseName(cfg.GoldenCopyPath)
-		fmt.Println("\n====================================================================")
-		fmt.Println("               Generated Reports & Files Summary                    ")
-		fmt.Println("====================================================================")
+		fmt.Println()
+		render.Banner(os.Stdout, "Generated Reports & Files Summary")
 		for idx, indexName := range cfg.Indices {
 			fmt.Printf("%d. %s Candidates:\n", idx+1, indexName)
 			fmt.Printf("   - CSV Output:         data/candidates/index_picks/%s_%s.csv\n", indexName, cfg.Strategy)
@@ -537,12 +535,10 @@ func runPipeline(ctx context.Context, c *cli.Command) error {
 		fmt.Printf("%d. Golden Copy Portfolio:%s\n", summaryIdx, cfg.GoldenCopyPath)
 		summaryIdx++
 		fmt.Printf("%d. Explanation Report:  report/%s_%s/executions/%s_03_portfolio_report.txt\n", summaryIdx, goldenBase, cfg.Strategy, dateStr)
-		fmt.Println("====================================================================")
 	}
 
-	fmt.Println("\n====================================================================")
-	fmt.Println("               Pipeline Completed Successfully!                     ")
-	fmt.Println("====================================================================")
+	fmt.Println()
+	render.Banner(os.Stdout, "Pipeline Completed Successfully!")
 
 	// Mark pipeline run as completed in DuckDB.
 	if db != nil {

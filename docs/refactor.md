@@ -20,7 +20,7 @@ A one-line ledger of completed refactor phases is kept at the bottom for git-arc
 
 | Phase | What | Status | Depends on |
 |-------|------|--------|-----------|
-| Loose ends | Wire-or-delete L1–L8 (render, selections, config_json, final stage, server paths, tax effect, EmailAlerter, skip-masking test) | ⬜ Next | none |
+| Loose ends | Wire-or-delete L1–L8 (~~render~~✅, selections, config_json, final stage, server paths, tax effect, EmailAlerter, skip-masking test) | 🟡 L1 done (R12.5); L2–L8 next | none |
 | R16 | Dependency untangling (break cycle-magnet packages) | ⬜ Next | none |
 | R14 | Structured logging (slog) — R14.4–R14.7 migration + steering | 🟡 R14.1+R14.2+R14.3 done | none |
 | R15 | Test strategy & E2E testing | ⬜ Design | R16 (seams land there) |
@@ -246,7 +246,7 @@ Existing `CalcSharpe`/`CalcSortino`/`CalcAlpha` delegate to these with `indiaRis
 - **Dashboard performance tab** — `pkg/server/performance_handler.go` (`GET /api/portfolio/{name}/performance`, nil-fetcher guard + `available` flag, mirrors `tax_handler.go`) + `performance-tab.js` (echarts equity curve portfolio vs SPY, metrics table, decomposition table) + the 4 frontend wiring edits (`api.js`, `app.js` import/VIEWS/routes/componentTags, `index.html` tab+view). `Server` gained a `WithFetcher(attribution.PriceFetcher)` option (variadic `New`, backward-compatible); `cmd/serve.go` wires the router. First tests for `pkg/server`.
 - **Alert nudge** — `pkg/attribution/nudge.go`: pure `AssessNudge(Result, threshold)` (default threshold −2% annualized alpha, ≥60 trading days required). `pkg/autopilot/alert.go`: `FormatAlphaNudgeAlert` + `SendAlphaNudgeAlerts` (no-op unless nudging) + `AssessPortfolioAlpha` (builds 1y NAV series, best-effort). Wired into `cmd/autopilot.go` after proposal alerts — logged and non-fatal. First tests for `pkg/autopilot`.
 
-**Deviation from original design**: output uses `fmt.Printf` (consistent with every sibling `cmd/*` command), **not** `pkg/render` — because `pkg/render` (R12) is currently imported by zero packages and was never adopted. Migrating to it is a codebase-wide task tracked under "Known Loose Ends" below, not Phase 5b scope.
+**Note on output layer**: Phase 5b originally shipped with `fmt.Printf` output because `pkg/render` (R12) was imported by zero packages and never adopted. This was closed by **L1 (R12.5)** — `render` is now the single reporting layer adopted across all of `cmd/*` and `pkg/{printer,executor}`. Performance output now renders via `render.Section`/`KV`/`Table`.
 
 
 ### Non-goals (Phase 5)
@@ -471,7 +471,7 @@ Half-finished or orphaned pieces discovered during Phase 5b. None are urgent, bu
 
 | # | Loose end | Evidence | Suggested fix / phase |
 |---|-----------|----------|----------------------|
-| L1 | **`pkg/render` is imported by zero packages.** Built in R12 (86% coverage) as the intended user-output layer, but never adopted — every `cmd/*` and `pkg/server` handler prints via `fmt.Printf`. The R14 design section still describes `render` as if it's in use. | `grep -r pkg/render` → no importers | Either adopt `render` across `cmd/*` (a focused "R12.5" pass) or delete it. Decide before R15 so E2E tests assert against the real output layer. |
+| L1 | ✅ **CLOSED (R12.5).** `pkg/render` was built in R12 but adopted by zero packages. Resolved by **adopting it everywhere** and making it interface-first: `render.Renderer` (Section/Banner/KV/Table/Writer) with a default tabwriter+ANSI impl behind it, so a specialized rendering lib can later be swapped in without touching call sites. `TableOpts` gained `Footer` + `Border` (pipe style); added `PnL`/`PnLPct` formatters. All of `cmd/*` and `pkg/{printer,executor}` now render through it. `pkg/printer` was rebuilt as a thin domain-report layer composing `render` (all hand-rolled padding/table code deleted) — establishing **one primitives layer** as the standard: `cmd`/`executor` → `printer` (domain reports) → `render` (generic primitives). Note: file-saved holdings/basket snapshots now use the `render` style. | was: `grep -r pkg/render` → no importers | Done. |
 | L2 | **`selections` table + `InsertSelections` never called in production.** Only tests populate it; the live pipeline writes `index_picks` + `proposals(draft,optimized)` only. `GetPreviousSelections`/driver-metric columns are dead in practice. | `cmd/pipeline.go` writes no selections; only `*_test.go` calls `InsertSelections` | Either wire selection persistence into the pipeline (the richer cross-run diff it was built for) or drop the table + methods. |
 | L3 | **`pipeline_runs.config_json` is always empty.** Column + struct field exist; nothing writes a config snapshot. | `InsertRun` passes `run.ConfigJSON` but callers leave it "" | Populate it (snapshot the `PipelineConfig` per run — useful for reproducibility/decomposition provenance) or remove the column. |
 | L4 | **Proposal `"final"` stage is defined but unused.** Only `draft` and `optimized` stages are ever written. | `GetProposals(runID, "final")` returns nothing in practice | Clarify the stage lifecycle: either write a `final` stage post-confirmation (closes the loop with executed orders) or document `optimized` as terminal. |
@@ -516,6 +516,7 @@ Durable design/algorithm details live in `docs/architecture.md`; this is a chron
 | **R9** | Schwab API integration — OAuth2, HTTP client, market data, US broker, transaction history; ticker routing; US cost model | — |
 | **R11** | Broker factory & market abstraction — `MarketConfig`, `CostModelForBroker`, removed hardcoded India assumptions; `pkg/schwab` → `pkg/broker/schwab`; Go → 1.27.0 | — |
 | **R12** | CLI rendering layer — `pkg/render` (tabwriter tables, formatters, TTY-aware color, panic-safe). See `docs/render.md` | — |
+| **R12.5** | Render adoption (closes L1) — made `pkg/render` interface-first (`Renderer`: Section/Banner/KV/Table/Writer + swappable default impl), added `Footer`/`Border` table opts + `PnL`/`PnLPct`; adopted across all `cmd/*` and `pkg/{printer,executor}`; rebuilt `pkg/printer` as a thin domain-report layer over `render` (deleted all hand-rolled padding/table code). One primitives layer standard: cmd/executor → printer → render | — |
 | **R13** | Stockpicker `DataFetcher` injection — interface seam, router wiring, `runPickWithOpts` collapsed. See architecture D10 | — |
 | **Phase 4** | Tax-loss harvesting — `pkg/tax` (FIFO, TLH, sequencing), Schwab transactions, DuckDB tax tables, `mycase tax`, dashboard Tax tab. See architecture D11–D12 | — |
 | **R14.1–R14.2** | Structured logging foundation — `pkg/logging` (fanout handler, req_id tracing, timing/HTTP/DB helpers, rotation), `main.go` Before/After wiring + global flags, `config/defaults.json` logging block | `db6e046` |

@@ -15,6 +15,7 @@ import (
 
 	"github.com/raghavkgarg/mycase/pkg/broker/schwab"
 	"github.com/raghavkgarg/mycase/pkg/config"
+	"github.com/raghavkgarg/mycase/pkg/render"
 )
 
 var AuthCommand = &cli.Command{
@@ -63,9 +64,7 @@ var AuthCommand = &cli.Command{
 }
 
 func runAuthCmd(ctx context.Context) error {
-	fmt.Println("====================================================================")
-	fmt.Println("             Zerodha Kite Connect Auth Setup Utility               ")
-	fmt.Println("====================================================================")
+	render.Banner(os.Stdout, "Zerodha Kite Connect Auth Setup Utility")
 	if publicIP := config.FetchPublicIP(); publicIP != "" {
 		fmt.Printf("Current Public IP: %s\n", publicIP)
 		fmt.Println("  (Make sure this IP is whitelisted under App Settings on https://developers.kite.trade/profile)")
@@ -199,9 +198,7 @@ p{font-size:16px;line-height:1.5;margin-bottom:30px}
 
 // runSchwabAuth performs the Schwab OAuth2 authorization_code flow.
 func runSchwabAuth(ctx context.Context, configPath, tokenPath string) error {
-	fmt.Println("====================================================================")
-	fmt.Println("           Charles Schwab OAuth2 Auth Setup Utility                 ")
-	fmt.Println("====================================================================")
+	render.Banner(os.Stdout, "Charles Schwab OAuth2 Auth Setup Utility")
 
 	app, err := schwab.LoadAppConfig(configPath)
 	if err != nil {
