@@ -51,7 +51,6 @@ type decompositionJSON struct {
 	BuyHoldReturn   float64 `json:"buy_hold_return"`
 	Selection       float64 `json:"selection"`
 	Rebalancing     float64 `json:"rebalancing"`
-	Tax             float64 `json:"tax"`
 	Rebalances      int     `json:"rebalances"`
 }
 
@@ -144,7 +143,6 @@ func (s *Server) handlePerformance(w http.ResponseWriter, r *http.Request) {
 			BuyHoldReturn:   d.BuyHoldReturn,
 			Selection:       d.Selection,
 			Rebalancing:     d.Rebalancing,
-			Tax:             d.Tax,
 			Rebalances:      d.Rebalances,
 		}
 	}

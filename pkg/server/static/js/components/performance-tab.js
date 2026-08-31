@@ -132,10 +132,6 @@ class PerformanceTab extends HTMLElement {
     }
     const pct = (v) => formatPct((v || 0) * 100)
     const cls = (v) => (v >= 0 ? 'cell-positive' : 'cell-negative')
-    let taxRow = ''
-    if (d.tax) {
-      taxRow = `<tr><td>Tax effect</td><td class="${cls(d.tax)}">${pct(d.tax)}</td><td>realized TLH saving / initial capital</td></tr>`
-    }
     el.innerHTML = `
       <table class="data-table">
         <thead><tr><th style="text-align:left">Component</th><th>Contribution</th><th style="text-align:left">Meaning</th></tr></thead>
@@ -143,11 +139,13 @@ class PerformanceTab extends HTMLElement {
           <tr><td><strong>Active return</strong></td><td class="${cls(d.active_return)}"><strong>${pct(d.active_return)}</strong></td><td>portfolio − benchmark</td></tr>
           <tr><td>Selection effect</td><td class="${cls(d.selection)}">${pct(d.selection)}</td><td>picks vs index (first basket held)</td></tr>
           <tr><td>Rebalancing effect</td><td class="${cls(d.rebalancing)}">${pct(d.rebalancing)}</td><td>re-selection vs holding first basket</td></tr>
-          ${taxRow}
         </tbody>
       </table>
       <p style="margin-top:10px;font-size:12px;color:var(--color-muted)">
         ${d.rebalances} rebalance${d.rebalances === 1 ? '' : 's'} in window · Selection + Rebalancing = Active return
+      </p>
+      <p style="margin-top:4px;font-size:12px;color:var(--color-muted)">
+        Tax-loss harvesting impact is reported separately in the Tax tab.
       </p>`
   }
 }

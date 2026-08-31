@@ -37,6 +37,14 @@ type RebalanceEvent struct {
 //     capital. Reported, not NAV-derived — it is a cash effect outside the
 //     price series, so it is surfaced alongside rather than folded into the
 //     price-return identity above.
+//
+// Note: the live CLI (`mycase performance --decompose`) and dashboard paths
+// deliberately leave TaxSaving unset (Tax == 0) and do not render a tax line —
+// a rate-weighted realized-loss estimate would overstate the benefit (it ignores
+// the basis reset on the wash-sale-avoiding repurchase). TLH impact is surfaced
+// in full ST/LT detail by `mycase tax` / the dashboard Tax tab instead. The Tax
+// field remains part of this reusable API for callers that supply their own
+// figure (and is exercised by tests).
 type Decomposition struct {
 	From           time.Time
 	To             time.Time

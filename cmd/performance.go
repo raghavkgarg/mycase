@@ -310,8 +310,11 @@ func printDecomposition(ctx context.Context, tracker *attribution.Tracker, holdi
 	d, err := tracker.Decompose(ctx, attribution.DecomposeInput{
 		Holdings: holdings,
 		History:  history,
-		// TaxSaving is left 0 here: harvest realization is surfaced by the
-		// `mycase tax` command, not recomputed on the performance path.
+		// TaxSaving is intentionally left 0 (and the tax line is not rendered):
+		// TLH impact is a cash effect outside the price-return identity, and a
+		// rate-weighted realized-loss estimate would overstate the benefit (it
+		// ignores the basis reset on the wash-sale-avoiding repurchase). Tax is
+		// surfaced honestly, in full ST/LT detail, by `mycase tax` / the Tax tab.
 	}, cfg)
 	if err != nil {
 		return err
@@ -333,11 +336,9 @@ func printDecompositionResult(d attribution.Decomposition) {
 		{Key: "Selection effect", Value: fmt.Sprintf("%s   (picks vs index, first basket held)", render.PnLPct(d.Selection*100))},
 		{Key: "Rebalancing effect", Value: fmt.Sprintf("%s   (re-selection vs holding first basket)", render.PnLPct(d.Rebalancing*100))},
 	}
-	if d.Tax != 0 {
-		pairs = append(pairs, render.KVPair{Key: "Tax effect", Value: fmt.Sprintf("%s   (realized TLH saving / initial capital)", render.PnLPct(d.Tax*100))})
-	}
 	render.KV(out, pairs)
 	fmt.Println("  (Selection + Rebalancing = Active return)")
+	fmt.Println("  Tax-loss harvesting impact is reported separately — run `mycase tax`.")
 }
 
 // cacheConn returns the global cache's *sql.DB, or nil if the cache is unset.
