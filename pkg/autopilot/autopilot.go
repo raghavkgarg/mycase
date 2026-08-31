@@ -38,6 +38,12 @@ type RunResult struct {
 	GoldenCopyPath string
 }
 
+// Compile-time assertion that *datafetcher.Router satisfies the interface the
+// stockpicker consumes. Lives here (a package that imports both) rather than in
+// datafetcher, so the low-level router need not import the high-level strategy
+// (R16 P2). This catches signature drift at build time.
+var _ stockpicker.DataFetcher = (*datafetcher.Router)(nil)
+
 // newDataRouter builds a datafetcher.Router from the pipeline config's Schwab
 // credentials. If Schwab is not configured (or creds are missing), the router
 // falls back to Yahoo Finance for all tickers.

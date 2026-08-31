@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/raghavkgarg/mycase/pkg/broker/schwab"
-	"github.com/raghavkgarg/mycase/pkg/stockpicker"
 	"github.com/raghavkgarg/mycase/pkg/yfinance"
 )
 
@@ -162,5 +161,8 @@ func (r *Router) GetBenchmarkSymbol(tickers []string) string {
 	return yfinance.GetBenchmarkSymbol(tickers)
 }
 
-// Compile-time assertion that *Router satisfies stockpicker.DataFetcher.
-var _ stockpicker.DataFetcher = (*Router)(nil)
+// Note: *Router structurally satisfies stockpicker.DataFetcher. The interface is
+// defined by its consumer (stockpicker), and satisfaction is compile-checked
+// where a *Router is assigned to stockpicker.Options.DataFetcher (in pkg/autopilot
+// and cmd). No compile-time assert lives here so this low-level data-routing
+// package does not import the high-level strategy package (R16 problem P2).
