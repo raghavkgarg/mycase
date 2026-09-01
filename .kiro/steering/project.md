@@ -16,7 +16,8 @@ make build           # Build dist/mycase binary
 make test            # Run all tests (30s timeout)
 make test-race       # Tests with race detector
 make test-coverage   # Tests + coverage.html report
-make cleanup         # gofmt + go fix + go vet + staticcheck + govulncheck
+make cleanup         # gofmt + go fix + go vet + staticcheck + govulncheck + check-deps
+make check-deps      # Enforce package layering (R16 leaves + downward imports)
 make run ARGS="..."  # Run with go run (dev mode)
 make help            # Show all targets
 ```
@@ -41,14 +42,18 @@ make run ARGS="autopilot run"                            # Full quarterly pipeli
 cmd/              CLI commands (thin wrappers calling pkg/)
 pkg/
 ├── broker/       Broker interface, MarketConfig, cost helpers
+│   ├── types/    Broker DTOs (Holding, Order, MarketConfig) — zero-import leaf
 │   ├── schwab/   Schwab API client (auth, market data, broker)
 │   └── zerodha/  Zerodha/Kite broker (India legacy)
 ├── brokerfactory/ Creates broker from config/defaults.json
 ├── stockpicker/  Scoring, hard filters, hysteresis, selection
 ├── optimizer/    Inverse-volatility, MFS weights, sector caps
 ├── datafetcher/  Ticker routing (US→Schwab, India→Yahoo)
-├── cache/        DuckDB price + fundamentals cache
-├── yfinance/     Yahoo Finance client + shared types
+├── cache/        DuckDB price + fundamentals cache (zero-import leaf; domains own their tables)
+├── yfinance/     Yahoo Finance client
+├── marketdata/   Shared price/fundamental DTOs — zero-import leaf
+├── tax/          FIFO lots, TLH, wash-sale, order sequencing (US); owns its DuckDB tables
+├── attribution/  Live performance vs benchmark; owns its DuckDB table
 ├── costs/        Transaction cost model (India + US)
 ├── backtest/     Backtesting engine
 ├── monitoring/   4-pillar health scoring

@@ -164,13 +164,15 @@ pkg/           — domain logic; no CLI imports
   optimizer/   — inverse-volatility, MFS weights, sector caps
   backtest/    — engine, metrics, portfolio valuation
   autopilot/   — non-interactive pipeline, proposal model, scheduling, alerts
-  yfinance/    — price and fundamental data fetching
-  cache/       — DuckDB read/write for prices, fundamentals, pipeline runs, tax lots
+  yfinance/    — price and fundamental data fetching (returns marketdata types)
+  marketdata/  — shared price/fundamental DTOs (HistoricalData, Fundamentals); zero-import leaf
+  cache/       — DuckDB read/write for prices, fundamentals, pipeline runs; zero-import leaf (domains own their own tables via a *sql.DB handle)
   broker/      — Broker interface; zerodha/, schwab/, and mock/ implementations
+  broker/types/ — broker DTOs (Holding, Order, OrderResult, MarketConfig); zero-import leaf
   schwab/      — Schwab Trader API: OAuth2 auth, HTTP client, market data, US broker, transaction history
   daemon/      — drift computation, alert dispatch
   costs/       — transaction cost model (India + US), tax classification
-  tax/         — FIFO lot tracking, tax-loss harvesting, wash-sale detection, order sequencing (US)
+  tax/         — FIFO lot tracking, tax-loss harvesting, wash-sale detection, order sequencing (US); owns its DuckDB tables via tax.Store
   monitoring/  — 4-pillar health scoring
   alert/       — Alerter interface; Telegram, Discord implementations
   executor/    — live order placement with retry logic
@@ -568,11 +570,11 @@ After autopilot runs pick → optimize → report, it persists a `Proposal` JSON
 
 ### D10 — Stockpicker Fetches via Injected DataFetcher, Not Direct yfinance Calls
 
-The stockpicker used to call `yfinance.FetchFundamentals` and friends directly, so US tickers always got Yahoo data even when Schwab was configured. It now depends on a `stockpicker.DataFetcher` interface set on `Options.DataFetcher`. Production callers pass a `*datafetcher.Router` (US→Schwab, India→Yahoo); when the field is nil the code falls back to direct yfinance calls, so tests and legacy paths keep working. The interface lives in the stockpicker package (not datafetcher) to avoid an import cycle; a compile-time assertion in `datafetcher` (`var _ stockpicker.DataFetcher = (*Router)(nil)`) catches signature drift. This also let `cmd/pick.go`'s `runPickWithOpts` collapse from a ~120-line duplicate of `stockpicker.RunWithResult` into a thin wrapper that wires the router and delegates — the `us_quality_momentum` branches (US hard filters, scoring, display) now live only in `RunWithResult`.
+The stockpicker used to call `yfinance.FetchFundamentals` and friends directly, so US tickers always got Yahoo data even when Schwab was configured. It now depends on a `stockpicker.DataFetcher` interface set on `Options.DataFetcher`. Production callers pass a `*datafetcher.Router` (US→Schwab, India→Yahoo); when the field is nil the code falls back to direct yfinance calls, so tests and legacy paths keep working. The interface lives in the stockpicker package (defined by its consumer) so the low-level `datafetcher` router need not import the high-level strategy — a back-edge R16 removed. A compile-time assertion (`var _ stockpicker.DataFetcher = (*datafetcher.Router)(nil)`) lives in `pkg/autopilot` (which legitimately imports both) to catch signature drift. This also let `cmd/pick.go`'s `runPickWithOpts` collapse from a ~120-line duplicate of `stockpicker.RunWithResult` into a thin wrapper that wires the router and delegates — the `us_quality_momentum` branches (US hard filters, scoring, display) now live only in `RunWithResult`.
 
 ### D11 — Tax Lots Are Derived State, Rebuilt from Transactions
 
-FIFO lots and realized gains are never edited in place — they are recomputed from the stored transaction history on every `tax import`. `tax_transactions` is the source of truth (idempotent on Schwab `activityId`); `tax_lots` and `realized_gains` are a full-replace projection produced by `tax.BuildLots`. This means a re-import can't double-count, a corrected/back-dated transaction is absorbed cleanly, and the FIFO engine (`pkg/tax`) stays a pure, unit-tested function with no DB coupling. The `pkg/tax` package imports only `pkg/broker` (for order sequencing types); `pkg/cache` and `pkg/broker/schwab` both import `pkg/tax`, keeping the dependency direction one-way and cycle-free. Schwab positions expose only a blended average price, so lot accuracy depends on the `/transactions` history — positions predating the account's transaction window can't be reconstructed, and oversells (a sell with no matching buy history) are recorded as warnings rather than fabricated zero-basis lots.
+FIFO lots and realized gains are never edited in place — they are recomputed from the stored transaction history on every `tax import`. `tax_transactions` is the source of truth (idempotent on Schwab `activityId`); `tax_lots` and `realized_gains` are a full-replace projection produced by `tax.BuildLots`. This means a re-import can't double-count, a corrected/back-dated transaction is absorbed cleanly, and the FIFO engine (`pkg/tax`) stays a pure, unit-tested function with no DB coupling. Persistence is owned by the domain: `tax.Store` wraps a `*sql.DB` handle (from `cache.Conn()`) and defines the tax tables itself, so `pkg/cache` does not import `pkg/tax` (R16 P4 — `pkg/cache` is now a zero-import leaf). `pkg/tax` depends only on `pkg/broker/types` (order-sequencing DTOs), keeping it off the broker hub and its `config`/`costs` deps. Schwab positions expose only a blended average price, so lot accuracy depends on the `/transactions` history — positions predating the account's transaction window can't be reconstructed, and oversells (a sell with no matching buy history) are recorded as warnings rather than fabricated zero-basis lots.
 
 ### D12 — Order Sequencing Is How Tax-Optimization Takes Effect
 
@@ -588,3 +590,13 @@ Schwab's Trader API (`pkg/broker/schwab`) uses OAuth2 `authorization_code` flow,
 - **No GTT**: Schwab has no server-side Good-Till-Triggered order (a Zerodha/Kite innovation). `PlaceGTT` returns an error directing the caller to a GTC stop-limit via `PlaceOrder` instead. GTT is India-specific and stays in the Zerodha implementation only.
 - **T+1 settlement, no buckets**: US settles T+1 with no visible T1/T2 quantity split, so `Holding.T1Quantity`/`T2Quantity` stay 0 (Zerodha exposes both).
 - **Custom HTTP client**: there is no official Go SDK for Schwab (unlike `gokiteconnect/v4` for Zerodha), so `pkg/broker/schwab` is a hand-rolled `net/http` client. Broker factory (`cmd/broker.go`) selects Schwab or Zerodha from `config/defaults.json`; both satisfy the `broker.Broker` interface (D6), so commands are broker-agnostic.
+
+### D14 — Package Layering: Leaf Types + Consumer-Owned Interfaces + Domain-Owned Persistence
+
+R16 restructured the `pkg/` graph around one rule: a package should either **define** widely-shared types or **import** heavy dependencies — not both when it sits low in the stack. The three mechanisms:
+
+- **Shared DTOs live in zero-import leaf packages.** `pkg/broker/types` holds `Holding`/`Order`/`OrderResult`/`MarketConfig`; `pkg/marketdata` holds `HistoricalData`/`Fundamentals` and friends. `pkg/broker` and `pkg/yfinance` re-export them via type aliases (`broker.Holding = types.Holding`, `yfinance.HistoricalData = marketdata.HistoricalData`), so existing call sites and behavior are unchanged, while type-only consumers (`tax`, `optimizer`, `printer`, `attribution`, `broker/schwab`) import the leaf and avoid dragging in `config`/`costs`/`cache`.
+- **Interfaces are defined by their consumer.** `stockpicker.DataFetcher` and `attribution.PriceFetcher` are declared where they are used; the low-level implementers (`datafetcher.Router`) satisfy them structurally without importing the consumer (see D10).
+- **Domains own their persistence.** `tax.Store` and `attribution.Store` each take a `*sql.DB` handle from `cache.Conn()` and define their own tables, so `pkg/cache` imports no domain package and stays a leaf (see D11).
+
+The result: no package both defines cross-boundary types and pulls heavy deps, so new feature packages depend on leaves, not hubs. A `go list`-based guard (`scripts/checkdeps`, run by `make check-deps` and `make cleanup`) enforces strictly-downward imports and leaf-ness; the layer table and rules are codified in `.kiro/steering/architecture.md`.
