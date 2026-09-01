@@ -507,6 +507,17 @@ func SelectTopNValue(
 		driverStr := fmt.Sprintf("Forward PE: %.1f, FCF Yield: %.1f%%, Inst Stake: %.1f%%", f.ForwardPE, fcfY, f.HeldPercentInstitutions*100.0)
 		tracker.RecordAdditionDriver(t, driverStr)
 
+		dsoDelta := 0.0
+		if _, dsoPrev, dsoLatest := yfinance.CalculateDSO(&f); dsoPrev > 0 {
+			dsoDelta = (dsoLatest - dsoPrev) / dsoPrev
+		}
+		roceVal, _ := getLatestROCE(&f)
+		tracker.RecordDriverMetrics(t, selectiontracker.DriverMetrics{
+			FCFYield: fcfY / 100.0,
+			DSODelta: dsoDelta,
+			ROIC:     roceVal,
+		})
+
 		if sectorCounts[sec] >= maxPerSector {
 			tracker.RecordSectorCapDrop(t, sec, sectorTopTickers[sec])
 			continue
@@ -657,6 +668,22 @@ func SelectTopNMultibagger(
 		roceVal, _ := getLatestROCE(&f)
 		driverStr := fmt.Sprintf("TTM Growth: %+.1f%% (3Y: %+.1f%%), ROCE: %.1f%%, Inst Stake: %.1f%%", ttmGrowth*100.0, cagr3y*100.0, roceVal*100.0, f.HeldPercentInstitutions*100.0)
 		tracker.RecordAdditionDriver(t, driverStr)
+
+		fcfYield := 0.0
+		if f.MarketCap > 0 && f.FreeCashflow > 0 {
+			fcfYield = f.FreeCashflow / f.MarketCap
+		}
+		dsoDelta := 0.0
+		if _, dsoPrev, dsoLatest := yfinance.CalculateDSO(&f); dsoPrev > 0 {
+			dsoDelta = (dsoLatest - dsoPrev) / dsoPrev
+		}
+		tracker.RecordDriverMetrics(t, selectiontracker.DriverMetrics{
+			TTMGrowth:   ttmGrowth,
+			RevenueCAGR: cagr3y,
+			DSODelta:    dsoDelta,
+			FCFYield:    fcfYield,
+			ROIC:        roceVal,
+		})
 
 		if sectorCounts[sec] >= maxPerSector {
 			tracker.RecordSectorCapDrop(t, sec, sectorTopTickers[sec])

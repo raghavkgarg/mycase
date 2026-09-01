@@ -218,6 +218,10 @@ func SelectTopNUSQM(
 		driverStr := fmt.Sprintf("ROE: %.1f%%, FCF Yield: %.1f%%, OpMargin: %.1f%%",
 			f.ROE*100.0, fcfY, f.OperatingMargins*100.0)
 		tracker.RecordAdditionDriver(t, driverStr)
+		tracker.RecordDriverMetrics(t, selectiontracker.DriverMetrics{
+			FCFYield: fcfY / 100.0,
+			ROIC:     computeROIC(&f),
+		})
 
 		if sectorCounts[sec] >= maxPerSector {
 			tracker.RecordSectorCapDrop(t, sec, sectorTopTickers[sec])

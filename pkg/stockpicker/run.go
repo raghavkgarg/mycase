@@ -7,6 +7,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/raghavkgarg/mycase/pkg/cache"
 	"github.com/raghavkgarg/mycase/pkg/csvloader"
 	"github.com/raghavkgarg/mycase/pkg/selectiontracker"
 	"github.com/raghavkgarg/mycase/pkg/yfinance"
@@ -16,9 +17,24 @@ import (
 // Callers can use this to persist results to DuckDB or other stores.
 type PickResult struct {
 	SelectedKeys []string
-	Weights      map[string]float64 // ticker → weight
-	Scores       map[string]float64 // ticker → score (nil for standard method)
-	Sectors      map[string]string  // ticker → sector
+	Weights      map[string]float64       // ticker → weight
+	Scores       map[string]float64       // ticker → score (nil for standard method)
+	Sectors      map[string]string        // ticker → sector
+	Ranks        map[string]int           // ticker → 1-based raw rank at selection time
+	Drivers      map[string]DriverMetrics // ticker → structured driver metrics
+}
+
+// DriverMetrics mirrors selectiontracker.DriverMetrics as the structured numeric
+// drivers surfaced on PickResult, so downstream persistence (the DuckDB selections
+// table) can consume them without importing selectiontracker.
+type DriverMetrics struct {
+	TTMGrowth   float64
+	RevenueCAGR float64
+	DSODelta    float64
+	RSI         float64
+	Momentum1Y  float64
+	FCFYield    float64
+	ROIC        float64
 }
 
 // Run executes the full stock selection pipeline for the given options.
@@ -153,7 +169,8 @@ func RunWithResult(ctx context.Context, opts *Options) (*PickResult, error) {
 		sectors[ticker] = fund.Sector
 		resultDates[ticker] = fund.ResultPrevComing
 	}
-	if err := tracker.SaveReport(displayNameVal, opts.Method, goldenWeights, sectors, finalWeights, resultDates); err != nil {
+	prevDrivers := loadPreviousDriverStrings(ctx, displayNameVal, opts.Method)
+	if err := tracker.SaveReport(displayNameVal, opts.Method, goldenWeights, sectors, finalWeights, resultDates, prevDrivers); err != nil {
 		fmt.Printf("Warning: Failed to save selection reasons report: %v\n", err)
 	}
 
@@ -180,14 +197,71 @@ func RunWithResult(ctx context.Context, opts *Options) (*PickResult, error) {
 		Weights:      finalWeights,
 		Scores:       scores,
 		Sectors:      make(map[string]string, len(selectedKeys)),
+		Ranks:        make(map[string]int, len(selectedKeys)),
+		Drivers:      make(map[string]DriverMetrics, len(selectedKeys)),
 	}
 	for _, k := range selectedKeys {
 		if f, ok := fundamentals[k]; ok {
 			result.Sectors[k] = f.Sector
 		}
+		if r, ok := tracker.RawRanks[k]; ok {
+			result.Ranks[k] = r
+		}
+		if dm, ok := tracker.DriverValues[k]; ok {
+			result.Drivers[k] = DriverMetrics{
+				TTMGrowth:   dm.TTMGrowth,
+				RevenueCAGR: dm.RevenueCAGR,
+				DSODelta:    dm.DSODelta,
+				RSI:         dm.RSI,
+				Momentum1Y:  dm.Momentum1Y,
+				FCFYield:    dm.FCFYield,
+				ROIC:        dm.ROIC,
+			}
+		}
 	}
 
 	return result, nil
+}
+
+// loadPreviousDriverStrings fetches the previous completed run's structured
+// selections from DuckDB and reconstructs each ticker's driver summary string in
+// the same format the given scoring method emits. This replaces selectiontracker's
+// old approach of re-parsing the prior text report (roadmap Phase 8). Returns nil
+// when the cache is unavailable or there is no prior run — callers treat nil as
+// "first run" (no cross-run delta).
+func loadPreviousDriverStrings(ctx context.Context, portfolio, method string) map[string]string {
+	db := cache.GetDB()
+	if db == nil {
+		return nil
+	}
+	prev, err := db.GetPreviousSelections(ctx, portfolio, method)
+	if err != nil || len(prev) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(prev))
+	for _, s := range prev {
+		out[s.Ticker] = formatDriverStringFromMetrics(method, s)
+	}
+	return out
+}
+
+// formatDriverStringFromMetrics rebuilds the human-readable driver summary from a
+// stored selection's numeric metrics, matching the per-method format produced at
+// scoring time so formatDriverDelta can parse both sides consistently.
+func formatDriverStringFromMetrics(method string, s cache.Selection) string {
+	switch method {
+	case "multibagger":
+		// Note: institutional stake is not persisted structurally; omit it from the
+		// reconstruction. formatDriverDelta tolerates a missing trailing metric.
+		return fmt.Sprintf("TTM Growth: %+.1f%% (3Y: %+.1f%%), ROCE: %.1f%%",
+			s.TTMGrowth*100.0, s.RevenueCagr*100.0, s.ROIC*100.0)
+	case "value":
+		return fmt.Sprintf("Forward PE: %.1f, FCF Yield: %.1f%%", 0.0, s.FCFYield*100.0)
+	default:
+		// us_quality_momentum and others: no delta format is defined; return the
+		// current-style summary so the report still shows values.
+		return fmt.Sprintf("ROIC: %.1f%%, FCF Yield: %.1f%%", s.ROIC*100.0, s.FCFYield*100.0)
+	}
 }
 
 // fetchFundamentalsVia uses the DataFetcher if available, otherwise falls back to yfinance.

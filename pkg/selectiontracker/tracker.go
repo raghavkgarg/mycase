@@ -10,17 +10,35 @@ import (
 	"time"
 )
 
+// DriverMetrics holds the structured numeric driver values recorded for a ticker
+// at selection time. These are the queryable counterparts to the human-formatted
+// AdditionDrivers string, and feed the DuckDB `selections` table (roadmap Phase 8)
+// so cross-run deltas can be computed from real numbers instead of parsing text.
+//
+// Fields are optional: a scoring method populates only the metrics it computes
+// (e.g. the US quality-momentum method has no TTM growth), leaving the rest zero.
+type DriverMetrics struct {
+	TTMGrowth   float64 // trailing-twelve-month earnings/sales growth (fraction)
+	RevenueCAGR float64 // multi-year revenue CAGR (fraction)
+	DSODelta    float64 // change in days-sales-outstanding
+	RSI         float64 // 14-day relative strength index
+	Momentum1Y  float64 // 12-month price momentum (fraction)
+	FCFYield    float64 // free cash flow / market cap (fraction)
+	ROIC        float64 // return on invested capital (fraction)
+}
+
 // Tracker records the lifecycle of tickers during the selection process.
 type Tracker struct {
 	InitialCount    int
-	SafetyReasons   map[string]string  // ticker -> reason
-	RawScores       map[string]float64 // ticker -> score
-	RawRanks        map[string]int     // ticker -> 1-based rank
-	SectorCapDrops  map[string]string  // ticker -> explanation
-	HysteresisDrops map[string]string  // ticker -> explanation
-	SelectedReasons map[string]string  // ticker -> explanation
-	AdditionDrivers map[string]string  // ticker -> positive driver summary
-	ResultDates     map[string]string  // ticker -> "24-04-26 ->  25-06-26"
+	SafetyReasons   map[string]string        // ticker -> reason
+	RawScores       map[string]float64       // ticker -> score
+	RawRanks        map[string]int           // ticker -> 1-based rank
+	SectorCapDrops  map[string]string        // ticker -> explanation
+	HysteresisDrops map[string]string        // ticker -> explanation
+	SelectedReasons map[string]string        // ticker -> explanation
+	AdditionDrivers map[string]string        // ticker -> positive driver summary
+	DriverValues    map[string]DriverMetrics // ticker -> structured numeric drivers
+	ResultDates     map[string]string        // ticker -> "24-04-26 ->  25-06-26"
 }
 
 // New initializes and returns a new Tracker instance.
@@ -33,6 +51,7 @@ func New() *Tracker {
 		HysteresisDrops: make(map[string]string),
 		SelectedReasons: make(map[string]string),
 		AdditionDrivers: make(map[string]string),
+		DriverValues:    make(map[string]DriverMetrics),
 		ResultDates:     make(map[string]string),
 	}
 }
@@ -70,6 +89,12 @@ func (t *Tracker) RecordHysteresisDrop(ticker string, rank, topN, bufferLimit in
 // RecordAdditionDriver logs key positive metric drivers for new additions or selected stocks.
 func (t *Tracker) RecordAdditionDriver(ticker, driverSummary string) {
 	t.AdditionDrivers[ticker] = driverSummary
+}
+
+// RecordDriverMetrics stores the structured numeric driver values for a ticker,
+// the machine-readable companion to the RecordAdditionDriver summary string.
+func (t *Tracker) RecordDriverMetrics(ticker string, m DriverMetrics) {
+	t.DriverValues[ticker] = m
 }
 
 // RecordSelected logs that a ticker was selected and specifies why.
@@ -156,7 +181,12 @@ func (t *Tracker) RecordResultDates(ticker, dates string) {
 }
 
 // SaveReport generates a structured selection reasons report in the report/ folder.
-func (t *Tracker) SaveReport(displayName, method string, existingHoldings map[string]float64, sectors map[string]string, weights map[string]float64, resultDates map[string]string) error {
+//
+// prevDrivers maps ticker → previous-run driver summary string, sourced by the
+// caller from the structured DuckDB selections history (cache.GetPreviousSelections)
+// rather than by re-parsing the prior text report. It may be nil (e.g. first run),
+// in which case cross-run driver deltas degrade to showing current values only.
+func (t *Tracker) SaveReport(displayName, method string, existingHoldings map[string]float64, sectors map[string]string, weights map[string]float64, resultDates map[string]string, prevDrivers map[string]string) error {
 	safeName := strings.ReplaceAll(strings.ToLower(displayName), " ", "_")
 	reportDir := filepath.Join("report", fmt.Sprintf("%s_%s", safeName, method), "executions")
 	if err := os.MkdirAll(reportDir, 0755); err != nil {
@@ -166,50 +196,11 @@ func (t *Tracker) SaveReport(displayName, method string, existingHoldings map[st
 	dateStr := time.Now().Format("20060102")
 	outPath := filepath.Join(reportDir, fmt.Sprintf("%s_01_selection_reasons.txt", dateStr))
 
-	// Locate previous report drivers
-	prevDriversMap := make(map[string]string)
-
-	if entries, err := os.ReadDir(reportDir); err == nil {
-		var reportFiles []string
-		for _, entry := range entries {
-			if !entry.IsDir() && strings.HasSuffix(entry.Name(), "_01_selection_reasons.txt") {
-				filePath := filepath.Join(reportDir, entry.Name())
-				reportFiles = append(reportFiles, filePath)
-			}
-		}
-		sort.Strings(reportFiles)
-		if len(reportFiles) > 0 {
-			lastReport := reportFiles[len(reportFiles)-1]
-			if data, err := os.ReadFile(lastReport); err == nil {
-				lines := strings.Split(string(data), "\n")
-				inSelected := false
-				for _, l := range lines {
-					tr := strings.TrimSpace(l)
-					if strings.Contains(tr, "SELECTED STOCKS") {
-						inSelected = true
-						continue
-					}
-					if inSelected && strings.Contains(tr, "REMOVED ACTIVE HOLDINGS") {
-						inSelected = false
-						break
-					}
-					if inSelected && strings.Contains(l, "|") {
-						parts := strings.Split(l, "|")
-						if len(parts) >= 6 {
-							ticker := strings.TrimSpace(parts[0])
-							if ticker == "Ticker" || strings.HasPrefix(ticker, "---") || ticker == "" {
-								continue
-							}
-							reasonCol := strings.TrimSpace(parts[len(parts)-1])
-							_, after, ok := strings.Cut(reasonCol, "Drivers: ")
-							if ok {
-								prevDriversMap[ticker] = strings.TrimSpace(after)
-							}
-						}
-					}
-				}
-			}
-		}
+	// Previous-run driver strings come from the structured selections history
+	// (passed in by the caller); nil is fine for a first run.
+	prevDriversMap := prevDrivers
+	if prevDriversMap == nil {
+		prevDriversMap = make(map[string]string)
 	}
 
 	f, err := os.Create(outPath)

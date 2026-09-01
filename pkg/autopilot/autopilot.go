@@ -291,6 +291,19 @@ func Run(ctx context.Context, rc RunConfig) (*RunResult, error) {
 			if err := db.InsertProposals(ctx, runID, "optimized", proposals); err != nil {
 				fmt.Printf("[autopilot] Warning: failed to persist optimized proposals: %v\n", err)
 			}
+
+			// Persist the structured final selection audit trail (Phase 8):
+			// finalized portfolio + driver metrics + cross-run deltas vs the
+			// previous completed run for this portfolio+method.
+			prevSels, err := db.GetPreviousSelections(ctx, goldenBase, cfg.Strategy)
+			if err != nil {
+				// No prior run (or none completed) is expected on first use — not an error.
+				prevSels = nil
+			}
+			selections := pickResultToSelections(optimResult, indexSelectionsByTicker(prevSels))
+			if err := db.InsertSelections(ctx, runID, selections); err != nil {
+				fmt.Printf("[autopilot] Warning: failed to persist selections: %v\n", err)
+			}
 		}
 	} else {
 		sourceCSV = outputCSVs[0]
@@ -579,4 +592,50 @@ func pickResultToProposals(r *stockpicker.PickResult) []cache.Proposal {
 		proposals = append(proposals, p)
 	}
 	return proposals
+}
+
+// pickResultToSelections builds the structured selection audit records for a run:
+// the finalized portfolio with per-stock driver metrics plus cross-run deltas
+// (action / prev_rank / prev_weight) computed against the previous run's selections.
+// prev indexes the most recent completed run's selections by ticker; when it is
+// empty (first run, or no prior selections persisted) every stock is "new".
+func pickResultToSelections(r *stockpicker.PickResult, prev map[string]cache.Selection) []cache.Selection {
+	selections := make([]cache.Selection, 0, len(r.SelectedKeys))
+	for i, ticker := range r.SelectedKeys {
+		s := cache.Selection{
+			Ticker: ticker,
+			Weight: r.Weights[ticker],
+			Rank:   i + 1,
+			Sector: r.Sectors[ticker],
+			Action: "new",
+		}
+		if r.Scores != nil {
+			s.Score = r.Scores[ticker]
+		}
+		if dm, ok := r.Drivers[ticker]; ok {
+			s.TTMGrowth = dm.TTMGrowth
+			s.RevenueCagr = dm.RevenueCAGR
+			s.DSODelta = dm.DSODelta
+			s.RSI = dm.RSI
+			s.Momentum1Y = dm.Momentum1Y
+			s.FCFYield = dm.FCFYield
+			s.ROIC = dm.ROIC
+		}
+		if p, ok := prev[ticker]; ok {
+			s.Action = "retained"
+			s.PrevRank = p.Rank
+			s.PrevWeight = p.Weight
+		}
+		selections = append(selections, s)
+	}
+	return selections
+}
+
+// indexSelectionsByTicker returns a lookup of the given selections keyed by ticker.
+func indexSelectionsByTicker(sels []cache.Selection) map[string]cache.Selection {
+	m := make(map[string]cache.Selection, len(sels))
+	for _, s := range sels {
+		m[s.Ticker] = s
+	}
+	return m
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/urfave/cli/v3"
 
@@ -102,11 +103,69 @@ func runPipelineShow(ctx context.Context, c *cli.Command) error {
 		fmt.Fprintln(out)
 	}
 
-	if len(allPicks) == 0 && !hadProposals {
+	// --- Final Selections ---
+	selections, err := db.GetSelections(ctx, runID)
+	if err != nil {
+		return fmt.Errorf("reading selections: %w", err)
+	}
+	if len(selections) > 0 {
+		render.Section(out, fmt.Sprintf("Final Selections (%d stocks)", len(selections)))
+		rows := make([][]string, 0, len(selections))
+		for _, s := range selections {
+			prevStr := "—"
+			if s.PrevRank > 0 {
+				prevStr = fmt.Sprintf("#%d", s.PrevRank)
+			}
+			rows = append(rows, []string{
+				s.Ticker, fmt.Sprintf("%d", s.Rank),
+				scoreOrDash(s.Score), weightPct(s.Weight), dashIfEmpty(s.Sector),
+				dashIfEmpty(s.Action), prevStr, driverSummary(s),
+			})
+		}
+		render.TableWithOpts(out, render.TableOpts{
+			Headers: []string{"Ticker", "Rank", "Score", "Weight", "Sector", "Action", "Prev Rank", "Drivers"},
+			Rows:    rows,
+			Align: []render.Alignment{
+				render.AlignLeft, render.AlignRight, render.AlignRight, render.AlignRight,
+				render.AlignLeft, render.AlignLeft, render.AlignRight, render.AlignLeft,
+			},
+		})
+		fmt.Fprintln(out)
+	}
+
+	if len(allPicks) == 0 && !hadProposals && len(selections) == 0 {
 		fmt.Println("  No data recorded for this run (pipeline may have been interrupted).")
 	}
 
 	return nil
+}
+
+// driverSummary renders the non-zero structured driver metrics for a selection
+// into a compact human-readable string (the queryable companion to the report).
+func driverSummary(s cache.Selection) string {
+	var parts []string
+	if s.ROIC != 0 {
+		parts = append(parts, fmt.Sprintf("ROIC %.1f%%", s.ROIC*100))
+	}
+	if s.FCFYield != 0 {
+		parts = append(parts, fmt.Sprintf("FCFY %.1f%%", s.FCFYield*100))
+	}
+	if s.TTMGrowth != 0 {
+		parts = append(parts, fmt.Sprintf("TTM %+.1f%%", s.TTMGrowth*100))
+	}
+	if s.RevenueCagr != 0 {
+		parts = append(parts, fmt.Sprintf("3Y %+.1f%%", s.RevenueCagr*100))
+	}
+	if s.Momentum1Y != 0 {
+		parts = append(parts, fmt.Sprintf("Mom %+.1f%%", s.Momentum1Y*100))
+	}
+	if s.RSI != 0 {
+		parts = append(parts, fmt.Sprintf("RSI %.0f", s.RSI))
+	}
+	if len(parts) == 0 {
+		return "—"
+	}
+	return strings.Join(parts, ", ")
 }
 
 // scoreOrDash formats a score, showing "—" when zero (unscored).
