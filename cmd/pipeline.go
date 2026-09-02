@@ -44,6 +44,7 @@ var PipelineCommand = &cli.Command{
 		pipelineHistoryCmd,
 		pipelineShowCmd,
 		pipelineDiffCmd,
+		pipelineReconcileCmd,
 	},
 }
 

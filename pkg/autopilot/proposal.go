@@ -5,9 +5,13 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/raghavkgarg/mycase/pkg/cache"
+	"github.com/raghavkgarg/mycase/pkg/tax"
 )
 
 const (
@@ -195,4 +199,125 @@ func ArchiveProposal(p *Proposal) error {
 	// Remove the active proposal file
 	_ = os.Remove(ProposalFile)
 	return nil
+}
+
+// FinalStageProposals converts a confirmed proposal's *successfully-placed* orders
+// into the []cache.Proposal records for the "final" pipeline stage.
+//
+// This is the executed-intent audit record (roadmap Phase 9): unlike the
+// "optimized" stage — which captures the target basket the strategy proposed
+// *before* confirmation — "final" reflects what the investor actually confirmed
+// and submitted to the broker. Orders that failed to place are excluded, so the
+// stage honestly records the executed roster, not the intended one.
+//
+// Weights are the executed BUY-side allocation: each held ticker's order value
+// as a fraction of the total placed BUY value, mirroring how "optimized" weights
+// are expressed (non-negative fractions summing to ~1). SELL orders reduce or
+// exit a position and carry no target weight, so they are not weighted here; they
+// still appear implicitly as absences relative to the previous run's selections.
+//
+// Order placement returns only an order id (no fill quantity/price — see
+// pkg/broker/types.OrderResult), so these are submitted-intent weights derived
+// from limit price × quantity, not realized fills. A realized-weight variant
+// (reconciled from broker transactions) is a documented follow-up.
+//
+// Returns nil when no BUY orders were successfully placed (nothing to record).
+func FinalStageProposals(p *Proposal) []cache.Proposal {
+	if p == nil {
+		return nil
+	}
+
+	// Index successful placements by ticker so we only record executed orders.
+	placed := make(map[string]bool, len(p.ExecutionLog))
+	for _, r := range p.ExecutionLog {
+		if r.Success {
+			placed[r.Ticker] = true
+		}
+	}
+
+	// Sum executed BUY value for weight normalization.
+	var totalBuy float64
+	for _, o := range p.Orders {
+		if o.Action == "BUY" && placed[o.Ticker] {
+			totalBuy += o.Value
+		}
+	}
+	if totalBuy <= 0 {
+		return nil
+	}
+
+	proposals := make([]cache.Proposal, 0, len(p.Orders))
+	rank := 0
+	for _, o := range p.Orders {
+		if o.Action != "BUY" || !placed[o.Ticker] {
+			continue
+		}
+		rank++
+		proposals = append(proposals, cache.Proposal{
+			Ticker: o.Ticker,
+			Weight: o.Value / totalBuy,
+			Rank:   rank,
+		})
+	}
+	return proposals
+}
+
+// RealizedStageProposals computes the *realized* "final" stage proposals from
+// actual broker fills, superseding the submitted-intent weights that
+// FinalStageProposals records at confirm time (roadmap Phase 9 follow-up).
+//
+// It aggregates the BUY-side executed dollar value per ticker
+// (Σ quantity × price, fees excluded so weights reflect market allocation, not
+// transaction drag) across all transactions whose TradedAt falls within
+// [from, to], then normalizes to per-ticker weights (fractions summing to ~1)
+// ranked by descending weight — the realized analogue of FinalStageProposals.
+//
+// Only BUY legs contribute weight: a SELL exits or trims a position and carries
+// no target allocation, mirroring FinalStageProposals. Transactions outside the
+// window (unrelated rebalances, dividends reinvested later) are ignored.
+//
+// The [from, to] bound is inclusive of from and exclusive of to. Returns nil
+// when no BUY fills land in the window (nothing to reconcile).
+func RealizedStageProposals(txns []tax.Transaction, from, to time.Time) []cache.Proposal {
+	realized := make(map[string]float64)
+	var total float64
+	for _, t := range txns {
+		if t.Type != tax.TxnBuy {
+			continue
+		}
+		if t.TradedAt.Before(from) || !t.TradedAt.Before(to) {
+			continue // outside [from, to)
+		}
+		value := t.Quantity * t.Price
+		if value <= 0 {
+			continue
+		}
+		realized[t.Ticker] += value
+		total += value
+	}
+	if total <= 0 {
+		return nil
+	}
+
+	// Deterministic order: descending realized value, ticker as tiebreak.
+	tickers := make([]string, 0, len(realized))
+	for tk := range realized {
+		tickers = append(tickers, tk)
+	}
+	sort.Slice(tickers, func(i, j int) bool {
+		if realized[tickers[i]] != realized[tickers[j]] {
+			return realized[tickers[i]] > realized[tickers[j]]
+		}
+		return tickers[i] < tickers[j]
+	})
+
+	proposals := make([]cache.Proposal, 0, len(tickers))
+	for i, tk := range tickers {
+		proposals = append(proposals, cache.Proposal{
+			Ticker: tk,
+			Weight: realized[tk] / total,
+			Rank:   i + 1,
+		})
+	}
+	return proposals
 }

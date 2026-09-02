@@ -158,6 +158,55 @@ func TestInsertProposals_RoundTrip(t *testing.T) {
 	}
 }
 
+func TestDeleteProposalsStage(t *testing.T) {
+	c := openTestCache(t)
+	ctx := context.Background()
+	insertTestRun(t, c, "run_del_stage")
+
+	final := []Proposal{
+		{Ticker: "AAPL", Weight: 0.5, Rank: 1},
+		{Ticker: "STALE", Weight: 0.5, Rank: 2}, // submitted but never filled
+	}
+	optimized := []Proposal{{Ticker: "AAPL", Weight: 1.0, Rank: 1}}
+	if err := c.InsertProposals(ctx, "run_del_stage", "final", final); err != nil {
+		t.Fatalf("InsertProposals final: %v", err)
+	}
+	if err := c.InsertProposals(ctx, "run_del_stage", "optimized", optimized); err != nil {
+		t.Fatalf("InsertProposals optimized: %v", err)
+	}
+
+	// Delete only the final stage; optimized must survive.
+	if err := c.DeleteProposalsStage(ctx, "run_del_stage", "final"); err != nil {
+		t.Fatalf("DeleteProposalsStage: %v", err)
+	}
+
+	gotFinal, err := c.GetProposals(ctx, "run_del_stage", "final")
+	if err != nil {
+		t.Fatalf("GetProposals final: %v", err)
+	}
+	if len(gotFinal) != 0 {
+		t.Errorf("final stage: expected 0 rows after delete, got %d", len(gotFinal))
+	}
+
+	gotOpt, err := c.GetProposals(ctx, "run_del_stage", "optimized")
+	if err != nil {
+		t.Fatalf("GetProposals optimized: %v", err)
+	}
+	if len(gotOpt) != 1 {
+		t.Errorf("optimized stage: expected 1 row preserved, got %d", len(gotOpt))
+	}
+
+	// Re-inserting a realized basket without STALE must not resurrect it.
+	realized := []Proposal{{Ticker: "AAPL", Weight: 1.0, Rank: 1}}
+	if err := c.InsertProposals(ctx, "run_del_stage", "final", realized); err != nil {
+		t.Fatalf("InsertProposals realized: %v", err)
+	}
+	gotFinal, _ = c.GetProposals(ctx, "run_del_stage", "final")
+	if len(gotFinal) != 1 || gotFinal[0].Ticker != "AAPL" {
+		t.Errorf("final after reconcile: got %+v, want single AAPL row", gotFinal)
+	}
+}
+
 func TestInsertProposals_MultiStage(t *testing.T) {
 	c := openTestCache(t)
 	ctx := context.Background()

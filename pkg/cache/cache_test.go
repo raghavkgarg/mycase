@@ -533,28 +533,33 @@ func TestIsFreshFundamentals(t *testing.T) {
 }
 
 func TestRangeKeyToStartDate(t *testing.T) {
+	// rangeKeyToStartDate uses calendar arithmetic (time.AddDate), so the exact
+	// number of days a key spans depends on which months/years it lands across
+	// (a "6mo" range can be 181–184 days). Assert against the same calendar
+	// arithmetic with a tight tolerance rather than fixed day-count windows,
+	// which would drift with the calendar (this used to make "6mo" flaky).
+	const tol = 2 * time.Hour // allowance for the now() gap between test and impl
 	now := time.Now().UTC()
 	tests := []struct {
-		key        string
-		wantBefore time.Duration // start date must be at least this far back
-		wantAfter  time.Duration // and no more than this far back
+		key  string
+		want time.Time
 	}{
-		{"1d", 23 * time.Hour, 25 * time.Hour},
-		{"7d", 6 * 24 * time.Hour, 8 * 24 * time.Hour},
-		{"1mo", 29 * 24 * time.Hour, 31 * 24 * time.Hour},
-		{"3mo", 89 * 24 * time.Hour, 92 * 24 * time.Hour},
-		{"6mo", 179 * 24 * time.Hour, 183 * 24 * time.Hour},
-		{"1y", 364 * 24 * time.Hour, 366 * 24 * time.Hour},
-		{"2y", 729 * 24 * time.Hour, 731 * 24 * time.Hour},
-		{"5y", 1824 * 24 * time.Hour, 1826 * 24 * time.Hour},
+		{"1d", now.AddDate(0, 0, -1)},
+		{"7d", now.AddDate(0, 0, -7)},
+		{"1mo", now.AddDate(0, -1, 0)},
+		{"3mo", now.AddDate(0, -3, 0)},
+		{"6mo", now.AddDate(0, -6, 0)},
+		{"1y", now.AddDate(-1, 0, 0)},
+		{"2y", now.AddDate(-2, 0, 0)},
+		{"5y", now.AddDate(-5, 0, 0)},
+		{"unknown", now.AddDate(0, -3, 0)}, // default falls back to 3mo
 	}
 	for _, tc := range tests {
 		t.Run(tc.key, func(t *testing.T) {
 			start := rangeKeyToStartDate(tc.key)
-			age := now.Sub(start)
-			if age < tc.wantBefore || age > tc.wantAfter {
-				t.Errorf("rangeKeyToStartDate(%q): age=%v, want [%v, %v]",
-					tc.key, age, tc.wantBefore, tc.wantAfter)
+			if diff := start.Sub(tc.want); diff < -tol || diff > tol {
+				t.Errorf("rangeKeyToStartDate(%q) = %v, want ~%v (diff %v, tol %v)",
+					tc.key, start, tc.want, diff, tol)
 			}
 		})
 	}

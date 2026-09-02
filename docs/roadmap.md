@@ -319,7 +319,21 @@ Implemented as the `pkg/tax` package (FIFO engine + TLH logic, broker-agnostic a
 
 ---
 
-### Phase 9: Proposal `final` Stage Lifecycle
+### ~~Phase 9: Proposal `final` Stage Lifecycle~~ ✅ Completed
+
+**Status**: ✅ Completed — the `final` stage is now written at execution-confirm time (submitted-intent weights), and a realized-fill reconcile (`mycase pipeline reconcile`) upgrades it to actual executed weights. This closes the proposed-vs-executed loop end to end.
+
+**What was built**:
+- **`autopilot.FinalStageProposals(*Proposal) []cache.Proposal`** (`pkg/autopilot/proposal.go`) — converts a confirmed proposal's *successfully-placed BUY orders* into `final`-stage proposals, weighting each ticker by its executed order value as a fraction of total placed BUY value (non-negative fractions summing to ~1, matching how `optimized` weights are expressed). Failed orders are excluded, so the stage records the *executed roster*, not the intended one. SELL orders carry no target weight. Unit-tested (`proposal_test.go`).
+- **Write path** — `pkg/server/handlers.go` `handleAutopilotConfirm` now calls `s.persistFinalStage(ctx, proposal)` after the `PlaceOrder` loop. It resolves the run via `cache.LatestRun(portfolio, method)` (normalizing `proposal.Portfolio` path → basename to match `pipeline_runs.portfolio`) and calls `InsertProposals(runID, "final", …)`. **Entirely best-effort**: any failure is logged via `slog` and swallowed — it must never affect an execution that already placed live orders. Zero DDL change (reuses the `proposals` table's `stage` column).
+- **Attribution** — `attribution.LoadRebalanceHistory` (`pkg/attribution/store.go`) now **prefers `stage="final"`** when present, falling back to `optimized` for runs that predate the final stage or were never executed. The rebalancing decomposition now measures *realized* (confirmed/executed) weights rather than merely intended ones.
+- **Readers** — `mycase pipeline show` (already looped `draft/optimized/final`) and `mycase pipeline diff --stage final` now have backing data; the previously-misleading empty affordance is real.
+
+**Correlation note**: no `run_id` is threaded through the confirm path, but the pipeline marks its run `completed` at proposal-save time, so the just-generated run is the latest completed `(portfolio, method)` match at confirm time.
+
+**Follow-up (realized fills)**: ✅ **Done.** Order placement returns only an order id (`broker.OrderResult` has no fill qty/price), so the confirm-time `final` stage holds *submitted-intent* weights (limit price × qty). The realized variant is now available via **`mycase pipeline reconcile <run_id>`**: it fetches the broker's TRADE transactions for the run's execution window (`FetchTransactions` + `NormalizeTransactions`, the same primitives as `tax import`), aggregates realized BUY value per ticker (`Σ qty × price`) into realized weights, and overwrites the `final` stage. `autopilot.RealizedStageProposals` is the pure, unit-tested aggregation; `cache.DeleteProposalsStage` clears the prior `final` rows first so tickers that were submitted but never filled don't linger with stale intent weights. `--dry-run` previews without writing; `--days` bounds the fill window (default 5, to catch next-day/partial fills). Since `attribution.LoadRebalanceHistory` already prefers `final`, reconciled weights flow into attribution automatically.
+
+<details><summary>Original deferral rationale (pre-implementation)</summary>
 
 **Status**: ⬜ Deferred (defined-but-unimplemented — loose end **L4**, kicked to roadmap for hindsight)
 
@@ -343,6 +357,8 @@ Implemented as the `pkg/tax` package (FIFO engine + TLH logic, broker-agnostic a
 **Effort**: ~2–3 days. The persistence is easy; the real work is threading executed fill data out of the executor and deciding the schema for realized (vs proposed) weights.
 
 **Dependency**: Best done with or after Phase 5 (the primary consumer of realized rebalance history). Independent of Phase 8.
+
+</details>
 
 ---
 
@@ -377,7 +393,7 @@ Implemented as the `pkg/tax` package (FIFO engine + TLH logic, broker-agnostic a
 | 4. Tax-Loss Harvesting | ~~Oct 2026~~ | Phase 7 ✅ | 0.5-1.5% tax alpha | ✅ Done |
 | 5. Performance Attribution | ~~Nov 2026~~ | Phase 3 ✅ | Know if system works | ✅ Done (5a+5b) |
 | 8. Structured Selection History | ~~Post Phase 5~~ | Phase 7 ✅ | Queryable "why held + what changed" audit trail | ✅ Done |
-| 9. Proposal `final` Stage | Post Phase 5 | Phase 7 ✅ | Executed-vs-proposed audit trail | ⬜ Deferred (defined-but-unimplemented, ex-L4) |
+| 9. Proposal `final` Stage | ~~Post Phase 5~~ | Phase 7 ✅ | Executed-vs-proposed audit trail | ✅ Done (intent-based + realized-fill reconcile) |
 | 6. Options Overlay | H2 2027 | Phase 5 + 6mo live data | Income optimization | ⬜ |
 
 ---

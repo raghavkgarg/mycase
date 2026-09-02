@@ -1,8 +1,10 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"math"
 	"net/http"
 	"os"
@@ -915,6 +917,11 @@ func (s *Server) handleAutopilotConfirm(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	// Persist the executed basket as the "final" pipeline stage (roadmap Phase 9).
+	// Best-effort: a failure here must never fail an execution that already placed
+	// orders — the audit trail is secondary to the trade.
+	s.persistFinalStage(r.Context(), proposal)
+
 	// Archive
 	_ = autopilot.ArchiveProposal(proposal)
 
@@ -932,6 +939,45 @@ func (s *Server) handleAutopilotConfirm(w http.ResponseWriter, r *http.Request) 
 		"failed":  len(results) - successCount,
 		"results": results,
 	})
+}
+
+// persistFinalStage writes the executed basket back to the DuckDB proposals table
+// as stage="final" (roadmap Phase 9), closing the loop between what was proposed
+// (stage="optimized") and what was actually confirmed and submitted.
+//
+// The run is correlated by (portfolio, method) via cache.LatestRun — no run_id is
+// threaded through the confirm path, but the pipeline marks its run "completed" at
+// proposal-save time, so the just-generated run is the latest completed match.
+// proposal.Portfolio is a golden-copy path; pipeline_runs stores the basename
+// without the .csv extension, so it is normalized here to match.
+//
+// Entirely best-effort: any failure is logged and swallowed. It must never affect
+// an execution that has already placed live orders.
+func (s *Server) persistFinalStage(ctx context.Context, proposal *autopilot.Proposal) {
+	if s.cache == nil || proposal == nil {
+		return
+	}
+
+	finalProposals := autopilot.FinalStageProposals(proposal)
+	if len(finalProposals) == 0 {
+		return // no successfully-placed BUY orders — nothing to record
+	}
+
+	portfolio := strings.TrimSuffix(filepath.Base(proposal.Portfolio), ".csv")
+	run, err := s.cache.LatestRun(ctx, portfolio, proposal.Strategy)
+	if err != nil {
+		slog.WarnContext(ctx, "autopilot.final_stage_run_lookup_failed",
+			"portfolio", portfolio, "method", proposal.Strategy, "error", err.Error())
+		return
+	}
+
+	if err := s.cache.InsertProposals(ctx, run.RunID, "final", finalProposals); err != nil {
+		slog.WarnContext(ctx, "autopilot.final_stage_persist_failed",
+			"run_id", run.RunID, "error", err.Error())
+		return
+	}
+	slog.InfoContext(ctx, "autopilot.final_stage_persisted",
+		"run_id", run.RunID, "stocks", len(finalProposals))
 }
 
 func (s *Server) handleAutopilotDismiss(w http.ResponseWriter, r *http.Request) {

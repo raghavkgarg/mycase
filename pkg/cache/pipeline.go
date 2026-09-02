@@ -217,6 +217,17 @@ func (c *Cache) GetProposals(ctx context.Context, runID, stage string) ([]Propos
 	return proposals, rows.Err()
 }
 
+// DeleteProposalsStage removes all proposals for a run at a single stage. It is
+// used before re-inserting a stage that is being *recomputed* (e.g. reconciling
+// the "final" stage from realized fills), so that tickers which no longer belong
+// — a ticker submitted but never filled — are not left behind with stale weights
+// by the UPSERT in InsertProposals (which only touches the tickers it is given).
+func (c *Cache) DeleteProposalsStage(ctx context.Context, runID, stage string) error {
+	_, err := c.db.ExecContext(ctx,
+		`DELETE FROM proposals WHERE run_id = ? AND stage = ?`, runID, stage)
+	return err
+}
+
 // InsertSelections bulk-inserts final portfolio selections for a run.
 func (c *Cache) InsertSelections(ctx context.Context, runID string, selections []Selection) error {
 	if len(selections) == 0 {

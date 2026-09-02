@@ -130,10 +130,16 @@ type runReader interface {
 }
 
 // LoadRebalanceHistory reconstructs a portfolio's target-weight history from the
-// pipeline_runs + proposals(stage="optimized") tables. Each completed run
-// becomes one RebalanceEvent timestamped at the run's start. Runs with no
-// optimized proposals are skipped (an interrupted or draft-only run is not a
-// rebalance). Results are returned oldest-first.
+// pipeline_runs + proposals tables. Each completed run becomes one RebalanceEvent
+// timestamped at the run's start. For each run the executed basket
+// (stage="final", roadmap Phase 9) is preferred when present, falling back to the
+// proposed basket (stage="optimized") for runs that predate the final stage or
+// were never executed. Runs with neither are skipped (an interrupted or
+// draft-only run is not a rebalance). Results are returned oldest-first.
+//
+// Preferring "final" means the decomposition measures *realized* rebalance weights
+// (what was actually confirmed and submitted) rather than merely intended ones,
+// tightening the "did rebalancing add value" measurement.
 //
 // The portfolio name here is the pipeline "portfolio"/universe name (e.g.
 // "us_sp500"), which is what pipeline_runs stores — the same value
@@ -154,9 +160,16 @@ func LoadRebalanceHistory(ctx context.Context, r runReader, portfolio string, si
 		if !since.IsZero() && run.StartedAt.Before(since) {
 			continue
 		}
-		props, perr := r.GetProposals(ctx, run.RunID, "optimized")
+		// Prefer the executed basket (final) over the proposed one (optimized).
+		props, perr := r.GetProposals(ctx, run.RunID, "final")
 		if perr != nil {
-			return nil, fmt.Errorf("get proposals for %s: %w", run.RunID, perr)
+			return nil, fmt.Errorf("get final proposals for %s: %w", run.RunID, perr)
+		}
+		if len(props) == 0 {
+			props, perr = r.GetProposals(ctx, run.RunID, "optimized")
+			if perr != nil {
+				return nil, fmt.Errorf("get proposals for %s: %w", run.RunID, perr)
+			}
 		}
 		if len(props) == 0 {
 			continue
