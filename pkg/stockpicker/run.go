@@ -113,6 +113,11 @@ func RunWithResult(ctx context.Context, opts *Options) (*PickResult, error) {
 		fmt.Printf("Warning: Failed to fetch fundamentals: %v. Using fallbacks.\n", err)
 	}
 
+	// Backfill sectors from the constituents CSV where the provider left them
+	// empty (Schwab returns no sector for US tickers). Fixes US sector caps
+	// collapsing to "Unknown" (Phase 10a). No-op when the CSV carries no sector.
+	InjectSectors(fundamentals, tickersSrc.Sectors)
+
 	InjectGovernance(fundamentals, cfg.Governance)
 	tracker := selectiontracker.New()
 

@@ -65,6 +65,7 @@ Automation eliminates all four. The system runs quarterly, follows its rules, an
 | Stock selection — MFS multi-factor | ✅ Production | 16-factor scoring, 4 strategy presets |
 | Stock selection — Value | ✅ Implemented | Indian large-cap, EPV-based, dual-path BFSI/industrial filters |
 | Stock selection — US Quality-Momentum | ✅ Production | S&P 500, 6-factor quality+momentum scoring, 3 hard filters |
+| Stock selection — Early Multibagger (EBM) | 🟧 Integrated | Regime-gated pre-breakout scoring (VCP/RVOL/pocket-pivot/delivery), PIT snapshots; `TestPickDeterminism` skipped pending regime-cutoff-vs-topN decision |
 | Weight optimization | ✅ Production | Inverse-volatility, MFS-proportional, equal-weight |
 | Sector caps & redistribution | ✅ Production | Iterative 25% sector cap, 3 stocks/sector, per-stock cap |
 | Backtesting engine | ✅ Production | Date-aligned, sell-then-buy, slippage, 7 metrics |
@@ -95,7 +96,7 @@ Automation eliminates all four. The system runs quarterly, follows its rules, an
 | Gap | Impact |
 |-----|--------|
 | Authoritative US fundamentals (SEC EDGAR) | Schwab fundamentals are thin TTM only — no cash-flow statement, no annual series; US scoring degrades to proxies (see `docs/datasources.md`) |
-| US sector classification | Schwab returns no sector → US stocks collapse to "Unknown" → sector caps silently disabled |
+| US sector classification | ✅ **Addressed (Phase 10a)** — `Fundamentals.Sector` backfilled from the constituents CSV's GICS Sector column, so US sector caps engage instead of collapsing to "Unknown" |
 | Data-source provenance in cache | Cannot audit which source produced a number, or invalidate one source selectively |
 
 ---
@@ -104,9 +105,9 @@ Automation eliminates all four. The system runs quarterly, follows its rules, an
 
 | Debt | Location | Impact | Fix effort |
 |------|----------|--------|-----------|
-| `yfinance.GetCache()` still exists (deprecated) | `pkg/yfinance/duckdbcache.go` | Confusing API — external code should use `cache.GetDB()` | Zero callers remain; delete in Phase 10a |
+| ~~`yfinance.GetCache()` still exists (deprecated)~~ | ~~`pkg/yfinance/duckdbcache.go`~~ | **RESOLVED (Phase 10a)** — deleted; zero callers | ✅ |
 | Seven command paths bypass `datafetcher.Router` | `cmd/report.go`, `cmd/monitor.go`, `cmd/optimize.go`, `pkg/server/handlers.go`, `pkg/executor/executor.go`, `pkg/backtest/valuation.go`, `pkg/autopilot/schedule.go` | US holdings get Yahoo data even when Schwab is configured — "use Schwab for US" is only true in `pick` today | Refactor R17 (Phase 10b) |
-| Schwab fundamentals mapper drops derivable fields | `pkg/broker/schwab/market.go` `mapSchwabFundamentals` | `Sector`/`RegularPrice`/`NetIncome` left empty though derivable | Phase 10a |
+| ~~Schwab fundamentals mapper drops derivable fields~~ | ~~`pkg/broker/schwab/market.go` `mapSchwabFundamentals`~~ | **PARTLY RESOLVED (Phase 10a)** — `NetIncome` + `RegularPrice` now derived; `Sector` backfilled from constituents CSV via `stockpicker.InjectSectors` | 🟧 sector-via-CSV done, EDGAR statements → 10c |
 
 ---
 
@@ -136,7 +137,7 @@ Small items left open by shipped phases, not yet scheduled:
 
 **Sub-phases** (each independently shippable, ordered by value-per-effort):
 
-- **Phase 10a — Cheap correctness wins** (~1–2 days): populate `Fundamentals.Sector` from the constituents CSV (fixes broken US sector caps); enrich `mapSchwabFundamentals` to derive `NetIncome` and wire `RegularPrice` from quotes; delete the dead `yfinance.GetCache()` (zero callers). No new source.
+- **Phase 10a — Cheap correctness wins** ✅ **DONE**: populate `Fundamentals.Sector` from the constituents CSV via `stockpicker.InjectSectors` (fixes broken US sector caps that collapsed to "Unknown"); enrich `mapSchwabFundamentals` to derive `NetIncome` (net-profit-margin × TTM revenue) and `RegularPrice` (market cap ÷ shares); deleted the dead `yfinance.GetCache()`. No new source. Note: `RegularPrice`/`NetIncome` are *derived* here; authoritative statement-level figures still arrive in 10c (EDGAR).
 - **Phase 10b — Router-bypass cleanup** (refactor **R17**, ~3–5 days): thread a `datafetcher.Router`/provider set into the seven bypass paths so every US command routes through Schwab; switch the benchmark to `US:SPY` via Schwab with `^GSPC`/Yahoo fallback; add a `source` column + `slog` which-source-served logging.
 - **Phase 10c — SEC EDGAR fundamentals source** (~5–8 days): new `pkg/edgar` client (ticker→CIK map cached, `companyfacts` fetch, XBRL concept mapper with ordered candidate tags, mandatory `User-Agent` + 10 req/s limiter); populate operating cash flow, net income, and all annual series from EDGAR; a `FundamentalsMerger` composes Schwab ratios + EDGAR statements + CSV sector; per-source cache freshness (EDGAR facts stable until next quarterly filing).
 - **Phase 10d — Provider abstraction hardening** (optional, ~2–3 days): split `DataFetcher` into capability interfaces (`PriceSource`, `FundamentalsSource`, `SectorSource`); formalize the ordered fallback chain; surface provenance in `pipeline show`/reports ("FCF: $2.1B [source: EDGAR 10-K 2025-Q4]").
@@ -181,7 +182,7 @@ Active and planned phases only (completed/dropped phases removed):
 
 | Phase | Target | Dependency | Core value delivered | Status |
 |-------|--------|------------|---------------------|--------|
-| 10. Data Source Resilience | Q4 2026 | Phase 2 (Schwab) | Authoritative US data (SEC EDGAR), Schwab everywhere, provenance | ⬜ |
+| 10. Data Source Resilience | Q4 2026 | Phase 2 (Schwab) | Authoritative US data (SEC EDGAR), Schwab everywhere, provenance | 🟧 10a done |
 | 6. Options Overlay | H2 2027 | 6mo live data | Income optimization | ⬜ |
 
 ---

@@ -125,46 +125,42 @@ func GetBenchmarkSymbolForIndex(indexName string, tickers []string) string {
 	return yfinance.GetBenchmarkSymbol(tickers)
 }
 
-func loadLocalCSVConstituents(filePath string) ([]string, error) {
+func loadLocalCSVConstituents(filePath string) ([]string, map[string]string, error) {
 	if excel.IsXLSXFile(filePath) {
 		fmt.Printf("Detected Excel (.xlsx) file format in %s, auto-converting...\n", filePath)
 		tmpCSV := filePath + ".converted.csv"
 		defer os.Remove(tmpCSV)
 		if _, err := excel.ConvertXLSXToCSV(filePath, tmpCSV); err != nil {
-			return nil, fmt.Errorf("auto-converting excel file: %w", err)
+			return nil, nil, fmt.Errorf("auto-converting excel file: %w", err)
 		}
 		filePath = tmpCSV
 	}
 
 	file, err := os.Open(filePath)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	defer file.Close()
 
 	reader := csv.NewReader(file)
 	records, err := reader.ReadAll()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	tickerIdx := -1
+	sectorIdx := -1
 	if len(records) > 0 {
-		for i, h := range records[0] {
-			hClean := strings.ToLower(strings.TrimSpace(h))
-			if hClean == "ticker" || hClean == "symbol" {
-				tickerIdx = i
-				break
-			}
-		}
+		tickerIdx, sectorIdx = findTickerAndSectorColumns(records[0])
 	}
 
 	if tickerIdx == -1 {
-		return nil, fmt.Errorf("could not find 'ticker' or 'symbol' column in the CSV")
+		return nil, nil, fmt.Errorf("could not find 'ticker' or 'symbol' column in the CSV")
 	}
 
 	isUSFile := IsUSIndex(filePath)
 	var tickers []string
+	sectors := make(map[string]string)
 	for _, record := range records[1:] {
 		if len(record) > tickerIdx {
 			ticker := strings.TrimSpace(record[tickerIdx])
@@ -177,75 +173,104 @@ func loadLocalCSVConstituents(filePath string) ([]string, error) {
 					}
 				}
 				tickers = append(tickers, ticker)
-			}
-		}
-	}
-
-	return tickers, nil
-}
-
-func downloadConstituents(indexName, url string) ([]string, error) {
-	client := &http.Client{Timeout: 15 * time.Second}
-	req, err := http.NewRequest("GET", url, nil)
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("network error: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("HTTP status: %d", resp.StatusCode)
-	}
-
-	reader := csv.NewReader(resp.Body)
-	records, err := reader.ReadAll()
-	if err != nil {
-		return nil, err
-	}
-
-	symbolIdx := -1
-	if len(records) > 0 {
-		for i, h := range records[0] {
-			hClean := strings.ToLower(strings.TrimSpace(h))
-			if hClean == "symbol" || hClean == "ticker" {
-				symbolIdx = i
-				break
-			}
-		}
-	}
-
-	if symbolIdx == -1 {
-		return nil, fmt.Errorf("could not find 'Symbol' or 'Ticker' column in the CSV")
-	}
-
-	isUS := IsUSIndex(indexName) || IsUSIndex(url)
-	var tickers []string
-	for _, record := range records[1:] {
-		if len(record) > symbolIdx {
-			sym := strings.TrimSpace(record[symbolIdx])
-			if sym != "" {
-				if isUS {
-					tickers = append(tickers, "US:"+sym)
-				} else {
-					tickers = append(tickers, "NSE:"+sym)
+				if sectorIdx != -1 && len(record) > sectorIdx {
+					if sec := strings.TrimSpace(record[sectorIdx]); sec != "" {
+						sectors[ticker] = sec
+					}
 				}
 			}
 		}
 	}
 
-	return tickers, nil
+	return tickers, sectors, nil
+}
+
+func downloadConstituents(indexName, url string) ([]string, map[string]string, error) {
+	client := &http.Client{Timeout: 15 * time.Second}
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return nil, nil, err
+	}
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, nil, fmt.Errorf("network error: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, nil, fmt.Errorf("HTTP status: %d", resp.StatusCode)
+	}
+
+	reader := csv.NewReader(resp.Body)
+	records, err := reader.ReadAll()
+	if err != nil {
+		return nil, nil, err
+	}
+
+	symbolIdx := -1
+	sectorIdx := -1
+	if len(records) > 0 {
+		symbolIdx, sectorIdx = findTickerAndSectorColumns(records[0])
+	}
+
+	if symbolIdx == -1 {
+		return nil, nil, fmt.Errorf("could not find 'Symbol' or 'Ticker' column in the CSV")
+	}
+
+	isUS := IsUSIndex(indexName) || IsUSIndex(url)
+	var tickers []string
+	sectors := make(map[string]string)
+	for _, record := range records[1:] {
+		if len(record) > symbolIdx {
+			sym := strings.TrimSpace(record[symbolIdx])
+			if sym != "" {
+				var ticker string
+				if isUS {
+					ticker = "US:" + sym
+				} else {
+					ticker = "NSE:" + sym
+				}
+				tickers = append(tickers, ticker)
+				if sectorIdx != -1 && len(record) > sectorIdx {
+					if sec := strings.TrimSpace(record[sectorIdx]); sec != "" {
+						sectors[ticker] = sec
+					}
+				}
+			}
+		}
+	}
+
+	return tickers, sectors, nil
+}
+
+// findTickerAndSectorColumns locates the ticker/symbol column and an optional
+// sector column ("GICS Sector" or "Sector") in a CSV header row, case-insensitively.
+// Returns -1 for a column that is absent.
+func findTickerAndSectorColumns(header []string) (tickerIdx, sectorIdx int) {
+	tickerIdx, sectorIdx = -1, -1
+	for i, h := range header {
+		hClean := strings.ToLower(strings.TrimSpace(h))
+		switch hClean {
+		case "ticker", "symbol":
+			if tickerIdx == -1 {
+				tickerIdx = i
+			}
+		case "gics sector", "sector":
+			if sectorIdx == -1 {
+				sectorIdx = i
+			}
+		}
+	}
+	return tickerIdx, sectorIdx
 }
 
 // LoadConstituents loads constituent tickers from local file path or downloads them from web.
 func LoadConstituents(filePath, indexName string) (*TickersSource, error) {
 	if filePath != "" {
 		fmt.Printf("\nLoading constituents from custom file %s...\n", filePath)
-		tickers, err := loadLocalCSVConstituents(filePath)
+		tickers, sectors, err := loadLocalCSVConstituents(filePath)
 		if err != nil {
 			return nil, fmt.Errorf("failed to load custom file: %w", err)
 		}
@@ -253,6 +278,7 @@ func LoadConstituents(filePath, indexName string) (*TickersSource, error) {
 		return &TickersSource{
 			Name:    csvloader.GetUniverseName(filePath),
 			Tickers: tickers,
+			Sectors: sectors,
 		}, nil
 	}
 
@@ -268,7 +294,7 @@ func LoadConstituents(filePath, indexName string) (*TickersSource, error) {
 	}
 
 	fmt.Printf("\nDownloading index constituents for %s...\n", indexName)
-	tickers, err := downloadConstituents(cleanIndex, url)
+	tickers, sectors, err := downloadConstituents(cleanIndex, url)
 	if err != nil {
 		return nil, fmt.Errorf("failed to download index: %w", err)
 	}
@@ -277,6 +303,7 @@ func LoadConstituents(filePath, indexName string) (*TickersSource, error) {
 	return &TickersSource{
 		Name:    indexName,
 		Tickers: tickers,
+		Sectors: sectors,
 	}, nil
 }
 

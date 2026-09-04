@@ -38,6 +38,11 @@ type Options struct {
 type TickersSource struct {
 	Name    string
 	Tickers []string
+	// Sectors maps ticker -> sector when the constituents CSV carries a
+	// GICS Sector column (e.g. the S&P 500 dataset). Empty for sources that
+	// don't. Used to backfill Fundamentals.Sector on the US/Schwab path,
+	// where the fundamentals endpoint returns no sector (Phase 10a).
+	Sectors map[string]string
 }
 
 // StrategyConfig wraps optimization weights, safety filters, and governance traps.

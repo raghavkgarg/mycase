@@ -86,6 +86,7 @@ func TestMapSchwabFundamentals(t *testing.T) {
 		SharesOutstanding:    15000000000,
 		TotalDebtToEquity:    1.2,
 		RevenueTTM:           380000000000,
+		NetProfitMarginTTM:   25.0, // 25% — used to derive NetIncome
 	}
 
 	result := mapSchwabFundamentals(f)
@@ -105,6 +106,28 @@ func TestMapSchwabFundamentals(t *testing.T) {
 	expectedFCF := 6.0 * 15000000000
 	if result.FreeCashflow != expectedFCF {
 		t.Errorf("FreeCashflow = %v, want %v", result.FreeCashflow, expectedFCF)
+	}
+	// Derived NetIncome = (NetProfitMarginTTM/100) * RevenueTTM (Phase 10a)
+	expectedNetIncome := 0.25 * 380000000000.0
+	if result.NetIncome != expectedNetIncome {
+		t.Errorf("NetIncome = %v, want %v (0.25 * revenueTTM)", result.NetIncome, expectedNetIncome)
+	}
+	// Derived RegularPrice = MarketCap(×1e6) / SharesOutstanding (Phase 10a)
+	expectedPrice := (2500000.0 * 1_000_000) / 15000000000.0
+	if result.RegularPrice != expectedPrice {
+		t.Errorf("RegularPrice = %v, want %v (marketCap/shares)", result.RegularPrice, expectedPrice)
+	}
+}
+
+func TestMapSchwabFundamentalsGuards(t *testing.T) {
+	// Zero shares outstanding must not divide-by-zero; RegularPrice stays 0.
+	f := &Fundamental{MarketCap: 1000.0, SharesOutstanding: 0, NetProfitMarginTTM: 10.0, RevenueTTM: 5000.0}
+	result := mapSchwabFundamentals(f)
+	if result.RegularPrice != 0 {
+		t.Errorf("RegularPrice = %v, want 0 when SharesOutstanding is 0", result.RegularPrice)
+	}
+	if result.NetIncome != 0.10*5000.0 {
+		t.Errorf("NetIncome = %v, want %v", result.NetIncome, 0.10*5000.0)
 	}
 }
 

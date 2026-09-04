@@ -182,6 +182,21 @@ func (c *Client) FetchFundamentals(ctx context.Context, symbols []string) (map[s
 // mapSchwabFundamentals converts Schwab's Fundamental struct to the shared
 // marketdata.Fundamentals that downstream scoring/filtering code expects.
 func mapSchwabFundamentals(f *Fundamental) marketdata.Fundamentals {
+	// Derive NetIncome from net-profit margin (percent) × TTM revenue. Schwab's
+	// fundamental endpoint exposes no absolute net-income figure, but the margin
+	// and revenue together give it. Downstream (earnings yield, CFO/PAT quality)
+	// otherwise degrades to proxies when NetIncome is zero.
+	netIncome := (f.NetProfitMarginTTM / 100.0) * f.RevenueTTM
+
+	// Derive RegularPrice from market cap ÷ shares outstanding. The fundamental
+	// endpoint carries no last/quote price; market cap (reported in millions)
+	// over share count reconstructs it well enough for the ADV liquidity filter
+	// and price-based checks. EPS×PE is avoided because EPS can be negative.
+	var regularPrice float64
+	if f.SharesOutstanding > 0 {
+		regularPrice = (f.MarketCap * 1_000_000) / f.SharesOutstanding
+	}
+
 	return marketdata.Fundamentals{
 		PEGRatio:         f.PegRatio,
 		ROE:              f.ReturnOnEquity / 100.0, // Schwab returns %; yfinance uses decimal
@@ -193,12 +208,14 @@ func mapSchwabFundamentals(f *Fundamental) marketdata.Fundamentals {
 		FreeCashflow:     f.FreeCashFlowPerShare * f.SharesOutstanding,
 		DebtToEquity:     f.TotalDebtToEquity,
 		TTMRevenue:       f.RevenueTTM,
-		Sector:           "", // Not available from instruments endpoint
+		Sector:           "", // Not available from instruments endpoint; injected from constituents CSV downstream (Phase 10a)
 		DividendYield:    f.DivYield / 100.0,
 		ReturnOnAssets:   f.ReturnOnAssets / 100.0,
 		Beta:             f.Beta,
 		NetProfitMargin:  f.NetProfitMarginTTM / 100.0,
 		GrossMarginTTM:   f.GrossMarginTTM / 100.0,
+		NetIncome:        netIncome,
+		RegularPrice:     regularPrice,
 	}
 }
 

@@ -201,7 +201,7 @@ BSE:500112,State Bank of India
 		t.Fatalf("failed to write test CSV: %v", err)
 	}
 
-	tickers, err := loadLocalCSVConstituents(csvPath)
+	tickers, _, err := loadLocalCSVConstituents(csvPath)
 	if err != nil {
 		t.Fatalf("unexpected error loading constituents: %v", err)
 	}
@@ -215,6 +215,59 @@ BSE:500112,State Bank of India
 		if tickers[i] != expected {
 			t.Errorf("at index %d: expected %s, got %s", i, expected, tickers[i])
 		}
+	}
+}
+
+func TestLoadLocalCSVConstituentsSector(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "stockpicker_sector_test")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	// US-style constituents CSV with a GICS Sector column (like the S&P 500 dataset).
+	csvPath := filepath.Join(tempDir, "sp500.csv")
+	csvContent := `Symbol,Security,GICS Sector
+AAPL,Apple Inc.,Information Technology
+JPM,JPMorgan Chase,Financials
+NOSEC,No Sector Co,
+`
+	if err := os.WriteFile(csvPath, []byte(csvContent), 0644); err != nil {
+		t.Fatalf("failed to write test CSV: %v", err)
+	}
+
+	tickers, sectors, err := loadLocalCSVConstituents(csvPath)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(tickers) != 3 {
+		t.Fatalf("expected 3 tickers, got %d: %v", len(tickers), tickers)
+	}
+	if sectors["US:AAPL"] != "Information Technology" {
+		t.Errorf("AAPL sector = %q, want %q", sectors["US:AAPL"], "Information Technology")
+	}
+	if sectors["US:JPM"] != "Financials" {
+		t.Errorf("JPM sector = %q, want %q", sectors["US:JPM"], "Financials")
+	}
+	if _, ok := sectors["US:NOSEC"]; ok {
+		t.Errorf("empty sector cell should not be recorded, got %q", sectors["US:NOSEC"])
+	}
+
+	// InjectSectors: fill empties, preserve provider-supplied sectors.
+	funds := map[string]yfinance.Fundamentals{
+		"US:AAPL":  {Sector: ""},                   // Schwab left empty -> should fill
+		"US:JPM":   {Sector: "Banks (from Yahoo)"}, // provider set -> must preserve
+		"US:NOSEC": {Sector: ""},                   // no CSV sector -> stays empty
+	}
+	InjectSectors(funds, sectors)
+	if funds["US:AAPL"].Sector != "Information Technology" {
+		t.Errorf("AAPL sector after inject = %q, want backfilled", funds["US:AAPL"].Sector)
+	}
+	if funds["US:JPM"].Sector != "Banks (from Yahoo)" {
+		t.Errorf("JPM sector after inject = %q, want preserved provider value", funds["US:JPM"].Sector)
+	}
+	if funds["US:NOSEC"].Sector != "" {
+		t.Errorf("NOSEC sector after inject = %q, want empty", funds["US:NOSEC"].Sector)
 	}
 }
 

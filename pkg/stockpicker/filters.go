@@ -67,6 +67,27 @@ func InjectGovernance(fundamentals map[string]yfinance.Fundamentals, govMap map[
 	}
 }
 
+// InjectSectors backfills Fundamentals.Sector from a ticker->sector map derived
+// from the constituents CSV (e.g. the S&P 500 GICS Sector column). It only fills
+// a sector that is currently empty, so provider-supplied sectors (Yahoo populates
+// Sector; Schwab does not) are preserved. This is the Phase 10a fix for US sector
+// caps collapsing to "Unknown" because the Schwab fundamentals endpoint carries
+// no sector. A nil/empty map is a no-op.
+func InjectSectors(fundamentals map[string]yfinance.Fundamentals, sectorByTicker map[string]string) {
+	if len(sectorByTicker) == 0 {
+		return
+	}
+	for t, f := range fundamentals {
+		if f.Sector != "" {
+			continue
+		}
+		if sec := sectorByTicker[t]; sec != "" {
+			f.Sector = sec
+			fundamentals[t] = f
+		}
+	}
+}
+
 // getLatestROCE calculates the latest Return on Capital Employed (ROCE).
 // GetLatestROCE calculates the latest Return on Capital Employed (ROCE) using default 45-day filing lag.
 func GetLatestROCE(f *yfinance.Fundamentals) (float64, bool) {
@@ -604,7 +625,7 @@ func check200DaySMATrend(prices []float64, minRatio float64) (bool, string) {
 			sumPast += prices[i]
 		}
 		sma200Past := sumPast / 200.0
-		if sma200Past > 0 && sma200Current < (0.995 * sma200Past) {
+		if sma200Past > 0 && sma200Current < (0.995*sma200Past) {
 			return false, fmt.Sprintf("Below 200-Day SMA with downward 200-SMA trend (Ratio %.2f < 1.0, SMA 20d decline > 0.5%%)", ratio)
 		}
 	}

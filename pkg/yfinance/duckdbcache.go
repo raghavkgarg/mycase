@@ -17,9 +17,7 @@ func SetCache(c *cache.Cache) {
 	cache.SetGlobal(c)
 }
 
-// GetCache returns the active cache (nil if not set).
-// Deprecated: use cache.GetDB() for non-yfinance access.
-func GetCache() *cache.Cache { return globalCache }
+// GetCache removed (Phase 10a): had zero callers. Non-yfinance code uses cache.GetDB().
 
 func checkPriceCache(ctx context.Context, ticker, rangeKey string) (*HistoricalData, bool) {
 	if globalCache == nil {
