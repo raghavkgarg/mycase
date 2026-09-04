@@ -3,6 +3,8 @@ package yfinance
 import (
 	"math"
 	"sort"
+	"strings"
+	"time"
 )
 
 // CalculateRSI calculates the 14-day Relative Strength Index
@@ -596,3 +598,525 @@ func CalculateCROIC(f *Fundamentals) (float64, bool) {
 	croic := fcf / investedCapital
 	return croic, true
 }
+
+// CalculateCapExTrend calculates the YoY growth in annual CapEx.
+func CalculateCapExTrend(f *Fundamentals) (latestCr float64, prevCr float64, pctGrowth float64, ok bool) {
+	if len(f.AnnualCapEx) < 2 {
+		if len(f.AnnualCapEx) == 1 {
+			return math.Abs(f.AnnualCapEx[0].Value) / 1e7, 0.0, 0.0, true
+		}
+		return 0.0, 0.0, 0.0, false
+	}
+	sorted := make([]AnnualMetric, len(f.AnnualCapEx))
+	copy(sorted, f.AnnualCapEx)
+	sort.Slice(sorted, func(i, j int) bool {
+		return sorted[i].Date < sorted[j].Date
+	})
+
+	n := len(sorted)
+	latest := math.Abs(sorted[n-1].Value)
+	prev := math.Abs(sorted[n-2].Value)
+
+	latestCr = latest / 1e7
+	prevCr = prev / 1e7
+
+	if prev > 0 {
+		pctGrowth = ((latest - prev) / prev) * 100.0
+	}
+	return latestCr, prevCr, pctGrowth, true
+}
+
+// CalculateEarningsBeatRate calculates annual earnings expansion years out of history.
+func CalculateEarningsBeatRate(f *Fundamentals) (beats int, total int, ok bool) {
+	if len(f.EarningsHistory) < 2 {
+		return 0, 0, false
+	}
+	for i := 1; i < len(f.EarningsHistory); i++ {
+		total++
+		if f.EarningsHistory[i].Earnings > f.EarningsHistory[i-1].Earnings {
+			beats++
+		}
+	}
+	if total == 0 {
+		return 0, 0, false
+	}
+	return beats, total, true
+}
+
+// CalculateCompositeRS calculates multi-timeframe relative strength (1M, 3M, 12M) vs benchmark.
+func CalculateCompositeRS(stockCloses, benchCloses []float64) (compositeRS, rs1m, rs3m, rs12m float64) {
+	nStock := len(stockCloses)
+	nBench := len(benchCloses)
+	if nStock < 2 {
+		return 0, 0, 0, 0
+	}
+
+	calcReturn := func(arr []float64, days int) float64 {
+		n := len(arr)
+		if n < 2 {
+			return 0.0
+		}
+		if days >= n {
+			days = n - 1
+		}
+		startVal := arr[n-1-days]
+		endVal := arr[n-1]
+		if startVal <= 0 {
+			return 0.0
+		}
+		return (endVal - startVal) / startVal
+	}
+
+	stock1m := calcReturn(stockCloses, 21)
+	stock3m := calcReturn(stockCloses, 63)
+	stock12m := calcReturn(stockCloses, 252)
+
+	bench1m, bench3m, bench12m := 0.0, 0.0, 0.0
+	if nBench >= 2 {
+		bench1m = calcReturn(benchCloses, 21)
+		bench3m = calcReturn(benchCloses, 63)
+		bench12m = calcReturn(benchCloses, 252)
+	}
+
+	rs1m = stock1m - bench1m
+	rs3m = stock3m - bench3m
+	rs12m = stock12m - bench12m
+
+	// Weighted composite: 40% 1-Month, 30% 3-Month, 30% 12-Month
+	compositeRS = (0.40 * rs1m) + (0.30 * rs3m) + (0.30 * rs12m)
+	return compositeRS, rs1m, rs3m, rs12m
+}
+
+// CalculateVCPTightness calculates short-term ATR vs long-term ATR volatility contraction.
+func CalculateVCPTightness(closes, opens []float64) (vcpRatio float64, isTight bool) {
+	n := len(closes)
+	if n < 15 {
+		return 1.0, false
+	}
+
+	calcNormalizedTR := func(i int) float64 {
+		c := closes[i]
+		if c <= 0 {
+			return 0.0
+		}
+		o := c
+		if i < len(opens) && opens[i] > 0 {
+			o = opens[i]
+		}
+		prevC := c
+		if i > 0 {
+			prevC = closes[i-1]
+		}
+
+		tr := math.Max(math.Abs(c-o), math.Max(math.Abs(c-prevC), math.Abs(o-prevC)))
+		return tr / c
+	}
+
+	// 10-day short-term ATR
+	lookback10 := 10
+	if n < lookback10 {
+		lookback10 = n
+	}
+	sumTR10 := 0.0
+	for i := n - lookback10; i < n; i++ {
+		sumTR10 += calcNormalizedTR(i)
+	}
+	atr10 := sumTR10 / float64(lookback10)
+
+	// 60-day long-term ATR
+	lookback60 := 60
+	if n < lookback60 {
+		lookback60 = n
+	}
+	sumTR60 := 0.0
+	for i := n - lookback60; i < n; i++ {
+		sumTR60 += calcNormalizedTR(i)
+	}
+	atr60 := sumTR60 / float64(lookback60)
+
+	if atr60 <= 0 {
+		return 1.0, false
+	}
+
+	vcpRatio = atr10 / atr60
+	isTight = vcpRatio <= 0.75
+	return vcpRatio, isTight
+}
+
+// CheckPocketPivot checks if any session in the past lookback days had a Pocket Pivot
+// (an up-day where volume exceeded the largest down-day volume in the previous 10 sessions).
+func CheckPocketPivot(closes, opens, volumes []float64, lookback int) (hasPocketPivot bool, daysAgo int, intensity float64) {
+	n := len(closes)
+	if n < 12 || len(volumes) < n {
+		return false, -1, 0.0
+	}
+
+	if lookback <= 0 {
+		lookback = 10
+	}
+	if lookback > n-11 {
+		lookback = n - 11
+	}
+
+	for i := n - 1; i >= n-lookback; i-- {
+		isGreen := false
+		if i < len(opens) && opens[i] > 0 {
+			isGreen = closes[i] >= opens[i]
+		} else if i > 0 {
+			isGreen = closes[i] >= closes[i-1]
+		}
+
+		if !isGreen {
+			continue
+		}
+
+		// Find highest down-day volume in previous 10 trading sessions before i
+		maxDownVol := 0.0
+		for j := i - 1; j >= i-10 && j >= 0; j-- {
+			isRed := false
+			if j < len(opens) && opens[j] > 0 {
+				isRed = closes[j] < opens[j]
+			} else if j > 0 {
+				isRed = closes[j] < closes[j-1]
+			}
+			if isRed && volumes[j] > maxDownVol {
+				maxDownVol = volumes[j]
+			}
+		}
+
+		if maxDownVol > 0 && volumes[i] > maxDownVol {
+			return true, n - 1 - i, volumes[i] / maxDownVol
+		}
+	}
+
+	return false, -1, 0.0
+}
+
+// CalculateProximity52W returns the ratio of the latest close to the 52-week (252 days) high.
+func CalculateProximity52W(closes []float64) float64 {
+	n := len(closes)
+	if n == 0 {
+		return 0.0
+	}
+	lookback := 252
+	if n < lookback {
+		lookback = n
+	}
+
+	maxPrice := 0.0
+	for i := n - lookback; i < n; i++ {
+		if closes[i] > maxPrice {
+			maxPrice = closes[i]
+		}
+	}
+
+	if maxPrice <= 0 {
+		return 0.0
+	}
+	return closes[n-1] / maxPrice
+}
+
+// CalculateDecayedPocketPivot computes a recency-decayed Pocket Pivot accumulation score with capped intensity.
+func CalculateDecayedPocketPivot(closes, opens, volumes []float64, lookback int, decayFactor float64) (score float64, count int) {
+	n := len(closes)
+	if n < 12 || len(volumes) < n {
+		return 0.0, 0
+	}
+
+	if lookback <= 0 {
+		lookback = 10
+	}
+	if lookback > n-11 {
+		lookback = n - 11
+	}
+	if decayFactor <= 0 {
+		decayFactor = 0.25
+	}
+
+	for i := n - 1; i >= n-lookback; i-- {
+		isGreen := false
+		if i < len(opens) && opens[i] > 0 {
+			isGreen = closes[i] >= opens[i]
+		} else if i > 0 {
+			isGreen = closes[i] >= closes[i-1]
+		}
+
+		if !isGreen {
+			continue
+		}
+
+		maxDownVol := 0.0
+		for j := i - 1; j >= i-10 && j >= 0; j-- {
+			isRed := false
+			if j < len(opens) && opens[j] > 0 {
+				isRed = closes[j] < opens[j]
+			} else if j > 0 {
+				isRed = closes[j] < closes[j-1]
+			}
+			if isRed && volumes[j] > maxDownVol {
+				maxDownVol = volumes[j]
+			}
+		}
+
+		if maxDownVol > 0 && volumes[i] > maxDownVol {
+			daysAgo := float64(n - 1 - i)
+			intensity := volumes[i] / maxDownVol
+			if intensity > 3.0 {
+				intensity = 3.0 // Cap daily intensity at 3.0
+			}
+			decayWeight := math.Exp(-decayFactor * daysAgo)
+			score += intensity * decayWeight
+			count++
+		}
+	}
+
+	return score, count
+}
+
+// CalculateRVOLZScore computes Relative Volume Z-score comparing short window (5D) to long window (50D) with winsorization.
+func CalculateRVOLZScore(volumes []float64, shortWindow, longWindow int) float64 {
+	return CalculateWinsorizedRVOLZScore(volumes, shortWindow, longWindow, 4.0)
+}
+
+// CalculateWinsorizedRVOLZScore computes Relative Volume Z-score with daily volume winsorized at winsorizeMult * 20D average volume.
+func CalculateWinsorizedRVOLZScore(volumes []float64, shortWindow, longWindow int, winsorizeMult float64) float64 {
+	n := len(volumes)
+	if n < 10 {
+		return 0.0
+	}
+
+	if shortWindow <= 0 {
+		shortWindow = 5
+	}
+	if longWindow <= 0 {
+		longWindow = 50
+	}
+	if longWindow > n {
+		longWindow = n
+	}
+	if shortWindow > longWindow {
+		shortWindow = longWindow / 2
+	}
+	if winsorizeMult <= 0 {
+		winsorizeMult = 4.0
+	}
+
+	// Calculate 20-day mean volume for winsorization cap
+	vol20Lookback := 20
+	if n < vol20Lookback {
+		vol20Lookback = n
+	}
+	sum20 := 0.0
+	for i := n - vol20Lookback; i < n; i++ {
+		sum20 += volumes[i]
+	}
+	mean20 := sum20 / float64(vol20Lookback)
+	volCap := winsorizeMult * mean20
+
+	cappedVols := make([]float64, n)
+	for i := 0; i < n; i++ {
+		if volCap > 0 && volumes[i] > volCap {
+			cappedVols[i] = volCap
+		} else {
+			cappedVols[i] = volumes[i]
+		}
+	}
+
+	sumShort := 0.0
+	for i := n - shortWindow; i < n; i++ {
+		sumShort += cappedVols[i]
+	}
+	meanShort := sumShort / float64(shortWindow)
+
+	sumLong := 0.0
+	for i := n - longWindow; i < n; i++ {
+		sumLong += cappedVols[i]
+	}
+	meanLong := sumLong / float64(longWindow)
+
+	varianceLong := 0.0
+	for i := n - longWindow; i < n; i++ {
+		diff := cappedVols[i] - meanLong
+		varianceLong += diff * diff
+	}
+	stdDevLong := math.Sqrt(varianceLong / float64(longWindow))
+
+	if stdDevLong <= 0 {
+		return 0.0
+	}
+
+	return (meanShort - meanLong) / stdDevLong
+}
+
+// CalculateBaseDurationWeeks counts consecutive weeks the stock stayed within the upper base zone (e.g. >= 85% of 52W high).
+func CalculateBaseDurationWeeks(closes []float64, zoneFloorPct float64) (weeks int, inBase bool) {
+	n := len(closes)
+	if n < 10 {
+		return 0, false
+	}
+
+	if zoneFloorPct <= 0 {
+		zoneFloorPct = 0.85
+	}
+
+	lookback := 252
+	if n < lookback {
+		lookback = n
+	}
+
+	maxPrice := 0.0
+	for i := n - lookback; i < n; i++ {
+		if closes[i] > maxPrice {
+			maxPrice = closes[i]
+		}
+	}
+
+	if maxPrice <= 0 {
+		return 0, false
+	}
+
+	floorPrice := zoneFloorPct * maxPrice
+	consecutiveDays := 0
+	for i := n - 1; i >= 0; i-- {
+		if closes[i] >= floorPrice {
+			consecutiveDays++
+		} else {
+			break
+		}
+	}
+
+	weeks = consecutiveDays / 5
+	inBase = weeks >= 4
+	return weeks, inBase
+}
+
+// CalculateSmoothedBenchmarkRegime calculates the continuous Market Regime Multiplier R_regime in [minFloor, 1.0].
+func CalculateSmoothedBenchmarkRegime(benchCloses []float64, period int, minFloor float64) (regimeScore float64) {
+	n := len(benchCloses)
+	if n < 20 {
+		return 1.0 // fallback if insufficient benchmark history
+	}
+
+	if period <= 0 {
+		period = 50
+	}
+	if period > n {
+		period = n
+	}
+	if minFloor <= 0 {
+		minFloor = 0.20
+	}
+
+	// 1. Calculate 50-Day SMA
+	sumSMA := 0.0
+	for i := n - period; i < n; i++ {
+		sumSMA += benchCloses[i]
+	}
+	sma50 := sumSMA / float64(period)
+	if sma50 <= 0 {
+		return 1.0
+	}
+
+	// 2. Count sessions above 50-DMA over last 20 sessions
+	sessionsAbove := 0
+	evalWindow := 20
+	if n < evalWindow {
+		evalWindow = n
+	}
+	for i := n - evalWindow; i < n; i++ {
+		// Calculate rolling SMA at index i if possible, or compare to current SMA
+		if benchCloses[i] >= sma50 {
+			sessionsAbove++
+		}
+	}
+	persistenceRatio := float64(sessionsAbove) / float64(evalWindow)
+
+	// 3. Price distance to 50-DMA
+	latestClose := benchCloses[n-1]
+	distPct := (latestClose - sma50) / sma50
+	scaledDist := distPct / 0.10
+	if scaledDist > 0.40 {
+		scaledDist = 0.40
+	}
+	if scaledDist < -0.40 {
+		scaledDist = -0.40
+	}
+
+	// 4. Combined R_regime formula
+	rawR := 0.20 + (0.60 * persistenceRatio) + (0.50 * scaledDist)
+	if rawR > 1.0 {
+		rawR = 1.0
+	}
+	if rawR < minFloor {
+		rawR = minFloor
+	}
+
+	return rawR
+}
+
+// CalculateBenchmarkRegime evaluates if benchmark index is in a bullish regime above its SMA period (e.g. 50-day).
+func CalculateBenchmarkRegime(benchCloses []float64, period int) (isBullish bool, ratio float64) {
+	n := len(benchCloses)
+	if n < 10 {
+		return true, 1.0 // fallback if insufficient benchmark history
+	}
+
+	if period <= 0 {
+		period = 50
+	}
+	if period > n {
+		period = n
+	}
+
+	sum := 0.0
+	for i := n - period; i < n; i++ {
+		sum += benchCloses[i]
+	}
+	sma := sum / float64(period)
+	if sma <= 0 {
+		return true, 1.0
+	}
+
+	latest := benchCloses[n-1]
+	ratio = latest / sma
+	// Allow slight buffer (e.g. >= 0.99)
+	isBullish = ratio >= 0.99
+	return isBullish, ratio
+}
+
+// IsEarningsBlackout returns true if scheduled quarterly results fall within blackoutDays from today.
+func IsEarningsBlackout(resultComingDate string, blackoutDays int) bool {
+	resultComingDate = strings.TrimSpace(resultComingDate)
+	if resultComingDate == "" || resultComingDate == "N/A" || resultComingDate == "-" {
+		return false
+	}
+
+	if blackoutDays <= 0 {
+		blackoutDays = 5
+	}
+
+	layouts := []string{"02-01-06", "02-01-2006", "2006-01-02", "02/01/2006", "02/01/06"}
+	var parsed time.Time
+	var err error
+	for _, l := range layouts {
+		parsed, err = time.Parse(l, resultComingDate)
+		if err == nil {
+			break
+		}
+	}
+
+	if err != nil {
+		return false
+	}
+
+	now := time.Now()
+	// Calculate difference in days
+	daysUntil := int(parsed.Sub(now).Hours() / 24.0)
+	if daysUntil >= -1 && daysUntil <= blackoutDays {
+		return true
+	}
+
+	return false
+}
+
+

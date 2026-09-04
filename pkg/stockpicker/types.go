@@ -67,4 +67,7 @@ type FilterStats struct {
 	EliminatedGrossMargin        int
 	EliminatedRSPercentile       int
 	EliminatedCROIC              int
+	EliminatedProximity52W       int
+	EliminatedBaseDuration       int
+	EliminatedEarningsBlackout   int
 }

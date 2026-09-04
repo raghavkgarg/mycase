@@ -38,6 +38,7 @@ func saveToCache(prefix, key string, source any) {
 
 // MapTickerToYahoo converts an exchange-specific ticker like "BSE:LT", "NSE:RELIANCE", or "US:AAPL" to a Yahoo symbol.
 func MapTickerToYahoo(ticker string) string {
+	ticker = strings.ReplaceAll(ticker, "::", ":")
 	if strings.HasPrefix(ticker, "^") {
 		return ticker
 	}
@@ -144,8 +145,17 @@ func FetchQuotes(ctx context.Context, tickers []string) (map[string]float64, err
 	wg.Wait()
 	close(errChan)
 
-	if len(errChan) > 0 {
-		return nil, <-errChan
+	var errMsgs []string
+	for err := range errChan {
+		errMsgs = append(errMsgs, err.Error())
+	}
+
+	if len(prices) == 0 && len(errMsgs) > 0 {
+		return nil, fmt.Errorf("%s", strings.Join(errMsgs, "; "))
+	}
+
+	if len(errMsgs) > 0 {
+		fmt.Printf("yfinance quote warnings (%d failed): %s\n", len(errMsgs), strings.Join(errMsgs, "; "))
 	}
 
 	return prices, nil

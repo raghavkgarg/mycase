@@ -194,6 +194,7 @@ type HardFilters struct {
 	VolumeBreakoutMultiplier    float64  `json:"volume_breakout_multiplier"`
 	MaxStocksPerSector          int      `json:"max_stocks_per_sector"`
 	MaxSectorWeightCap          float64  `json:"max_sector_weight_cap"`
+	AllowCashOnSectorCapExhaustion bool  `json:"allow_cash_on_sector_cap_exhaustion"`
 	PEGFloor                    float64  `json:"peg_floor"`
 	MaxPEG                      float64  `json:"max_peg"`
 	CheckGrossMargin            bool     `json:"check_gross_margin"`
@@ -228,6 +229,27 @@ type HardFilters struct {
 	ScoreWeightEarningsQuality    float64 `json:"score_weight_earnings_quality"`
 	ScoreWeightShareholderYieldUS float64 `json:"score_weight_shareholder_yield_us"`
 	ScoreWeightLowVol             float64 `json:"score_weight_low_vol"`
+
+	// EBM / early-multibagger filters and scoring weights
+	FundamentalsLagDays        int     `json:"fundamentals_lag_days"`
+	ShareholdingLagDays        int     `json:"shareholding_lag_days"`
+	DeliveryDataLagDays        int     `json:"delivery_data_lag_days"`
+	EarningsBlackoutDaysBefore int     `json:"earnings_blackout_days_before"`
+	RegimeBenchmarkSMAPeriod   int     `json:"regime_benchmark_sma_period"`
+	RegimeMinConfidenceFloor   float64 `json:"regime_min_confidence_floor"`
+	MinEffectiveScoreThreshold float64 `json:"min_effective_score_threshold"`
+	MinProximity52WHigh        float64 `json:"min_proximity_52w_high"`
+	MinBaseDurationWeeks       int     `json:"min_base_duration_weeks"`
+	RVOLWinsorizeMultiplier    float64 `json:"rvol_winsorize_multiplier"`
+	ScoreWeightIdiosyncraticRS float64 `json:"score_weight_idiosyncratic_rs"`
+	ScoreWeightVCPTightness    float64 `json:"score_weight_vcp_tightness"`
+	ScoreWeightVolumeFootprint float64 `json:"score_weight_volume_footprint"`
+	ScoreWeightDeliveryDelta   float64 `json:"score_weight_delivery_delta"`
+	ScoreWeightBaseVCP         float64 `json:"score_weight_base_vcp"`
+	ScoreWeightCompositeRS     float64 `json:"score_weight_composite_rs"`
+	ScoreWeightPocketPivot     float64 `json:"score_weight_pocket_pivot"`
+	ScoreWeightProximity52W    float64 `json:"score_weight_proximity_52w"`
+	ScoreWeightFundamentals    float64 `json:"score_weight_fundamentals"`
 }
 
 // MFSStrategies wrapper containing the mapping of strategies and filters
@@ -248,6 +270,10 @@ func LoadHardFilters(filename string, strategy string) (*HardFilters, error) {
 	err = json.NewDecoder(file).Decode(&wrapper)
 	if err != nil {
 		return nil, err
+	}
+
+	if strategy == "earlymb" {
+		strategy = "early_multibagger"
 	}
 
 	if f, ok := wrapper.Filters[strategy]; ok {
@@ -302,6 +328,10 @@ func LoadMFSConfig(filename string, strategy string) (*MFSConfig, error) {
 	err = json.NewDecoder(file).Decode(&wrapper)
 	if err != nil {
 		return nil, err
+	}
+
+	if strategy == "earlymb" {
+		strategy = "early_multibagger"
 	}
 
 	if cfg, ok := wrapper.Strategies[strategy]; ok {

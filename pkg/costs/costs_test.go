@@ -31,8 +31,8 @@ func TestCalculate_SellComponents(t *testing.T) {
 	// STT   = 0.1% × 50000 = 50.00
 	// Stamp = 0 (sell)
 	// SEBI  = 0.0001% × 50000 = 0.05
-	// DP    = 15.93 (flat per ISIN)
-	// Total = 65.98
+	// DP    = 15.05 (flat per ISIN)
+	// Total = 65.10
 	bd := DefaultZerodha.Calculate("SELL", 50, 1000)
 	assertClose(t, "TradeValue", bd.TradeValue, 50000)
 	assertClose(t, "STT", bd.STT, 50.00)
@@ -66,10 +66,10 @@ func TestCalculate_CustomBrokerage(t *testing.T) {
 }
 
 // Micro-transaction: 1 share of a ₹50 stock on sell
-// DP alone (₹15.93) dominates; cost ratio should be > 0.5%.
+// DP alone (₹15.05) dominates; cost ratio should be > 0.5%.
 func TestCalculate_MicroTransactionHighRatio(t *testing.T) {
 	bd := DefaultZerodha.Calculate("SELL", 1, 50)
-	// DP=15.93, STT=0.05, SEBI≈0, Total≈15.98, ratio ≈ 31.96%
+	// DP=15.05, STT=0.05, SEBI≈0, Total≈15.10, ratio ≈ 30.20%
 	if bd.CostRatio < 0.005 {
 		t.Errorf("expected high cost ratio for micro-tx, got %.4f", bd.CostRatio)
 	}

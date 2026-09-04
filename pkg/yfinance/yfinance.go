@@ -330,10 +330,25 @@ func FetchFundamentals(ctx context.Context, tickers []string) (map[string]Fundam
 					}
 				}
 
-				// Enrich dates from Screener.in for Indian stocks
+				// Enrich dates & delivery % for Indian stocks
+				dlyPct := 0.0
+				dlyDate := ""
+				dlyQty := 0.0
 				if strings.HasPrefix(job.ticker, "NSE:") || strings.HasPrefix(job.ticker, "BSE:") || strings.HasSuffix(job.ticker, ".NS") || strings.HasSuffix(job.ticker, ".BO") {
 					if sDates, err := FetchScreenerEarningsDates(ctx, job.ticker); err == nil && len(sDates) > 0 {
 						allDates = append(allDates, sDates...)
+					}
+					if delDetails, err := FetchNselibDeliveryDataDetails(ctx, []string{job.ticker}); err == nil {
+						cleanSym := strings.TrimSuffix(strings.TrimPrefix(strings.TrimPrefix(job.ticker, "NSE:"), "BSE:"), ".NS")
+						if rec, ok := delDetails[job.ticker]; ok {
+							dlyPct = rec.DeliveryPct
+							dlyDate = rec.Date
+							dlyQty = rec.DeliverableQty
+						} else if rec, ok := delDetails[cleanSym]; ok {
+							dlyPct = rec.DeliveryPct
+							dlyDate = rec.Date
+							dlyQty = rec.DeliverableQty
+						}
 					}
 				}
 
@@ -369,6 +384,9 @@ func FetchFundamentals(ctx context.Context, tickers []string) (map[string]Fundam
 					AnnualCurrentLiabilities: annualCurrentLiabilities,
 					AnnualInterestExpense:    annualInterestExpense,
 					ResultPrevComing:         resPrevComing,
+					DeliveryPct:              dlyPct,
+					DeliveryDate:             dlyDate,
+					DeliverableQty:           dlyQty,
 				}
 
 				results <- fetchResult{ticker: job.ticker, fund: fund}
@@ -416,12 +434,15 @@ func FormatPrevComingResultDates(allDates []time.Time) string {
 		return sortedDates[i].Before(sortedDates[j])
 	})
 
-	now := time.Now()
+	ist := time.FixedZone("IST", 5*3600+30*60)
+	todayIST := time.Now().In(ist).Truncate(24 * time.Hour)
+
 	var prevDate, comingDate time.Time
 	foundPrev, foundComing := false, false
 
 	for _, d := range sortedDates {
-		if !d.After(now) {
+		dIST := d.In(ist).Truncate(24 * time.Hour)
+		if dIST.Before(todayIST) {
 			prevDate = d
 			foundPrev = true
 		} else if !foundComing {

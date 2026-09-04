@@ -61,6 +61,11 @@ type Fundamentals struct {
 	AnnualInterestExpense    []AnnualMetric
 	ResultPrevComing         string
 
+	// NSE delivery data (EBM strategy — populated from Yahoo/NSE)
+	DeliveryPct    float64
+	DeliveryDate   string
+	DeliverableQty float64
+
 	// US-specific fields (populated from Schwab)
 	DividendYield   float64 // Annual dividend yield as decimal (e.g., 0.02 = 2%)
 	ReturnOnAssets  float64 // ROA as decimal
@@ -85,33 +90,59 @@ type HistoricalData struct {
 }
 
 // CleanIntradayNoise discards the last day's price/volume from the slice if it is
-// today's date during market hours (before 15:30 IST).
+// today's date during market hours (before 15:45 IST).
 func (h *HistoricalData) CleanIntradayNoise() {
+	h.CleanIntradayNoiseAsOf(time.Now())
+}
+
+// CleanIntradayNoiseAsOf discards in-progress or unconfirmed bars relative to the
+// asOf date and market close (15:45 IST — market close 15:30 + 15 min settlement buffer).
+func (h *HistoricalData) CleanIntradayNoiseAsOf(asOf time.Time) {
 	if h == nil || len(h.Closes) == 0 || len(h.Timestamps) == 0 {
 		return
 	}
 	istLoc, err := time.LoadLocation("Asia/Kolkata")
 	if err != nil {
-		istLoc = time.UTC
+		istLoc = time.FixedZone("IST", 5*3600+30*60)
 	}
-	now := time.Now().In(istLoc)
-	lastTs := time.Unix(h.Timestamps[len(h.Timestamps)-1], 0).In(istLoc)
+	asOfIST := asOf.In(istLoc)
+	if asOf.IsZero() {
+		asOfIST = time.Now().In(istLoc)
+	}
 
-	// If the last timestamp is today, and it is before market close (15:30)
-	if lastTs.Year() == now.Year() && lastTs.YearDay() == now.YearDay() {
-		// Market is open from 9:15 to 15:30.
-		// If current time is before 15:30, discard the live updating day
-		cutoffTime := time.Date(now.Year(), now.Month(), now.Day(), 15, 30, 0, 0, istLoc)
-		if now.Before(cutoffTime) {
-			// Discard the last element
-			h.Closes = h.Closes[:len(h.Closes)-1]
-			if len(h.Opens) > 0 {
-				h.Opens = h.Opens[:len(h.Opens)-1]
-			}
-			if len(h.Volumes) > 0 {
-				h.Volumes = h.Volumes[:len(h.Volumes)-1]
-			}
-			h.Timestamps = h.Timestamps[:len(h.Timestamps)-1]
+	// 1. Truncate any bars that are strictly AFTER the asOf date
+	for len(h.Timestamps) > 0 {
+		lastTs := time.Unix(h.Timestamps[len(h.Timestamps)-1], 0).In(istLoc)
+		if lastTs.Truncate(24*time.Hour).After(asOfIST.Truncate(24 * time.Hour)) {
+			h.truncateLast()
+			continue
 		}
+		break
+	}
+
+	// 2. If the last bar is on the SAME day as asOfIST and before the settlement cutoff, drop it.
+	if len(h.Timestamps) > 0 {
+		lastTs := time.Unix(h.Timestamps[len(h.Timestamps)-1], 0).In(istLoc)
+		if lastTs.Year() == asOfIST.Year() && lastTs.YearDay() == asOfIST.YearDay() {
+			settlementCutoff := time.Date(asOfIST.Year(), asOfIST.Month(), asOfIST.Day(), 15, 45, 0, 0, istLoc)
+			if asOfIST.Before(settlementCutoff) {
+				h.truncateLast()
+			}
+		}
+	}
+}
+
+func (h *HistoricalData) truncateLast() {
+	if len(h.Closes) > 0 {
+		h.Closes = h.Closes[:len(h.Closes)-1]
+	}
+	if len(h.Opens) > 0 {
+		h.Opens = h.Opens[:len(h.Opens)-1]
+	}
+	if len(h.Volumes) > 0 {
+		h.Volumes = h.Volumes[:len(h.Volumes)-1]
+	}
+	if len(h.Timestamps) > 0 {
+		h.Timestamps = h.Timestamps[:len(h.Timestamps)-1]
 	}
 }

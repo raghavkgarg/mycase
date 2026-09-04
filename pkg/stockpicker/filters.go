@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/raghavkgarg/mycase/pkg/config"
 	"github.com/raghavkgarg/mycase/pkg/optimizer"
@@ -67,16 +68,44 @@ func InjectGovernance(fundamentals map[string]yfinance.Fundamentals, govMap map[
 }
 
 // getLatestROCE calculates the latest Return on Capital Employed (ROCE).
-func getLatestROCE(f *yfinance.Fundamentals) (float64, bool) {
-	nIncome := len(f.AnnualOperatingIncome)
-	nAssets := len(f.AnnualTotalAssets)
-	nLiab := len(f.AnnualCurrentLiabilities)
+// GetLatestROCE calculates the latest Return on Capital Employed (ROCE) using default 45-day filing lag.
+func GetLatestROCE(f *yfinance.Fundamentals) (float64, bool) {
+	return getLatestROCE(f, time.Now(), 45)
+}
+
+// filterMetricsBeforeDate returns only annual metrics whose reporting date is at least lagDays before asOf.
+func filterMetricsBeforeDate(metrics []yfinance.AnnualMetric, asOf time.Time, lagDays int) []yfinance.AnnualMetric {
+	if asOf.IsZero() {
+		asOf = time.Now()
+	}
+	cutoff := asOf.AddDate(0, 0, -lagDays)
+	var filtered []yfinance.AnnualMetric
+	for _, m := range metrics {
+		if t, err := time.Parse("2006-01-02", m.Date); err == nil {
+			if !t.After(cutoff) {
+				filtered = append(filtered, m)
+			}
+		} else {
+			filtered = append(filtered, m)
+		}
+	}
+	return filtered
+}
+
+func getLatestROCE(f *yfinance.Fundamentals, asOf time.Time, lagDays int) (float64, bool) {
+	incomes := filterMetricsBeforeDate(f.AnnualOperatingIncome, asOf, lagDays)
+	assets := filterMetricsBeforeDate(f.AnnualTotalAssets, asOf, lagDays)
+	liabs := filterMetricsBeforeDate(f.AnnualCurrentLiabilities, asOf, lagDays)
+
+	nIncome := len(incomes)
+	nAssets := len(assets)
+	nLiab := len(liabs)
 	if nIncome == 0 || nAssets == 0 || nLiab == 0 {
 		return 0.0, false
 	}
-	latestEBIT := f.AnnualOperatingIncome[nIncome-1].Value
-	latestAssets := f.AnnualTotalAssets[nAssets-1].Value
-	latestLiab := f.AnnualCurrentLiabilities[nLiab-1].Value
+	latestEBIT := incomes[nIncome-1].Value
+	latestAssets := assets[nAssets-1].Value
+	latestLiab := liabs[nLiab-1].Value
 	capEmployed := latestAssets - latestLiab
 	if capEmployed <= 0 {
 		return 0.0, false
@@ -85,13 +114,17 @@ func getLatestROCE(f *yfinance.Fundamentals) (float64, bool) {
 }
 
 // checkROCE checks if latest or 3-year average ROCE is at or above a minimum threshold.
-func checkROCE(f *yfinance.Fundamentals, minROCE float64) bool {
-	if latestROCE, ok := getLatestROCE(f); ok && latestROCE >= minROCE {
+func checkROCE(f *yfinance.Fundamentals, minROCE float64, asOf time.Time, lagDays int) bool {
+	if latestROCE, ok := getLatestROCE(f, asOf, lagDays); ok && latestROCE >= minROCE {
 		return true
 	}
-	nIncome := len(f.AnnualOperatingIncome)
-	nAssets := len(f.AnnualTotalAssets)
-	nLiab := len(f.AnnualCurrentLiabilities)
+	incomes := filterMetricsBeforeDate(f.AnnualOperatingIncome, asOf, lagDays)
+	assets := filterMetricsBeforeDate(f.AnnualTotalAssets, asOf, lagDays)
+	liabs := filterMetricsBeforeDate(f.AnnualCurrentLiabilities, asOf, lagDays)
+
+	nIncome := len(incomes)
+	nAssets := len(assets)
+	nLiab := len(liabs)
 
 	var sumROCE float64
 	var countROCE int
@@ -100,10 +133,10 @@ func checkROCE(f *yfinance.Fundamentals, minROCE float64) bool {
 		idxAss := nAssets - i
 		idxLiab := nLiab - i
 		if idxInc >= 0 && idxAss >= 0 && idxLiab >= 0 {
-			ebit := f.AnnualOperatingIncome[idxInc].Value
-			assets := f.AnnualTotalAssets[idxAss].Value
-			liab := f.AnnualCurrentLiabilities[idxLiab].Value
-			ce := assets - liab
+			ebit := incomes[idxInc].Value
+			assetsVal := assets[idxAss].Value
+			liabVal := liabs[idxLiab].Value
+			ce := assetsVal - liabVal
 			if ce > 0 {
 				sumROCE += ebit / ce
 				countROCE++
@@ -182,10 +215,16 @@ func isEligible(
 		}
 	}
 
-	// 6. 200-Day SMA Trend Check
-	if hardFilters.Check200DaySMA && !isAbove200DaySMA(closes) {
-		stats.EliminatedSMATrend++
-		return false, "Below 200-Day SMA (Downtrend)"
+	// 6. 200-Day SMA Trend & Buffer Floor Check
+	if hardFilters.Check200DaySMA {
+		minRatio := hardFilters.Min200DaySMARatio
+		if minRatio <= 0 {
+			minRatio = 0.95
+		}
+		if ok, reason := check200DaySMATrend(closes, minRatio); !ok {
+			stats.EliminatedSMATrend++
+			return false, reason
+		}
 	}
 
 	// 7. Promoter Pledging Check (Indian Governance Trap)
@@ -196,7 +235,11 @@ func isEligible(
 
 	// 8. ROCE Capital Efficiency Check
 	if hardFilters.MinROCE > 0 {
-		if !checkROCE(&f, hardFilters.MinROCE) {
+		lagDays := 45
+		if hardFilters.FundamentalsLagDays > 0 {
+			lagDays = hardFilters.FundamentalsLagDays
+		}
+		if !checkROCE(&f, hardFilters.MinROCE, time.Now(), lagDays) {
 			stats.EliminatedROCE++
 			return false, fmt.Sprintf("Low Capital Efficiency (ROCE < %.1f%%)", hardFilters.MinROCE*100.0)
 		}
@@ -341,6 +384,46 @@ func isEligible(
 				}
 			}
 		}
+	} else if method == "early_multibagger" || method == "earlymb" {
+		// 1. Earnings Proximity Blackout Gate
+		if hardFilters.EarningsBlackoutDaysBefore > 0 && f.ResultPrevComing != "" {
+			if yfinance.IsEarningsBlackout(f.ResultPrevComing, hardFilters.EarningsBlackoutDaysBefore) {
+				stats.EliminatedEarningsBlackout++
+				return false, fmt.Sprintf("Earnings event blackout: results scheduled within %d days (%s)", hardFilters.EarningsBlackoutDaysBefore, f.ResultPrevComing)
+			}
+		}
+
+		// 2. Proximity to 52-Week High
+		if hardFilters.MinProximity52WHigh > 0 && len(closes) > 0 {
+			prox := yfinance.CalculateProximity52W(closes)
+			if prox < hardFilters.MinProximity52WHigh {
+				stats.EliminatedProximity52W++
+				return false, fmt.Sprintf("Far from 52-Week High (%.1f%% of 52W high < %.1f%% floor)", prox*100.0, hardFilters.MinProximity52WHigh*100.0)
+			}
+		}
+
+		// 3. Base Duration Floor
+		if hardFilters.MinBaseDurationWeeks > 0 && len(closes) >= 20 {
+			weeks, _ := yfinance.CalculateBaseDurationWeeks(closes, hardFilters.MinProximity52WHigh)
+			if weeks < hardFilters.MinBaseDurationWeeks {
+				stats.EliminatedBaseDuration++
+				return false, fmt.Sprintf("Base duration too short (%d weeks < %d weeks required base)", weeks, hardFilters.MinBaseDurationWeeks)
+			}
+		}
+
+		// 4. Working Capital Deterioration Sentry (DSO)
+		_, dsoPrev, dsoLatest := yfinance.CalculateDSO(&f)
+		if dsoPrev > 0 {
+			dsoDeltaPct := ((dsoLatest - dsoPrev) / dsoPrev) * 100.0
+			maxDSOPct := 15.0
+			if hardFilters != nil && hardFilters.MaxDSODeteriorationPct > 0 {
+				maxDSOPct = hardFilters.MaxDSODeteriorationPct
+			}
+			if dsoDeltaPct > maxDSOPct {
+				stats.EliminatedWorkingCapital++
+				return false, fmt.Sprintf("DSO Deterioration limit exceeded (+%.1f%% > %.1f%% threshold)", dsoDeltaPct, maxDSOPct)
+			}
+		}
 	} else if method == "multibagger" {
 		// 1. Sales Growth Accelerator (TTM vs 3Y CAGR)
 		passedSales, _, _ := yfinance.CalculateSalesGrowth(&f)
@@ -482,4 +565,49 @@ func isAbove200DaySMA(prices []float64) bool {
 	sma200 := sum / 200.0
 	latestPrice := prices[len(prices)-1]
 	return latestPrice >= sma200
+}
+
+// check200DaySMATrend checks if prices meet the 200-day SMA ratio floor and slope trend criteria.
+// Returns (true, "") if passed, or (false, reason) if eliminated.
+func check200DaySMATrend(prices []float64, minRatio float64) (bool, string) {
+	if len(prices) < 200 {
+		return true, ""
+	}
+	if minRatio <= 0 {
+		minRatio = 0.95
+	}
+
+	sum := 0.0
+	startIndex := len(prices) - 200
+	for i := startIndex; i < len(prices); i++ {
+		sum += prices[i]
+	}
+	sma200Current := sum / 200.0
+	if sma200Current <= 0 {
+		return true, ""
+	}
+
+	latestPrice := prices[len(prices)-1]
+	ratio := latestPrice / sma200Current
+
+	// 1. Buffer Ratio Floor check (e.g. latestPrice must be >= 95% of 200-SMA)
+	if ratio < minRatio {
+		return false, fmt.Sprintf("Below 200-Day SMA ratio floor (%.2f < %.2f limit)", ratio, minRatio)
+	}
+
+	// 2. Slope / Trend check: If price is currently below the 200-SMA line (ratio < 1.0),
+	// ensure the 200-SMA line itself is NOT in a downward trend (declined by >0.5% over past 20 trading days).
+	if ratio < 1.0 && len(prices) >= 220 {
+		sumPast := 0.0
+		pastStartIndex := len(prices) - 220
+		for i := pastStartIndex; i < pastStartIndex+200; i++ {
+			sumPast += prices[i]
+		}
+		sma200Past := sumPast / 200.0
+		if sma200Past > 0 && sma200Current < (0.995 * sma200Past) {
+			return false, fmt.Sprintf("Below 200-Day SMA with downward 200-SMA trend (Ratio %.2f < 1.0, SMA 20d decline > 0.5%%)", ratio)
+		}
+	}
+
+	return true, ""
 }

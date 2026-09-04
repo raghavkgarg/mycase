@@ -271,7 +271,11 @@ func NormalizeUSQMWeights(
 		}
 	}
 
-	NormalizeAndCapWeights(selectedKeys, finalWeights, fundamentals, stockCapVal, sectorCapVal)
+	allowCash := false
+	if hardFilters != nil {
+		allowCash = hardFilters.AllowCashOnSectorCapExhaustion
+	}
+	NormalizeAndCapWeights(selectedKeys, finalWeights, fundamentals, stockCapVal, sectorCapVal, allowCash)
 
 	// Apply rebalancing band/tolerance
 	finalWeights = ApplyRebalancingBand(selectedKeys, finalWeights, existingHoldings, rebalanceTolerance)

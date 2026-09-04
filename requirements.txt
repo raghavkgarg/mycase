@@ -1,0 +1,4 @@
+nselib>=2.5.1
+pandas>=2.0.0
+pandas_market_calendars<5.0.0
+requests>=2.30.0
