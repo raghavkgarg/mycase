@@ -54,7 +54,7 @@ Data is sourced **per data type from the most authoritative provider that can su
 | Holdings / transactions / orders | Schwab | Zerodha | Broker |
 | Index constituents | CSV (S&P 500 dataset) | CSV (NSE) | Index provider |
 
-> **Known drift**: Schwab's fundamentals are a thin TTM snapshot — no sector, no cash-flow statement, no annual series — and seven command paths (`report`, `monitor`, `optimize`, `serve`, `executor`, `backtest`, `autopilot-schedule`) still bypass the Router and hit Yahoo directly for US data. The remediation is tracked as **roadmap Phase 10** (data-source resilience) and **refactor R17** (Router-bypass cleanup). See `docs/datasources.md`.
+> **Known drift**: Schwab's fundamentals are a thin TTM snapshot — no cash-flow statement, no annual series (US sector is now backfilled from the constituents CSV, and `NetIncome`/`RegularPrice` are derived in the mapper, per **Phase 10a**) — and seven command paths (`report`, `monitor`, `optimize`, `serve`, `executor`, `backtest`, `autopilot-schedule`) still bypass the Router and hit Yahoo directly for US data. The remaining remediation is tracked as **roadmap Phase 10b–c** (data-source resilience) and **refactor R17** (Router-bypass cleanup). See `docs/datasources.md`.
 
 ### Schwab Market Data API (US primary)
 

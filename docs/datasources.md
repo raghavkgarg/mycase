@@ -158,9 +158,9 @@ Yahoo's fundamentals are the **richest** we consume (sector, annual series, earn
 
 **Parsing risk:** filers use custom taxonomy extensions and tags drift over time; a robust mapper tries an ordered list of candidate tags per concept and picks the most recent 10-K/10-Q fact. This is the real engineering cost of EDGAR vs. a pre-cleaned vendor feed.
 
-### 4.4 Constituents CSV (proposed sector source)
+### 4.4 Constituents CSV (sector source)
 
-Already used for the universe (S&P 500 GitHub/datahub dataset). The S&P 500 constituent files carry **GICS sector** per ticker. Carrying that column through to `Fundamentals.Sector` fixes sector caps with **zero live fetch** and no Yahoo dependency.
+Already used for the universe (S&P 500 GitHub/datahub dataset). The S&P 500 constituent files carry **GICS sector** per ticker. Carrying that column through to `Fundamentals.Sector` fixes sector caps with **zero live fetch** and no Yahoo dependency. **Implemented in Phase 10a** via `stockpicker.InjectSectors` (`TickersSource.Sectors` → fill-if-empty backfill in `RunWithResult`).
 
 ---
 
@@ -183,9 +183,9 @@ Per data type, which source can supply it — and the honest quality.
 
 ### The three real gaps
 
-1. **Sector is empty for US** (`mapSchwabFundamentals` sets `Sector: ""`). Every routed US stock collapses to `"Unknown"`, silently disabling sector caps. **Cheapest fix: sector from constituents CSV.**
-2. **Operating cash flow & annual series are absent from Schwab.** Earnings-quality degrades to an FCF proxy; ROIC always uses the ROA/ROE fallback instead of the preferred NOPAT/invested-capital calc. **Authoritative fix: SEC EDGAR.**
-3. **Two fields Schwab could supply but the mapper drops:** `NetIncome` (derive from `revenueTTM × netProfitMarginTTM` or `epsTTM × sharesOutstanding`) and `RegularPrice` (from the quotes endpoint). **Fix: enrich the mapper — no new source needed.**
+1. ~~**Sector is empty for US**~~ **✅ FIXED (Phase 10a).** `mapSchwabFundamentals` still leaves `Sector: ""`, but the constituents CSV's GICS Sector column is now carried through `TickersSource.Sectors` and backfilled by `stockpicker.InjectSectors` (fill-if-empty, so Yahoo sectors survive). Routed US stocks get their GICS sector, so sector caps engage instead of collapsing to `"Unknown"`.
+2. **Operating cash flow & annual series are absent from Schwab.** Earnings-quality degrades to an FCF proxy; ROIC always uses the ROA/ROE fallback instead of the preferred NOPAT/invested-capital calc. **Authoritative fix: SEC EDGAR (Phase 10c).** *(Still open.)*
+3. ~~**Two fields Schwab could supply but the mapper drops**~~ **✅ FIXED (Phase 10a).** `mapSchwabFundamentals` now derives `NetIncome` (`revenueTTM × netProfitMarginTTM/100`) and `RegularPrice` (`marketCap / sharesOutstanding`, guarded). These are *derived* values; authoritative statement-level figures still come from EDGAR in Phase 10c.
 
 ---
 
