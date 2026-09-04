@@ -28,7 +28,22 @@
 - (TODO) filesystem layout conventions (data/, report/, config/ read-only at runtime).
 - (TODO) network IO: rate limits as a budget, cache-first, save-raw-for-debug.
 
-## 3. Data Sources & Integration
+## 3. Configuration Management
+
+- Precedence is explicit and one-directional: flag > env > config file > built-in default (cf. logging config wiring).
+- User preferences (`config/defaults.json`) provide convenience defaults; explicit flags always override — config never forces behavior.
+- Config files are read-only at runtime; the system never writes back to its own config as a side effect.
+- Config structs are additive/backward-compatible: new fields default to zero-value and don't break existing files (cf. EBM `HardFilters` fields, `AllowCashOnSectorCapExhaustion`).
+- Strategy/behavior config (`mfs.json`, `pipeline.yaml`) is version-controlled; secrets/tokens are separate, gitignored files referenced by key name.
+- Method/name aliasing handled at the config-load boundary, not scattered through call sites (cf. `earlymb`→`early_multibagger`).
+- Config loading is a leaf concern (`pkg/config`, zero internal imports); it parses, it doesn't orchestrate.
+- Absent/malformed optional config degrades to zero-value defaults, never panics (cf. `LoadUserDefaults`).
+- (TODO) config schema documentation + validation (where do we validate ranges/required fields?).
+- (TODO) per-market vs. per-strategy vs. per-user config boundaries — which file owns what.
+- (TODO) migration/versioning story for config schema changes over time.
+- (TODO) relationship between config files and the DuckDB-stored state (what belongs in each).
+
+## 4. Data Sources & Integration
 
 - Source each data type from the most authoritative provider that can supply it (prices→broker/exchange, fundamentals→SEC EDGAR, sector→classification standard).
 - Aggregators (Yahoo) are fallback, not source-of-record; demote, don't eliminate.
@@ -40,7 +55,7 @@
 - (TODO) how to add a provider without touching consumers.
 - (TODO) cache freshness policy per data type (intraday prices vs. quarterly filings).
 
-## 4. Algorithms & Strategies
+## 5. Algorithms & Strategies
 
 - Strategy = scoring + hard filters + selection; each pluggable by `--method` dispatch in one place (`stockpicker.RunWithResult`).
 - Hard filters exclude entirely (not low-score); scoring normalizes within the candidate set.
@@ -51,7 +66,7 @@
 - (TODO) factor-weight config conventions (`config/mfs.json` per strategy).
 - (TODO) where derived metrics live (structured `DriverMetrics` vs. formatted strings).
 
-## 5. Pipelines & Orchestration
+## 6. Pipelines & Orchestration
 
 - Pipeline stages share one process (one DB conn, one market-data session, one broker client); no subprocess chaining.
 - Stages communicate via DuckDB tables + structured results (`PickResult`), not by re-parsing text output.
@@ -62,7 +77,7 @@
 - (TODO) pipeline pause/resume + proposal lifecycle (proposed → executed reconcile).
 - (TODO) scheduling boundary (launchd/OS owns lifecycle, not in-process loops for long intervals).
 
-## 6. Testing & Verification
+## 7. Testing & Verification
 
 - Build + layering guard + tests must stay green on every change (`make build`, `make check-deps`, `make test`).
 - Table-driven, stdlib `testing`, hand-written mocks; interfaces are the seams. No mocking framework.
@@ -72,7 +87,7 @@
 - (TODO) coverage targets per layer.
 - (TODO) E2E scenario list + tags.
 
-## 7. Change & Merge Discipline
+## 8. Change & Merge Discipline
 
 - Distinguish algorithmic changes (bring) from architectural changes (evaluate against principles; our architecture wins on conflict).
 - Union where both sides added disjoint things; take-theirs where we never touched a file; hand-merge only true conflicts.
@@ -83,7 +98,7 @@
 
 ---
 
-## 8. Self-Evaluation: Current Solution vs. Principles
+## 9. Self-Evaluation: Current Solution vs. Principles
 
 Rough scoring after the EBM integration (`integration/main-ebm`). To be detailed next session.
 
@@ -91,13 +106,14 @@ Rough scoring after the EBM integration (`integration/main-ebm`). To be detailed
 |------|--------|-------|
 | Layering | 🟢 Strong | R16 guard enforced; new pkgs placed deliberately; pithistory cycle avoided |
 | IO / side effects | 🟢 Good | slog/render split; rejected machine-specific token-sync. TODO: audit remaining `fmt` diagnostics |
+| Config management | 🟢 Good | flag>env>file>default precedence; additive structs; read-only at runtime. TODO: no schema validation |
 | Data sources | 🟡 Partial | Principles documented (datasources.md) but Phase 10 unbuilt; 7 router-bypass paths remain; Yahoo still primary for many US paths |
 | Algorithms | 🟢 Good | Clean `--method` dispatch; injected DataFetcher; EBM slotted in without touching IO. TODO: rsi/momentum still persist zero |
 | Pipelines | 🟢 Good | DuckDB-backed, run-tracked, proposal lifecycle closed; PIT snapshots added |
 | Testing | 🟢 Good | build+check-deps+test green; integration tests now skip gracefully. TODO: coverage gaps (stockpicker historically low) |
 | Merge discipline | 🟢 Applied | This session: algorithm-in / architecture-preserved worked cleanly |
 
-## 9. Improvements Identified (this branch)
+## 10. Improvements Identified (this branch)
 
 - (TODO) Phase 10 data-source resilience is the biggest gap vs. §3 principles — the 7 router-bypass paths + Yahoo-primary + no provenance column.
 - (TODO) `rsi`/`momentum_1y` persist zero in selections (Phase 8 follow-up) — violates "explainable from output" partially.
