@@ -2,11 +2,13 @@ package cmd
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	"github.com/urfave/cli/v3"
 
 	"github.com/raghavkgarg/mycase/pkg/config"
+	"github.com/raghavkgarg/mycase/pkg/pithistory"
 	"github.com/raghavkgarg/mycase/pkg/stockpicker"
 )
 
@@ -16,7 +18,7 @@ var PickCommand = &cli.Command{
 	Flags: []cli.Flag{
 		&cli.StringFlag{Name: "index", Aliases: []string{"i"}, Usage: "Index to pick stocks from (default from config/defaults.json)"},
 		&cli.StringFlag{Name: "file", Aliases: []string{"f"}, Usage: "Path to custom CSV file (takes precedence over --index)"},
-		&cli.StringFlag{Name: "method", Aliases: []string{"m"}, Usage: "Scoring strategy (balanced, aggressive, conservative, multibagger, value, us_quality_momentum) (default from config/defaults.json)"},
+		&cli.StringFlag{Name: "method", Aliases: []string{"m"}, Usage: "Scoring strategy (balanced, aggressive, conservative, multibagger, earlymb, value, us_quality_momentum) (default from config/defaults.json)"},
 		&cli.IntFlag{Name: "top", Usage: "Number of top stocks to pick (default from config/defaults.json)"},
 		&cli.StringFlag{Name: "range", Usage: "Historical data range: 3mo, 6mo, 1y (default from config/defaults.json)"},
 		&cli.BoolFlag{Name: "skip-scuttlebutt", Usage: "Skip qualitative scuttlebutt checklist report"},
@@ -96,5 +98,23 @@ func runPickWithOpts(ctx context.Context, opts *stockpicker.Options) error {
 	if opts.DataFetcher == nil {
 		opts.DataFetcher = newDataRouter()
 	}
-	return stockpicker.Run(ctx, opts)
+	result, err := stockpicker.RunWithResult(ctx, opts)
+	if err != nil {
+		return err
+	}
+
+	// Persist the point-in-time run snapshot to DuckDB. Done here (composition root)
+	// rather than in pkg/stockpicker, because pithistory imports stockpicker — the
+	// reverse edge would be an import cycle (R16 layering).
+	if result != nil && result.PITSnapshot != nil {
+		if pitDB, dbErr := pithistory.Open(""); dbErr == nil {
+			if sErr := pitDB.SaveRunSnapshot(ctx, result.PITSnapshot); sErr == nil {
+				fmt.Printf("Persisted Point-in-Time Run Snapshot to DuckDB (%s)\n", pithistory.DefaultDBPath)
+			} else {
+				fmt.Printf("Warning: failed to persist PIT snapshot to DuckDB: %v\n", sErr)
+			}
+			pitDB.Close()
+		}
+	}
+	return nil
 }

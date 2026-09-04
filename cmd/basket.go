@@ -90,7 +90,7 @@ func runBasketWithParams(ctx context.Context, liveMode bool, basketFilename stri
 		return nil
 	}
 
-	quoteData, currentHoldings, err := datafetcher.FetchMarketData(ctx, b, basketKeys)
+	quoteData, currentHoldings, _, err := datafetcher.FetchMarketData(ctx, b, basketKeys)
 	if err != nil {
 		return fmt.Errorf("fetching market data: %w", err)
 	}

@@ -42,6 +42,7 @@ func fetchIPFromURLs(urls []string, network string) string {
 	client := &http.Client{
 		Timeout: 2 * time.Second,
 		Transport: &http.Transport{
+			Proxy: http.ProxyFromEnvironment,
 			DialContext: func(ctx context.Context, netName, addr string) (net.Conn, error) {
 				var d net.Dialer
 				return d.DialContext(ctx, network, addr)
@@ -86,6 +87,7 @@ type Config struct {
 	APIKey      string `json:"api_key"`
 	APISecret   string `json:"api_secret,omitempty"`
 	AccessToken string `json:"access_token"`
+	HTTPProxy   string `json:"http_proxy,omitempty"`
 }
 
 // LoadConfig reads configuration from config/config.json
@@ -101,6 +103,13 @@ func LoadConfig(filename string) (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	if cfg.HTTPProxy != "" {
+		os.Setenv("HTTP_PROXY", cfg.HTTPProxy)
+		os.Setenv("HTTPS_PROXY", cfg.HTTPProxy)
+		os.Setenv("ALL_PROXY", cfg.HTTPProxy)
+	}
+
 	return &cfg, nil
 }
 

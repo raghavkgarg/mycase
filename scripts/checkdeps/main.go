@@ -48,6 +48,7 @@ var layers = map[string]int{
 	"marketdata":       0,
 	"render":           0,
 	"selectiontracker": 0,
+	"universe":         0,
 
 	// L1 — stores / low-level impls over leaves.
 	"broker":   1, // broker/types, config, costs
@@ -68,8 +69,9 @@ var layers = map[string]int{
 	"stockpicker": 3, // config, csvloader, excel, optimizer, selectiontracker, yfinance
 
 	// L4 — orchestration / IO.
-	"daemon":   4, // alert, broker, config, csvloader
-	"executor": 4, // broker, config, market, printer, render, yfinance
+	"daemon":     4, // alert, broker, config, csvloader
+	"executor":   4, // broker, config, market, printer, render, yfinance
+	"pithistory": 4, // stockpicker
 
 	// L5 — top composition (below cmd/main, which live outside pkg/).
 	"autopilot": 5,

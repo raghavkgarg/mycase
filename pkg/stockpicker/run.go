@@ -22,6 +22,7 @@ type PickResult struct {
 	Sectors      map[string]string        // ticker → sector
 	Ranks        map[string]int           // ticker → 1-based raw rank at selection time
 	Drivers      map[string]DriverMetrics // ticker → structured driver metrics
+	PITSnapshot  *PITRunSnapshot          // point-in-time run snapshot for DuckDB persistence by the command layer
 }
 
 // DriverMetrics mirrors selectiontracker.DriverMetrics as the structured numeric
@@ -141,6 +142,10 @@ func RunWithResult(ctx context.Context, opts *Options) (*PickResult, error) {
 		scores = ScoreMultibagger(ctx, activeKeys, fundamentals, fullHistory, cfg.HardFilters)
 		selectedKeys = SelectTopNMultibagger(activeKeys, scores, fundamentals, cfg.HardFilters, opts.TopN, goldenWeights, opts.HysteresisBuffer, tracker)
 		finalWeights = NormalizeMultibaggerWeights(selectedKeys, scores, fundamentals, cfg.HardFilters, goldenWeights, opts.RebalanceTolerance)
+	} else if opts.Method == "earlymb" || opts.Method == "early_multibagger" {
+		scores = ScoreEarlyMultibagger(ctx, activeKeys, fundamentals, fullHistory, cfg.HardFilters)
+		selectedKeys = SelectTopNEarlyMultibagger(activeKeys, scores, fundamentals, fullHistory, cfg.HardFilters, opts.TopN, goldenWeights, opts.HysteresisBuffer, tracker)
+		finalWeights = NormalizeEarlyMultibaggerWeights(selectedKeys, scores, fundamentals, cfg.HardFilters, goldenWeights, opts.RebalanceTolerance)
 	} else if opts.Method == "us_quality_momentum" {
 		scores = ScoreUSQualityMomentum(ctx, activeKeys, fundamentals, fullHistory, cfg.HardFilters)
 		selectedKeys = SelectTopNUSQM(activeKeys, scores, fundamentals, cfg.HardFilters, opts.TopN, goldenWeights, opts.HysteresisBuffer, tracker)
@@ -154,7 +159,12 @@ func RunWithResult(ctx context.Context, opts *Options) (*PickResult, error) {
 		return finalWeights[selectedKeys[i]] > finalWeights[selectedKeys[j]]
 	})
 
-	if opts.Method == "value" || opts.Method == "multibagger" || opts.Method == "us_quality_momentum" {
+	if opts.Method == "earlymb" || opts.Method == "early_multibagger" {
+		PrintEarlyMultibaggerTable(selectedKeys, finalWeights, scores, fundamentals, fullHistory, displayNameVal, opts.Method)
+		if !opts.SkipScuttlebutt {
+			PrintScuttlebutt(selectedKeys, fundamentals, displayNameVal, opts.Method)
+		}
+	} else if opts.Method == "value" || opts.Method == "multibagger" || opts.Method == "us_quality_momentum" {
 		PrintMultibaggerTable(selectedKeys, finalWeights, scores, fundamentals, fullHistory, displayNameVal, opts.Method)
 		if !opts.SkipScuttlebutt && opts.Method != "us_quality_momentum" {
 			PrintScuttlebutt(selectedKeys, fundamentals, displayNameVal, opts.Method)
@@ -169,6 +179,76 @@ func RunWithResult(ctx context.Context, opts *Options) (*PickResult, error) {
 		sectors[ticker] = fund.Sector
 		resultDates[ticker] = fund.ResultPrevComing
 	}
+
+	// Structural funnel accounting validation (non-fatal).
+	if _, fErr := tracker.BuildFunnel(); fErr != nil {
+		fmt.Printf("⚠️  Funnel Validation Notice: %v\n", fErr)
+	}
+
+	// Build a point-in-time run snapshot: file-based save + run-to-run diff here
+	// (all within pkg/stockpicker). DuckDB persistence is done by the command layer
+	// (cmd/pick.go) to keep stockpicker from importing pithistory (layering: pithistory
+	// imports stockpicker, so the reverse edge would be a cycle).
+	todayStr := time.Now().Format("2006-01-02")
+	rRegime := 1.0
+	if tracker.RegimeMultiplier > 0 {
+		rRegime = tracker.RegimeMultiplier
+	} else if len(benchmarkPrices) >= 50 {
+		rRegime = yfinance.CalculateSmoothedBenchmarkRegime(benchmarkPrices, 50, 0.20)
+	}
+	selectedSet := make(map[string]bool, len(selectedKeys))
+	for _, s := range selectedKeys {
+		selectedSet[s] = true
+	}
+	candidateMap := make(map[string]CandidateScoreDetail, len(combinedTickers))
+	for _, t := range combinedTickers {
+		reason, isSafetyDrop := tracker.SafetyReasons[t]
+		rawScore, hasRaw := tracker.RawScores[t]
+		effScore, hasEff := tracker.EffectiveScores[t]
+		if !hasEff && hasRaw {
+			effScore = rawScore * rRegime
+		}
+		var compRS, vcpRatio, rvolZ, ppScore, delivDelta float64
+		if hist, ok := fullHistory[t]; ok && len(hist.Closes) >= 60 {
+			compRS, _, _, _ = yfinance.CalculateCompositeRS(hist.Closes, benchmarkPrices)
+			vcpRatio, _ = yfinance.CalculateVCPTightness(hist.Closes, hist.Opens)
+			rvolZ = yfinance.CalculateWinsorizedRVOLZScore(hist.Volumes, 5, 50, 4.0)
+			ppScore, _ = yfinance.CalculateDecayedPocketPivot(hist.Closes, hist.Opens, hist.Volumes, 10, 0.25)
+			delivDelta = (fundamentals[t].DeliveryPct / 100.0) - 0.35
+		}
+		candidateMap[t] = CandidateScoreDetail{
+			Ticker:          t,
+			PassedStage1:    !isSafetyDrop && hasRaw,
+			RejectionReason: reason,
+			RawScore:        rawScore,
+			EffectiveScore:  effScore,
+			CompositeRS:     compRS,
+			VCPRatio:        vcpRatio,
+			RVOLZScore:      rvolZ,
+			DecayedPP:       ppScore,
+			DeliveryDelta:   delivDelta,
+			Selected:        selectedSet[t],
+			FinalWeight:     finalWeights[t],
+			Sector:          sectors[t],
+		}
+	}
+	pitSnapshot := &PITRunSnapshot{
+		AsOfDate:          todayStr,
+		IndexName:         displayNameVal,
+		Method:            opts.Method,
+		RegimeMultiplier:  rRegime,
+		TotalConstituents: len(combinedTickers),
+		Stage1Count:       len(activeKeys),
+		SelectedCount:     len(selectedKeys),
+		Candidates:        candidateMap,
+	}
+	if prevSnap, pErr := LoadPreviousSnapshot(displayNameVal, opts.Method, todayStr); pErr == nil && prevSnap != nil {
+		PrintDiffReport(DiffSnapshots(prevSnap, pitSnapshot))
+	}
+	if snapPath, sErr := SaveRunSnapshot(pitSnapshot); sErr == nil {
+		fmt.Printf("Saved PIT Run Snapshot to %s\n", snapPath)
+	}
+
 	prevDrivers := loadPreviousDriverStrings(ctx, displayNameVal, opts.Method)
 	if err := tracker.SaveReport(displayNameVal, opts.Method, goldenWeights, sectors, finalWeights, resultDates, prevDrivers); err != nil {
 		fmt.Printf("Warning: Failed to save selection reasons report: %v\n", err)
@@ -219,6 +299,7 @@ func RunWithResult(ctx context.Context, opts *Options) (*PickResult, error) {
 			}
 		}
 	}
+	result.PITSnapshot = pitSnapshot
 
 	return result, nil
 }
