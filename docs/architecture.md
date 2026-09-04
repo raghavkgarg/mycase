@@ -2,6 +2,8 @@
 
 **Module**: `github.com/raghavkgarg/mycase` | **Go**: 1.27.0 | **Binary**: `mycase`
 
+> **Design-review rubric**: the durable architectural principles this design is built on — and how the current solution scores against them — live in [`docs/principles.md`](./principles.md). Evaluate changes and cross-branch merges against that rubric. The mechanically-enforced subset is in `.kiro/steering/` (`architecture.md` = layering, `logging.md` = the two-channel rule, `api-rules.md` = network discipline).
+
 ---
 
 ## Table of Contents
