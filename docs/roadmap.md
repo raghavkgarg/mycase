@@ -2,7 +2,7 @@
 
 **Goal**: An automated US equity system that delivers slight but consistent outperformance over the S&P 500 while eliminating emotional decision-making and manual busy work.
 
-**Updated**: August 2026
+**Updated**: September 2026
 
 **Target investor**: US-based individual investor using Schwab. The India market components exist as legacy code from an earlier multi-market design but are not part of the active strategy.
 
@@ -94,7 +94,9 @@ Automation eliminates all four. The system runs quarterly, follows its rules, an
 
 | Gap | Impact |
 |-----|--------|
-| Live performance attribution (benchmark tracking) | Cannot measure if we're actually outperforming |
+| Authoritative US fundamentals (SEC EDGAR) | Schwab fundamentals are thin TTM only — no cash-flow statement, no annual series; US scoring degrades to proxies (see `docs/datasources.md`) |
+| US sector classification | Schwab returns no sector → US stocks collapse to "Unknown" → sector caps silently disabled |
+| Data-source provenance in cache | Cannot audit which source produced a number, or invalidate one source selectively |
 
 ---
 
@@ -102,267 +104,59 @@ Automation eliminates all four. The system runs quarterly, follows its rules, an
 
 | Debt | Location | Impact | Fix effort |
 |------|----------|--------|-----------|
-| ~~Stockpicker calls `yfinance.FetchFundamentals` directly~~ | ~~`pkg/stockpicker/run.go:93`, `cmd/pick.go`~~ | ✅ Fixed — `stockpicker.DataFetcher` interface added; `opts.DataFetcher` (a `datafetcher.Router`) routes US tickers to Schwab, others to Yahoo | Done |
-| ~~`cmd/pick.go` `runPickWithOpts` duplicates `stockpicker.Run`~~ | ~~`cmd/pick.go:100-220`~~ | ✅ Fixed — `runPickWithOpts` now wires the router and delegates to `stockpicker.Run`; `us_quality_momentum` branches moved into `RunWithResult` | Done |
-| `yfinance.GetCache()` still exists (deprecated) | `pkg/yfinance/duckdbcache.go` | Confusing API — external code should use `cache.GetDB()` | Remove once no callers remain |
+| `yfinance.GetCache()` still exists (deprecated) | `pkg/yfinance/duckdbcache.go` | Confusing API — external code should use `cache.GetDB()` | Zero callers remain; delete in Phase 10a |
+| Seven command paths bypass `datafetcher.Router` | `cmd/report.go`, `cmd/monitor.go`, `cmd/optimize.go`, `pkg/server/handlers.go`, `pkg/executor/executor.go`, `pkg/backtest/valuation.go`, `pkg/autopilot/schedule.go` | US holdings get Yahoo data even when Schwab is configured — "use Schwab for US" is only true in `pick` today | Refactor R17 (Phase 10b) |
+| Schwab fundamentals mapper drops derivable fields | `pkg/broker/schwab/market.go` `mapSchwabFundamentals` | `Sector`/`RegularPrice`/`NetIncome` left empty though derivable | Phase 10a |
 
 ---
 
 ## 3. Architecture Vision
 
-The system should operate as a **6-layer stack** where each layer has a clear responsibility and can be tested independently:
-
-```
-┌─────────────────────────────────────────────────────────┐
-│  Layer 6: Performance Audit & Attribution                │
-│  Benchmark tracking, alpha decomposition, annual report  │
-├─────────────────────────────────────────────────────────┤
-│  Layer 5: Autopilot & Scheduling                ✅ BUILT │
-│  Quarterly pipeline, drift-trigger, alert→confirm→exec   │
-├─────────────────────────────────────────────────────────┤
-│  Layer 4: Execution & Tax Awareness             ✅ BUILT │
-│  Zerodha (India), Schwab (US), FIFO lots ✅, TLH ✅      │
-├─────────────────────────────────────────────────────────┤
-│  Layer 3: Portfolio Construction                         │
-│  Cross-market allocation, per-market optimization,       │
-│  sector caps, rebalancing bands                          │
-├─────────────────────────────────────────────────────────┤
-│  Layer 2: Strategy Engine                                │
-│  Multibagger (India S/M), Value (India L), US Factor,    │
-│  MFS scoring, hard filters                               │
-├─────────────────────────────────────────────────────────┤
-│  Layer 1: Multi-Market Data                      ✅ BUILT │
-│  Yahoo Finance (India), Schwab API (US), DuckDB cache,   │
-│  Screener.in (enrichment), NSE/BSE constituents          │
-└─────────────────────────────────────────────────────────┘
-```
-
-### Data flow in autopilot mode
-
-```
-Quarterly trigger (launchd/cron)
-  │
-  ├─ India leg
-  │   ├─ Fetch microcap250 + small250 constituents
-  │   ├─ Pick (multibagger, top 20)
-  │   ├─ Optimize (inverse-vol, sector caps)
-  │   └─ Generate India basket
-  │
-  ├─ US leg
-  │   ├─ Fetch S&P 500 constituents (or custom universe)
-  │   ├─ Pick (quality-momentum factor tilt, top 15-20)
-  │   ├─ Optimize (inverse-vol, sector caps)
-  │   └─ Generate US basket
-  │
-  ├─ Cross-market allocation
-  │   ├─ Apply India/US target split (e.g., 60/40)
-  │   ├─ Adjust for drift since last rebalance
-  │   └─ Tax-loss harvest: identify loss-making lots to realize
-  │
-  ├─ Consolidate orders
-  │   ├─ Filter micro-transactions
-  │   ├─ Classify STCG/LTCG (India), long/short-term (US)
-  │   └─ Generate combined order sheet
-  │
-  └─ Alert investor
-      ├─ Telegram: summary + link to dashboard
-      ├─ Dashboard: full order table, cost breakdown, tax impact
-      └─ Await confirmation before executing
-```
-
-### Ticker convention
-
-| Market | Prefix | Example | Data source | Broker |
-|--------|--------|---------|-------------|--------|
-| India (NSE) | `NSE:` | `NSE:RELIANCE` | Yahoo Finance (`.NS` suffix) | Zerodha |
-| India (BSE) | `BSE:` | `BSE:500325` | Yahoo Finance (`.BO` suffix) | Zerodha |
-| US (NYSE/NASDAQ) | `US:` | `US:AAPL` | Schwab Market Data API | Schwab |
-
-The router in `pkg/yfinance/router.go` (new) selects data source based on prefix. DuckDB cache stores all markets identically — only the fetch path differs.
+The system is a 6-layer responsibility stack (market data → strategy → portfolio construction → execution & tax → autopilot → audit & attribution), US-only via Schwab. For the system design — conceptual layers, the concrete `cmd/pkg/` package breakdown, data flow, ticker routing (`US:`→Schwab, else→Yahoo), and design decisions — see **`docs/architecture.md`** §2 (Inputs), §4 (System Design), and §11 (Design Decisions). This roadmap covers only *what* is being built and *when*.
 
 ---
 
 ## 4. Phased Roadmap
 
-### ~~Phase 1: Quarterly Autopilot Pipeline~~ ✅ Completed (R10)
+Completed and dropped phases have been removed from this roadmap; their design detail lives in `docs/architecture.md` (design decisions), `docs/refactor.md` (Completed Phases ledger), and `docs/duckdb-migration.md`. Only active and planned work remains below.
 
-Implemented as `mycase autopilot {run, install, uninstall, status, dismiss}`. Non-interactive pipeline generates a proposal file, sends Telegram/Discord alert, and waits for investor confirmation via web dashboard or CLI. Scheduling via launchd `StartCalendarInterval` plist. See `docs/architecture.md` D7–D9 for design decisions, `docs/runbook.md` §7b for usage.
+### Carried-over follow-ups (non-blocking)
 
----
-
-### ~~Phase 2: Schwab Integration — US Market Access (R9)~~ ✅ Completed
-
-Implemented as `pkg/schwab/` (auth, client, market data, broker) + `pkg/datafetcher/router.go` (ticker routing) + `pkg/costs/us.go` (US cost model). CLI: `mycase auth --broker schwab`. See `docs/refactor.md` R9 in Completed Phases and `docs/architecture.md` D6 for broker interface design.
-
-**Prerequisite for live use**: Schwab developer app registration + approval (1–3 business days), then `mycase auth --broker schwab` to complete OAuth flow.
-
----
-
-### ~~Phase 3: US Factor Strategy~~ ✅ Completed
-
-Implemented as `mycase pick --index sp500 --method us_quality_momentum --top 20`. Six-factor 100-point scoring model (ROIC, FCF Yield, 12-month Momentum skip-1-month, Earnings Quality, Shareholder Yield, Low Volatility) with US-specific hard filters (market cap > $10B, ADV > $50M, positive FCF). Scoring in `pkg/stockpicker/scoring_us.go`, config in `config/mfs.json` under `us_quality_momentum`. S&P 500 constituents fetched from GitHub dataset. Sector caps (max 4/sector), hysteresis, and rebalancing bands apply identically to India strategies.
-
----
-
-### ~~Phase 4: Strategic Asset Allocation Layer~~ ❌ Dropped
-
-**Reason**: The system is now focused on US-only investing via Schwab. Cross-market India/US allocation requires the investor to have brokerage access in both markets (Zerodha + Schwab), which is impractical for a US-based investor. Indian markets are also underperforming, making the complexity unjustified. The India code remains as legacy but is not part of the active strategy.
-
----
-
-### Phase 7: DuckDB Intermediate Pipeline Migration
-
-**What**: Move pipeline intermediate data (index picks, proposals, selection tracker state) from CSV files to DuckDB tables. Adds run tracking, atomic writes, and cross-run diffs.
-
-**Why**: The pipeline currently passes data between stages via CSV files in `data/candidates/`. This is fragile (half-written CSV on crash), opaque (can't query historical runs), and messy (stale files accumulate). The selection tracker parses its own `.txt` output to extract previous-run metrics — brittle. Moving to DuckDB gives atomic transactions, run history, and a foundation for lot tracking (Phase 4 TLH) and performance attribution (Phase 5).
-
-**What moves**:
-- `data/candidates/index_picks/*.csv` → `index_picks` table
-- `data/candidates/proposals/*.csv` → `proposals` table (with stage column)
-- `data/candidates/temp/combine_*.csv` → eliminated (in-memory DuckDB join)
-- Selection tracker cross-run state → `selections` table
-
-**What stays as files**:
-- `data/{name}.csv` (golden copy) — requires manual editing until SwiftUI UI exists
-- Human-readable `.txt` reports — opened in editor
-- Backup CSVs — manual disaster recovery
-- Config files — version-controlled
-
-**Schema**: `pipeline_runs` (run tracking), `index_picks` (per-index scored candidates), `proposals` (draft/optimized/final stages), `selections` (final portfolio with driver metrics for cross-run comparison).
-
-**Deliverables**:
-- Schema additions to `pkg/cache/db.go` (`ensureSchema()`)
-- `pipeline_runs` tracking (run_id, status, portfolio, method)
-- Pipeline write path: stages insert to DB instead of writing CSV
-- Pipeline read path: combine step is a query, not file parsing
-- `mycase pipeline history` — list past runs
-- `mycase pipeline diff <run1> <run2>` — cross-run comparison
-- `mycase pipeline show <run_id>` — inspect a specific run
-- `--legacy-csv` flag during transition for belt-and-suspenders
-
-**Effort**: ~10 days (4 sub-phases: schema 1d, write path 3–4d, read path 2–3d, CLI+cleanup 2–3d). Each sub-phase is independently deployable.
-
-**Detailed design**: See `docs/duckdb-migration.md` for full schema DDL, implementation phases, and risk mitigations.
-
----
-
-### ~~Phase 4: Tax-Loss Harvesting Engine~~ ✅ Completed
-
-**What**: FIFO lot tracking and systematic tax-loss harvesting for the US portfolio.
-
-Implemented as the `pkg/tax` package (FIFO engine + TLH logic, broker-agnostic and unit-tested) plus supporting infrastructure:
-
-- **`pkg/tax/fifo.go`** — `BuildLots` replays a chronological transaction history with FIFO matching (oldest lots consumed first), producing open lots and per-lot realized gains. Buy fees increase cost basis; sell fees reduce proceeds; oversells are flagged as warnings rather than fabricating zero-basis lots.
-- **`pkg/tax/tlh.go`** — `FindHarvestCandidates` identifies loss-making lots worth harvesting (only losing lots within a mixed position), estimates federal tax savings (ST 37% / LT 20%), suggests same-sector substitutes that avoid the wash-sale rule, and flags wash-sale risk. `DetectWashSales` and `SummarizeRealized` (ST/LT split) round out reporting.
-- **`pkg/tax/sequence.go`** — `TaxOptimizeOrders` reorders a batch for execution: loss-sells → gain-sells → buys, and flags any buy that would repurchase a loss-sold security (wash sale).
-- **`pkg/broker/schwab/transactions.go`** — `FetchTransactions` (`GET /accounts/{hash}/transactions?types=TRADE`, chunked by year to respect the API window) + `NormalizeTransactions` mapping Schwab records to broker-agnostic `tax.Transaction`.
-- **DuckDB** — `tax_transactions`, `tax_lots`, `realized_gains` tables (additive `CREATE TABLE IF NOT EXISTS`) with round-tripped Insert/Get methods in `pkg/cache/tax.go`. Lots and realized gains are derived state (recomputed from transactions on each import).
-- **CLI** — `mycase tax import --broker schwab` (bootstraps lots), `mycase tax status` (open lots + YTD/all-time realized summary), `mycase tax harvest` (harvest candidates). `mycase basket --tax-optimize` sequences orders and surfaces wash-sale warnings; the basket's US tax warnings now use real FIFO purchase dates instead of "Unknown".
-- **Dashboard** — new Tax tab (`/api/portfolio/{name}/tax` + `tax-tab.js`) showing realized gains/losses (YTD + all-time), harvest candidates, wash-sale calendar, and open lots with unrealized P&L.
-
-**US tax rules honored**: short-term (< 1 year, up to 37%) vs long-term (≥ 1 year, 15/20%), 30-day wash-sale window, substitute must differ from the harvested security and its sector peers already held.
-
----
-
-### Phase 5: Live Performance Attribution
-
-**What**: Continuously track the actual portfolio's performance against SPY and decompose returns into their sources.
-
-**Why**: Without this, you don't know if the system is working. "I think I'm beating the market" is not the same as "I'm beating the market by 1.7% annualized with a 0.82 information ratio." You need hard numbers to decide whether to continue, adjust, or simplify to pure index funds.
-
-**Deliverables**:
-- `pkg/attribution/tracker.go` — daily NAV computation from live Schwab holdings
-- Benchmark tracked: SPY (S&P 500 ETF) — the "do nothing" baseline
-- Monthly attribution report: how much came from stock selection vs rebalancing vs tax savings
-- `mycase performance --vs-benchmark` — show cumulative alpha chart
-- Dashboard performance tab: equity curve overlaid with SPY, rolling 1Y alpha
-- Alert: if trailing 12-month alpha is significantly negative, send a "review your strategy" nudge
-
-**Attribution decomposition**:
-- **Selection effect**: did factor-tilted picks beat SPY?
-- **Rebalancing effect**: did quarterly rebalancing add value vs buy-and-hold?
-- **Tax effect**: how much did TLH save vs a no-TLH baseline?
-
-**Effort**: ~2 weeks. The hard part is getting consistent NAV history; the math is standard.
-
-**Implementation split** (see `docs/refactor.md` Phase 5 for full design):
-- **Phase 5a** (in progress) — NAV foundation: `pkg/attribution` (daily NAV via `datafetcher.Router`, alpha/beta/information ratio vs benchmark), `nav_history` DuckDB table, `mycase performance --vs-benchmark`. Written slog-native (R14.3).
-- **Phase 5b** — return decomposition (selection/rebalancing/tax), dashboard performance tab, negative-alpha alert nudge.
-- **Benchmark**: `US:SPY` (the actual ETF, routed through Schwab) rather than the `^GSPC` index the backtest uses — SPY is the honest "you-could-have-bought-this" baseline. Configurable.
-
----
-
-### ~~Phase 8: Structured Selection History & Cross-Run Attribution Trail~~ ✅ Completed
-
-**Status**: ✅ Completed — the `selections` scaffolding was restored and, crucially, **wired into the pipeline** (the step that was never built before).
-
-**What was built**:
-- **`selectiontracker`** (still a zero-import leaf) gained a structured `DriverMetrics` type + `DriverValues` map + `RecordDriverMetrics`, populated alongside the existing formatted `AdditionDrivers` strings at the multibagger / value / US quality-momentum scoring sites. `SaveReport` no longer re-parses the prior text report — it takes a `prevDrivers map[string]string` supplied by the caller from structured DuckDB history.
-- **`pkg/cache`** — restored the `selections` table DDL (now with a `sector` column), the `Selection` struct, and `InsertSelections`/`GetSelections`/`GetPreviousSelections` + the `DeleteRunData` clause, with round-trip tests.
-- **`pkg/stockpicker`** — `PickResult` now carries `Ranks` + `Drivers` (a stockpicker-local `DriverMetrics`, decoupled from selectiontracker). `RunWithResult` populates them and calls the new `loadPreviousDriverStrings` helper (`cache.GetPreviousSelections`) to feed `SaveReport`'s deltas.
-- **`pkg/autopilot`** — at finalization, immediately after `InsertProposals(…, "optimized", …)`, it builds `[]cache.Selection` via `pickResultToSelections`, computing `action`/`prev_rank`/`prev_weight` against `GetPreviousSelections(portfolio, method)`, and calls `InsertSelections`.
-- **`mycase pipeline show`** — the "Final Selections" section is restored (Ticker / Rank / Score / Weight / Sector / Action / Prev Rank / Drivers), now backed by real data.
-
-**Known limitation**: `rsi` and `momentum_1y` are persisted as zero for now — they are computed inside the scoring pass but not available at the `RecordDriverMetrics` selection site without replumbing signatures. The columns exist and are ready to populate when that plumbing is added.
-
-**Origin**: Phase 7 (DuckDB migration) created a `selections` table + `Selection` struct + `InsertSelections`/`GetSelections`/`GetPreviousSelections` methods intended to hold a **structured, queryable audit trail of the final portfolio with per-stock driver metrics and cross-run deltas**. That persistence was never wired into the pipeline (nothing ever called `InsertSelections`), so `pipeline show`'s "Final Selections" section always rendered empty. During the "fix before feature" cleanup (loose end **L2**) the unused scaffolding was **deleted** rather than left as dead code — with the design intent captured here. This phase re-added it and, crucially, built the missing write path.
-
-**Data model** (what the richer record captures beyond `proposals`):
-- Per-stock driver metrics at selection time: `ttm_growth`, `revenue_cagr`, `dso_delta`, `rsi`, `momentum_1y`, `fcf_yield`, `roic` (rsi + momentum_1y currently persist zero — see limitation above).
-- Cross-run delta fields: `action` ("new" / "retained" / "removed"), `prev_rank`, `prev_weight`.
-
-**Follow-ups** (not blocking):
-- Plumb `rsi` / `momentum_1y` from the scoring pass down to the `RecordDriverMetrics` selection site so they persist non-zero.
+Small items left open by shipped phases, not yet scheduled:
+- Plumb `rsi` / `momentum_1y` from the scoring pass to the `selectiontracker.RecordDriverMetrics` site so the `selections` columns persist non-zero (they exist, currently zero).
 - Extend `mycase pipeline diff` to compare selection-level driver metrics between runs (today it diffs proposals only).
 
-**Dependency**: Sequenced after Phase 5 (Performance Attribution), the primary consumer of the structured selection history.
-
 ---
 
-### ~~Phase 9: Proposal `final` Stage Lifecycle~~ ✅ Completed
+### Phase 10: Data Source Resilience
 
-**Status**: ✅ Completed — the `final` stage is now written at execution-confirm time (submitted-intent weights), and a realized-fill reconcile (`mycase pipeline reconcile`) upgrades it to actual executed weights. This closes the proposed-vs-executed loop end to end.
+**What**: Source each data type from the most authoritative provider that can supply it, with deterministic logged fallback, and record provenance. Today the clean `pick`/autopilot pipeline routes US data through Schwab, but seven other command paths bypass the router and hit Yahoo directly, Schwab's fundamentals are a thin TTM snapshot (no sector, no cash-flow statement, no annual series), and the benchmark is always Yahoo `^GSPC`. Full design, API shapes, provenance chain, and gap analysis live in **`docs/datasources.md`**.
 
-**What was built**:
-- **`autopilot.FinalStageProposals(*Proposal) []cache.Proposal`** (`pkg/autopilot/proposal.go`) — converts a confirmed proposal's *successfully-placed BUY orders* into `final`-stage proposals, weighting each ticker by its executed order value as a fraction of total placed BUY value (non-negative fractions summing to ~1, matching how `optimized` weights are expressed). Failed orders are excluded, so the stage records the *executed roster*, not the intended one. SELL orders carry no target weight. Unit-tested (`proposal_test.go`).
-- **Write path** — `pkg/server/handlers.go` `handleAutopilotConfirm` now calls `s.persistFinalStage(ctx, proposal)` after the `PlaceOrder` loop. It resolves the run via `cache.LatestRun(portfolio, method)` (normalizing `proposal.Portfolio` path → basename to match `pipeline_runs.portfolio`) and calls `InsertProposals(runID, "final", …)`. **Entirely best-effort**: any failure is logged via `slog` and swallowed — it must never affect an execution that already placed live orders. Zero DDL change (reuses the `proposals` table's `stage` column).
-- **Attribution** — `attribution.LoadRebalanceHistory` (`pkg/attribution/store.go`) now **prefers `stage="final"`** when present, falling back to `optimized` for runs that predate the final stage or were never executed. The rebalancing decomposition now measures *realized* (confirmed/executed) weights rather than merely intended ones.
-- **Readers** — `mycase pipeline show` (already looped `draft/optimized/final`) and `mycase pipeline diff --stage final` now have backing data; the previously-misleading empty affordance is real.
+**Why**: Yahoo is a free aggregator reselling a vendor's parse of SEC filings — it is neither authoritative nor stable (unofficial endpoints, legally a scrape). The real origins are: **exchanges** for prices (Schwab is broker-direct, closer than Yahoo), **SEC EDGAR XBRL** for fundamentals (the filing itself), and **GICS/constituents-CSV** for sector. Sourcing authoritatively removes a fragile dependency, fixes silently-broken US sector caps, and upgrades the earnings-quality and ROIC factors from proxies to real inputs. This directly serves the "no black boxes / transparency" design constraint.
 
-**Correlation note**: no `run_id` is threaded through the confirm path, but the pipeline marks its run `completed` at proposal-save time, so the just-generated run is the latest completed `(portfolio, method)` match at confirm time.
+**Sub-phases** (each independently shippable, ordered by value-per-effort):
 
-**Follow-up (realized fills)**: ✅ **Done.** Order placement returns only an order id (`broker.OrderResult` has no fill qty/price), so the confirm-time `final` stage holds *submitted-intent* weights (limit price × qty). The realized variant is now available via **`mycase pipeline reconcile <run_id>`**: it fetches the broker's TRADE transactions for the run's execution window (`FetchTransactions` + `NormalizeTransactions`, the same primitives as `tax import`), aggregates realized BUY value per ticker (`Σ qty × price`) into realized weights, and overwrites the `final` stage. `autopilot.RealizedStageProposals` is the pure, unit-tested aggregation; `cache.DeleteProposalsStage` clears the prior `final` rows first so tickers that were submitted but never filled don't linger with stale intent weights. `--dry-run` previews without writing; `--days` bounds the fill window (default 5, to catch next-day/partial fills). Since `attribution.LoadRebalanceHistory` already prefers `final`, reconciled weights flow into attribution automatically.
-
-<details><summary>Original deferral rationale (pre-implementation)</summary>
-
-**Status**: ⬜ Deferred (defined-but-unimplemented — loose end **L4**, kicked to roadmap for hindsight)
-
-**Origin**: The DuckDB `proposals` table carries a `stage` column, and the pipeline writes two stages: `draft` (raw pick) and `optimized` (post weight-optimization + sector caps). A third stage, `"final"`, is *referenced* on the read side — `mycase pipeline show` iterates `draft/optimized/final`, and `pipeline diff`'s `--stage` flag lists `final` as a valid value — but **nothing ever writes it**. `GetProposals(runID, "final")` always returns empty. It is aspirational surface area with no consumer, so rather than invent a lifecycle speculatively during the "fix before feature" cleanup (loose end **L4**), the intent is captured here to be built deliberately (or dropped) with hindsight.
-
-**What it would be**: A `final` stage closes the loop between *what the system proposed* and *what actually executed*. After the investor confirms a proposal and orders fire (`mycase basket --live` / autopilot execution), the executed basket — real fill quantities and prices, post micro-transaction filtering and any manual edits — is written back as the `final` stage for that run. This makes the run record a complete audit trail: proposed (`optimized`) vs executed (`final`).
-
-**Why it's worth building** (when prioritized):
-- **Honest audit trail**: today the DB records what was *proposed*, never what was *executed*. Drift between the two (partial fills, skipped micro-transactions, manual removals) is invisible after the fact.
-- **Feeds performance attribution (Phase 5)**: the selection/rebalancing decomposition currently reconstructs history from `optimized` proposals — i.e. intended weights, not realized ones. A `final` stage lets attribution use *actual* executed weights, tightening the "did rebalancing add value" measurement.
-- **Removes a misleading affordance**: `pipeline show`/`diff` currently advertise a `final` stage that never has data — either back it with real data or trim the references.
+- **Phase 10a — Cheap correctness wins** (~1–2 days): populate `Fundamentals.Sector` from the constituents CSV (fixes broken US sector caps); enrich `mapSchwabFundamentals` to derive `NetIncome` and wire `RegularPrice` from quotes; delete the dead `yfinance.GetCache()` (zero callers). No new source.
+- **Phase 10b — Router-bypass cleanup** (refactor **R17**, ~3–5 days): thread a `datafetcher.Router`/provider set into the seven bypass paths so every US command routes through Schwab; switch the benchmark to `US:SPY` via Schwab with `^GSPC`/Yahoo fallback; add a `source` column + `slog` which-source-served logging.
+- **Phase 10c — SEC EDGAR fundamentals source** (~5–8 days): new `pkg/edgar` client (ticker→CIK map cached, `companyfacts` fetch, XBRL concept mapper with ordered candidate tags, mandatory `User-Agent` + 10 req/s limiter); populate operating cash flow, net income, and all annual series from EDGAR; a `FundamentalsMerger` composes Schwab ratios + EDGAR statements + CSV sector; per-source cache freshness (EDGAR facts stable until next quarterly filing).
+- **Phase 10d — Provider abstraction hardening** (optional, ~2–3 days): split `DataFetcher` into capability interfaces (`PriceSource`, `FundamentalsSource`, `SectorSource`); formalize the ordered fallback chain; surface provenance in `pipeline show`/reports ("FCF: $2.1B [source: EDGAR 10-K 2025-Q4]").
 
 **Deliverables**:
-- Define the trigger: write `final` at execution confirmation (`pkg/executor` / autopilot post-confirm path), sourced from executed order results rather than the proposal.
-- Persist executed quantities/prices (may need a richer `Proposal` shape or a sibling table if fill data doesn't fit the current `{ticker, weight, score, rank, sector}`).
-- Update attribution's `LoadRebalanceHistory` to prefer `final` when present, falling back to `optimized` for runs that predate the stage.
-- Restore/confirm the `pipeline show` + `diff` `final` references now that they have data.
+- `pkg/edgar/` — SEC EDGAR client + XBRL concept mapper (Phase 10c)
+- `datafetcher.FundamentalsMerger` — composite Schwab + EDGAR + CSV fundamentals (Phase 10c)
+- Sector-carrying constituents CSVs + loader wiring (Phase 10a)
+- Router wired into `report`/`monitor`/`optimize`/`serve`/`executor`/`backtest`/`autopilot-schedule` (Phase 10b / R17)
+- `source` provenance column in the price + fundamentals cache with per-source freshness (Phase 10b/10c)
+- `US:SPY`-via-Schwab benchmark with Yahoo fallback (Phase 10b)
 
-**Alternative (if not built)**: drop `"final"` from the `pipeline_show` loop and the `pipeline diff --stage` usage string, and document `optimized` as the terminal stage — so the code stops implying a feature that doesn't exist.
+**Effort**: ~2–3 weeks total across the four sub-phases. The hard part is Phase 10c's XBRL parsing — filers use custom taxonomy extensions and tags drift over time, so the concept mapper must try an ordered list of candidate tags per concept. The open question (see `docs/datasources.md` §10) is whether to parse EDGAR ourselves or pay a commercial fundamentals vendor to skip it.
 
-**Effort**: ~2–3 days. The persistence is easy; the real work is threading executed fill data out of the executor and deciding the schema for realized (vs proposed) weights.
-
-**Dependency**: Best done with or after Phase 5 (the primary consumer of realized rebalance history). Independent of Phase 8.
-
-</details>
+**Dependency**: Phase 10a and 10b are independent and can ship immediately. Phase 10c depends on 10b (the merger plugs into the routed path). Phase 10d depends on 10c.
 
 ---
 
 ### Phase 6: Options Overlay (Post-Maturity)
+
 
 **What**: Once the portfolio is stable and well-tracked (6+ months live), add an options overlay for income generation and tail-risk hedging.
 
@@ -383,18 +177,12 @@ Implemented as the `pkg/tax` package (FIFO engine + TLH logic, broker-agnostic a
 
 ### Timeline Summary
 
+Active and planned phases only (completed/dropped phases removed):
+
 | Phase | Target | Dependency | Core value delivered | Status |
 |-------|--------|------------|---------------------|--------|
-| 1. Quarterly Autopilot | ~~Sep 2026~~ | None | Removes all manual busy work | ✅ Done |
-| 2. Schwab Integration | ~~Oct 2026~~ | Schwab app approval | US market access | ✅ Done |
-| 3. US Factor Strategy | ~~Nov 2026~~ | Phase 2 ✅ | US stock picking with factor edge | ✅ Done |
-| ~~4. Asset Allocation~~ | — | — | ~~India+US portfolio~~ | ❌ Dropped |
-| 7. DuckDB Pipeline Migration | Sep 2026 | None | Atomic pipeline, run history, query-based diffs | ✅ Done |
-| 4. Tax-Loss Harvesting | ~~Oct 2026~~ | Phase 7 ✅ | 0.5-1.5% tax alpha | ✅ Done |
-| 5. Performance Attribution | ~~Nov 2026~~ | Phase 3 ✅ | Know if system works | ✅ Done (5a+5b) |
-| 8. Structured Selection History | ~~Post Phase 5~~ | Phase 7 ✅ | Queryable "why held + what changed" audit trail | ✅ Done |
-| 9. Proposal `final` Stage | ~~Post Phase 5~~ | Phase 7 ✅ | Executed-vs-proposed audit trail | ✅ Done (intent-based + realized-fill reconcile) |
-| 6. Options Overlay | H2 2027 | Phase 5 + 6mo live data | Income optimization | ⬜ |
+| 10. Data Source Resilience | Q4 2026 | Phase 2 (Schwab) | Authoritative US data (SEC EDGAR), Schwab everywhere, provenance | ⬜ |
+| 6. Options Overlay | H2 2027 | 6mo live data | Income optimization | ⬜ |
 
 ---
 
@@ -454,7 +242,7 @@ These are things we explicitly will **not** build or pursue:
 | Perfect market timing | Impossible; system stays fully invested through all conditions |
 | Zero drawdowns | Drawdowns are the price of equity returns; we accept them, we don't avoid them |
 | Beating the market every quarter | Factor tilts underperform for years at a time; the edge is long-term |
-| Complex derivatives strategies | Covered calls/puts (Phase 7) are the ceiling; no multi-leg spreads, no straddles |
+| Complex derivatives strategies | Covered calls/puts (Phase 6) are the ceiling; no multi-leg spreads, no straddles |
 
 ### Design constraints (inherited from vision.md)
 
@@ -473,6 +261,7 @@ These are things we explicitly will **not** build or pursue:
 | Rebalancing premium | Phase 1 (quarterly rebalance) | 0.3–0.8% / year |
 | Factor tilts (US) | Phase 3 (quality + momentum) | 0.5–1.5% / year |
 | Pipeline reliability | Phase 7 (DuckDB migration — atomic writes, run history) | Operational quality (no lost data) |
+| Data source integrity | Phase 10 (authoritative SEC EDGAR fundamentals, Schwab prices, provenance) | Operational quality (correct inputs, no silent Yahoo scrape drift) |
 | Tax-loss harvesting | Phase 4 | 0.5–1.5% / year (tax savings) |
 | Performance awareness | Phase 5 (know when to simplify) | Prevents compounding losses from a broken strategy |
 | Options income | Phase 6 | 1–3% / year on mature portfolio |
@@ -485,11 +274,11 @@ These are things we explicitly will **not** build or pursue:
 
 ## Appendix B: Future Explorations (Parked)
 
-Ideas worth revisiting once the core system (Phases 1–7) is stable and the ecosystem matures.
+Ideas worth revisiting once the core system is stable and the ecosystem matures.
 
 ### Native macOS App (SwiftUI + DuckDB)
 
-**Revisit when**: macOS 27, DuckDB 2.0, and Phases 4–5 are complete.
+**Revisit when**: macOS 27, DuckDB 2.0, and the core system is stable with 6+ months of live tracking.
 
 **Why it might be better**: The current web dashboard (`mycase serve` + browser) works but has friction — starting a server, opening a tab, no native notifications. More critically, the pipeline's "pause for human editing" step currently requires opening a raw CSV in a text editor — zero context, zero validation, easy to break.
 
@@ -559,7 +348,7 @@ This is fragile: wrong column deleted, accidental formatting, no context while e
 
 #### Why Not Now
 
-Phases 4–5 (TLH, Performance Attribution) are higher priority — they generate alpha; the UI doesn't. The CSV workflow is ugly but works for quarterly rebalance (4×/year). Defer until:
+Data-source resilience (Phase 10) is higher priority — it improves the correctness of inputs the strategy depends on; the UI doesn't. The CSV workflow is ugly but works for quarterly rebalance (4×/year). Defer until:
 - The system is stable enough that UX is the bottleneck, not the strategy
-- DuckDB intermediate migration is done (Phase 7, see `docs/duckdb-migration.md`) — the golden copy can then move to DB
+- The golden copy can move to DuckDB (the pipeline migration is done — see `docs/duckdb-migration.md`)
 - Swift Charts and DuckDB Swift bindings are mature enough for production use

@@ -41,9 +41,26 @@ Each step is a `mycase` subcommand that can run independently or as part of `myc
 
 ## 2. Inputs: Where Data Comes From
 
-### Yahoo Finance (primary data source)
+Data is sourced **per data type from the most authoritative provider that can supply it**, selected at runtime by `pkg/datafetcher/Router` on the ticker prefix (`US:`/`NYSE:`/`NASDAQ:` → Schwab; everything else → Yahoo). The full source-by-source API shapes, provenance chain (exchanges vs SEC vs classification standards), and the resilient-architecture plan live in **`docs/datasources.md`**; this section is the summary.
 
-All price and fundamental data is fetched from Yahoo Finance's unofficial APIs. There are two endpoints:
+| Data type | Current US source | India source | Origin |
+|-----------|-------------------|--------------|--------|
+| Prices / quotes / OHLCV | Schwab (Yahoo fallback) | Yahoo | Exchanges (SIP) |
+| Fundamentals — ratios (P/E, ROE, margins, beta) | Schwab TTM | Yahoo | Vendor parse of SEC filings |
+| Fundamentals — statements (cash flow, annual series) | Yahoo (Schwab has none) → SEC EDGAR planned | Yahoo | SEC EDGAR XBRL |
+| Sector | Yahoo (Schwab returns none) → constituents CSV planned | Yahoo | GICS (licensed) / SIC (free) |
+| Holdings / transactions / orders | Schwab | Zerodha | Broker |
+| Index constituents | CSV (S&P 500 dataset) | CSV (NSE) | Index provider |
+
+> **Known drift**: Schwab's fundamentals are a thin TTM snapshot — no sector, no cash-flow statement, no annual series — and seven command paths (`report`, `monitor`, `optimize`, `serve`, `executor`, `backtest`, `autopilot-schedule`) still bypass the Router and hit Yahoo directly for US data. The remediation is tracked as **roadmap Phase 10** (data-source resilience) and **refactor R17** (Router-bypass cleanup). See `docs/datasources.md`.
+
+### Schwab Market Data API (US primary)
+
+US price history (`/pricehistory`), batch quotes (`/quotes`), and per-ticker fundamentals (`/instruments?projection=fundamental`) via `pkg/broker/schwab/`. OAuth2, 120 req/min ceiling. Fundamentals are TTM ratios only — see the drift note above and `docs/datasources.md` §5 for the gap analysis. See also D13.
+
+### Yahoo Finance (India primary, US fallback)
+
+All price and fundamental data for India — and the US fallback when Schwab errors or is unconfigured — is fetched from Yahoo Finance's unofficial APIs. There are two endpoints:
 
 **Chart API** (`/v8/finance/chart/{symbol}`): used for daily OHLCV price history.
 - Range mode: `range=1mo|3mo|6mo|1y|2y|5y` for recent history
@@ -155,6 +172,21 @@ Answers: "Run the quarterly rebalance without me babysitting 15 terminal prompts
 
 ## 4. System Design
 
+### Conceptual Layers
+
+The system is a stack of responsibilities, each testable in isolation and depending only on those below it (the US-only active path; India packages remain as legacy):
+
+| Layer | Responsibility | Key packages |
+|-------|----------------|--------------|
+| 1 — Market data | Prices, quotes, fundamentals, constituents | `datafetcher` (US→Schwab, else→Yahoo), `broker/schwab`, `yfinance`, `cache`, `marketdata` |
+| 2 — Strategy engine | Scoring, hard filters, hysteresis, selection | `stockpicker`, `selectiontracker` |
+| 3 — Portfolio construction | Weight optimization, sector caps, rebalancing bands | `optimizer` |
+| 4 — Execution & tax | Order placement, FIFO lots, TLH, cost model | `executor`, `broker`, `tax`, `costs` |
+| 5 — Autopilot & scheduling | Non-interactive quarterly pipeline, drift daemon, alert→confirm→exec | `autopilot`, `daemon`, `alert` |
+| 6 — Audit & attribution | Live NAV vs SPY, alpha decomposition, monitoring | `attribution`, `monitoring` |
+
+Cross-market India/US allocation was considered as a Layer-3 concern but **dropped** (roadmap Phase 4) — the active strategy is US-only. The concrete `cmd/pkg/` package breakdown below is the authoritative structural view.
+
 ### Layer Architecture
 
 ```
@@ -164,12 +196,13 @@ pkg/           — domain logic; no CLI imports
   optimizer/   — inverse-volatility, MFS weights, sector caps
   backtest/    — engine, metrics, portfolio valuation
   autopilot/   — non-interactive pipeline, proposal model, scheduling, alerts
+  attribution/ — live NAV series, vs-benchmark metrics (alpha/beta/IR), return decomposition; owns its DuckDB table via attribution.Store
   yfinance/    — price and fundamental data fetching (returns marketdata types)
   marketdata/  — shared price/fundamental DTOs (HistoricalData, Fundamentals); zero-import leaf
   cache/       — DuckDB read/write for prices, fundamentals, pipeline runs; zero-import leaf (domains own their own tables via a *sql.DB handle)
-  broker/      — Broker interface; zerodha/, schwab/, and mock/ implementations
+  broker/      — Broker interface + MockBroker (broker.go, mock.go); zerodha/ and schwab/ implementations, types/ leaf
   broker/types/ — broker DTOs (Holding, Order, OrderResult, MarketConfig); zero-import leaf
-  schwab/      — Schwab Trader API: OAuth2 auth, HTTP client, market data, US broker, transaction history
+  broker/schwab/ — Schwab Trader API: OAuth2 auth, HTTP client, market data, US broker, transaction history
   daemon/      — drift computation, alert dispatch
   costs/       — transaction cost model (India + US), tax classification
   tax/         — FIFO lot tracking, tax-loss harvesting, wash-sale detection, order sequencing (US); owns its DuckDB tables via tax.Store
@@ -177,6 +210,8 @@ pkg/           — domain logic; no CLI imports
   alert/       — Alerter interface; Telegram, Discord implementations
   executor/    — live order placement with retry logic
   printer/     — terminal output formatting
+  render/      — CLI rendering primitives (tabwriter tables, KV, color, formatters); zero-import leaf
+  logging/     — structured slog setup: fanout handler, req_id tracing, timing/HTTP/DB helpers; zero-import leaf
   csvloader/   — CSV/golden copy operations, comparison reports
   excel/       — native Excel (.xlsx) parsing & smart ticker extraction
   config/      — configuration loading/parsing (pipeline, mfs, alerts)
@@ -205,7 +240,7 @@ IsAuthenticated() bool
 
 ### In-Process Pipeline
 
-All pipeline steps share one Go process: one DuckDB connection, one Yahoo Finance session, one broker client. `mycase pipeline` incurs zero inter-process overhead. The only coordination is sequential function calls — no channels, no goroutines across steps.
+All pipeline steps share one Go process: one DuckDB connection, one market-data session (Schwab client for US via the `datafetcher.Router`, Yahoo for India), one broker client. `mycase pipeline` incurs zero inter-process overhead. The only coordination is sequential function calls — no channels, no goroutines across steps.
 
 Concurrency happens within individual commands: `backtest` fetches all tickers concurrently via goroutines + buffered channel; `pick` fetches fundamentals for 250 stocks in parallel with a semaphore.
 
@@ -515,6 +550,8 @@ CREATE TABLE cache_meta (
 
 Historical date-range keys never expire because stock prices for past dates do not change. This is the key optimization for backtesting: a 5-year backtest across 15 tickers fetches each ticker once and never re-fetches unless the cache is manually cleared.
 
+> **Provenance gap**: the cache records *when* a value was fetched but not *which source* produced it. There is no `source` column, so we cannot audit whether a number came from Schwab, Yahoo, or (planned) SEC EDGAR, nor invalidate one source selectively. Adding provenance is part of roadmap Phase 10 — see `docs/datasources.md` §7. The expiry policy above is also India/Yahoo-framed (15:30 IST market close); the planned EDGAR path uses filing-based freshness (facts stable until the next quarterly filing).
+
 ### File Cache (`data/.cache/`)
 
 Date-stamped JSON files for same-day price data. Used as a fallback when DuckDB is unavailable and as a warm cache for intraday performance tracking. Not used by the backtest engine (DuckDB only for date-range queries).
@@ -600,3 +637,14 @@ R16 restructured the `pkg/` graph around one rule: a package should either **def
 - **Domains own their persistence.** `tax.Store` and `attribution.Store` each take a `*sql.DB` handle from `cache.Conn()` and define their own tables, so `pkg/cache` imports no domain package and stays a leaf (see D11).
 
 The result: no package both defines cross-boundary types and pulls heavy deps, so new feature packages depend on leaves, not hubs. A `go list`-based guard (`scripts/checkdeps`, run by `make check-deps` and `make cleanup`) enforces strictly-downward imports and leaf-ness; the layer table and rules are codified in `.kiro/steering/architecture.md`.
+
+
+### D15 — Data Source Per Data Type, Not Per Market
+
+Routing today is **market-keyed** (`datafetcher.Router` sends US→Schwab, India→Yahoo, D10). The target model (roadmap Phase 10) is **data-type-keyed with an ordered, logged provider chain**, because the most authoritative source depends on *what* is fetched, not just *where* it trades:
+
+- **Prices/quotes** → Schwab (broker-direct, closest to the exchange SIP feed), Yahoo fallback.
+- **Fundamentals** are *composed*, not single-sourced: Schwab TTM ratios + SEC EDGAR statement facts (operating cash flow, net income, annual series — the authoritative XBRL origin) + sector from the constituents CSV, with Yahoo as the whole-record fallback when the merge is too sparse to score.
+- **Benchmark** → Schwab `US:SPY` (the honest "you-could-have-bought-this" baseline), Yahoo `^GSPC` fallback.
+
+Rationale: Yahoo is a free aggregator reselling a vendor's parse of SEC filings; SEC EDGAR is the filing itself. We accept the XBRL parsing cost for authoritative, license-clean, quarterly-stable data. Fallbacks become an explicit chain with `slog` visibility (degraded runs are observable, not silently swallowed), and the cache gains a `source` column so every number is auditable — consistent with the "no black boxes" design constraint. Full design, API shapes, and gap analysis: `docs/datasources.md`.
