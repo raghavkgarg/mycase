@@ -2,7 +2,9 @@ package datafetcher
 
 import (
 	"context"
+	"log/slog"
 	"maps"
+	"strings"
 	"time"
 
 	"github.com/raghavkgarg/mycase/pkg/broker/schwab"
@@ -85,16 +87,23 @@ func (r *Router) FetchQuotes(ctx context.Context, tickers []string) (map[string]
 			schwabPrices, err := r.schwabClient.FetchQuotes(ctx, usTickers)
 			if err != nil {
 				// Fallback to Yahoo for US tickers
+				slog.WarnContext(ctx, "datafetcher.quotes_schwab_fallback",
+					"source", "yahoo", "reason", "schwab_error",
+					"count", len(usTickers), "err", err)
 				yfPrices, yfErr := yfinance.FetchQuotes(ctx, usTickers)
 				if yfErr != nil {
 					return nil, err // return original Schwab error
 				}
 				maps.Copy(prices, yfPrices)
 			} else {
+				slog.DebugContext(ctx, "datafetcher.quotes_served",
+					"source", "schwab", "count", len(usTickers))
 				maps.Copy(prices, schwabPrices)
 			}
 		} else {
 			// No Schwab client — use Yahoo for US tickers too
+			slog.DebugContext(ctx, "datafetcher.quotes_served",
+				"source", "yahoo", "reason", "no_schwab_client", "count", len(usTickers))
 			yfPrices, err := yfinance.FetchQuotes(ctx, usTickers)
 			if err != nil {
 				return nil, err
@@ -135,15 +144,22 @@ func (r *Router) FetchFundamentals(ctx context.Context, tickers []string) (map[s
 			schwabFund, err := r.schwabClient.FetchFundamentals(ctx, usTickers)
 			if err != nil {
 				// Fallback to Yahoo
+				slog.WarnContext(ctx, "datafetcher.fundamentals_schwab_fallback",
+					"source", "yahoo", "reason", "schwab_error",
+					"count", len(usTickers), "err", err)
 				yfFund, yfErr := yfinance.FetchFundamentals(ctx, usTickers)
 				if yfErr != nil {
 					return nil, err
 				}
 				maps.Copy(result, yfFund)
 			} else {
+				slog.DebugContext(ctx, "datafetcher.fundamentals_served",
+					"source", "schwab", "count", len(usTickers))
 				maps.Copy(result, schwabFund)
 			}
 		} else {
+			slog.DebugContext(ctx, "datafetcher.fundamentals_served",
+				"source", "yahoo", "reason", "no_schwab_client", "count", len(usTickers))
 			yfFund, err := yfinance.FetchFundamentals(ctx, usTickers)
 			if err != nil {
 				return nil, err
@@ -155,10 +171,50 @@ func (r *Router) FetchFundamentals(ctx context.Context, tickers []string) (map[s
 	return result, nil
 }
 
-// GetBenchmarkSymbol returns the appropriate benchmark for a set of tickers.
-// Mixed portfolios get S&P 500 if any US tickers are present.
+// FetchIntradayData fetches 1-minute intraday OHLC for a ticker over a range.
+// Schwab exposes no intraday endpoint in this client, so intraday always uses
+// Yahoo Finance regardless of ticker prefix.
+func (r *Router) FetchIntradayData(ctx context.Context, ticker string, rangeStr string) (*yfinance.IntradayData, error) {
+	if schwab.IsUSTicker(ticker) {
+		slog.DebugContext(ctx, "datafetcher.intraday_served",
+			"source", "yahoo", "reason", "schwab_no_intraday", "ticker", ticker)
+	}
+	return yfinance.FetchIntradayData(ctx, ticker, rangeStr)
+}
+
+// GetBenchmarkSymbol returns the appropriate benchmark ticker for a set of
+// tickers. When a Schwab client is configured and the portfolio contains US
+// tickers, it returns the Schwab-fetchable "US:SPY" (SPY ETF, the honest
+// "you could have bought this" baseline) so the benchmark routes through
+// Schwab. Without a Schwab client it falls back to Yahoo's index symbols
+// (^GSPC for US, ^NSEI otherwise).
 func (r *Router) GetBenchmarkSymbol(tickers []string) string {
+	for _, t := range tickers {
+		if schwab.IsUSTicker(t) {
+			if r.schwabClient != nil {
+				return "US:SPY"
+			}
+			return "^GSPC"
+		}
+	}
 	return yfinance.GetBenchmarkSymbol(tickers)
+}
+
+// NormalizeBenchmarkSymbol maps a configured benchmark symbol to the form this
+// Router can fetch. A Yahoo US index symbol (^GSPC/^SPX) is upgraded to the
+// Schwab-fetchable "US:SPY" when a Schwab client is present, so callers that
+// read the benchmark from MarketConfig still route through Schwab. Non-US and
+// already-prefixed symbols pass through unchanged.
+func (r *Router) NormalizeBenchmarkSymbol(symbol string) string {
+	if r.schwabClient == nil {
+		return symbol
+	}
+	switch strings.TrimSpace(symbol) {
+	case "^GSPC", "^SPX", "SPX", "$SPX":
+		return "US:SPY"
+	default:
+		return symbol
+	}
 }
 
 // Note: *Router structurally satisfies stockpicker.DataFetcher. The interface is

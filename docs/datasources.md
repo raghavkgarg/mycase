@@ -200,9 +200,9 @@ Fallback behavior differs by method:
 - Historical methods: US → Schwab, **no error fallback** (Schwab error propagates); Yahoo only when no client.
 - `GetBenchmarkSymbol`: always Yahoo string logic → benchmark prices always come from Yahoo (`^GSPC`).
 
-### Problem 1 — Seven paths bypass the Router entirely
+### Problem 1 — Seven paths bypassed the Router entirely ✅ FIXED (Phase 10b / R17)
 
-These construct no Router and call `yfinance.*` directly, so US holdings get Yahoo data even when Schwab is configured:
+These constructed no Router and called `yfinance.*` directly, so US holdings got Yahoo data even when Schwab was configured. **All seven now route through a `datafetcher.Router`** (`cmd/*` via the `newDataRouter()` factory; `pkg/server` via a `MarketDataFetcher`/`WithRouter` seam; `pkg/backtest` + `pkg/autopilot/schedule` via consumer-side interfaces over the `marketdata` leaf to respect layering):
 
 | Path | Direct Yahoo calls |
 |------|-------------------|
@@ -218,13 +218,13 @@ These construct no Router and call `yfinance.*` directly, so US holdings get Yah
 
 Even on the Schwab-routed happy path, US fundamentals lack sector, cash flow, and annual series ([§5](#5-capability-matrix--gap-analysis)).
 
-### Problem 3 — Benchmark is always Yahoo
+### Problem 3 — Benchmark was always Yahoo ✅ FIXED (Phase 10b / R17)
 
-`^GSPC` comes from Yahoo everywhere, even inside the Router. Roadmap Phase 5 already flags the *correct* benchmark as `US:SPY` routed through Schwab (the honest "you could have bought this" baseline).
+`^GSPC` used to come from Yahoo everywhere. `Router.GetBenchmarkSymbol` now returns `US:SPY` (Schwab-fetchable) for US portfolios when a Schwab client is present, and `Router.NormalizeBenchmarkSymbol` upgrades a configured `^GSPC`/`^SPX` to `US:SPY` — so the benchmark routes through Schwab with `^GSPC`/Yahoo as fallback. This realizes the Phase 5 "honest `US:SPY` baseline" decision.
 
-### Problem 4 — No provenance in the cache
+### Problem 4 — Provenance in the cache 🟧 GROUNDWORK DONE (Phase 10b / R17)
 
-The DuckDB cache (`pkg/cache/`) stores prices and a fundamentals JSON blob per ticker with freshness metadata, but **no column records which source produced a value.** We can't audit whether a number came from Schwab, Yahoo, or EDGAR — or selectively invalidate one source.
+The DuckDB cache now carries a `source VARCHAR` column on both `prices` and `fundamentals` (idempotent `ADD COLUMN IF NOT EXISTS` migration), and the Router emits `slog` "which source served" logging on its Schwab→Yahoo fallback branches. The yfinance write path tags rows `"yahoo"`; Schwab/EDGAR-side tagging and per-source freshness arrive with the Phase 10c merger (Schwab fundamentals don't flow through these cache methods yet).
 
 ---
 

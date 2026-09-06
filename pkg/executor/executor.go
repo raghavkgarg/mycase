@@ -14,10 +14,10 @@ import (
 
 	"github.com/raghavkgarg/mycase/pkg/broker"
 	"github.com/raghavkgarg/mycase/pkg/config"
+	"github.com/raghavkgarg/mycase/pkg/datafetcher"
 	"github.com/raghavkgarg/mycase/pkg/market"
 	"github.com/raghavkgarg/mycase/pkg/printer"
 	"github.com/raghavkgarg/mycase/pkg/render"
-	"github.com/raghavkgarg/mycase/pkg/yfinance"
 )
 
 type FailedOrderSpec struct {
@@ -358,8 +358,13 @@ func ExecuteRetryPayload(jsonPath string, b broker.Broker, reader *bufio.Reader)
 	}
 	if len(quoteMap) == 0 {
 		ctx := context.Background()
-		if yfQuotes, err := yfinance.FetchQuotes(ctx, tickers); err == nil {
-			quoteMap = yfQuotes
+		// Route the quote fallback through the datafetcher.Router so US tickers
+		// would go to Schwab; these retry tickers are typically NSE (India), so
+		// the Router forwards them to Yahoo. No Schwab client is wired here
+		// (executor owns no credentials), so US tickers fall back to Yahoo too.
+		router := datafetcher.NewRouter(nil)
+		if rQuotes, err := router.FetchQuotes(ctx, tickers); err == nil {
+			quoteMap = rQuotes
 		}
 	}
 

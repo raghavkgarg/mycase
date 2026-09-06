@@ -7,12 +7,23 @@ import (
 
 	"github.com/raghavkgarg/mycase/pkg/broker"
 	"github.com/raghavkgarg/mycase/pkg/config"
-	"github.com/raghavkgarg/mycase/pkg/yfinance"
+	"github.com/raghavkgarg/mycase/pkg/marketdata"
 )
+
+// benchmarkFetcher is the minimal price surface IsTradingDay needs. Defined
+// consumer-side (autopilot) so this package depends only on the leaf
+// marketdata DTOs; *datafetcher.Router satisfies it structurally.
+type benchmarkFetcher interface {
+	FetchHistoricalDataWithTimestamps(ctx context.Context, ticker, rangeStr string) (*marketdata.HistoricalData, error)
+	NormalizeBenchmarkSymbol(symbol string) string
+}
 
 // IsTradingDay checks if today is a trading day by attempting to fetch
 // a recent benchmark price and checking if the latest candle is from today.
-func IsTradingDay(ctx context.Context) bool {
+// The fetcher routes the benchmark probe through the same provider chain the
+// pipeline uses (Schwab for US, Yahoo otherwise). A nil fetcher means "can't
+// check" and the function optimistically returns true.
+func IsTradingDay(ctx context.Context, fetcher benchmarkFetcher) bool {
 	mktCfg := broker.LoadMarketConfig()
 	loc, err := time.LoadLocation(mktCfg.Timezone)
 	if err != nil {
@@ -25,7 +36,13 @@ func IsTradingDay(ctx context.Context) bool {
 		return false
 	}
 
-	data, err := yfinance.FetchHistoricalDataWithTimestamps(ctx, mktCfg.Benchmark, "5d")
+	if fetcher == nil {
+		// No fetcher wired — assume trading day and let the pipeline try.
+		return true
+	}
+
+	benchmark := fetcher.NormalizeBenchmarkSymbol(mktCfg.Benchmark)
+	data, err := fetcher.FetchHistoricalDataWithTimestamps(ctx, benchmark, "5d")
 	if err != nil || data == nil || len(data.Timestamps) == 0 {
 		// If we can't check, assume it's a trading day and let the pipeline try
 		return true
@@ -139,8 +156,8 @@ func scheduleLocation() *time.Location {
 
 // ShouldRetryTomorrow determines if the autopilot should retry the next day
 // (e.g., if today is not a trading day).
-func ShouldRetryTomorrow(ctx context.Context) bool {
-	return !IsTradingDay(ctx)
+func ShouldRetryTomorrow(ctx context.Context, fetcher benchmarkFetcher) bool {
+	return !IsTradingDay(ctx, fetcher)
 }
 
 // LaunchdQuarterlyIntervals returns the StartCalendarInterval entries

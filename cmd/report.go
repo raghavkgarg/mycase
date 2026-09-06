@@ -111,6 +111,8 @@ func runReportWithParams(ctx context.Context, filePath, method string) error {
 	})
 	fmt.Fprintln(writer)
 
+	router := newDataRouter()
+
 	price3mo := make(map[string][]float64)
 	hist1y := make(map[string]*yfinance.HistoricalData)
 	var mu sync.Mutex
@@ -120,7 +122,7 @@ func runReportWithParams(ctx context.Context, filePath, method string) error {
 		wg.Add(2)
 		go func(ticker string) {
 			defer wg.Done()
-			p, err := yfinance.FetchHistoricalPrices(ctx, ticker, "3mo")
+			p, err := router.FetchHistoricalPrices(ctx, ticker, "3mo")
 			if err == nil {
 				mu.Lock()
 				price3mo[ticker] = p
@@ -129,7 +131,7 @@ func runReportWithParams(ctx context.Context, filePath, method string) error {
 		}(t)
 		go func(ticker string) {
 			defer wg.Done()
-			h, err := yfinance.FetchHistoricalDataWithTimestamps(ctx, ticker, "1y")
+			h, err := router.FetchHistoricalDataWithTimestamps(ctx, ticker, "1y")
 			if err == nil {
 				mu.Lock()
 				hist1y[ticker] = h
@@ -145,7 +147,7 @@ func runReportWithParams(ctx context.Context, filePath, method string) error {
 		hardFilters = cfg.HardFilters
 	}
 
-	fundamentals, err := yfinance.FetchFundamentals(ctx, tickers)
+	fundamentals, err := router.FetchFundamentals(ctx, tickers)
 	if err != nil {
 		fmt.Fprintf(writer, "Warning: Failed to fetch fundamentals: %v. Continuing...\n", err)
 	}

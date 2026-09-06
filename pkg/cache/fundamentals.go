@@ -27,12 +27,18 @@ func (c *Cache) GetFundamentalsJSON(ctx context.Context, ticker string) ([]byte,
 	return []byte(rawJSON), true, nil
 }
 
-// StoreFundamentalsJSON upserts the JSON blob for ticker with the current timestamp.
-func (c *Cache) StoreFundamentalsJSON(ctx context.Context, ticker string, data []byte) error {
+// StoreFundamentalsJSON upserts the JSON blob for ticker with the current
+// timestamp. source records which provider produced the blob (e.g. "yahoo",
+// "schwab"); an empty string is stored as NULL (R17 / Phase 10 provenance).
+func (c *Cache) StoreFundamentalsJSON(ctx context.Context, ticker string, data []byte, source string) error {
+	var src any
+	if source != "" {
+		src = source
+	}
 	_, err := c.db.ExecContext(ctx, `
-		INSERT INTO fundamentals (ticker, fetched_at, raw_json) VALUES (?, ?, ?)
-		ON CONFLICT (ticker) DO UPDATE SET fetched_at = EXCLUDED.fetched_at, raw_json = EXCLUDED.raw_json`,
-		ticker, time.Now().Unix(), string(data),
+		INSERT INTO fundamentals (ticker, fetched_at, raw_json, source) VALUES (?, ?, ?, ?)
+		ON CONFLICT (ticker) DO UPDATE SET fetched_at = EXCLUDED.fetched_at, raw_json = EXCLUDED.raw_json, source = EXCLUDED.source`,
+		ticker, time.Now().Unix(), string(data), src,
 	)
 	return err
 }

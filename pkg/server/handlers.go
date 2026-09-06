@@ -410,7 +410,13 @@ func (s *Server) handleMonitor(w http.ResponseWriter, r *http.Request) {
 
 	wg.Go(func() {
 		benchTicker := broker.LoadMarketConfig().Benchmark
-		b, ferr := yfinance.FetchHistoricalDataWithTimestamps(ctx, benchTicker, "2y")
+		var b *yfinance.HistoricalData
+		var ferr error
+		if s.router != nil {
+			b, ferr = s.router.FetchHistoricalDataWithTimestamps(ctx, s.router.NormalizeBenchmarkSymbol(benchTicker), "2y")
+		} else {
+			b, ferr = yfinance.FetchHistoricalDataWithTimestamps(ctx, benchTicker, "2y")
+		}
 		if ferr == nil && b != nil && len(b.Closes) >= 200 {
 			mu.Lock()
 			benchData = b
@@ -422,7 +428,13 @@ func (s *Server) handleMonitor(w http.ResponseWriter, r *http.Request) {
 		wg.Add(2)
 		go func(ticker string) {
 			defer wg.Done()
-			h, ferr := yfinance.FetchHistoricalDataWithTimestamps(ctx, ticker, "2y")
+			var h *yfinance.HistoricalData
+			var ferr error
+			if s.router != nil {
+				h, ferr = s.router.FetchHistoricalDataWithTimestamps(ctx, ticker, "2y")
+			} else {
+				h, ferr = yfinance.FetchHistoricalDataWithTimestamps(ctx, ticker, "2y")
+			}
 			if ferr == nil && h != nil && len(h.Closes) >= 200 {
 				mu.Lock()
 				liveHist[ticker] = h
@@ -431,7 +443,13 @@ func (s *Server) handleMonitor(w http.ResponseWriter, r *http.Request) {
 		}(t)
 		go func(ticker string) {
 			defer wg.Done()
-			funds, ferr := yfinance.FetchFundamentals(ctx, []string{ticker})
+			var funds map[string]yfinance.Fundamentals
+			var ferr error
+			if s.router != nil {
+				funds, ferr = s.router.FetchFundamentals(ctx, []string{ticker})
+			} else {
+				funds, ferr = yfinance.FetchFundamentals(ctx, []string{ticker})
+			}
 			if ferr == nil && len(funds) > 0 {
 				mu.Lock()
 				if val, ok := funds[ticker]; ok {
@@ -545,6 +563,9 @@ func (s *Server) handleBacktest(w http.ResponseWriter, r *http.Request) {
 	if benchmark == "" {
 		benchmark = broker.LoadMarketConfig().Benchmark
 	}
+	if s.router != nil {
+		benchmark = s.router.NormalizeBenchmarkSymbol(benchmark)
+	}
 	capital := params.Capital
 	if capital <= 0 {
 		capital = 100000.0
@@ -566,12 +587,24 @@ func (s *Server) handleBacktest(w http.ResponseWriter, r *http.Request) {
 
 	for _, h := range holdings {
 		go func(ticker string) {
-			hist, ferr := yfinance.FetchHistoricalByDateRange(ctx, ticker, fromTime, toTime)
+			var hist *yfinance.HistoricalData
+			var ferr error
+			if s.router != nil {
+				hist, ferr = s.router.FetchHistoricalByDateRange(ctx, ticker, fromTime, toTime)
+			} else {
+				hist, ferr = yfinance.FetchHistoricalByDateRange(ctx, ticker, fromTime, toTime)
+			}
 			resultCh <- fetchResult{ticker: ticker, hist: hist, err: ferr}
 		}(h.Ticker)
 	}
 	go func() {
-		hist, ferr := yfinance.FetchHistoricalByDateRange(ctx, benchmark, fromTime, toTime)
+		var hist *yfinance.HistoricalData
+		var ferr error
+		if s.router != nil {
+			hist, ferr = s.router.FetchHistoricalByDateRange(ctx, benchmark, fromTime, toTime)
+		} else {
+			hist, ferr = yfinance.FetchHistoricalByDateRange(ctx, benchmark, fromTime, toTime)
+		}
 		resultCh <- fetchResult{ticker: benchmark, hist: hist, err: ferr}
 	}()
 

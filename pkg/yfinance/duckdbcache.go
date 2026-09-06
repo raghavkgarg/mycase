@@ -10,6 +10,9 @@ import (
 
 var globalCache *cache.Cache
 
+// sourceYahoo is the provenance tag for data this package caches (Yahoo Finance).
+const sourceYahoo = "yahoo"
+
 // SetCache wires a DuckDB cache into the yfinance package for transparent
 // price/fundamentals caching. Also sets the global cache singleton.
 func SetCache(c *cache.Cache) {
@@ -53,6 +56,7 @@ func storePriceCache(ctx context.Context, ticker, rangeKey string, hist *Histori
 			Close:     hist.Closes[i],
 			Open:      hist.Opens[i],
 			Volume:    hist.Volumes[i],
+			Source:    sourceYahoo,
 		}
 	}
 	_ = globalCache.StorePrices(ctx, ticker, rangeKey, records)
@@ -92,6 +96,7 @@ func storeDateRangeCache(ctx context.Context, ticker string, from, to time.Time,
 			Close:     hist.Closes[i],
 			Open:      hist.Opens[i],
 			Volume:    hist.Volumes[i],
+			Source:    sourceYahoo,
 		}
 	}
 	_ = globalCache.StorePricesByDateRange(ctx, ticker, from, to, records)
@@ -120,5 +125,5 @@ func storeFundamentalsCache(ctx context.Context, ticker string, f *Fundamentals)
 	if err != nil {
 		return
 	}
-	_ = globalCache.StoreFundamentalsJSON(ctx, ticker, data)
+	_ = globalCache.StoreFundamentalsJSON(ctx, ticker, data, sourceYahoo)
 }

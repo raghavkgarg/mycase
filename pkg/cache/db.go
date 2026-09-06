@@ -65,12 +65,14 @@ CREATE TABLE IF NOT EXISTS prices (
     close   DOUBLE  NOT NULL,
     open    DOUBLE,
     volume  DOUBLE,
+    source  VARCHAR,
     PRIMARY KEY (ticker, date)
 );
 CREATE TABLE IF NOT EXISTS fundamentals (
     ticker     VARCHAR PRIMARY KEY,
     fetched_at BIGINT  NOT NULL,
-    raw_json   VARCHAR NOT NULL
+    raw_json   VARCHAR NOT NULL,
+    source     VARCHAR
 );
 CREATE TABLE IF NOT EXISTS cache_meta (
     ticker     VARCHAR NOT NULL,
@@ -129,6 +131,22 @@ CREATE TABLE IF NOT EXISTS selections (
 `
 
 func (c *Cache) initSchema(ctx context.Context) error {
-	_, err := c.db.ExecContext(ctx, ddl)
-	return err
+	if _, err := c.db.ExecContext(ctx, ddl); err != nil {
+		return err
+	}
+	// Idempotent migrations for DBs created before the R17 provenance column.
+	// DuckDB supports ADD COLUMN IF NOT EXISTS, so this is a no-op on new DBs.
+	for _, mig := range migrations {
+		if _, err := c.db.ExecContext(ctx, mig); err != nil {
+			return fmt.Errorf("cache migration %q: %w", mig, err)
+		}
+	}
+	return nil
+}
+
+// migrations are idempotent schema upgrades applied after the base DDL, for
+// caches created by an earlier version. Each must be safe to run repeatedly.
+var migrations = []string{
+	`ALTER TABLE prices ADD COLUMN IF NOT EXISTS source VARCHAR`,
+	`ALTER TABLE fundamentals ADD COLUMN IF NOT EXISTS source VARCHAR`,
 }

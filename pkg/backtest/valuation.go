@@ -6,8 +6,17 @@ import (
 	"sync"
 	"time"
 
-	"github.com/raghavkgarg/mycase/pkg/yfinance"
+	"github.com/raghavkgarg/mycase/pkg/marketdata"
 )
+
+// PriceProvider is the price-series surface ValuatePortfolio needs. It is
+// defined here (consumer-side) so pkg/backtest depends only on the leaf
+// marketdata DTOs, not on pkg/datafetcher (which sits at a higher layer).
+// *datafetcher.Router satisfies it structurally; tests can supply a fake.
+type PriceProvider interface {
+	FetchHistoricalDataWithTimestamps(ctx context.Context, ticker, rangeStr string) (*marketdata.HistoricalData, error)
+	FetchIntradayData(ctx context.Context, ticker, rangeStr string) (*marketdata.IntradayData, error)
+}
 
 // StockResult holds the per-stock P&L calculation result.
 type StockResult struct {
@@ -27,6 +36,7 @@ type StockResult struct {
 // 7 days ago; intraday mode is used otherwise.
 func ValuatePortfolio(
 	ctx context.Context,
+	fetcher PriceProvider,
 	portfolio []Holding,
 	capital float64,
 	targetTime time.Time,
@@ -48,7 +58,7 @@ func ValuatePortfolio(
 			}
 
 			if useDailyClose {
-				data, err := yfinance.FetchHistoricalDataWithTimestamps(ctx, info.Ticker, rangeStr)
+				data, err := fetcher.FetchHistoricalDataWithTimestamps(ctx, info.Ticker, rangeStr)
 				if err != nil {
 					res.Err = err
 					results[idx] = res
@@ -92,7 +102,7 @@ func ValuatePortfolio(
 				res.FinalValue = shares * priceClose
 				res.PctReturn = ((priceClose - priceAtBuy) / priceAtBuy) * 100.0
 			} else {
-				data, err := yfinance.FetchIntradayData(ctx, info.Ticker, rangeStr)
+				data, err := fetcher.FetchIntradayData(ctx, info.Ticker, rangeStr)
 				if err != nil {
 					res.Err = err
 					results[idx] = res

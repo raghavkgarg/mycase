@@ -278,7 +278,7 @@ func TestStoreFundamentals_Basic(t *testing.T) {
 	c := openTestCache(t)
 
 	want := []byte(`{"Sector":"Technology","ForwardPE":25.5,"ROE":0.42}`)
-	if err := c.StoreFundamentalsJSON(ctx, "NSE:TCS", want); err != nil {
+	if err := c.StoreFundamentalsJSON(ctx, "NSE:TCS", want, "yahoo"); err != nil {
 		t.Fatalf("StoreFundamentalsJSON: %v", err)
 	}
 
@@ -297,10 +297,10 @@ func TestStoreFundamentals_Basic(t *testing.T) {
 func TestStoreFundamentals_Upsert(t *testing.T) {
 	c := openTestCache(t)
 
-	if err := c.StoreFundamentalsJSON(ctx, "NSE:TCS", []byte(`{"ForwardPE":20.0}`)); err != nil {
+	if err := c.StoreFundamentalsJSON(ctx, "NSE:TCS", []byte(`{"ForwardPE":20.0}`), "yahoo"); err != nil {
 		t.Fatalf("first store: %v", err)
 	}
-	if err := c.StoreFundamentalsJSON(ctx, "NSE:TCS", []byte(`{"ForwardPE":25.0}`)); err != nil {
+	if err := c.StoreFundamentalsJSON(ctx, "NSE:TCS", []byte(`{"ForwardPE":25.0}`), "yahoo"); err != nil {
 		t.Fatalf("second store (upsert): %v", err)
 	}
 
@@ -335,7 +335,7 @@ func TestGetFundamentals_Miss(t *testing.T) {
 func TestGetFundamentals_Stale(t *testing.T) {
 	c := openTestCache(t)
 
-	if err := c.StoreFundamentalsJSON(ctx, "NSE:TCS", []byte(`{}`)); err != nil {
+	if err := c.StoreFundamentalsJSON(ctx, "NSE:TCS", []byte(`{}`), "yahoo"); err != nil {
 		t.Fatalf("StoreFundamentalsJSON: %v", err)
 	}
 
@@ -382,7 +382,7 @@ func TestStatus_WithData(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("StorePrices: %v", err)
 	}
-	if err := c.StoreFundamentalsJSON(ctx, "NSE:RELIANCE", []byte(`{}`)); err != nil {
+	if err := c.StoreFundamentalsJSON(ctx, "NSE:RELIANCE", []byte(`{}`), "yahoo"); err != nil {
 		t.Fatalf("StoreFundamentalsJSON: %v", err)
 	}
 
@@ -423,7 +423,7 @@ func TestClearTicker_RemovesOnlyTarget(t *testing.T) {
 		}); err != nil {
 			t.Fatalf("StorePrices %s: %v", ticker, err)
 		}
-		if err := c.StoreFundamentalsJSON(ctx, ticker, []byte(`{}`)); err != nil {
+		if err := c.StoreFundamentalsJSON(ctx, ticker, []byte(`{}`), "yahoo"); err != nil {
 			t.Fatalf("StoreFundamentalsJSON %s: %v", ticker, err)
 		}
 	}
@@ -465,7 +465,7 @@ func TestClearAll(t *testing.T) {
 	ts := time.Now().Add(-24 * time.Hour).Unix()
 	for _, ticker := range []string{"NSE:TCS", "NSE:INFY", "NSE:RELIANCE"} {
 		c.StorePrices(ctx, ticker, "3mo", []PriceRecord{{Timestamp: ts, Close: 100.0}})
-		c.StoreFundamentalsJSON(ctx, ticker, []byte(`{}`))
+		c.StoreFundamentalsJSON(ctx, ticker, []byte(`{}`), "yahoo")
 	}
 
 	if err := c.ClearAll(ctx); err != nil {

@@ -259,13 +259,14 @@ func monitorLoadAllData(ctx context.Context, tickers []string) (
 	map[string]bool,
 	bool,
 ) {
+	router := newDataRouter()
 	var benchData *yfinance.HistoricalData
 	var mu sync.Mutex
 	var wg sync.WaitGroup
 
 	wg.Go(func() {
-		benchTicker := broker.LoadMarketConfig().Benchmark
-		b, err := yfinance.FetchHistoricalDataWithTimestamps(ctx, benchTicker, "2y")
+		benchTicker := router.NormalizeBenchmarkSymbol(broker.LoadMarketConfig().Benchmark)
+		b, err := router.FetchHistoricalDataWithTimestamps(ctx, benchTicker, "2y")
 		if err == nil && b != nil && len(b.Closes) > 200 {
 			mu.Lock()
 			benchData = b
@@ -280,7 +281,7 @@ func monitorLoadAllData(ctx context.Context, tickers []string) (
 		wg.Add(2)
 		go func(ticker string) {
 			defer wg.Done()
-			h, err := yfinance.FetchHistoricalDataWithTimestamps(ctx, ticker, "2y")
+			h, err := router.FetchHistoricalDataWithTimestamps(ctx, ticker, "2y")
 			if err == nil && h != nil && len(h.Closes) > 200 {
 				mu.Lock()
 				liveHist[ticker] = h
@@ -289,7 +290,7 @@ func monitorLoadAllData(ctx context.Context, tickers []string) (
 		}(t)
 		go func(ticker string) {
 			defer wg.Done()
-			funds, err := yfinance.FetchFundamentals(ctx, []string{ticker})
+			funds, err := router.FetchFundamentals(ctx, []string{ticker})
 			if err == nil && len(funds) > 0 {
 				mu.Lock()
 				if val, ok := funds[ticker]; ok {

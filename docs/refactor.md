@@ -24,7 +24,7 @@ A one-line ledger of completed refactor phases is kept at the bottom for git-arc
 | R16 | Dependency untangling (break cycle-magnet packages) | ✅ Done | none |
 | R14 | Structured logging (slog) — R14.5–R14.7 migration | 🟡 R14.1–R14.4 + steering done | none |
 | R15 | Test strategy & E2E testing | ⬜ Next (unblocked — R16 seams landed) | R16 ✅ |
-| R17 | Router-bypass cleanup (route 7 paths through `datafetcher.Router`) | ⬜ (roadmap Phase 10b) | none |
+| R17 | Router-bypass cleanup (route 7 paths through `datafetcher.Router`) | ✅ Done (roadmap Phase 10b) | none |
 
 **R14 progress**: `pkg/logging` package (fanout handler, req_id tracing, timing/HTTP/DB helpers, rotation) + `main.go` wiring (global flags `--log-level`/`--log-dir`/`--quiet`/`--verbose`, `Before`/`After` hooks, `slog.SetDefault`) + `config/defaults.json` `logging` block are **done and verified**. R14.3 (new Phase 5 code written slog-native) shipped with Phase 5a/5b. Remaining: R14.4–R14.7 (incremental `fmt`→slog migration of existing packages), and the `.kiro/steering/logging.md` conventions file.
 
@@ -472,48 +472,18 @@ E2E tests double as logging-integration checks: assert that a full command run p
 
 ---
 
-## Phase R17 — Router-Bypass Cleanup — DESIGN
+## Phase R17 — Router-Bypass Cleanup — DONE
 
-**Status**: ⬜ Not started (this is roadmap **Phase 10b**; the feature framing and full data-source rationale live in `docs/roadmap.md` Phase 10 and `docs/datasources.md`).
+**Status**: ✅ **Done** (this is roadmap **Phase 10b**; the feature framing and full data-source rationale live in `docs/roadmap.md` Phase 10 and `docs/datasources.md`).
 
-**Motivation**: `datafetcher.Router` (D10/D14) exists to route US tickers to Schwab and everything else to Yahoo, but **only the `pick`/autopilot pipeline actually uses it**. Seven other command paths import `pkg/yfinance` and call its fetch functions directly, so US holdings get Yahoo data even when a Schwab client is configured. This is the same *build-it-then-never-wire-it* pattern the loose-ends cleanup targets: the routing seam was built (R16, D10) but never wired into these consumers.
+**What shipped**:
+- `datafetcher.Router` threaded into all seven bypass paths — `cmd/report.go`, `cmd/monitor.go`, `cmd/optimize.go`, `pkg/server/handlers.go`, `pkg/executor/executor.go`, `pkg/backtest/valuation.go`, `pkg/autopilot/schedule.go` — replacing direct `yfinance.*` fetch calls. `cmd/*` paths build the Router via the existing `newDataRouter()` factory; `pkg/server` gained a `MarketDataFetcher` consumer interface + `WithRouter` option; `pkg/backtest` (L2, below datafetcher) and `pkg/autopilot/schedule` define **consumer-side interfaces** (`PriceProvider`, `benchmarkFetcher`) over the leaf `marketdata` DTOs so no upward import is introduced — layering stays intact (`make check-deps` green).
+- **Benchmark now Schwab-aware**: `Router.GetBenchmarkSymbol` returns `US:SPY` (Schwab-fetchable) for US portfolios when a Schwab client is present, else Yahoo `^GSPC`/`^NSEI`. Added `Router.NormalizeBenchmarkSymbol` to upgrade a configured `^GSPC`/`^SPX` benchmark to `US:SPY` when Schwab is present; wired into the monitor/optimize/server/schedule benchmark reads.
+- **`Router.FetchIntradayData`** added (Yahoo-only — Schwab exposes no intraday endpoint) so the backtest path routes through the Router uniformly.
+- **Provenance groundwork**: `slog` Debug/Warn "which source served" logging on the Router's Schwab→Yahoo fallback branches (`datafetcher.quotes_served`/`quotes_schwab_fallback`, `fundamentals_served`/`fundamentals_schwab_fallback`, `intraday_served`); `source VARCHAR` column added to the cache `prices` + `fundamentals` tables with an idempotent `ALTER TABLE … ADD COLUMN IF NOT EXISTS` migration, `PriceRecord.Source` + a `source` param on `StoreFundamentalsJSON` (yfinance path tags `"yahoo"`; Schwab/EDGAR tagging arrives with the Phase 10c merger).
+- **Tests**: `pkg/datafetcher/router_test.go` gained `FetchFundamentals` (US→Schwab split), `GetBenchmarkSymbol`, and `NormalizeBenchmarkSymbol` (table) coverage. Full suite + `-race` on touched packages green; `make cleanup` clean.
 
-Direct-yfinance call sites bypassing the Router:
-
-| Path | Direct Yahoo calls |
-|------|-------------------|
-| `cmd/report.go` | prices, historical, fundamentals |
-| `cmd/monitor.go` | benchmark + per-holding prices + fundamentals |
-| `cmd/optimize.go` | prices, benchmark, fundamentals |
-| `pkg/server/handlers.go` | benchmark + per-holding history + fundamentals (the dashboard) |
-| `pkg/executor/executor.go` | quote fallback |
-| `pkg/backtest/valuation.go` | historical + intraday |
-| `pkg/autopilot/schedule.go` | benchmark trading-day probe |
-
-Additionally, `GetBenchmarkSymbol` always resolves to Yahoo's `^GSPC`, so benchmark prices come from Yahoo even inside the Router (the honest US baseline is `US:SPY` through Schwab — see Phase 5 benchmark decision and D15).
-
-### Design principle: wire the existing seam, don't invent a new one
-
-The Router already satisfies the shapes these callers need (`FetchHistoricalDataWithTimestamps`, `FetchQuotes`, `FetchFundamentals`, `FetchHistoricalByDateRange`). The work is threading a constructed `*datafetcher.Router` (built from the same broker factory the pipeline uses) into each path, replacing the direct `yfinance.*` calls. No new abstraction is required for R17 itself; the richer composite-fundamentals merger and SEC EDGAR source are roadmap Phase 10c (kept out of this refactor to keep it purely mechanical and low-risk).
-
-Where a path currently has no broker client in scope (e.g. `cmd/report.go`), it acquires one via the existing `cmd/broker.go` factory, exactly as `cmd/pick.go` does post-R16.
-
-### Deliverables
-
-- Router threaded into the seven paths above; direct `pkg/yfinance` imports removed from `cmd/report.go`, `cmd/monitor.go`, `cmd/optimize.go`, `pkg/server/handlers.go`, `pkg/executor/executor.go`, `pkg/backtest/valuation.go`, `pkg/autopilot/schedule.go` (type-only imports of `marketdata` DTOs stay).
-- Benchmark resolves to `US:SPY` via Schwab for US portfolios, `^GSPC`/Yahoo fallback (retire the hardcoded Yahoo benchmark fetch in `pkg/stockpicker/loader.go` and the bypass paths).
-- `slog` "which source served" logging on the Router fallback branches, so a Schwab→Yahoo degrade is observable (feeds the R14 logging story).
-- `source` provenance column groundwork in the cache (shared with roadmap Phase 10c).
-- Unit tests for the Router prefix + fallback logic (dovetails with R15's `datafetcher` coverage target 21%→60%).
-
-### Non-goals
-
-- No SEC EDGAR source and no composite `FundamentalsMerger` — those are roadmap Phase 10c, deliberately sequenced after this mechanical cleanup so the wiring change carries no data-model risk.
-- No change to the India/Yahoo path — it stays the primary for non-US tickers.
-
-### Relationship to R15 (testing)
-
-R17 makes the Router the single choke point for market data across all commands, which is exactly the seam R15 wants to unit-test. Landing R17 first means the E2E command scenarios exercise the routed path uniformly rather than a mix of routed (`pick`) and direct-Yahoo (everything else).
+**Deliberately deferred to Phase 10c** (unchanged from the design's non-goals): SEC EDGAR source, composite `FundamentalsMerger`, and Schwab-side `source` tagging (Schwab doesn't write through the yfinance cache methods today).
 
 ---
 

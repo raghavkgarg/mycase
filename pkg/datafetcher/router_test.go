@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/raghavkgarg/mycase/pkg/broker/schwab"
+	"github.com/raghavkgarg/mycase/pkg/yfinance"
 )
 
 func buildSchwabTestClient(t *testing.T, handler http.Handler) *schwab.Client {
@@ -128,4 +129,105 @@ func TestRouterFetchHistoricalByDateRange(t *testing.T) {
 	if len(hist.Closes) != 1 {
 		t.Fatalf("len(Closes) = %d, want 1", len(hist.Closes))
 	}
+}
+
+func TestRouterFetchFundamentalsUSToSchwab(t *testing.T) {
+	schwabHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Indian tickers must never reach Schwab.
+		if strings.Contains(r.URL.Query().Get("symbol"), "RELIANCE") {
+			t.Error("Indian ticker should not reach Schwab fundamentals")
+		}
+		json.NewEncoder(w).Encode(schwab.InstrumentResponse{
+			Instruments: []schwab.Instrument{
+				{
+					Symbol: "AAPL",
+					Fundamental: &schwab.Fundamental{
+						Symbol:             "AAPL",
+						MarketCap:          3_000_000, // millions → 3e12
+						ReturnOnEquity:     42.0,      // percent
+						PeRatio:            28.0,
+						NetProfitMarginTTM: 25.0,
+						RevenueTTM:         400_000_000_000,
+						SharesOutstanding:  15_000_000_000,
+					},
+				},
+			},
+		})
+	})
+
+	client := buildSchwabTestClient(t, schwabHandler)
+	router := NewRouter(client)
+
+	funds, err := router.FetchFundamentals(context.Background(), []string{"US:AAPL"})
+	if err != nil {
+		t.Fatalf("FetchFundamentals: %v", err)
+	}
+	f, ok := funds["US:AAPL"]
+	if !ok {
+		t.Fatalf("US:AAPL missing from fundamentals result")
+	}
+	if f.MarketCap != 3_000_000*1_000_000 {
+		t.Errorf("MarketCap = %v, want 3e12", f.MarketCap)
+	}
+	// ROE is percent→decimal converted by the Schwab mapper.
+	if f.ROE != 0.42 {
+		t.Errorf("ROE = %v, want 0.42", f.ROE)
+	}
+}
+
+func TestRouterGetBenchmarkSymbol(t *testing.T) {
+	usTickers := []string{"US:AAPL", "US:MSFT"}
+	indiaTickers := []string{"NSE:RELIANCE", "NSE:TCS"}
+
+	// With a Schwab client, US portfolios get the Schwab-fetchable US:SPY.
+	withSchwab := NewRouter(buildSchwabTestClient(t, http.HandlerFunc(func(http.ResponseWriter, *http.Request) {})))
+	if got := withSchwab.GetBenchmarkSymbol(usTickers); got != "US:SPY" {
+		t.Errorf("US benchmark with Schwab = %q, want US:SPY", got)
+	}
+	// Non-US portfolios still delegate to Yahoo's symbol logic.
+	if got := withSchwab.GetBenchmarkSymbol(indiaTickers); got != "^NSEI" {
+		t.Errorf("India benchmark = %q, want ^NSEI", got)
+	}
+
+	// Without a Schwab client, US portfolios fall back to Yahoo's ^GSPC.
+	noSchwab := NewRouter(nil)
+	if got := noSchwab.GetBenchmarkSymbol(usTickers); got != "^GSPC" {
+		t.Errorf("US benchmark without Schwab = %q, want ^GSPC", got)
+	}
+}
+
+func TestRouterNormalizeBenchmarkSymbol(t *testing.T) {
+	withSchwab := NewRouter(buildSchwabTestClient(t, http.HandlerFunc(func(http.ResponseWriter, *http.Request) {})))
+	noSchwab := NewRouter(nil)
+
+	cases := []struct {
+		name    string
+		router  *Router
+		in, out string
+	}{
+		{"gspc upgraded to spy with schwab", withSchwab, "^GSPC", "US:SPY"},
+		{"spx upgraded to spy with schwab", withSchwab, "$SPX", "US:SPY"},
+		{"india untouched with schwab", withSchwab, "^NSEI", "^NSEI"},
+		{"already prefixed untouched", withSchwab, "US:SPY", "US:SPY"},
+		{"gspc untouched without schwab", noSchwab, "^GSPC", "^GSPC"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.router.NormalizeBenchmarkSymbol(tc.in); got != tc.out {
+				t.Errorf("NormalizeBenchmarkSymbol(%q) = %q, want %q", tc.in, got, tc.out)
+			}
+		})
+	}
+}
+
+func TestRouterFetchIntradayNilSchwab(t *testing.T) {
+	// Intraday is Yahoo-only (Schwab has no intraday endpoint). Verify the
+	// router constructs with a nil Schwab client and that the intraday method
+	// exists on the Router surface (compile-time). The live Yahoo fetch needs
+	// network, so it is exercised in integration tests, not here.
+	router := NewRouter(nil)
+	if router.schwabClient != nil {
+		t.Fatal("expected nil schwabClient")
+	}
+	var _ func(context.Context, string, string) (*yfinance.IntradayData, error) = router.FetchIntradayData
 }

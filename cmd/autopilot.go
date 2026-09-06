@@ -81,7 +81,7 @@ func runAutopilotRun(ctx context.Context, c *cli.Command) error {
 
 	// Check trading day
 	if !skipTradingDayCheck {
-		if !autopilot.IsTradingDay(ctx) {
+		if !autopilot.IsTradingDay(ctx, newDataRouter()) {
 			fmt.Println("[autopilot] Today is not a trading day. Use --skip-trading-day-check to override.")
 			fmt.Println("[autopilot] Will retry on next trading day.")
 			return nil

@@ -13,6 +13,9 @@ type PriceRecord struct {
 	Close     float64
 	Open      float64
 	Volume    float64
+	// Source records which provider produced this row (e.g. "yahoo", "schwab").
+	// Empty string is stored as NULL. Provenance groundwork for R17 / Phase 10.
+	Source string
 }
 
 // GetPrices returns cached price records for (ticker, rangeKey) if the data
@@ -76,12 +79,16 @@ func (c *Cache) StorePrices(ctx context.Context, ticker, rangeKey string, record
 
 	for _, r := range records {
 		date := time.Unix(r.Timestamp, 0).UTC().Format("2006-01-02")
+		var source any
+		if r.Source != "" {
+			source = r.Source
+		}
 		if _, err := tx.ExecContext(ctx, `
-			INSERT INTO prices (ticker, date, ts, close, open, volume) VALUES (?, ?, ?, ?, ?, ?)
+			INSERT INTO prices (ticker, date, ts, close, open, volume, source) VALUES (?, ?, ?, ?, ?, ?, ?)
 			ON CONFLICT (ticker, date) DO UPDATE SET
 				ts = EXCLUDED.ts, close = EXCLUDED.close,
-				open = EXCLUDED.open, volume = EXCLUDED.volume`,
-			ticker, date, r.Timestamp, r.Close, r.Open, r.Volume,
+				open = EXCLUDED.open, volume = EXCLUDED.volume, source = EXCLUDED.source`,
+			ticker, date, r.Timestamp, r.Close, r.Open, r.Volume, source,
 		); err != nil {
 			return err
 		}

@@ -148,7 +148,7 @@ func runPerfWithParams(ctx context.Context, filePath string, capital float64, ta
 		fmt.Printf("Analyzing portfolio performance: Bought on %s at %s IST till latest Close...\n\n", targetTime.Format("2006-01-02"), targetTime.Format("15:04"))
 	}
 
-	results := backtest.ValuatePortfolio(ctx, portfolio, capital, targetTime, useDailyClose, rangeStr, istLoc)
+	results := backtest.ValuatePortfolio(ctx, newDataRouter(), portfolio, capital, targetTime, useDailyClose, rangeStr, istLoc)
 
 	out := os.Stdout
 	var totalInitial, totalFinal float64
