@@ -3,6 +3,7 @@ package datafetcher
 import (
 	"context"
 	"fmt"
+	"maps"
 	"strings"
 
 	"github.com/raghavkgarg/mycase/pkg/broker"
@@ -46,9 +47,7 @@ func FetchMarketData(ctx context.Context, b broker.Broker, basketKeys []string) 
 			if err != nil {
 				fmt.Printf("Broker GetQuotes fallback warning: %v\n", err)
 			} else {
-				for k, v := range kiteQuotes {
-					quoteData[k] = v
-				}
+				maps.Copy(quoteData, kiteQuotes)
 			}
 		}
 	}

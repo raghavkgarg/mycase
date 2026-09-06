@@ -504,4 +504,3 @@ func FetchCustomerConcentrationData(ctx context.Context, tickers []string) (map[
 
 	return resultMap, nil
 }
-

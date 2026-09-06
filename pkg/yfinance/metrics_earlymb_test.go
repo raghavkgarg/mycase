@@ -16,7 +16,7 @@ func TestCalculateSmoothedBenchmarkRegime_ExactWorkedExamples(t *testing.T) {
 			closes: func() []float64 {
 				c := make([]float64, 50)
 				// 30 days at 97.3333333333 + 20 days at 104.0 -> sum = 5000 -> SMA50 = 100.0
-				for i := 0; i < 30; i++ {
+				for i := range 30 {
 					c[i] = 2920.0 / 30.0
 				}
 				for i := 30; i < 50; i++ {
@@ -31,7 +31,7 @@ func TestCalculateSmoothedBenchmarkRegime_ExactWorkedExamples(t *testing.T) {
 			closes: func() []float64 {
 				c := make([]float64, 50)
 				// 30 days at 101.2 + 6 days at 101.0 + 14 days at 97.0 -> sum = 5000 -> SMA50 = 100.0
-				for i := 0; i < 30; i++ {
+				for i := range 30 {
 					c[i] = 3036.0 / 30.0
 				}
 				for i := 30; i < 36; i++ {
@@ -49,7 +49,7 @@ func TestCalculateSmoothedBenchmarkRegime_ExactWorkedExamples(t *testing.T) {
 			closes: func() []float64 {
 				c := make([]float64, 50)
 				// 30 days at 106.6666667 + 20 days at 90.0 -> sum = 5000 -> SMA50 = 100.0
-				for i := 0; i < 30; i++ {
+				for i := range 30 {
 					c[i] = 3200.0 / 30.0
 				}
 				for i := 30; i < 50; i++ {
@@ -120,7 +120,7 @@ func TestCalculateVCPTightness_ExactRatio(t *testing.T) {
 	opens := make([]float64, n)
 
 	// First 60 days: daily true range = 10.0 (Open 90, Close 100)
-	for i := 0; i < 60; i++ {
+	for i := range 60 {
 		opens[i] = 90.0
 		closes[i] = 100.0
 	}
@@ -150,7 +150,7 @@ func TestCalculateDecayedPocketPivot_ExactFormula(t *testing.T) {
 	volumes := make([]float64, 50)
 
 	// 50 days of normal trading: red days with 1000 volume
-	for i := 0; i < 50; i++ {
+	for i := range 50 {
 		closes[i] = 100.0
 		opens[i] = 101.0 // red day
 		volumes[i] = 1000.0
@@ -177,7 +177,7 @@ func TestCalculateDecayedPocketPivot_ExactFormula(t *testing.T) {
 func TestCalculateWinsorizedRVOLZScore_ExactFormula(t *testing.T) {
 	// 60 days of uniform volume: 1000.0
 	volumes := make([]float64, 60)
-	for i := 0; i < 55; i++ {
+	for i := range 55 {
 		volumes[i] = 1000.0
 	}
 	// Last 5 days: surge to 2000.0 (within 4x winsorize cap of 4000)
@@ -212,7 +212,7 @@ func TestCalculateBaseDurationWeeks_ExactFormula(t *testing.T) {
 	closes[10] = 200.0
 
 	// Days 0-24: 150.0 (below 170 floor)
-	for i := 0; i < 25; i++ {
+	for i := range 25 {
 		if i != 10 {
 			closes[i] = 150.0
 		}

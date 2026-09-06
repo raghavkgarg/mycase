@@ -584,7 +584,7 @@ func NormalizeAndCapWeights(
 	}
 
 	// Iteratively enforce stockCap and sectorCap
-	for iter := 0; iter < 20; iter++ {
+	for range 20 {
 		// 1. Enforce Stock Cap
 		for _, k := range selectedKeys {
 			if weights[k] > stockCap {
@@ -1225,4 +1225,3 @@ func NormalizeEarlyMultibaggerWeights(
 ) map[string]float64 {
 	return NormalizeMultibaggerWeights(selectedKeys, scores, fundamentals, hardFilters, existingHoldings, rebalanceTolerance)
 }
-

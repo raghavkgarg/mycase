@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"slices"
 	"sort"
 	"time"
 
@@ -13,35 +14,35 @@ import (
 
 // PillarStats contains statistical summary of Spearman Rank IC over multiple periods.
 type PillarStats struct {
-	MeanIC     float64 `json:"mean_ic"`
-	StdIC      float64 `json:"std_ic"`
-	IR         float64 `json:"information_ratio"`
-	TStat      float64 `json:"t_stat"`
+	MeanIC      float64 `json:"mean_ic"`
+	StdIC       float64 `json:"std_ic"`
+	IR          float64 `json:"information_ratio"`
+	TStat       float64 `json:"t_stat"`
 	PositivePct float64 `json:"positive_pct"`
 	SampleCount int     `json:"sample_count"`
 }
 
 // PeriodICResult stores cross-sectional Information Coefficients for a single evaluation date.
 type PeriodICResult struct {
-	Date                string  `json:"date"`
-	SurvivorCount       int     `json:"survivor_count"`
-	RegimeMultiplier    float64 `json:"regime_multiplier"`
-	ICCompositeRS       float64 `json:"ic_composite_rs"`
-	ICVCPTightness      float64 `json:"ic_vcp_tightness"`
-	ICWinsorizedRVOL    float64 `json:"ic_winsorized_rvol"`
-	ICDecayedPP         float64 `json:"ic_decayed_pp"`
-	ICDeliveryDelta     float64 `json:"ic_delivery_delta"`
-	ICRawComposite      float64 `json:"ic_raw_composite"`
+	Date                 string  `json:"date"`
+	SurvivorCount        int     `json:"survivor_count"`
+	RegimeMultiplier     float64 `json:"regime_multiplier"`
+	ICCompositeRS        float64 `json:"ic_composite_rs"`
+	ICVCPTightness       float64 `json:"ic_vcp_tightness"`
+	ICWinsorizedRVOL     float64 `json:"ic_winsorized_rvol"`
+	ICDecayedPP          float64 `json:"ic_decayed_pp"`
+	ICDeliveryDelta      float64 `json:"ic_delivery_delta"`
+	ICRawComposite       float64 `json:"ic_raw_composite"`
 	ICEffectiveComposite float64 `json:"ic_effective_composite"`
 }
 
 // EmpiricalBounds contains P5 and P95 derived from the training window.
 type EmpiricalBounds struct {
-	CompositeRS   [2]float64 `json:"composite_rs"`
-	VCPRatio      [2]float64 `json:"vcp_ratio"`
+	CompositeRS    [2]float64 `json:"composite_rs"`
+	VCPRatio       [2]float64 `json:"vcp_ratio"`
 	WinsorizedRVOL [2]float64 `json:"winsorized_rvol"`
-	DecayedPP     [2]float64 `json:"decayed_pp"`
-	DeliveryDelta [2]float64 `json:"delivery_delta"`
+	DecayedPP      [2]float64 `json:"decayed_pp"`
+	DeliveryDelta  [2]float64 `json:"delivery_delta"`
 }
 
 // CalibrationSummary is the full output of an empirical IC calibration run.
@@ -106,7 +107,7 @@ func SpearmanRankCorrelation(x, y []float64) float64 {
 	ry := RankValues(y)
 
 	var meanX, meanY float64
-	for i := 0; i < n; i++ {
+	for i := range n {
 		meanX += rx[i]
 		meanY += ry[i]
 	}
@@ -114,7 +115,7 @@ func SpearmanRankCorrelation(x, y []float64) float64 {
 	meanY /= float64(n)
 
 	var num, denX, denY float64
-	for i := 0; i < n; i++ {
+	for i := range n {
 		dx := rx[i] - meanX
 		dy := ry[i] - meanY
 		num += dx * dy
@@ -272,14 +273,14 @@ func RunEarlyMBCalibration(
 
 		// Slice each stock's OHLCV strictly up to evalTS (Zero Lookahead)
 		type survivorData struct {
-			ticker       string
-			compRS       float64
-			vcpRatio     float64
-			rvolZ        float64
-			decayedPP    float64
-			delivDelta   float64
-			rawScore     float64
-			effScore     float64
+			ticker        string
+			compRS        float64
+			vcpRatio      float64
+			rvolZ         float64
+			decayedPP     float64
+			delivDelta    float64
+			rawScore      float64
+			effScore      float64
 			forwardReturn float64
 		}
 		var survivors []survivorData
@@ -292,8 +293,8 @@ func RunEarlyMBCalibration(
 
 			// Find index in stock's series corresponding to evalTS
 			stockIdx := -1
-			for s := len(pd.Timestamps) - 1; s >= 0; s-- {
-				if pd.Timestamps[s] <= evalTS {
+			for s, v := range slices.Backward(pd.Timestamps) {
+				if v <= evalTS {
 					stockIdx = s
 					break
 				}
@@ -445,11 +446,11 @@ func RunEarlyMBCalibration(
 	sort.Float64s(trainDeliv)
 
 	calibBounds := EmpiricalBounds{
-		CompositeRS:   [2]float64{Percentile(trainCompRS, 0.05), Percentile(trainCompRS, 0.95)},
-		VCPRatio:      [2]float64{Percentile(trainVCP, 0.05), Percentile(trainVCP, 0.95)},
+		CompositeRS:    [2]float64{Percentile(trainCompRS, 0.05), Percentile(trainCompRS, 0.95)},
+		VCPRatio:       [2]float64{Percentile(trainVCP, 0.05), Percentile(trainVCP, 0.95)},
 		WinsorizedRVOL: [2]float64{Percentile(trainRVOL, 0.05), Percentile(trainRVOL, 0.95)},
-		DecayedPP:     [2]float64{Percentile(trainPP, 0.05), Percentile(trainPP, 0.95)},
-		DeliveryDelta: [2]float64{Percentile(trainDeliv, 0.05), Percentile(trainDeliv, 0.95)},
+		DecayedPP:      [2]float64{Percentile(trainPP, 0.05), Percentile(trainPP, 0.95)},
+		DeliveryDelta:  [2]float64{Percentile(trainDeliv, 0.05), Percentile(trainDeliv, 0.95)},
 	}
 
 	// 5. Aggregate Training & Testing Statistics
@@ -465,12 +466,12 @@ func RunEarlyMBCalibration(
 			icEff = append(icEff, r.ICEffectiveComposite)
 		}
 		return map[string]PillarStats{
-			"composite_rs":       ComputePillarStats(icRS),
-			"vcp_tightness":      ComputePillarStats(icVCP),
-			"winsorized_rvol":    ComputePillarStats(icRVOL),
-			"decayed_pp":         ComputePillarStats(icPP),
-			"delivery_delta":     ComputePillarStats(icDeliv),
-			"raw_composite":      ComputePillarStats(icRaw),
+			"composite_rs":        ComputePillarStats(icRS),
+			"vcp_tightness":       ComputePillarStats(icVCP),
+			"winsorized_rvol":     ComputePillarStats(icRVOL),
+			"decayed_pp":          ComputePillarStats(icPP),
+			"delivery_delta":      ComputePillarStats(icDeliv),
+			"raw_composite":       ComputePillarStats(icRaw),
 			"effective_composite": ComputePillarStats(icEff),
 		}
 	}

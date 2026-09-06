@@ -86,7 +86,7 @@ func TestCheck200DaySMATrend(t *testing.T) {
 
 	// 3. Price below 200-SMA (98.0) AND 200-SMA is sloping DOWN -> Fails slope check
 	p3 := make([]float64, 220)
-	for i := 0; i < 20; i++ {
+	for i := range 20 {
 		p3[i] = 150.0 // Past 200-SMA was high (~150)
 	}
 	for i := 20; i < 219; i++ {

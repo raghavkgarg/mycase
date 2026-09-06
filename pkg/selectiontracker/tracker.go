@@ -30,17 +30,17 @@ type DriverMetrics struct {
 // Tracker records the lifecycle of tickers during the selection process.
 type Tracker struct {
 	InitialCount        int
-	SafetyReasons       map[string]string  // ticker -> reason
-	ScoreThresholdDrops map[string]string  // ticker -> reason
-	RawScores           map[string]float64 // ticker -> raw score
-	EffectiveScores     map[string]float64 // ticker -> effective score (raw * regime)
-	RawRanks            map[string]int     // ticker -> 1-based rank
-	SectorCapDrops      map[string]string  // ticker -> explanation
-	HysteresisDrops     map[string]string  // ticker -> explanation
-	SelectedReasons     map[string]string  // ticker -> explanation
-	AdditionDrivers     map[string]string  // ticker -> positive driver summary
+	SafetyReasons       map[string]string        // ticker -> reason
+	ScoreThresholdDrops map[string]string        // ticker -> reason
+	RawScores           map[string]float64       // ticker -> raw score
+	EffectiveScores     map[string]float64       // ticker -> effective score (raw * regime)
+	RawRanks            map[string]int           // ticker -> 1-based rank
+	SectorCapDrops      map[string]string        // ticker -> explanation
+	HysteresisDrops     map[string]string        // ticker -> explanation
+	SelectedReasons     map[string]string        // ticker -> explanation
+	AdditionDrivers     map[string]string        // ticker -> positive driver summary
 	DriverValues        map[string]DriverMetrics // ticker -> structured numeric drivers
-	ResultDates         map[string]string  // ticker -> "24-04-26 ->  25-06-26"
+	ResultDates         map[string]string        // ticker -> "24-04-26 ->  25-06-26"
 	RegimeMultiplier    float64
 }
 
@@ -189,16 +189,16 @@ type parsedDriverMetrics struct {
 }
 
 func extractMetricBetween(s, startStr, endStr string) string {
-	idx := strings.Index(s, startStr)
-	if idx == -1 {
+	_, after, ok := strings.Cut(s, startStr)
+	if !ok {
 		return ""
 	}
-	sub := s[idx+len(startStr):]
-	endIdx := strings.Index(sub, endStr)
-	if endIdx == -1 {
+	sub := after
+	before0, _, ok0 := strings.Cut(sub, endStr)
+	if !ok0 {
 		return strings.TrimSpace(sub)
 	}
-	return strings.TrimSpace(sub[:endIdx])
+	return strings.TrimSpace(before0)
 }
 
 func parseDriverString(s string) parsedDriverMetrics {

@@ -113,7 +113,7 @@ func (h *HistoricalData) CleanIntradayNoiseAsOf(asOf time.Time) {
 	// 1. Truncate any bars that are strictly AFTER the asOf date
 	for len(h.Timestamps) > 0 {
 		lastTs := time.Unix(h.Timestamps[len(h.Timestamps)-1], 0).In(istLoc)
-		if lastTs.Truncate(24*time.Hour).After(asOfIST.Truncate(24 * time.Hour)) {
+		if lastTs.Truncate(24 * time.Hour).After(asOfIST.Truncate(24 * time.Hour)) {
 			h.truncateLast()
 			continue
 		}
