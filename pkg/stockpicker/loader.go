@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -170,6 +171,9 @@ func loadLocalCSVConstituents(filePath string) ([]string, error) {
 		if len(record) > tickerIdx {
 			ticker := strings.TrimSpace(record[tickerIdx])
 			if ticker != "" {
+				if IsDummyTicker(ticker) {
+					continue
+				}
 				if !strings.HasPrefix(ticker, "NSE:") && !strings.HasPrefix(ticker, "BSE:") && !strings.HasPrefix(ticker, "US:") && !strings.HasPrefix(ticker, "NASDAQ:") && !strings.HasPrefix(ticker, "NYSE:") {
 					if isUSFile {
 						ticker = "US:" + ticker
@@ -230,6 +234,9 @@ func downloadConstituents(indexName, url string) ([]string, error) {
 		if len(record) > symbolIdx {
 			sym := strings.TrimSpace(record[symbolIdx])
 			if sym != "" {
+				if IsDummyTicker(sym) {
+					continue
+				}
 				if isUS {
 					tickers = append(tickers, "US:"+sym)
 				} else {
@@ -240,6 +247,12 @@ func downloadConstituents(indexName, url string) ([]string, error) {
 	}
 
 	return tickers, nil
+}
+
+// IsDummyTicker returns true if a ticker is an artificial corporate action or demerger placeholder.
+func IsDummyTicker(ticker string) bool {
+	upper := strings.ToUpper(ticker)
+	return strings.Contains(upper, "DUMMY")
 }
 
 // LoadConstituents loads constituent tickers from local file path or downloads them from web.
@@ -325,8 +338,10 @@ func LoadConstituents(filePath, indexName string) (*TickersSource, error) {
 	}, nil
 }
 
-// FetchHistoricalPrices concurrently retrieves historical price data for the tickers.
-func FetchHistoricalPrices(ctx context.Context, rawTickers []string) (map[string]*yfinance.HistoricalData, []string) {
+// FetchHistoricalPrices concurrently retrieves historical price data for the tickers,
+// with automatic retry passes and backoff for failed fetches.
+// Returns: (fullHistory, activeKeys, failedKeys)
+func FetchHistoricalPrices(ctx context.Context, rawTickers []string) (map[string]*yfinance.HistoricalData, []string, []string) {
 	fmt.Printf("\nFetching historical prices (1y) for constituents...\n")
 	type fetchJob struct {
 		ticker string
@@ -337,43 +352,97 @@ func FetchHistoricalPrices(ctx context.Context, rawTickers []string) (map[string
 		err    error
 	}
 
-	jobs := make(chan fetchJob, len(rawTickers))
-	results := make(chan fetchResult, len(rawTickers))
-	var wg sync.WaitGroup
+	runBatch := func(tickers []string, workerCount int) ([]fetchResult, []string) {
+		jobs := make(chan fetchJob, len(tickers))
+		results := make(chan fetchResult, len(tickers))
+		var wg sync.WaitGroup
 
-	// Start workers
-	workerCount := 15
-	for range workerCount {
-		wg.Go(func() {
-			for job := range jobs {
-				hist, err := yfinance.FetchHistoricalDataWithTimestamps(ctx, job.ticker, "1y")
-				results <- fetchResult{ticker: job.ticker, hist: hist, err: err}
+		for range workerCount {
+			wg.Go(func() {
+				for job := range jobs {
+					hist, err := yfinance.FetchHistoricalDataWithTimestamps(ctx, job.ticker, "1y")
+					results <- fetchResult{ticker: job.ticker, hist: hist, err: err}
+				}
+			})
+		}
+
+		for _, t := range tickers {
+			jobs <- fetchJob{ticker: t}
+		}
+		close(jobs)
+
+		go func() {
+			wg.Wait()
+			close(results)
+		}()
+
+		var succeeded []fetchResult
+		var failed []string
+		for res := range results {
+			if res.err == nil && res.hist != nil && len(res.hist.Closes) >= 2 {
+				succeeded = append(succeeded, res)
+			} else {
+				failed = append(failed, res.ticker)
 			}
-		})
+		}
+		return succeeded, failed
 	}
 
-	for _, t := range rawTickers {
-		jobs <- fetchJob{ticker: t}
-	}
-	close(jobs)
-
-	// Wait for workers to finish in background and close results channel
-	go func() {
-		wg.Wait()
-		close(results)
-	}()
-
+	// Initial concurrent pass (15 workers)
 	fullHistory := make(map[string]*yfinance.HistoricalData)
 	var activeKeys []string
-	for res := range results {
-		if res.err == nil && res.hist != nil && len(res.hist.Closes) >= 2 {
+	succeeded, pendingRetries := runBatch(rawTickers, 15)
+	for _, res := range succeeded {
+		fullHistory[res.ticker] = res.hist
+		activeKeys = append(activeKeys, res.ticker)
+	}
+
+	// Retry passes with exponential backoff (up to 2 passes with smaller worker pool)
+	maxRetries := 2
+	backoffs := []time.Duration{1500 * time.Millisecond, 3000 * time.Millisecond}
+	for retry := 0; retry < maxRetries && len(pendingRetries) > 0; retry++ {
+		fmt.Printf("Retrying %d failed ticker fetches (attempt %d/%d after %v backoff)...\n",
+			len(pendingRetries), retry+1, maxRetries, backoffs[retry])
+		select {
+		case <-ctx.Done():
+			break
+		case <-time.After(backoffs[retry]):
+		}
+
+		retriedSucceeded, stillFailed := runBatch(pendingRetries, 5)
+		for _, res := range retriedSucceeded {
 			fullHistory[res.ticker] = res.hist
 			activeKeys = append(activeKeys, res.ticker)
 		}
+		pendingRetries = stillFailed
 	}
 
+	failedKeys := pendingRetries
+	sort.Strings(activeKeys)
+	sort.Strings(failedKeys)
+
 	fmt.Printf("Successfully fetched historical data for %d / %d active tickers.\n", len(activeKeys), len(rawTickers))
-	return fullHistory, activeKeys
+
+	if len(failedKeys) > 0 {
+		failPct := float64(len(failedKeys)) * 100.0 / float64(len(rawTickers))
+		if failPct >= 5.0 {
+			fmt.Printf("\n========================================================================================\n")
+			fmt.Printf("🚨 [HARD WARNING: CRITICAL DATA FETCH FAILURE RATE: %.1f%% (%d / %d tickers)] 🚨\n",
+				failPct, len(failedKeys), len(rawTickers))
+			fmt.Printf("Over 5%% of index constituents failed historical price retrieval. Stage-1 candidate pool is incomplete!\n")
+			sampleCount := len(failedKeys)
+			if sampleCount > 10 {
+				sampleCount = 10
+			}
+			fmt.Printf("Failed sample (first 10): %s\n", strings.Join(failedKeys[:sampleCount], ", "))
+			fmt.Printf("========================================================================================\n\n")
+		} else {
+			fmt.Printf("Notice: %d / %d tickers (%.1f%%) failed price fetch and will be tagged with DATA_FETCH_FAILED.\n",
+				len(failedKeys), len(rawTickers), failPct)
+		}
+	}
+
+	return fullHistory, activeKeys, failedKeys
 }
 
 // GetBenchmarkAndSlicedPrices fetches benchmark prices and aligns stock prices with benchmark range.

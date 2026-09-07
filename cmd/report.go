@@ -49,8 +49,39 @@ func runReportWithParams(ctx context.Context, filePath, method string) error {
 	if err != nil {
 		return fmt.Errorf("reading CSV: %w", err)
 	}
+	indexName := csvloader.GetUniverseName(filePath)
+	reportDir := filepath.Join("report", fmt.Sprintf("%s_%s", indexName, method), "executions")
+	if err := os.MkdirAll(reportDir, 0755); err != nil {
+		fmt.Printf("Warning: Failed to create report directory: %v\n", err)
+	}
+	dateStr := time.Now().Format("20060102")
+	outReportPath := filepath.Join(reportDir, fmt.Sprintf("%s_03_portfolio_report.txt", dateStr))
+
 	if len(records) < 2 {
-		return fmt.Errorf("CSV file contains no data rows")
+		reportFile, err := os.Create(outReportPath)
+		if err != nil {
+			return fmt.Errorf("creating report file %s: %w", outReportPath, err)
+		}
+		defer reportFile.Close()
+
+		fmt.Fprintf(reportFile, "====================================================================\n")
+		fmt.Fprintf(reportFile, "             Portfolio Selection Explanation Report                 \n")
+		fmt.Fprintf(reportFile, "====================================================================\n")
+		fmt.Fprintf(reportFile, "File:        %s\n", filePath)
+		fmt.Fprintf(reportFile, "Strategy:    %s Preset\n", strings.ToUpper(method[:1])+method[1:])
+		fmt.Fprintf(reportFile, "State:       100%% CASH DEFENSE (0 Equities Selected)\n")
+		fmt.Fprintf(reportFile, "Report File: %s\n", outReportPath)
+		fmt.Fprintf(reportFile, "====================================================================\n\n")
+		fmt.Fprintf(reportFile, "SUMMARY:\n")
+		fmt.Fprintf(reportFile, "Total Equities : 0 stocks (0.00%% allocation)\n")
+		fmt.Fprintf(reportFile, "Cash Reserve   : 100.00%%\n\n")
+		fmt.Fprintf(reportFile, "EXPLANATION:\n")
+		fmt.Fprintf(reportFile, "The market regime sentry mandated defensive capital preservation.\n")
+		fmt.Fprintf(reportFile, "All candidates remained below the regime hurdle cutoff.\n")
+		fmt.Fprintf(reportFile, "Capital is preserved 100%% in cash reserve.\n")
+
+		fmt.Println("Generated 100% Cash Defense Portfolio Report:", outReportPath)
+		return nil
 	}
 
 	tickerIdx, weightIdx := -1, -1
@@ -80,20 +111,39 @@ func runReportWithParams(ctx context.Context, filePath, method string) error {
 		}
 		ticker := strings.TrimSpace(record[tickerIdx])
 		weightVal, err := strconv.ParseFloat(strings.TrimSpace(record[weightIdx]), 64)
-		if err != nil || ticker == "" {
+		if err != nil || ticker == "" || weightVal <= 0 {
 			continue
 		}
 		portfolio = append(portfolio, reportStock{ticker: ticker, weight: weightVal})
 		tickers = append(tickers, ticker)
 	}
 
-	indexName := csvloader.GetUniverseName(filePath)
-	reportDir := filepath.Join("report", fmt.Sprintf("%s_%s", indexName, method), "executions")
-	if err := os.MkdirAll(reportDir, 0755); err != nil {
-		fmt.Printf("Warning: Failed to create report directory: %v\n", err)
+	if len(tickers) == 0 {
+		reportFile, err := os.Create(outReportPath)
+		if err != nil {
+			return fmt.Errorf("creating report file %s: %w", outReportPath, err)
+		}
+		defer reportFile.Close()
+
+		fmt.Fprintf(reportFile, "====================================================================\n")
+		fmt.Fprintf(reportFile, "             Portfolio Selection Explanation Report                 \n")
+		fmt.Fprintf(reportFile, "====================================================================\n")
+		fmt.Fprintf(reportFile, "File:        %s\n", filePath)
+		fmt.Fprintf(reportFile, "Strategy:    %s Preset\n", strings.ToUpper(method[:1])+method[1:])
+		fmt.Fprintf(reportFile, "State:       100%% CASH DEFENSE (0 Equities Selected)\n")
+		fmt.Fprintf(reportFile, "Report File: %s\n", outReportPath)
+		fmt.Fprintf(reportFile, "====================================================================\n\n")
+		fmt.Fprintf(reportFile, "SUMMARY:\n")
+		fmt.Fprintf(reportFile, "Total Equities : 0 stocks (0.00%% allocation)\n")
+		fmt.Fprintf(reportFile, "Cash Reserve   : 100.00%%\n\n")
+		fmt.Fprintf(reportFile, "EXPLANATION:\n")
+		fmt.Fprintf(reportFile, "The market regime sentry mandated defensive capital preservation.\n")
+		fmt.Fprintf(reportFile, "All candidates remained below the regime hurdle cutoff.\n")
+		fmt.Fprintf(reportFile, "Capital is preserved 100%% in cash reserve.\n")
+
+		fmt.Println("Generated 100% Cash Defense Portfolio Report:", outReportPath)
+		return nil
 	}
-	dateStr := time.Now().Format("20060102")
-	outReportPath := filepath.Join(reportDir, fmt.Sprintf("%s_03_portfolio_report.txt", dateStr))
 
 	reportFile, err := os.Create(outReportPath)
 	if err != nil {

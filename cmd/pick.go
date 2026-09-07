@@ -32,11 +32,15 @@ var PickCommand = &cli.Command{
 		&cli.IntFlag{Name: "hysteresis-buffer", Value: 5, Usage: "Extra ranks to allow existing holdings to drift"},
 		&cli.StringFlag{Name: "name", Usage: "Custom display name for output files"},
 		&cli.StringFlag{Name: "out", Usage: "Custom output CSV path"},
+		&cli.BoolFlag{Name: "analysis", Aliases: []string{"a"}, Usage: "Run deep quantitative deduction analysis using DuckDB"},
 	},
 	Action: runPick,
 }
 
 func runPick(ctx context.Context, c *cli.Command) error {
+	if c.Bool("analysis") {
+		return RunPitAnalysisDirect(ctx, c.String("index"), c.String("method"))
+	}
 	return runPickWithOpts(ctx, pickOptsFromCmd(c))
 }
 
@@ -94,7 +98,7 @@ func runPickWithOpts(ctx context.Context, opts *stockpicker.Options) error {
 		}
 	}
 
-	fullHistory, activeKeys := stockpicker.FetchHistoricalPrices(ctx, combinedTickers)
+	fullHistory, activeKeys, failedKeys := stockpicker.FetchHistoricalPrices(ctx, combinedTickers)
 	if len(activeKeys) == 0 {
 		fmt.Println("No active tickers loaded. Exiting...")
 		return nil
@@ -118,11 +122,13 @@ func runPickWithOpts(ctx context.Context, opts *stockpicker.Options) error {
 
 	stockpicker.InjectGovernance(fundamentals, cfg.Governance)
 	tracker := selectiontracker.New()
+	tracker.InitialCount = len(combinedTickers)
+	for _, f := range failedKeys {
+		tracker.RecordFetchFailure(f, "DATA_FETCH_FAILED: historical price bars unavailable")
+	}
 
 	if cfg.HardFilters != nil {
 		activeKeys = stockpicker.ApplySafetyFilters(ctx, activeKeys, opts.Method, cfg.HardFilters, fundamentals, fullHistory, tracker)
-	} else {
-		tracker.InitialCount = len(activeKeys)
 	}
 
 	if len(activeKeys) == 0 {
@@ -197,8 +203,17 @@ func runPickWithOpts(ctx context.Context, opts *stockpicker.Options) error {
 	}
 
 	// Add all constituents to candidateMap
+	failedSet := make(map[string]bool)
+	for _, f := range failedKeys {
+		failedSet[f] = true
+	}
+
 	for _, t := range combinedTickers {
+		isFetchFailed := failedSet[t]
 		reason, isSafetyDrop := tracker.SafetyReasons[t]
+		if isFetchFailed {
+			reason = "DATA_FETCH_FAILED: historical price bars unavailable"
+		}
 		rawScore, hasRaw := tracker.RawScores[t]
 		effScore, hasEff := tracker.EffectiveScores[t]
 		if !hasEff && hasRaw {
@@ -207,7 +222,7 @@ func runPickWithOpts(ctx context.Context, opts *stockpicker.Options) error {
 
 		var compRS, vcpRatio, rvolZ, ppScore, delivDelta float64
 		if hist, ok := fullHistory[t]; ok && len(hist.Closes) >= 60 {
-			compRS, _, _, _ = yfinance.CalculateCompositeRS(hist.Closes, benchmarkPrices)
+			compRS, _, _, _ = yfinance.CalculateCompositeRS(hist.Closes, benchmarkPrices, t)
 			vcpRatio, _ = yfinance.CalculateVCPTightness(hist.Closes, hist.Opens)
 			rvolZ = yfinance.CalculateWinsorizedRVOLZScore(hist.Volumes, 5, 50, 4.0)
 			ppScore, _ = yfinance.CalculateDecayedPocketPivot(hist.Closes, hist.Opens, hist.Volumes, 10, 0.25)
@@ -216,7 +231,8 @@ func runPickWithOpts(ctx context.Context, opts *stockpicker.Options) error {
 
 		candidateMap[t] = stockpicker.CandidateScoreDetail{
 			Ticker:          t,
-			PassedStage1:    !isSafetyDrop && hasRaw,
+			PassedStage1:    !isFetchFailed && !isSafetyDrop && hasRaw,
+			DataFetchFailed: isFetchFailed,
 			RejectionReason: reason,
 			RawScore:        rawScore,
 			EffectiveScore:  effScore,
@@ -275,6 +291,11 @@ func runPickWithOpts(ctx context.Context, opts *stockpicker.Options) error {
 	}
 	if err := stockpicker.SavePortfolioToCSV(selectedKeys, finalWeights, outPath); err != nil {
 		return fmt.Errorf("writing output file: %w", err)
+	}
+
+	if opts.Method == "earlymb" || opts.Method == "early_multibagger" {
+		incubatorPath := filepath.Join("data", "candidates", "index_picks", fmt.Sprintf("%s_%s_incubator.csv", displayNameVal, opts.Method))
+		_, _ = stockpicker.GenerateIncubatorWatchlist(activeKeys, scores, fundamentals, fullHistory, tracker, incubatorPath)
 	}
 
 	if opts.GoldenPath != "" && len(goldenWeights) > 0 {

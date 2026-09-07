@@ -13,6 +13,7 @@ import (
 // Tracker records the lifecycle of tickers during the selection process.
 type Tracker struct {
 	InitialCount        int
+	FetchFailures       map[string]string  // ticker -> fetch failure reason
 	SafetyReasons       map[string]string  // ticker -> reason
 	ScoreThresholdDrops map[string]string  // ticker -> reason
 	RawScores           map[string]float64 // ticker -> raw score
@@ -29,6 +30,7 @@ type Tracker struct {
 // New initializes and returns a new Tracker instance.
 func New() *Tracker {
 	return &Tracker{
+		FetchFailures:       make(map[string]string),
 		SafetyReasons:       make(map[string]string),
 		ScoreThresholdDrops: make(map[string]string),
 		RawScores:           make(map[string]float64),
@@ -41,6 +43,11 @@ func New() *Tracker {
 		ResultDates:         make(map[string]string),
 		RegimeMultiplier:    1.0,
 	}
+}
+
+// RecordFetchFailure saves an upstream data fetch error reason.
+func (t *Tracker) RecordFetchFailure(ticker, reason string) {
+	t.FetchFailures[ticker] = reason
 }
 
 // RecordSafetyDrop saves a hard filter rejection reason.
@@ -102,12 +109,14 @@ func (t *Tracker) RecordSelected(ticker string, rank, limit int, isExisting bool
 
 // SelectionFunnel structurally models and validates exact constituent conservation across funnel stages.
 type SelectionFunnel struct {
-	InitialPool     int      `json:"initial_pool"`
-	Stage1Survivors []string `json:"stage1_survivors"`
-	RegimeRejected  []string `json:"regime_rejected"`
-	SectorCapped    []string `json:"sector_capped"`
-	RankLimited     []string `json:"rank_limited"`
-	FinalSelected   []string `json:"final_selected"`
+	InitialPool      int      `json:"initial_pool"`
+	DataFetchFailed  []string `json:"data_fetch_failed"`
+	Stage1Eliminated []string `json:"stage1_eliminated"`
+	Stage1Survivors  []string `json:"stage1_survivors"`
+	RegimeRejected   []string `json:"regime_rejected"`
+	SectorCapped     []string `json:"sector_capped"`
+	RankLimited      []string `json:"rank_limited"`
+	FinalSelected    []string `json:"final_selected"`
 }
 
 // Validate asserts that every Stage-1 survivor is strictly accounted for.
@@ -117,6 +126,13 @@ func (f SelectionFunnel) Validate() error {
 		return fmt.Errorf("funnel conservation mismatch: %d accounted (RegimeRejected:%d + SectorCapped:%d + RankLimited:%d + FinalSelected:%d) vs %d Stage-1 survivors",
 			totalAccounted, len(f.RegimeRejected), len(f.SectorCapped), len(f.RankLimited), len(f.FinalSelected), len(f.Stage1Survivors))
 	}
+	if f.InitialPool > 0 {
+		stage1Accounted := len(f.DataFetchFailed) + len(f.Stage1Eliminated) + len(f.Stage1Survivors)
+		if stage1Accounted != f.InitialPool {
+			return fmt.Errorf("initial pool conservation mismatch: %d accounted (FetchFailed:%d + Stage1Eliminated:%d + Stage1Survivors:%d) vs %d InitialPool",
+				stage1Accounted, len(f.DataFetchFailed), len(f.Stage1Eliminated), len(f.Stage1Survivors), f.InitialPool)
+		}
+	}
 	return nil
 }
 
@@ -125,6 +141,16 @@ func (t *Tracker) BuildFunnel() (SelectionFunnel, error) {
 	var survivors []string
 	for sym := range t.RawScores {
 		survivors = append(survivors, sym)
+	}
+
+	var fetchFailed []string
+	for sym := range t.FetchFailures {
+		fetchFailed = append(fetchFailed, sym)
+	}
+
+	var stage1Elim []string
+	for sym := range t.SafetyReasons {
+		stage1Elim = append(stage1Elim, sym)
 	}
 
 	var regimeRej, sectorCap, rankLim, finalSel []string
@@ -142,12 +168,14 @@ func (t *Tracker) BuildFunnel() (SelectionFunnel, error) {
 	}
 
 	f := SelectionFunnel{
-		InitialPool:     t.InitialCount,
-		Stage1Survivors: survivors,
-		RegimeRejected:  regimeRej,
-		SectorCapped:    sectorCap,
-		RankLimited:     rankLim,
-		FinalSelected:   finalSel,
+		InitialPool:      t.InitialCount,
+		DataFetchFailed:  fetchFailed,
+		Stage1Eliminated: stage1Elim,
+		Stage1Survivors:  survivors,
+		RegimeRejected:   regimeRej,
+		SectorCapped:     sectorCap,
+		RankLimited:      rankLim,
+		FinalSelected:    finalSel,
 	}
 	return f, f.Validate()
 }

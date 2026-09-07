@@ -14,6 +14,17 @@ import (
 var PitCommand = &cli.Command{
 	Name:  "pit",
 	Usage: "Point-in-Time research database management and empirical calibration analytics",
+	Flags: []cli.Flag{
+		&cli.StringFlag{Name: "index", Aliases: []string{"i"}, Value: "niftytotalmarket", Usage: "Index name to analyze"},
+		&cli.StringFlag{Name: "method", Aliases: []string{"m"}, Value: "earlymb", Usage: "Strategy method to analyze"},
+		&cli.BoolFlag{Name: "analysis", Aliases: []string{"a"}, Usage: "Run deep quantitative deduction analysis using DuckDB"},
+	},
+	Action: func(ctx context.Context, c *cli.Command) error {
+		if c.Bool("analysis") {
+			return runPitAnalysis(ctx, c)
+		}
+		return runPitStats(ctx, c)
+	},
 	Commands: []*cli.Command{
 		{
 			Name:  "update",
@@ -33,8 +44,35 @@ var PitCommand = &cli.Command{
 				&cli.StringFlag{Name: "method", Aliases: []string{"m"}, Value: "earlymb", Usage: "Strategy method to analyze"},
 				&cli.IntFlag{Name: "days", Value: 60, Usage: "Rolling history lookback window in calendar days (0 for all)"},
 				&cli.StringFlag{Name: "ticker", Usage: "Optional specific ticker to view score trajectory for"},
+				&cli.BoolFlag{Name: "analysis", Aliases: []string{"a"}, Usage: "Run deep quantitative deduction analysis using DuckDB"},
 			},
-			Action: runPitStats,
+			Action: func(ctx context.Context, c *cli.Command) error {
+				if c.Bool("analysis") {
+					return runPitAnalysis(ctx, c)
+				}
+				return runPitStats(ctx, c)
+			},
+		},
+		{
+			Name:    "analysis",
+			Aliases: []string{"analyze"},
+			Usage:   "Run deep quantitative and operational deduction analysis using DuckDB",
+			Flags: []cli.Flag{
+				&cli.StringFlag{Name: "index", Aliases: []string{"i"}, Value: "niftytotalmarket", Usage: "Index name to analyze"},
+				&cli.StringFlag{Name: "method", Aliases: []string{"m"}, Value: "earlymb", Usage: "Strategy method to analyze"},
+			},
+			Action: runPitAnalysis,
+		},
+		{
+			Name:    "retry",
+			Aliases: []string{"retry-failed"},
+			Usage:   "Re-run historical price and fundamental fetch specifically for failed tickers in a PIT snapshot",
+			Flags: []cli.Flag{
+				&cli.StringFlag{Name: "index", Aliases: []string{"i"}, Value: "niftytotalmarket", Usage: "Index name to retry"},
+				&cli.StringFlag{Name: "method", Aliases: []string{"m"}, Value: "earlymb", Usage: "Strategy method (earlymb, multibagger)"},
+				&cli.StringFlag{Name: "date", Aliases: []string{"d"}, Value: "2026-09-01", Usage: "As-of date of the PIT snapshot to heal (defaults to latest)"},
+			},
+			Action: runPitRetry,
 		},
 	},
 }
@@ -148,3 +186,52 @@ func runPitStats(ctx context.Context, c *cli.Command) error {
 
 	return nil
 }
+
+func runPitAnalysis(ctx context.Context, c *cli.Command) error {
+	indexVal := strings.NewReplacer(",", "_", " ", "_", "^", "").Replace(c.String("index"))
+	methodVal := c.String("method")
+	return RunPitAnalysisDirect(ctx, indexVal, methodVal)
+}
+
+// RunPitAnalysisDirect executes the DuckDB deep analysis engine directly without CLI context overhead.
+func RunPitAnalysisDirect(ctx context.Context, indexName, method string) error {
+	indexVal := strings.NewReplacer(",", "_", " ", "_", "^", "").Replace(indexName)
+	if indexVal == "" {
+		indexVal = "niftytotalmarket"
+	}
+	if method == "" {
+		method = "earlymb"
+	}
+
+	db, err := pithistory.Open("")
+	if err != nil {
+		return fmt.Errorf("failed to open pit database: %w", err)
+	}
+	defer db.Close()
+
+	return db.RunDeepAnalysis(ctx, indexVal, method)
+}
+
+func runPitRetry(ctx context.Context, c *cli.Command) error {
+	indexVal := c.String("index")
+	methodVal := c.String("method")
+	dateVal := c.String("date")
+
+	snap, err := stockpicker.RetryFailedSnapshotCandidates(ctx, indexVal, methodVal, dateVal)
+	if err != nil {
+		return fmt.Errorf("pit retry failed: %w", err)
+	}
+
+	db, err := pithistory.Open("")
+	if err == nil {
+		defer db.Close()
+		if dbErr := db.SaveRunSnapshot(ctx, snap); dbErr != nil {
+			fmt.Printf("Warning: failed to update DuckDB: %v\n", dbErr)
+		} else {
+			fmt.Println("Successfully synchronized updated run snapshot into DuckDB (data/pit_history.db).")
+		}
+	}
+
+	return nil
+}
+

@@ -231,3 +231,22 @@ func TestCalculateBaseDurationWeeks_ExactFormula(t *testing.T) {
 		t.Errorf("expected inBase=true for 5 weeks (>= 4W), got %t", inBase)
 	}
 }
+
+func TestCalculateCompositeRS_SanityCheck(t *testing.T) {
+	// Simulate an extreme outlier like CUPID (700% return vs 10% benchmark)
+	stockCloses := make([]float64, 252)
+	benchCloses := make([]float64, 252)
+
+	for i := 0; i < 252; i++ {
+		stockCloses[i] = 30.0 + float64(i)*(270.0/251.0) // 30.0 -> 300.0 (+900%)
+		benchCloses[i] = 100.0 + float64(i)*(10.0/251.0) // 100.0 -> 110.0 (+10%)
+	}
+
+	compRS, rs1m, rs3m, rs12m := CalculateCompositeRS(stockCloses, benchCloses)
+	if compRS <= 1.0 {
+		t.Errorf("expected extreme Composite RS > 1.0 (100%%), got %.4f", compRS)
+	}
+	t.Logf("Computed Extreme Outlier Composite RS: %+.2f%% (1M: %+.2f%%, 3M: %+.2f%%, 12M: %+.2f%%)",
+		compRS*100.0, rs1m*100.0, rs3m*100.0, rs12m*100.0)
+}
+

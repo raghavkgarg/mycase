@@ -34,12 +34,14 @@ var PipelineCommand = &cli.Command{
 		&cli.StringFlag{Name: "purchase-date", Aliases: []string{"date"}, Usage: "Purchase date for performance simulation (YYYY-MM-DD)"},
 		&cli.FloatFlag{Name: "rebalance-tolerance", Usage: "Rebalancing weight tolerance % (e.g. 0.10 for 0.10%)"},
 		&cli.IntFlag{Name: "hysteresis-buffer", Usage: "Extra ranks to allow existing holdings to drift"},
+		&cli.BoolFlag{Name: "yes", Aliases: []string{"y"}, Usage: "Non-interactive mode (auto-accept defaults, skip prompts)"},
 	},
 	Action: runPipeline,
 }
 
 func runPipeline(ctx context.Context, c *cli.Command) error {
 	execOnly := c.Bool("exec-only")
+	autoYes := c.Bool("yes")
 	configPath := c.String("config")
 
 	fmt.Println("====================================================================")
@@ -123,9 +125,12 @@ func runPipeline(ctx context.Context, c *cli.Command) error {
 			today := time.Now().Format("2006-01-02")
 			if info.ModTime().Format("2006-01-02") == today {
 				fmt.Printf("\nGolden copy %s was already updated today (%s).\n", cfg.GoldenCopyPath, today)
-				fmt.Print("Would you like to skip analysis and jump straight to Zerodha authentication & basket execution? (y/n, default: n): ")
-				skipChoice, _ := reader.ReadString('\n')
-				skipChoice = strings.ToLower(strings.TrimSpace(skipChoice))
+				skipChoice := "n"
+				if !autoYes {
+					fmt.Print("Would you like to skip analysis and jump straight to Zerodha authentication & basket execution? (y/n, default: n): ")
+					line, _ := reader.ReadString('\n')
+					skipChoice = strings.ToLower(strings.TrimSpace(line))
+				}
 				if skipChoice == "y" || skipChoice == "yes" {
 					execOnly = true
 				}
@@ -282,11 +287,14 @@ func runPipeline(ctx context.Context, c *cli.Command) error {
 		fmt.Printf("\n[Step %d/%d] Updating the %s golden copy...\n", stepCounter, totalSteps, goldenCSV)
 
 		comparisonReportPath := filepath.Join("report", fmt.Sprintf("%s_%s", goldenBase, cfg.Strategy), "executions", fmt.Sprintf("%s_02_comparison.txt", dateStr))
-		pipelineOfferToOpenReport(reader, comparisonReportPath)
+		pipelineOfferToOpenReport(reader, comparisonReportPath, autoYes)
 
-		fmt.Printf("Would you like to update the golden copy %s with the new candidates? (y/n, default: y): ", goldenCSV)
-		updateChoice, _ := reader.ReadString('\n')
-		updateChoice = strings.ToLower(strings.TrimSpace(updateChoice))
+		updateChoice := "y"
+		if !autoYes {
+			fmt.Printf("Would you like to update the golden copy %s with the new candidates? (y/n, default: y): ", goldenCSV)
+			line, _ := reader.ReadString('\n')
+			updateChoice = strings.ToLower(strings.TrimSpace(line))
+		}
 		if updateChoice == "" || updateChoice == "y" || updateChoice == "yes" {
 			if _, err := os.Stat(goldenCSV); err == nil {
 				backupDir := filepath.Join("data", "backups", goldenBase)
@@ -305,9 +313,11 @@ func runPipeline(ctx context.Context, c *cli.Command) error {
 				return fmt.Errorf("updating golden copy: %w", err)
 			}
 			fmt.Printf("Successfully updated %s with new candidates. Exited tickers kept at 0.0000 weight.\n", goldenCSV)
-			fmt.Printf("\n>>> ACTION REQUIRED: If you wish to manually tweak the golden copy (%s), do it now.\n", goldenCSV)
-			fmt.Print("Press Enter to continue once you have reviewed the file...")
-			_, _ = reader.ReadString('\n')
+			if !autoYes {
+				fmt.Printf("\n>>> ACTION REQUIRED: If you wish to manually tweak the golden copy (%s), do it now.\n", goldenCSV)
+				fmt.Print("Press Enter to continue once you have reviewed the file...")
+				_, _ = reader.ReadString('\n')
+			}
 		} else {
 			fmt.Println("Skipped golden copy update. Exiting pipeline.")
 			return nil
@@ -320,51 +330,60 @@ func runPipeline(ctx context.Context, c *cli.Command) error {
 			return fmt.Errorf("step %d (report): %w", stepCounter, err)
 		}
 		portfolioReportPath := filepath.Join("report", fmt.Sprintf("%s_%s", goldenBase, cfg.Strategy), "executions", fmt.Sprintf("%s_03_portfolio_report.txt", dateStr))
-		pipelineOfferToOpenReport(reader, portfolioReportPath)
+		pipelineOfferToOpenReport(reader, portfolioReportPath, autoYes)
 		stepCounter++
 
-		// Performance simulation
-		fmt.Printf("\n[Step %d/%d] Running performance simulation...\n", stepCounter, totalSteps)
-		fmt.Printf("Enter capital (default %d): ", cfg.Capital)
-		capInput, _ := reader.ReadString('\n')
-		capital := strings.TrimSpace(capInput)
-		if capital == "" {
-			capital = strconv.Itoa(cfg.Capital)
-		}
-		fmt.Printf("Enter purchase date YYYY-MM-DD (default %s): ", cfg.PurchaseDate)
-		dateInput, _ := reader.ReadString('\n')
-		dateVal := strings.TrimSpace(dateInput)
-		if dateVal == "" {
-			dateVal = cfg.PurchaseDate
-		}
-		capFloat, err := strconv.ParseFloat(capital, 64)
-		if err != nil {
-			capFloat = float64(cfg.Capital)
-		}
-		if err := runPerfWithParams(ctx, goldenCSV, capFloat, dateVal, "09:30"); err != nil {
-			return fmt.Errorf("step %d (performance): %w", stepCounter, err)
-		}
-		stepCounter++
+		activeHoldings, _ := csvloader.CountActiveHoldings(goldenCSV)
+		if activeHoldings == 0 {
+			fmt.Println("\n====================================================================")
+			fmt.Println("   100% CASH DEFENSE ACTIVE: 0 Equities Selected                    ")
+			fmt.Println("   Preserving 100% capital in cash reserve under macro regime.      ")
+			fmt.Println("   Skipping Performance Simulation, Monitoring Tool & Basket Orders. ")
+			fmt.Println("====================================================================")
+		} else {
+			// Performance simulation
+			fmt.Printf("\n[Step %d/%d] Running performance simulation...\n", stepCounter, totalSteps)
+			fmt.Printf("Enter capital (default %d): ", cfg.Capital)
+			capInput, _ := reader.ReadString('\n')
+			capital := strings.TrimSpace(capInput)
+			if capital == "" {
+				capital = strconv.Itoa(cfg.Capital)
+			}
+			fmt.Printf("Enter purchase date YYYY-MM-DD (default %s): ", cfg.PurchaseDate)
+			dateInput, _ := reader.ReadString('\n')
+			dateVal := strings.TrimSpace(dateInput)
+			if dateVal == "" {
+				dateVal = cfg.PurchaseDate
+			}
+			capFloat, err := strconv.ParseFloat(capital, 64)
+			if err != nil {
+				capFloat = float64(cfg.Capital)
+			}
+			if err := runPerfWithParams(ctx, goldenCSV, capFloat, dateVal, "09:30"); err != nil {
+				return fmt.Errorf("step %d (performance): %w", stepCounter, err)
+			}
+			stepCounter++
 
-		// Monitoring simulation
-		fmt.Printf("\n[Step %d/%d] Running monitoring tool...\n", stepCounter, totalSteps)
-		fmt.Println("Choose Monitoring Simulator timeframe:")
-		fmt.Println("1. 1 Year Historical Backtest [Default]")
-		fmt.Printf("2. Same as performance simulation date (%s)\n", dateVal)
-		fmt.Print("Enter choice (1-2, default: 1): ")
-		timeframeChoice, _ := reader.ReadString('\n')
-		timeframeChoice = strings.TrimSpace(timeframeChoice)
+			// Monitoring simulation
+			fmt.Printf("\n[Step %d/%d] Running monitoring tool...\n", stepCounter, totalSteps)
+			fmt.Println("Choose Monitoring Simulator timeframe:")
+			fmt.Println("1. 1 Year Historical Backtest [Default]")
+			fmt.Printf("2. Same as performance simulation date (%s)\n", dateVal)
+			fmt.Print("Enter choice (1-2, default: 1): ")
+			timeframeChoice, _ := reader.ReadString('\n')
+			timeframeChoice = strings.TrimSpace(timeframeChoice)
 
-		monDate := ""
-		if timeframeChoice == "2" {
-			monDate = dateVal
+			monDate := ""
+			if timeframeChoice == "2" {
+				monDate = dateVal
+			}
+			if err := runMonitorWithParams(ctx, goldenCSV, true, "moderate", float64(cfg.Capital), monDate, cfg.Strategy, runTimestamp, true); err != nil {
+				return fmt.Errorf("step %d (monitor): %w", stepCounter, err)
+			}
+			monitoringReportPath := filepath.Join("report", fmt.Sprintf("%s_%s", goldenBase, cfg.Strategy), "simulations", fmt.Sprintf("%s_monitoring.txt", runTimestamp))
+			pipelineOfferToOpenReport(reader, monitoringReportPath, autoYes)
+			stepCounter++
 		}
-		if err := runMonitorWithParams(ctx, goldenCSV, true, "moderate", float64(cfg.Capital), monDate, cfg.Strategy, runTimestamp, true); err != nil {
-			return fmt.Errorf("step %d (monitor): %w", stepCounter, err)
-		}
-		monitoringReportPath := filepath.Join("report", fmt.Sprintf("%s_%s", goldenBase, cfg.Strategy), "simulations", fmt.Sprintf("%s_monitoring.txt", runTimestamp))
-		pipelineOfferToOpenReport(reader, monitoringReportPath)
-		stepCounter++
 	}
 
 	var usDetectedSources []string
@@ -402,8 +421,11 @@ func runPipeline(ctx context.Context, c *cli.Command) error {
 		}
 	}
 
+	activeBasketHoldings, _ := csvloader.CountActiveHoldings(cfg.GoldenCopyPath)
 	if len(usDetectedSources) > 0 {
 		fmt.Printf("\n[Step %d/%d] US market portfolio detected (%v). Skipping Zerodha Indian broker authentication & basket execution.\n", stepCounter, totalSteps, usDetectedSources)
+	} else if activeBasketHoldings == 0 {
+		fmt.Printf("\n[Step %d/%d] Skipping Zerodha authentication & basket execution (Portfolio is in 100%% Cash Defense).\n", stepCounter, totalSteps)
 	} else {
 		// Auth step
 		fmt.Printf("\n[Step %d/%d] Setting up Zerodha authentication...\n", stepCounter, totalSteps)
@@ -443,6 +465,9 @@ func runPipeline(ctx context.Context, c *cli.Command) error {
 		for idx, indexName := range cfg.Indices {
 			fmt.Printf("%d. %s Candidates:\n", idx+1, indexName)
 			fmt.Printf("   - CSV Output:         data/candidates/index_picks/%s_%s.csv\n", indexName, cfg.Strategy)
+			if cfg.Strategy == "earlymb" || cfg.Strategy == "early_multibagger" {
+				fmt.Printf("   - Incubator Watchlist:data/candidates/index_picks/%s_%s_incubator.csv\n", indexName, cfg.Strategy)
+			}
 			fmt.Printf("   - Selection reasons:  report/%s_%s/executions/%s_01_selection_reasons.txt\n", indexName, cfg.Strategy, dateStr)
 		}
 		summaryIdx := len(cfg.Indices) + 1
@@ -469,7 +494,10 @@ func runPipeline(ctx context.Context, c *cli.Command) error {
 	return nil
 }
 
-func pipelineOfferToOpenReport(reader *bufio.Reader, filePath string) {
+func pipelineOfferToOpenReport(reader *bufio.Reader, filePath string, autoYes bool) {
+	if autoYes {
+		return
+	}
 	fmt.Printf("Would you like to open the report file %s now? (y/n, default: y): ", filePath)
 	choice, _ := reader.ReadString('\n')
 	choice = strings.ToLower(strings.TrimSpace(choice))

@@ -46,6 +46,17 @@ func main() {
 			mycmd.ConvertCommand,
 			mycmd.RetryCommand,
 		},
+		Flags: []cli.Flag{
+			&cli.StringFlag{Name: "index", Aliases: []string{"i"}, Value: "niftytotalmarket", Usage: "Index name to analyze or pick"},
+			&cli.StringFlag{Name: "method", Aliases: []string{"m"}, Value: "earlymb", Usage: "Strategy method"},
+			&cli.BoolFlag{Name: "analysis", Aliases: []string{"a"}, Usage: "Run deep quantitative deduction analysis using DuckDB"},
+		},
+		Action: func(ctx context.Context, c *cli.Command) error {
+			if c.Bool("analysis") {
+				return mycmd.RunPitAnalysisDirect(ctx, c.String("index"), c.String("method"))
+			}
+			return cli.ShowAppHelp(c)
+		},
 	}
 	if err := app.Run(context.Background(), os.Args); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)

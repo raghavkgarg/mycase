@@ -532,3 +532,43 @@ func PrintComparisonReport(src, dst, strategy string) {
 		fmt.Printf("Comparison report successfully saved to %s\n\n", reportFileName)
 	}
 }
+
+// CountActiveHoldings returns the number of holdings with weight > 0 in the CSV file.
+func CountActiveHoldings(csvPath string) (int, error) {
+	f, err := os.Open(csvPath)
+	if err != nil {
+		return 0, err
+	}
+	defer f.Close()
+
+	r := csv.NewReader(f)
+	records, err := r.ReadAll()
+	if err != nil {
+		return 0, err
+	}
+	if len(records) < 2 {
+		return 0, nil
+	}
+
+	weightIdx := -1
+	for i, h := range records[0] {
+		if strings.ToLower(strings.TrimSpace(h)) == "weight" {
+			weightIdx = i
+			break
+		}
+	}
+	if weightIdx == -1 {
+		return len(records) - 1, nil
+	}
+
+	activeCount := 0
+	for _, row := range records[1:] {
+		if len(row) > weightIdx {
+			w, err := strconv.ParseFloat(strings.TrimSpace(row[weightIdx]), 64)
+			if err == nil && w > 0 {
+				activeCount++
+			}
+		}
+	}
+	return activeCount, nil
+}

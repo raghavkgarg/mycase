@@ -48,5 +48,8 @@
   "GRANULES": "Metric Coverage Pending (Place the Annual Report PDF in data/annual_reports/) (Scanned: 2026-08-26)",
   "SKFINDUS": "Metric Coverage Pending (Place the Annual Report PDF in data/annual_reports/) (Scanned: 2026-08-26)",
   "LAURUSLABS": "PASS: No major customer concentration detected in segment notes (Scanned: 2026-08-28)",
-  "BALKRISIND": "PASS: No major customer concentration detected in segment notes (Scanned: 2026-08-28)"
+  "BALKRISIND": "PASS: No major customer concentration detected in segment notes (Scanned: 2026-08-28)",
+  "IPCALAB": "PASS: No single client > 10% (Regulation compliant segment disclosure) (Scanned: 2026-08-31)",
+  "DIVISLAB": "PASS: Major clients contribute 10.0% of revenue (< 40% target) (Scanned: 2026-08-31)",
+  "MASTEK": "Metric Coverage Pending (Place the Annual Report PDF in data/annual_reports/) (Scanned: 2026-09-02)"
 }
