@@ -7,10 +7,10 @@ import (
 	"maps"
 	"math"
 	"os"
-	"slices"
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/raghavkgarg/mycase/pkg/config"
 	"github.com/raghavkgarg/mycase/pkg/optimizer"
@@ -484,6 +484,23 @@ func SelectTopNValue(
 	hysteresisBuffer int,
 	tracker *selectiontracker.Tracker,
 ) []string {
+	return SelectTopNValueWithCooldown(activeKeys, scores, fundamentals, hardFilters, topN, existingHoldings, hysteresisBuffer, tracker, nil, 0, 0)
+}
+
+// SelectTopNValueWithCooldown selects top N constituents for the value strategy applying sector caps and anti-churn cooldown.
+func SelectTopNValueWithCooldown(
+	activeKeys []string,
+	scores map[string]float64,
+	fundamentals map[string]yfinance.Fundamentals,
+	hardFilters *config.HardFilters,
+	topN int,
+	existingHoldings map[string]float64,
+	hysteresisBuffer int,
+	tracker *selectiontracker.Tracker,
+	recentExits map[string]time.Time,
+	cooldownDays int,
+	bypassRank int,
+) []string {
 	maxPerSector := hardFilters.MaxStocksPerSector
 	if maxPerSector <= 0 {
 		maxPerSector = 3
@@ -521,7 +538,7 @@ func SelectTopNValue(
 	}
 
 	bufferLimit := topN + hysteresisBuffer
-	return ApplyHysteresisSelection(sectorCapCandidates, existingHoldings, topN, bufferLimit, tracker)
+	return ApplyHysteresisSelectionWithCooldown(sectorCapCandidates, existingHoldings, topN, bufferLimit, tracker, recentExits, cooldownDays, bypassRank)
 }
 
 // NormalizeAndCapWeights rescales weights to sum to 1.0 while strictly enforcing stock and sector caps.
@@ -662,6 +679,23 @@ func SelectTopNMultibagger(
 	hysteresisBuffer int,
 	tracker *selectiontracker.Tracker,
 ) []string {
+	return SelectTopNMultibaggerWithCooldown(activeKeys, scores, fundamentals, hardFilters, topN, existingHoldings, hysteresisBuffer, tracker, nil, 0, 0)
+}
+
+// SelectTopNMultibaggerWithCooldown filters top N constituents applying sector caps, hysteresis buffer, and anti-churn cooldown.
+func SelectTopNMultibaggerWithCooldown(
+	activeKeys []string,
+	scores map[string]float64,
+	fundamentals map[string]yfinance.Fundamentals,
+	hardFilters *config.HardFilters,
+	topN int,
+	existingHoldings map[string]float64,
+	hysteresisBuffer int,
+	tracker *selectiontracker.Tracker,
+	recentExits map[string]time.Time,
+	cooldownDays int,
+	bypassRank int,
+) []string {
 	maxPerSector := hardFilters.MaxStocksPerSector
 	if maxPerSector <= 0 {
 		maxPerSector = 3
@@ -700,10 +734,10 @@ func SelectTopNMultibagger(
 		sectorCapCandidates = append(sectorCapCandidates, t)
 	}
 
-	// 2. Apply hysteresis buffer selection
+	// 2. Apply hysteresis buffer selection with anti-churn cooldown
 	bufferLimit := topN + hysteresisBuffer
 	fmt.Printf("Applying Hysteresis Buffer Zone (Top %d target, existing kept up to rank %d)...\n", topN, bufferLimit)
-	return ApplyHysteresisSelection(sectorCapCandidates, existingHoldings, topN, bufferLimit, tracker)
+	return ApplyHysteresisSelectionWithCooldown(sectorCapCandidates, existingHoldings, topN, bufferLimit, tracker, recentExits, cooldownDays, bypassRank)
 }
 
 // NormalizeMultibaggerWeights normalizes weights proportionally to scores and enforces sector caps.
@@ -761,6 +795,24 @@ func SelectTopNStandard(
 	hysteresisBuffer int,
 	tracker *selectiontracker.Tracker,
 ) []string {
+	return SelectTopNStandardWithCooldown(activeKeys, slicedPriceHistory, benchmarkPrices, fundamentals, optWeights, topN, existingHoldings, hysteresisBuffer, tracker, nil, 0, 0)
+}
+
+// SelectTopNStandardWithCooldown scores, ranks, and slices standard constituents with anti-churn cooldown.
+func SelectTopNStandardWithCooldown(
+	activeKeys []string,
+	slicedPriceHistory map[string][]float64,
+	benchmarkPrices []float64,
+	fundamentals map[string]yfinance.Fundamentals,
+	optWeights optimizer.MFSWeights,
+	topN int,
+	existingHoldings map[string]float64,
+	hysteresisBuffer int,
+	tracker *selectiontracker.Tracker,
+	recentExits map[string]time.Time,
+	cooldownDays int,
+	bypassRank int,
+) []string {
 	fmt.Printf("Scoring and ranking constituents...\n")
 	allWeights := optimizer.OptimizeMultiFactor(activeKeys, slicedPriceHistory, benchmarkPrices, fundamentals, optWeights)
 
@@ -778,7 +830,7 @@ func SelectTopNStandard(
 
 	bufferLimit := topN + hysteresisBuffer
 	fmt.Printf("Applying Hysteresis Buffer Zone (Top %d target, existing kept up to rank %d)...\n", topN, bufferLimit)
-	return ApplyHysteresisSelection(sortedKeys, existingHoldings, topN, bufferLimit, tracker)
+	return ApplyHysteresisSelectionWithCooldown(sortedKeys, existingHoldings, topN, bufferLimit, tracker, recentExits, cooldownDays, bypassRank)
 }
 
 // NormalizeStandardWeights optimizes multi-factor weights for standard strategy selection.
@@ -822,9 +874,10 @@ func LoadGoldenWeights(path string) map[string]float64 {
 	weightIdx := -1
 	for i, h := range records[0] {
 		hLower := strings.ToLower(strings.TrimSpace(h))
-		if hLower == "ticker" {
+		switch hLower {
+		case "ticker":
 			tickerIdx = i
-		} else if hLower == "weight" {
+		case "weight":
 			weightIdx = i
 		}
 	}
@@ -859,6 +912,20 @@ func ApplyHysteresisSelection(
 	bufferLimit int,
 	tracker *selectiontracker.Tracker,
 ) []string {
+	return ApplyHysteresisSelectionWithCooldown(sortedKeys, existingHoldings, topN, bufferLimit, tracker, nil, 0, 0)
+}
+
+// ApplyHysteresisSelectionWithCooldown selects the top N constituents using a rank buffer and enforces re-entry cooldown on new additions.
+func ApplyHysteresisSelectionWithCooldown(
+	sortedKeys []string,
+	existingHoldings map[string]float64,
+	topN int,
+	bufferLimit int,
+	tracker *selectiontracker.Tracker,
+	recentExits map[string]time.Time,
+	cooldownDays int,
+	bypassRank int,
+) []string {
 	if len(sortedKeys) <= topN {
 		for rankIdx, ticker := range sortedKeys {
 			rank := rankIdx + 1
@@ -868,53 +935,101 @@ func ApplyHysteresisSelection(
 		return sortedKeys
 	}
 
-	// 1. Identify which existing holdings are within the buffer limit (rank <= 25)
-	existingInBuffer := make(map[string]bool)
+	// Calculate displacement threshold: new candidates with rank <= displacementRank
+	// can displace existing holdings lingering in the buffer zone (topN < rank <= bufferLimit).
+	displacementRank := topN - (bufferLimit - topN)
+	if displacementRank <= 0 {
+		displacementRank = 1
+	}
+
+	var selected []string
+	selectedMap := make(map[string]bool)
+
+	// Phase 1: Retain all existing holdings that are solidly within topN (rank <= topN)
 	for rankIdx, ticker := range sortedKeys {
 		rank := rankIdx + 1
-		if _, ok := existingHoldings[ticker]; ok {
-			if rank <= bufferLimit {
-				existingInBuffer[ticker] = true
-			}
+		if rank > topN {
+			break
+		}
+		if _, isExisting := existingHoldings[ticker]; isExisting {
+			selected = append(selected, ticker)
+			selectedMap[ticker] = true
+			tracker.RecordSelected(ticker, rank, topN, true)
 		}
 	}
 
-	// 2. Build the selected set
-	var selected []string
+	// Phase 2: Add high-conviction new candidates (rank <= displacementRank), respecting cooldown.
+	// These strong entrants take precedence over buffer-zone existing holdings.
+	for rankIdx, ticker := range sortedKeys {
+		rank := rankIdx + 1
+		if rank > displacementRank || len(selected) >= topN {
+			break
+		}
+		if selectedMap[ticker] {
+			continue
+		}
+		if _, isExisting := existingHoldings[ticker]; !isExisting {
+			if onCd, cdReason := IsOnCooldown(ticker, recentExits, rank, bypassRank, time.Now(), cooldownDays); onCd {
+				tracker.RecordCooldownDrop(ticker, cdReason)
+				continue
+			}
+			selected = append(selected, ticker)
+			selectedMap[ticker] = true
+			tracker.RecordSelected(ticker, rank, topN, false)
+		}
+	}
+
+	// Phase 3: Fill available slots from existing holdings in the buffer zone (topN < rank <= bufferLimit)
+	// ordered by rank (best rank first).
 	for rankIdx, ticker := range sortedKeys {
 		rank := rankIdx + 1
 		if len(selected) >= topN {
 			break
 		}
-		if existingInBuffer[ticker] {
+		if rank <= topN || rank > bufferLimit {
+			continue
+		}
+		if _, isExisting := existingHoldings[ticker]; isExisting {
 			selected = append(selected, ticker)
+			selectedMap[ticker] = true
 			tracker.RecordSelected(ticker, rank, bufferLimit, true)
 		}
 	}
 
-	// Fill remaining slots with the highest-ranked new candidates
+	// Phase 4: Fill remaining slots with remaining eligible candidates up to topN (marginal new candidates)
 	for rankIdx, ticker := range sortedKeys {
 		rank := rankIdx + 1
 		if len(selected) >= topN {
 			break
 		}
-		alreadySelected := slices.Contains(selected, ticker)
-		if alreadySelected {
+		if rank > topN {
+			break
+		}
+		if selectedMap[ticker] {
 			continue
 		}
-		selected = append(selected, ticker)
-		_, isExisting := existingHoldings[ticker]
-		tracker.RecordSelected(ticker, rank, topN, isExisting)
+		if _, isExisting := existingHoldings[ticker]; !isExisting {
+			if onCd, cdReason := IsOnCooldown(ticker, recentExits, rank, bypassRank, time.Now(), cooldownDays); onCd {
+				tracker.RecordCooldownDrop(ticker, cdReason)
+				continue
+			}
+			selected = append(selected, ticker)
+			selectedMap[ticker] = true
+			tracker.RecordSelected(ticker, rank, topN, false)
+		}
 	}
 
-	// Record rejections for candidates not selected
-	selectedMap := make(map[string]bool)
+	// Phase 5: Record rejections for candidates not selected
 	for _, t := range selected {
 		selectedMap[t] = true
 	}
 	for rankIdx, ticker := range sortedKeys {
 		rank := rankIdx + 1
 		if !selectedMap[ticker] {
+			if _, isCd := tracker.CooldownDrops[ticker]; isCd {
+				// Already accounted for as cooldown drop
+				continue
+			}
 			_, isExisting := existingHoldings[ticker]
 			tracker.RecordHysteresisDrop(ticker, rank, topN, bufferLimit, isExisting)
 		}
@@ -1104,6 +1219,24 @@ func SelectTopNEarlyMultibagger(
 	hysteresisBuffer int,
 	tracker *selectiontracker.Tracker,
 ) []string {
+	return SelectTopNEarlyMultibaggerWithCooldown(activeKeys, scores, fundamentals, fullHistory, hardFilters, topN, existingHoldings, hysteresisBuffer, tracker, nil, 0, 0)
+}
+
+// SelectTopNEarlyMultibaggerWithCooldown filters top N constituents applying market regime scaling, score cutoffs, sector caps, and anti-churn cooldown.
+func SelectTopNEarlyMultibaggerWithCooldown(
+	activeKeys []string,
+	scores map[string]float64,
+	fundamentals map[string]yfinance.Fundamentals,
+	fullHistory map[string]*yfinance.HistoricalData,
+	hardFilters *config.HardFilters,
+	topN int,
+	existingHoldings map[string]float64,
+	hysteresisBuffer int,
+	tracker *selectiontracker.Tracker,
+	recentExits map[string]time.Time,
+	cooldownDays int,
+	bypassRank int,
+) []string {
 	// 1. Calculate Market Regime Multiplier R_regime
 	regimePeriod := 50
 	regimeFloor := 0.20
@@ -1184,7 +1317,7 @@ func SelectTopNEarlyMultibagger(
 
 	bufferLimit := topN + hysteresisBuffer
 	fmt.Printf("Applying Hysteresis Buffer Zone (Top %d target, existing kept up to rank %d)...\n", topN, bufferLimit)
-	return ApplyHysteresisSelection(sectorCapCandidates, existingHoldings, topN, bufferLimit, tracker)
+	return ApplyHysteresisSelectionWithCooldown(sectorCapCandidates, existingHoldings, topN, bufferLimit, tracker, recentExits, cooldownDays, bypassRank)
 }
 
 // NormalizeEarlyMultibaggerWeights normalizes weights proportionally to scores and enforces sector caps.

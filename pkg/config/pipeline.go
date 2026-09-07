@@ -14,6 +14,8 @@ type PipelineConfig struct {
 	PurchaseDate          string   `yaml:"purchase_date"`
 	RebalanceTolerancePct float64  `yaml:"rebalance_tolerance_pct"`
 	HysteresisRankBuffer  int      `yaml:"hysteresis_rank_buffer"`
+	CooldownDays          int      `yaml:"cooldown_days"`
+	CooldownBypassRank    int      `yaml:"cooldown_bypass_rank"`
 }
 
 type rawPipelineConfig struct {
@@ -27,6 +29,8 @@ type rawPipelineConfig struct {
 	PurchaseDate          any      `yaml:"purchase_date"`
 	RebalanceTolerancePct any      `yaml:"rebalance_tolerance_pct"`
 	HysteresisRankBuffer  any      `yaml:"hysteresis_rank_buffer"`
+	CooldownDays          any      `yaml:"cooldown_days"`
+	CooldownBypassRank    any      `yaml:"cooldown_bypass_rank"`
 }
 
 // resolveFirst extracts T from val (which may be a scalar or a []any from multi-doc YAML).
@@ -122,5 +126,15 @@ func (cfg *PipelineConfig) UnmarshalYAML(value *yaml.Node) error {
 		buf = 5
 	}
 	cfg.HysteresisRankBuffer = buf
+	cooldown := resolveFirst(a.CooldownDays, 30)
+	if cooldown < 0 {
+		cooldown = 30
+	}
+	cfg.CooldownDays = cooldown
+	bypass := resolveFirst(a.CooldownBypassRank, 5)
+	if bypass < 0 {
+		bypass = 5
+	}
+	cfg.CooldownBypassRank = bypass
 	return nil
 }

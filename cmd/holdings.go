@@ -14,6 +14,7 @@ import (
 	"github.com/raghavkgarg/mycase/pkg/csvloader"
 	"github.com/raghavkgarg/mycase/pkg/portfolio"
 	"github.com/raghavkgarg/mycase/pkg/printer"
+	"github.com/raghavkgarg/mycase/pkg/themereturn"
 )
 
 var HoldingsCommand = &cli.Command{
@@ -80,6 +81,32 @@ func runHoldings(ctx context.Context, c *cli.Command) error {
 		}
 		if !matched {
 			uncategorizedHoldings = append(uncategorizedHoldings, h)
+		}
+	}
+
+	// Enrich each theme with audited Triple Returns if portfolio.db is available
+	ltpMap := make(map[string]float64)
+	for _, h := range rawHoldings {
+		ltpMap[h.TradingSymbol] = h.LastPrice
+	}
+
+	if db, err := themereturn.OpenDB(""); err == nil {
+		defer db.Close()
+		for i, g := range groups {
+			if len(g.Holdings) == 0 {
+				continue
+			}
+			matched, mErr := themereturn.ResolveTheme(g.Name, g.CSVPath, "config/themes.json")
+			if mErr != nil {
+				continue
+			}
+			rep, rErr := themereturn.EvaluateThemeReturn(db, matched, ltpMap, themereturn.ThemeReturnOptions{
+				AccountID:        "CBR420",
+				IncludeLifecycle: true,
+			})
+			if rErr == nil && rep.ActiveInvestedValue > 0 {
+				groups[i].ReturnBanner = themereturn.RenderBanner(rep)
+			}
 		}
 	}
 

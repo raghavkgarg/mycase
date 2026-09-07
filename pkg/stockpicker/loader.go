@@ -294,11 +294,12 @@ func LoadConstituents(filePath, indexName string) (*TickersSource, error) {
 		// Alias check: "microsmall" -> expand to microcap250 and smallcap250
 		var subIndices []string
 		cleanRaw := strings.ToLower(strings.ReplaceAll(rawIdx, " ", ""))
-		if cleanRaw == "microsmall" || cleanRaw == "microsmall250" || cleanRaw == "micro_small" {
+		switch cleanRaw {
+		case "microsmall", "microsmall250", "micro_small":
 			subIndices = []string{"microcap250", "smallcap250"}
-		} else if cleanRaw == "midsmallmicro" || cleanRaw == "allcaps" {
+		case "midsmallmicro", "allcaps":
 			subIndices = []string{"midcap150", "smallcap250", "microcap250"}
-		} else {
+		default:
 			subIndices = []string{rawIdx}
 		}
 
@@ -400,12 +401,13 @@ func FetchHistoricalPrices(ctx context.Context, rawTickers []string) (map[string
 	// Retry passes with exponential backoff (up to 2 passes with smaller worker pool)
 	maxRetries := 2
 	backoffs := []time.Duration{1500 * time.Millisecond, 3000 * time.Millisecond}
+retryLoop:
 	for retry := 0; retry < maxRetries && len(pendingRetries) > 0; retry++ {
 		fmt.Printf("Retrying %d failed ticker fetches (attempt %d/%d after %v backoff)...\n",
 			len(pendingRetries), retry+1, maxRetries, backoffs[retry])
 		select {
 		case <-ctx.Done():
-			break
+			break retryLoop
 		case <-time.After(backoffs[retry]):
 		}
 

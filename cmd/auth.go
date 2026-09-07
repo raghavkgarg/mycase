@@ -25,7 +25,7 @@ var AuthCommand = &cli.Command{
 	},
 }
 
-func runAuthCmd(ctx context.Context) error {
+func runAuthCmd(_ context.Context) error {
 	fmt.Println("====================================================================")
 	fmt.Println("             Zerodha Kite Connect Auth Setup Utility               ")
 	fmt.Println("====================================================================")

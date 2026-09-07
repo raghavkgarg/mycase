@@ -304,7 +304,7 @@ func FormatPnLPct(val float64) string {
 	return fmt.Sprintf("%s%.2f%%", sign, math.Abs(val))
 }
 
-func renderSection(title string, labelPrefix string, holdings []portfolio.Holding, totalCurrentAll float64) string {
+func renderSection(title string, labelPrefix string, holdings []portfolio.Holding, totalCurrentAll float64, banner ...string) string {
 	if len(holdings) == 0 {
 		return ""
 	}
@@ -323,10 +323,16 @@ func renderSection(title string, labelPrefix string, holdings []portfolio.Holdin
 	// Dynamic centering of title
 	titleLen := len(title)
 	padding := max((119-titleLen)/2, 0)
-	centeredTitle := strings.Repeat(" ", padding) + title
-	sb.WriteString(centeredTitle + strings.Repeat(" ", max(0, 119-len(centeredTitle))) + "\n")
+	sb.WriteString(strings.Repeat(" ", padding))
+	sb.WriteString(title)
+	if padRight := max(0, 119-padding-titleLen); padRight > 0 {
+		sb.WriteString(strings.Repeat(" ", padRight))
+	}
+	sb.WriteString("\n")
 
-	sb.WriteString(header + cols + sep)
+	sb.WriteString(header)
+	sb.WriteString(cols)
+	sb.WriteString(sep)
 
 	var invested, current, pnl float64
 	for _, h := range holdings {
@@ -373,7 +379,11 @@ func renderSection(title string, labelPrefix string, holdings []portfolio.Holdin
 	sb.WriteString(fmt.Sprintf("%s  ₹%.2f\n", PadString(labelPrefix+" Invested Value:", 28), invested))
 	sb.WriteString(fmt.Sprintf("%s  ₹%.2f%s\n", PadString(labelPrefix+" Current Value:", 28), current, groupWeightStr))
 	sb.WriteString(fmt.Sprintf("%s  %s (%s)\n", PadString(labelPrefix+" Portfolio PnL:", 28), FormatPnL(pnl), FormatPnLPct(pnlPct)))
-	sb.WriteString(header + "\n")
+	if len(banner) > 0 && banner[0] != "" {
+		sb.WriteString(banner[0])
+	}
+	sb.WriteString(header)
+	sb.WriteString("\n")
 
 	return sb.String()
 }
@@ -408,6 +418,7 @@ type ThemeGroup struct {
 	TargetWeight float64
 	Tickers      map[string]bool
 	Holdings     []portfolio.Holding
+	ReturnBanner string
 }
 
 func renderThemeAllocationSummary(groups []ThemeGroup, uncategorizedHoldings []portfolio.Holding, totalCurrent float64) string {
@@ -421,9 +432,16 @@ func renderThemeAllocationSummary(groups []ThemeGroup, uncategorizedHoldings []p
 	title := "THEME TARGET VS ACTUAL WEIGHT ALLOCATION SUMMARY"
 	titleLen := len(title)
 	padding := max((119-titleLen)/2, 0)
-	centeredTitle := strings.Repeat(" ", padding) + title
-	sb.WriteString(centeredTitle + strings.Repeat(" ", max(0, 119-len(centeredTitle))) + "\n")
-	sb.WriteString(header + cols + sep)
+	sb.WriteString(strings.Repeat(" ", padding))
+	sb.WriteString(title)
+	if padRight := max(0, 119-padding-titleLen); padRight > 0 {
+		sb.WriteString(strings.Repeat(" ", padRight))
+	}
+	sb.WriteString("\n")
+
+	sb.WriteString(header)
+	sb.WriteString(cols)
+	sb.WriteString(sep)
 
 	var totalInvestedAll, totalCurrentAll, totalPnLAll, totalTargetWt float64
 
@@ -543,7 +561,8 @@ func renderThemeAllocationSummary(groups []ThemeGroup, uncategorizedHoldings []p
 		PadStringRight(fmt.Sprintf("%.2f%%", totalTargetWt), 11),
 		PadStringRight(totalDriftStr, 9),
 	))
-	sb.WriteString(header + "\n")
+	sb.WriteString(header)
+	sb.WriteString("\n")
 
 	return sb.String()
 }
@@ -570,7 +589,7 @@ func RenderHoldingsSnapshot(
 	// Render configured groups
 	for _, g := range groups {
 		title := fmt.Sprintf("%s HOLDINGS SNAPSHOT", strings.ToUpper(g.Name))
-		sb.WriteString(renderSection(title, g.Prefix, g.Holdings, totalCurrent))
+		sb.WriteString(renderSection(title, g.Prefix, g.Holdings, totalCurrent, g.ReturnBanner))
 	}
 
 	// Render Uncategorized if any

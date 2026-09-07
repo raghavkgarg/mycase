@@ -160,7 +160,45 @@ func isEligible(
 	volumes []float64,
 	rsPercentiles map[string]float64,
 	stats *FilterStats,
+	isExisting bool,
 ) (bool, string) {
+	// Soft-band tolerance adjustments for existing portfolio holdings (anti-churn preservation)
+	minROCE := hardFilters.MinROCE
+	minCROIC := hardFilters.MinCROIC
+	maxDebtToEquity := hardFilters.MaxDebtToEquity
+	minInterestCoverage := hardFilters.MinInterestCoverage
+	minCFOPAT := hardFilters.MinCFOPAT
+	minPromoter := hardFilters.MinPromoterPercent
+
+	minSMARatio := hardFilters.Min200DaySMARatio
+	if minSMARatio <= 0 {
+		minSMARatio = 0.95
+	}
+
+	if isExisting {
+		if minROCE > 0 {
+			minROCE *= 0.85 // e.g. 12% -> 10.2%
+		}
+		if minCROIC > 0 {
+			minCROIC *= 0.80 // e.g. 6.0% -> 4.8%
+		}
+		if maxDebtToEquity > 0 {
+			maxDebtToEquity *= 1.15 // e.g. 1.5 -> 1.725
+		}
+		if minInterestCoverage > 0 {
+			minInterestCoverage *= 0.90 // e.g. 3.0 -> 2.7
+		}
+		if minCFOPAT > 0 {
+			minCFOPAT *= 0.80 // e.g. 0.25 -> 0.20
+		}
+		if minPromoter > 0 {
+			minPromoter *= 0.90
+		}
+		// Soft-band tolerance for existing holdings: allow up to 10% pullback (0.90) instead of 5% (0.95)
+		// to avoid binary cliff liquidations on short-term market corrections. Layer 2 slope check still guards downtrends.
+		minSMARatio = 0.90
+	}
+
 	// 1. Size Limit check
 	if (hardFilters.MinMarketCap > 0 && f.MarketCap < hardFilters.MinMarketCap) ||
 		(hardFilters.MaxMarketCap > 0 && f.MarketCap > hardFilters.MaxMarketCap) {
@@ -180,11 +218,11 @@ func isEligible(
 	}
 
 	// 3. Cash Flow Quality check
-	if hardFilters.MinCFOPAT > 0 || hardFilters.MinFCF != nil {
+	if minCFOPAT > 0 || hardFilters.MinFCF != nil {
 		if f.OperatingCashflow != 0 || f.FreeCashflow != 0 {
 			cfoPatPassed := true
 			if f.NetIncome > 0 {
-				cfoPatPassed = (f.OperatingCashflow / f.NetIncome) >= hardFilters.MinCFOPAT
+				cfoPatPassed = (f.OperatingCashflow / f.NetIncome) >= minCFOPAT
 			} else {
 				cfoPatPassed = false
 			}
@@ -209,19 +247,15 @@ func isEligible(
 
 	// 5. Promoter Stake check (Skip for US stocks as US equities are institutionally held)
 	if !strings.HasPrefix(t, "US:") && !strings.HasPrefix(t, "NASDAQ:") && !strings.HasPrefix(t, "NYSE:") {
-		if hardFilters.MinPromoterPercent > 0 && f.InsidersPercent < hardFilters.MinPromoterPercent {
+		if minPromoter > 0 && f.InsidersPercent < minPromoter {
 			stats.EliminatedPromoter++
-			return false, fmt.Sprintf("Low promoter stake (%.1f%% < %.1f%% limit)", f.InsidersPercent*100.0, hardFilters.MinPromoterPercent*100.0)
+			return false, fmt.Sprintf("Low promoter stake (%.1f%% < %.1f%% limit)", f.InsidersPercent*100.0, minPromoter*100.0)
 		}
 	}
 
 	// 6. 200-Day SMA Trend & Buffer Floor Check
 	if hardFilters.Check200DaySMA {
-		minRatio := hardFilters.Min200DaySMARatio
-		if minRatio <= 0 {
-			minRatio = 0.95
-		}
-		if ok, reason := check200DaySMATrend(closes, minRatio); !ok {
+		if ok, reason := check200DaySMATrend(closes, minSMARatio); !ok {
 			stats.EliminatedSMATrend++
 			return false, reason
 		}
@@ -234,28 +268,28 @@ func isEligible(
 	}
 
 	// 8. ROCE Capital Efficiency Check
-	if hardFilters.MinROCE > 0 {
+	if minROCE > 0 {
 		lagDays := 45
 		if hardFilters.FundamentalsLagDays > 0 {
 			lagDays = hardFilters.FundamentalsLagDays
 		}
-		if !checkROCE(&f, hardFilters.MinROCE, time.Now(), lagDays) {
+		if !checkROCE(&f, minROCE, time.Now(), lagDays) {
 			stats.EliminatedROCE++
-			return false, fmt.Sprintf("Low Capital Efficiency (ROCE < %.1f%%)", hardFilters.MinROCE*100.0)
+			return false, fmt.Sprintf("Low Capital Efficiency (ROCE < %.1f%%)", minROCE*100.0)
 		}
 	}
 
 	// 9. Debt-to-Equity Check (Balance Sheet Survivability)
-	if hardFilters.MaxDebtToEquity > 0 {
+	if maxDebtToEquity > 0 {
 		ratio := f.DebtToEquity / 100.0
-		if ratio >= hardFilters.MaxDebtToEquity {
+		if ratio >= maxDebtToEquity {
 			stats.EliminatedLeverage++
-			return false, fmt.Sprintf("High Debt/Equity (%.2f >= %.2f cap)", ratio, hardFilters.MaxDebtToEquity)
+			return false, fmt.Sprintf("High Debt/Equity (%.2f >= %.2f cap)", ratio, maxDebtToEquity)
 		}
 	}
 
 	// 10. Interest Coverage Check (Balance Sheet Survivability)
-	if hardFilters.MinInterestCoverage > 0 {
+	if minInterestCoverage > 0 {
 		passedCoverage := true
 		nIncome := len(f.AnnualOperatingIncome)
 		nInt := len(f.AnnualInterestExpense)
@@ -264,14 +298,14 @@ func isEligible(
 			latestInt := f.AnnualInterestExpense[nInt-1].Value
 			if latestInt > 0 {
 				coverage := latestEBIT / latestInt
-				if coverage < hardFilters.MinInterestCoverage {
+				if coverage < minInterestCoverage {
 					passedCoverage = false
 				}
 			}
 		}
 		if !passedCoverage {
 			stats.EliminatedInterestCoverage++
-			return false, fmt.Sprintf("Low Interest Coverage (ratio < %.1f)", hardFilters.MinInterestCoverage)
+			return false, fmt.Sprintf("Low Interest Coverage (ratio < %.1f)", minInterestCoverage)
 		}
 	}
 
@@ -329,18 +363,19 @@ func isEligible(
 	}
 
 	// N. CROIC Check
-	if hardFilters.MinCROIC > 0 {
+	if minCROIC > 0 {
 		croic, ok := yfinance.CalculateCROIC(&f)
 		if ok {
-			if croic < hardFilters.MinCROIC {
+			if croic < minCROIC {
 				stats.EliminatedCROIC++
-				return false, fmt.Sprintf("Low CROIC (%.1f%% < %.1f%% limit)", croic*100.0, hardFilters.MinCROIC*100.0)
+				return false, fmt.Sprintf("Low CROIC (%.1f%% < %.1f%% limit)", croic*100.0, minCROIC*100.0)
 			}
 		}
 	}
 
 	// 11. Special Multibagger / Value strategy filters
-	if method == "value" {
+	switch method {
+	case "value":
 		// 200-Day SMA ratio floor check (allows up to 15% dip below 200-SMA)
 		minSMARatio := 0.85
 		if hardFilters.Min200DaySMARatio > 0 {
@@ -384,7 +419,7 @@ func isEligible(
 				}
 			}
 		}
-	} else if method == "early_multibagger" || method == "earlymb" {
+	case "early_multibagger", "earlymb":
 		// 1. Earnings Proximity Blackout Gate
 		if hardFilters.EarningsBlackoutDaysBefore > 0 && f.ResultPrevComing != "" {
 			if yfinance.IsEarningsBlackout(f.ResultPrevComing, hardFilters.EarningsBlackoutDaysBefore) {
@@ -424,7 +459,7 @@ func isEligible(
 				return false, fmt.Sprintf("DSO Deterioration limit exceeded (+%.1f%% > %.1f%% threshold)", dsoDeltaPct, maxDSOPct)
 			}
 		}
-	} else if method == "multibagger" {
+	case "multibagger":
 		// 1. Sales Growth Accelerator (TTM vs 3Y CAGR)
 		passedSales, _, _ := yfinance.CalculateSalesGrowth(&f)
 
@@ -452,7 +487,8 @@ func isEligible(
 			}
 		}
 
-		// Require at least 2 out of 3 operational criteria to pass
+		// Require at least 2 out of 3 operational criteria to pass for new candidates,
+		// and at least 1 out of 3 for existing holdings to avoid cliff evictions on growth normalization.
 		passCount := 0
 		if passedSales {
 			passCount++
@@ -464,7 +500,12 @@ func isEligible(
 			passCount++
 		}
 
-		if passCount < 2 {
+		minPassCount := 2
+		if isExisting {
+			minPassCount = 1
+		}
+
+		if passCount < minPassCount {
 			stats.EliminatedSalesAccelerator++
 			return false, fmt.Sprintf("Operational Criteria failed: only %d/3 criteria met (Sales Acceleration: %t, Asset Turnover expansion: %t, DSO improvement: %t)", passCount, passedSales, passedAT, passedWC)
 		}
@@ -488,6 +529,7 @@ func ApplySafetyFilters(
 	fundamentals map[string]yfinance.Fundamentals,
 	fullHistory map[string]*yfinance.HistoricalData,
 	tracker *selectiontracker.Tracker,
+	existingHoldings map[string]float64,
 ) []string {
 	var filteredKeys []string
 	var stats FilterStats
@@ -540,7 +582,11 @@ func ApplySafetyFilters(
 			continue
 		}
 		hist := fullHistory[t]
-		eligible, reason := isEligible(t, f, method, hardFilters, hist.Closes, hist.Opens, hist.Volumes, rsPercentiles, &stats)
+		isExisting := false
+		if existingHoldings != nil {
+			_, isExisting = existingHoldings[t]
+		}
+		eligible, reason := isEligible(t, f, method, hardFilters, hist.Closes, hist.Opens, hist.Volumes, rsPercentiles, &stats, isExisting)
 		if eligible {
 			filteredKeys = append(filteredKeys, t)
 		} else {

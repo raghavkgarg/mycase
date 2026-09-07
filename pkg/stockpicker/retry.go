@@ -90,7 +90,7 @@ func RetryFailedSnapshotCandidates(ctx context.Context, indexName, method, asOfD
 
 	var survivors []string
 	if cfg != nil && cfg.HardFilters != nil && len(activeKeys) > 0 {
-		survivors = ApplySafetyFilters(ctx, activeKeys, snap.Method, cfg.HardFilters, fundamentals, fullHistory, tracker)
+		survivors = ApplySafetyFilters(ctx, activeKeys, snap.Method, cfg.HardFilters, fundamentals, fullHistory, tracker, nil)
 	} else {
 		survivors = activeKeys
 	}

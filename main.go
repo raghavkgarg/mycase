@@ -27,6 +27,7 @@ func main() {
 		Usage:   "Portfolio basket & rebalancing engine",
 		Version: fmt.Sprintf("%s (commit: %s, built: %s)", Version, GitCommit, BuildDate),
 		Commands: []*cli.Command{
+			mycmd.ReturnsCommand,
 			mycmd.PipelineCommand,
 			mycmd.PickCommand,
 			mycmd.OptimizeCommand,

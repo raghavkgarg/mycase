@@ -20,6 +20,7 @@ type Tracker struct {
 	EffectiveScores     map[string]float64 // ticker -> effective score (raw * regime)
 	RawRanks            map[string]int     // ticker -> 1-based rank
 	SectorCapDrops      map[string]string  // ticker -> explanation
+	CooldownDrops       map[string]string  // ticker -> explanation (anti-churn cooldown block)
 	HysteresisDrops     map[string]string  // ticker -> explanation
 	SelectedReasons     map[string]string  // ticker -> explanation
 	AdditionDrivers     map[string]string  // ticker -> positive driver summary
@@ -37,6 +38,7 @@ func New() *Tracker {
 		EffectiveScores:     make(map[string]float64),
 		RawRanks:            make(map[string]int),
 		SectorCapDrops:      make(map[string]string),
+		CooldownDrops:       make(map[string]string),
 		HysteresisDrops:     make(map[string]string),
 		SelectedReasons:     make(map[string]string),
 		AdditionDrivers:     make(map[string]string),
@@ -80,10 +82,19 @@ func (t *Tracker) RecordSectorCapDrop(ticker, sector string, higherTickers []str
 	t.SectorCapDrops[ticker] = fmt.Sprintf("Sector cap for '%s' exceeded (3/3 slots filled by %s)", sector, fillers)
 }
 
+// RecordCooldownDrop logs that a candidate ticker was blocked by the anti-churn re-entry cooldown window.
+func (t *Tracker) RecordCooldownDrop(ticker, reason string) {
+	t.CooldownDrops[ticker] = reason
+}
+
 // RecordHysteresisDrop logs rejection during top N and hysteresis evaluation.
 func (t *Tracker) RecordHysteresisDrop(ticker string, rank, topN, bufferLimit int, isExisting bool) {
 	if isExisting {
-		t.HysteresisDrops[ticker] = fmt.Sprintf("Removed: Rank %d fell below hysteresis buffer limit (%d)", rank, bufferLimit)
+		if rank <= bufferLimit {
+			t.HysteresisDrops[ticker] = fmt.Sprintf("Removed: Rank %d displaced from buffer by higher-ranked new candidate", rank)
+		} else {
+			t.HysteresisDrops[ticker] = fmt.Sprintf("Removed: Rank %d fell below hysteresis buffer limit (%d)", rank, bufferLimit)
+		}
 	} else {
 		if rank <= topN {
 			t.HysteresisDrops[ticker] = "Not added: portfolio full (slots filled by existing holdings retained via hysteresis)"
@@ -115,16 +126,17 @@ type SelectionFunnel struct {
 	Stage1Survivors  []string `json:"stage1_survivors"`
 	RegimeRejected   []string `json:"regime_rejected"`
 	SectorCapped     []string `json:"sector_capped"`
+	CooldownBlocked  []string `json:"cooldown_blocked"`
 	RankLimited      []string `json:"rank_limited"`
 	FinalSelected    []string `json:"final_selected"`
 }
 
 // Validate asserts that every Stage-1 survivor is strictly accounted for.
 func (f SelectionFunnel) Validate() error {
-	totalAccounted := len(f.RegimeRejected) + len(f.SectorCapped) + len(f.RankLimited) + len(f.FinalSelected)
+	totalAccounted := len(f.RegimeRejected) + len(f.SectorCapped) + len(f.CooldownBlocked) + len(f.RankLimited) + len(f.FinalSelected)
 	if totalAccounted != len(f.Stage1Survivors) {
-		return fmt.Errorf("funnel conservation mismatch: %d accounted (RegimeRejected:%d + SectorCapped:%d + RankLimited:%d + FinalSelected:%d) vs %d Stage-1 survivors",
-			totalAccounted, len(f.RegimeRejected), len(f.SectorCapped), len(f.RankLimited), len(f.FinalSelected), len(f.Stage1Survivors))
+		return fmt.Errorf("funnel conservation mismatch: %d accounted (RegimeRejected:%d + SectorCapped:%d + CooldownBlocked:%d + RankLimited:%d + FinalSelected:%d) vs %d Stage-1 survivors",
+			totalAccounted, len(f.RegimeRejected), len(f.SectorCapped), len(f.CooldownBlocked), len(f.RankLimited), len(f.FinalSelected), len(f.Stage1Survivors))
 	}
 	if f.InitialPool > 0 {
 		stage1Accounted := len(f.DataFetchFailed) + len(f.Stage1Eliminated) + len(f.Stage1Survivors)
@@ -153,12 +165,15 @@ func (t *Tracker) BuildFunnel() (SelectionFunnel, error) {
 		stage1Elim = append(stage1Elim, sym)
 	}
 
-	var regimeRej, sectorCap, rankLim, finalSel []string
+	var regimeRej, sectorCap, cdBlocked, rankLim, finalSel []string
 	for sym := range t.ScoreThresholdDrops {
 		regimeRej = append(regimeRej, sym)
 	}
 	for sym := range t.SectorCapDrops {
 		sectorCap = append(sectorCap, sym)
+	}
+	for sym := range t.CooldownDrops {
+		cdBlocked = append(cdBlocked, sym)
 	}
 	for sym := range t.HysteresisDrops {
 		rankLim = append(rankLim, sym)
@@ -174,6 +189,7 @@ func (t *Tracker) BuildFunnel() (SelectionFunnel, error) {
 		Stage1Survivors:  survivors,
 		RegimeRejected:   regimeRej,
 		SectorCapped:     sectorCap,
+		CooldownBlocked:  cdBlocked,
 		RankLimited:      rankLim,
 		FinalSelected:    finalSel,
 	}
@@ -558,6 +574,22 @@ func (t *Tracker) SaveReport(displayName, method string, existingHoldings map[st
 		}
 	}
 	for ticker, reason := range t.ScoreThresholdDrops {
+		if _, ok := existingHoldings[ticker]; !ok {
+			rawS := t.RawScores[ticker]
+			effS := t.EffectiveScores[ticker]
+			if effS == 0 && rawS > 0 && t.RegimeMultiplier > 0 {
+				effS = rawS * t.RegimeMultiplier
+			}
+			rejectedCandidates = append(rejectedCandidates, struct {
+				ticker         string
+				rawScore       float64
+				effectiveScore float64
+				rank           int
+				reason         string
+			}{ticker, rawS, effS, t.RawRanks[ticker], reason})
+		}
+	}
+	for ticker, reason := range t.CooldownDrops {
 		if _, ok := existingHoldings[ticker]; !ok {
 			rawS := t.RawScores[ticker]
 			effS := t.EffectiveScores[ticker]

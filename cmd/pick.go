@@ -30,6 +30,8 @@ var PickCommand = &cli.Command{
 		&cli.StringFlag{Name: "golden", Usage: "Path to golden copy CSV for hysteresis and rebalancing band"},
 		&cli.FloatFlag{Name: "rebalance-tolerance", Value: 0.10, Usage: "Rebalancing weight tolerance %% (e.g. 0.10 for 0.10%%)"},
 		&cli.IntFlag{Name: "hysteresis-buffer", Value: 5, Usage: "Extra ranks to allow existing holdings to drift"},
+		&cli.IntFlag{Name: "cooldown-days", Value: 30, Usage: "Days to bar recently exited holdings from re-entering"},
+		&cli.IntFlag{Name: "cooldown-bypass-rank", Value: 5, Usage: "High conviction rank threshold to bypass cooldown"},
 		&cli.StringFlag{Name: "name", Usage: "Custom display name for output files"},
 		&cli.StringFlag{Name: "out", Usage: "Custom output CSV path"},
 		&cli.BoolFlag{Name: "analysis", Aliases: []string{"a"}, Usage: "Run deep quantitative deduction analysis using DuckDB"},
@@ -59,6 +61,8 @@ func pickOptsFromCmd(c *cli.Command) *stockpicker.Options {
 		GoldenPath:         c.String("golden"),
 		RebalanceTolerance: c.Float("rebalance-tolerance"),
 		HysteresisBuffer:   int(c.Int("hysteresis-buffer")),
+		CooldownDays:       int(c.Int("cooldown-days")),
+		CooldownBypassRank: int(c.Int("cooldown-bypass-rank")),
 		DisplayName:        c.String("name"),
 		OutputFile:         c.String("out"),
 	}
@@ -127,8 +131,18 @@ func runPickWithOpts(ctx context.Context, opts *stockpicker.Options) error {
 		tracker.RecordFetchFailure(f, "DATA_FETCH_FAILED: historical price bars unavailable")
 	}
 
+	// Load recent exits for anti-churn cooldown tracking
+	goldenBase := csvloader.GetUniverseName(opts.GoldenPath)
+	if goldenBase == "" {
+		goldenBase = displayNameVal
+	}
+	recentExits := stockpicker.LoadRecentExits(goldenBase, goldenWeights, opts.CooldownDays, time.Now())
+	if len(recentExits) > 0 {
+		fmt.Printf("Loaded %d recent exits for anti-churn cooldown tracking (%d-day window)\n", len(recentExits), opts.CooldownDays)
+	}
+
 	if cfg.HardFilters != nil {
-		activeKeys = stockpicker.ApplySafetyFilters(ctx, activeKeys, opts.Method, cfg.HardFilters, fundamentals, fullHistory, tracker)
+		activeKeys = stockpicker.ApplySafetyFilters(ctx, activeKeys, opts.Method, cfg.HardFilters, fundamentals, fullHistory, tracker, goldenWeights)
 	}
 
 	if len(activeKeys) == 0 {
@@ -140,20 +154,21 @@ func runPickWithOpts(ctx context.Context, opts *stockpicker.Options) error {
 	var finalWeights map[string]float64
 	var scores map[string]float64
 
-	if opts.Method == "value" {
+	switch opts.Method {
+	case "value":
 		scores = stockpicker.ScoreValue(ctx, activeKeys, fundamentals, fullHistory, cfg.HardFilters)
-		selectedKeys = stockpicker.SelectTopNValue(activeKeys, scores, fundamentals, cfg.HardFilters, opts.TopN, goldenWeights, opts.HysteresisBuffer, tracker)
+		selectedKeys = stockpicker.SelectTopNValueWithCooldown(activeKeys, scores, fundamentals, cfg.HardFilters, opts.TopN, goldenWeights, opts.HysteresisBuffer, tracker, recentExits, opts.CooldownDays, opts.CooldownBypassRank)
 		finalWeights = stockpicker.NormalizeValueWeights(selectedKeys, scores, fundamentals, cfg.HardFilters, goldenWeights, opts.RebalanceTolerance)
-	} else if opts.Method == "earlymb" || opts.Method == "early_multibagger" {
+	case "earlymb", "early_multibagger":
 		scores = stockpicker.ScoreEarlyMultibagger(ctx, activeKeys, fundamentals, fullHistory, cfg.HardFilters)
-		selectedKeys = stockpicker.SelectTopNEarlyMultibagger(activeKeys, scores, fundamentals, fullHistory, cfg.HardFilters, opts.TopN, goldenWeights, opts.HysteresisBuffer, tracker)
+		selectedKeys = stockpicker.SelectTopNEarlyMultibaggerWithCooldown(activeKeys, scores, fundamentals, fullHistory, cfg.HardFilters, opts.TopN, goldenWeights, opts.HysteresisBuffer, tracker, recentExits, opts.CooldownDays, opts.CooldownBypassRank)
 		finalWeights = stockpicker.NormalizeEarlyMultibaggerWeights(selectedKeys, scores, fundamentals, cfg.HardFilters, goldenWeights, opts.RebalanceTolerance)
-	} else if opts.Method == "multibagger" {
+	case "multibagger":
 		scores = stockpicker.ScoreMultibagger(ctx, activeKeys, fundamentals, fullHistory, cfg.HardFilters)
-		selectedKeys = stockpicker.SelectTopNMultibagger(activeKeys, scores, fundamentals, cfg.HardFilters, opts.TopN, goldenWeights, opts.HysteresisBuffer, tracker)
+		selectedKeys = stockpicker.SelectTopNMultibaggerWithCooldown(activeKeys, scores, fundamentals, cfg.HardFilters, opts.TopN, goldenWeights, opts.HysteresisBuffer, tracker, recentExits, opts.CooldownDays, opts.CooldownBypassRank)
 		finalWeights = stockpicker.NormalizeMultibaggerWeights(selectedKeys, scores, fundamentals, cfg.HardFilters, goldenWeights, opts.RebalanceTolerance)
-	} else {
-		selectedKeys = stockpicker.SelectTopNStandard(activeKeys, slicedPrices, benchmarkPrices, fundamentals, cfg.Weights, opts.TopN, goldenWeights, opts.HysteresisBuffer, tracker)
+	default:
+		selectedKeys = stockpicker.SelectTopNStandardWithCooldown(activeKeys, slicedPrices, benchmarkPrices, fundamentals, cfg.Weights, opts.TopN, goldenWeights, opts.HysteresisBuffer, tracker, recentExits, opts.CooldownDays, opts.CooldownBypassRank)
 		finalWeights = stockpicker.NormalizeStandardWeights(selectedKeys, slicedPrices, benchmarkPrices, fundamentals, cfg.Weights, goldenWeights, opts.RebalanceTolerance)
 	}
 
@@ -161,17 +176,18 @@ func runPickWithOpts(ctx context.Context, opts *stockpicker.Options) error {
 		return finalWeights[selectedKeys[i]] > finalWeights[selectedKeys[j]]
 	})
 
-	if opts.Method == "earlymb" || opts.Method == "early_multibagger" {
+	switch opts.Method {
+	case "earlymb", "early_multibagger":
 		stockpicker.PrintEarlyMultibaggerTable(selectedKeys, finalWeights, scores, fundamentals, fullHistory, displayNameVal, opts.Method)
 		if !opts.SkipScuttlebutt {
 			stockpicker.PrintScuttlebutt(selectedKeys, fundamentals, displayNameVal, opts.Method)
 		}
-	} else if opts.Method == "value" || opts.Method == "multibagger" {
+	case "value", "multibagger":
 		stockpicker.PrintMultibaggerTable(selectedKeys, finalWeights, scores, fundamentals, fullHistory, displayNameVal, opts.Method)
 		if !opts.SkipScuttlebutt {
 			stockpicker.PrintScuttlebutt(selectedKeys, fundamentals, displayNameVal, opts.Method)
 		}
-	} else {
+	default:
 		stockpicker.PrintStandardTable(selectedKeys, finalWeights, fullHistory, displayNameVal, opts.Method)
 	}
 

@@ -16,6 +16,8 @@ type Options struct {
 	GoldenPath         string
 	RebalanceTolerance float64
 	HysteresisBuffer   int
+	CooldownDays       int
+	CooldownBypassRank int
 	DisplayName        string
 	OutputFile         string
 }

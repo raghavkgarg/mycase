@@ -195,6 +195,8 @@ func runPipeline(ctx context.Context, c *cli.Command) error {
 				GoldenPath:         cfg.GoldenCopyPath,
 				RebalanceTolerance: cfg.RebalanceTolerancePct,
 				HysteresisBuffer:   cfg.HysteresisRankBuffer,
+				CooldownDays:       cfg.CooldownDays,
+				CooldownBypassRank: cfg.CooldownBypassRank,
 				OutputFile:         outPath,
 			}
 			if src.isIndex {
@@ -242,6 +244,8 @@ func runPipeline(ctx context.Context, c *cli.Command) error {
 				GoldenPath:         cfg.GoldenCopyPath,
 				RebalanceTolerance: cfg.RebalanceTolerancePct,
 				HysteresisBuffer:   cfg.HysteresisRankBuffer,
+				CooldownDays:       cfg.CooldownDays,
+				CooldownBypassRank: cfg.CooldownBypassRank,
 				DisplayName:        goldenBase,
 				OutputFile:         outPath,
 			}
@@ -271,6 +275,8 @@ func runPipeline(ctx context.Context, c *cli.Command) error {
 				GoldenPath:         cfg.GoldenCopyPath,
 				RebalanceTolerance: cfg.RebalanceTolerancePct,
 				HysteresisBuffer:   cfg.HysteresisRankBuffer,
+				CooldownDays:       cfg.CooldownDays,
+				CooldownBypassRank: cfg.CooldownBypassRank,
 				DisplayName:        goldenBase,
 				OutputFile:         optimPath,
 			}

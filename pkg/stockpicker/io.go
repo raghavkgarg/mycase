@@ -65,12 +65,13 @@ func PrintSafetyFilterSummary(hardFilters *config.HardFilters, stats FilterStats
 	if hardFilters.MinCROIC > 0 {
 		fmt.Printf("- Low CROIC (< %.1f%%) eliminated:             %d stocks\n", hardFilters.MinCROIC*100.0, stats.EliminatedCROIC)
 	}
-	if method == "multibagger" {
+	switch method {
+	case "multibagger":
 		fmt.Printf("- Sales Growth Accelerator eliminated:      %d stocks\n", stats.EliminatedSalesAccelerator)
 		fmt.Printf("- Asset Turnover & CapEx Inflection eliminated: %d stocks\n", stats.EliminatedAssetTurnoverCapEx)
 		fmt.Printf("- Working Capital (DSO) eliminated:         %d stocks\n", stats.EliminatedWorkingCapital)
 		fmt.Printf("- Volume Breakout Check eliminated:         %d stocks\n", stats.EliminatedVolumeBreakout)
-	} else if method == "early_multibagger" || method == "earlymb" {
+	case "early_multibagger", "earlymb":
 		if hardFilters.EarningsBlackoutDaysBefore > 0 {
 			fmt.Printf("- Earnings Event Blackout (±%d Days) eliminated: %d stocks\n", hardFilters.EarningsBlackoutDaysBefore, stats.EliminatedEarningsBlackout)
 		}
