@@ -1,5 +1,5 @@
 .PHONY: build build-linux-arm64 build-linux-amd64 build-darwin-arm64 build-darwin-amd64
-.PHONY: install run test test-verbose test-race test-integration test-coverage cleanup clean fetch-echarts check-deps help
+.PHONY: install run test test-verbose test-race test-integration test-coverage cleanup clean fetch-echarts check-deps deps-graph help
 
 UNAME_S := $(shell uname -s)
 ifeq ($(UNAME_S),Darwin)
@@ -91,14 +91,25 @@ cleanup:
 	@echo "=== Vulnerabilities ==="
 	@govulncheck ./...
 	@echo "=== Dependency layering ==="
-	@go run ./scripts/checkdeps
+	@go run ./devtools/checkdeps
 	@echo "=== All clean ==="
 
 check-deps:
-	@go run ./scripts/checkdeps
+	@go run ./devtools/checkdeps
+
+deps-graph:
+	@mkdir -p dist
+	@go run ./devtools/depsgraph > dist/deps.dot
+	@if command -v dot >/dev/null 2>&1; then \
+		dot -Tsvg dist/deps.dot -o dist/deps.svg; \
+		echo "Dependency graph: dist/deps.svg (source: dist/deps.dot)"; \
+	else \
+		echo "Dependency graph: dist/deps.dot"; \
+		echo "Install Graphviz (brew install graphviz) to render SVG: dot -Tsvg dist/deps.dot -o dist/deps.svg"; \
+	fi
 
 clean:
-	@rm -f dist/mycase dist/mycase-arm64 dist/mycase-amd64 dist/mycase-darwin-arm64 dist/mycase-darwin-amd64
+	@rm -f dist/mycase dist/mycase-arm64 dist/mycase-amd64 dist/mycase-darwin-arm64 dist/mycase-darwin-amd64 dist/deps.dot dist/deps.svg
 	@echo "Cleaned"
 
 fetch-echarts:
@@ -123,5 +134,6 @@ help:
 	@echo "  test-coverage      - Run tests and generate coverage.html"
 	@echo "  cleanup            - gofmt + go fix + go vet + staticcheck + govulncheck + check-deps"
 	@echo "  check-deps         - Enforce R16 package layering (leaves + downward imports)"
+	@echo "  deps-graph         - Render pkg/ dependency graph to dist/deps.svg (layer-colored)"
 	@echo "  clean              - Remove build artifacts"
 	@echo "  fetch-echarts      - Download ECharts 5.6.0 into pkg/server/static/vendor/"

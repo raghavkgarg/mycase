@@ -638,7 +638,7 @@ R16 restructured the `pkg/` graph around one rule: a package should either **def
 - **Interfaces are defined by their consumer.** `stockpicker.DataFetcher` and `attribution.PriceFetcher` are declared where they are used; the low-level implementers (`datafetcher.Router`) satisfy them structurally without importing the consumer (see D10).
 - **Domains own their persistence.** `tax.Store` and `attribution.Store` each take a `*sql.DB` handle from `cache.Conn()` and define their own tables, so `pkg/cache` imports no domain package and stays a leaf (see D11).
 
-The result: no package both defines cross-boundary types and pulls heavy deps, so new feature packages depend on leaves, not hubs. A `go list`-based guard (`scripts/checkdeps`, run by `make check-deps` and `make cleanup`) enforces strictly-downward imports and leaf-ness; the layer table and rules are codified in `.kiro/steering/architecture.md`.
+The result: no package both defines cross-boundary types and pulls heavy deps, so new feature packages depend on leaves, not hubs. A `go list`-based guard (`devtools/checkdeps`, run by `make check-deps` and `make cleanup`) enforces strictly-downward imports and leaf-ness; the layer table and rules are codified in `.kiro/steering/architecture.md`.
 
 
 ### D15 — Data Source Per Data Type, Not Per Market

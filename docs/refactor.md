@@ -268,7 +268,7 @@ Existing `CalcSharpe`/`CalcSortino`/`CalcAlpha` delegate to these with `indiaRis
 - **P3** `broker` hub → extracted `pkg/broker/types` leaf (`Holding`/`Order`/`OrderResult`/`MarketConfig`); `broker` re-exports via aliases. `tax` now depends only on `broker/types` (was `tax→broker→config/costs`); `printer`/`optimizer` likewise off the hub.
 - **P4** `cache→tax` → moved tax persistence into `pkg/tax.Store` (owns its DDL via a `*sql.DB` handle, mirroring `attribution.Store`). `pkg/cache` now has **zero internal imports**.
 
-Guard: `scripts/checkdeps` (a `go list`-based layer checker, run by `make check-deps` + `make cleanup`) enforces downward-only imports and leaf-ness. Rules codified in `.kiro/steering/architecture.md`. See the Completed Phases ledger for commits.
+Guard: `devtools/checkdeps` (a `go list`-based layer checker, run by `make check-deps` + `make cleanup`) enforces downward-only imports and leaf-ness. Rules codified in `.kiro/steering/architecture.md`. See the Completed Phases ledger for commits.
 **Motivation**: The internal package graph is **currently acyclic** (it compiles), but a handful of low-level packages have become *hubs* that mix type definitions with behavior and configuration. Every new feature package risks closing a loop against one of them — this is why Phase 5a had to invent a local `PriceFetcher` interface and have `attribution` own its cache table. The pain is not existing cycles; it's that the shape *invites* them, making the system progressively harder to understand, test, and extend.
 
 ### The dependency graph (measured `go list`, Aug 2026)

@@ -25,12 +25,12 @@ Read the sections below as the technical expression of these four domain pressur
 - Shared DTOs live in zero-import leaf packages (`marketdata`, `broker/types`) — define OR consume, not both low in the stack.
 - Interfaces are defined by their consumer; the low-level implementer satisfies structurally, never imports the consumer.
 - Domains own their persistence (take a `*sql.DB` via `cache.Conn()`, define their own tables); `cache` never imports a domain.
-- New package → must be placed in `scripts/checkdeps` layer map deliberately; guard fails on unlisted packages.
+- New package → must be placed in `devtools/internal/layers` layer map deliberately; guard fails on unlisted packages.
 - Designated leaves never acquire an internal import (`marketdata`, `broker/types`, `cache`, `config`, `costs`, `render`, `market`, `logging`, `alert`).
 
 ### When to introduce a new package vs. extend an existing one
 
-The deciding question is **"does this define a widely-shared type, or does it wire behavior?"** — the R16 cycle-magnets all failed by doing both low in the stack. Rules encoded in the layer map (`scripts/checkdeps/main.go`, `var layers`):
+The deciding question is **"does this define a widely-shared type, or does it wire behavior?"** — the R16 cycle-magnets all failed by doing both low in the stack. Rules encoded in the layer map (`devtools/internal/layers/layers.go`, `var Layers`):
 
 - If the artifact is only a **shared DTO** used across package boundaries, it gets (or joins) a zero-import leaf — `marketdata` (price/fundamental DTOs), `broker/types` (Holding/Order/MarketConfig). Consumers then import the leaf directly; `broker` and `yfinance` additionally re-export those types via aliases so legacy call sites are unchanged.
 - If the artifact **wires behavior or config**, it becomes a heavier package placed at the layer matching its dependencies (e.g. `datafetcher` at L3 because it composes `broker/schwab` + `yfinance`).
@@ -234,7 +234,8 @@ Two models coexist deliberately:
 ### The green bar
 
 - `make build` — `go build` with LDFLAGS injecting version/commit/date → `dist/mycase`.
-- `make check-deps` — `go run ./scripts/checkdeps`, the R16 layering guard (part of `make cleanup`).
+- `make check-deps` — `go run ./devtools/checkdeps`, the R16 layering guard (part of `make cleanup`).
+- `make deps-graph` — `go run ./devtools/depsgraph`, the visual companion to `check-deps`: emits a layer-colored Graphviz dependency graph of `pkg/` to `dist/deps.dot`, rendering `dist/deps.svg` if Graphviz (`dot`) is installed. Not part of `make cleanup` — run on demand to eyeball the graph during refactors. Shares its layer map with `check-deps` via `devtools/internal/layers`.
 - `make test` — `go test -timeout 30s ./...`; `test-race` (`-race -timeout 60s`), `test-integration` (`-tags=integration -timeout 120s`), `test-coverage` (→ `coverage.html`).
 
 All three are green on `integration/main-ebm` as of this writing.
@@ -272,7 +273,7 @@ Scored after the EBM integration (`integration/main-ebm`), grounded in the file 
 
 | Area | Status | Evidence |
 |------|--------|----------|
-| Layering | 🟢 Strong | `scripts/checkdeps` enforces the full layer map with three failure modes (unlisted / leaf-violation / downward-only); `check-deps` green. datafetcher→stockpicker cycle avoided via consumer-defined interface + structural satisfaction (`router.go`); pithistory owns its own DB (`pithistory/db.go`) instead of pushing into `cache`. |
+| Layering | 🟢 Strong | `devtools/checkdeps` enforces the full layer map with three failure modes (unlisted / leaf-violation / downward-only); `check-deps` green. datafetcher→stockpicker cycle avoided via consumer-defined interface + structural satisfaction (`router.go`); pithistory owns its own DB (`pithistory/db.go`) instead of pushing into `cache`. |
 | IO / side effects | 🟢 Good | render(stdout)/slog(stderr+file) split with `req_id` tracing (`main.go` Before hook); `config/` read-only; golden-copy mutated only via `cmd/merge.go`. Residual gap: several diagnostic `fmt` sites not yet migrated to slog (audit pending). |
 | Config management | 🟢 Good | flag>env>file>default proven in `setupLogging`; additive zero-value-safe structs; `LoadUserDefaults` degrades on malformed input; aliasing at load boundary. Gap: no schema/range validation, no schema-version/migration story (§10). |
 | Data sources | 🟡 Partial | Router prefix-routing with logged Schwab→Yahoo fallback exists (`datafetcher/router.go`), but **~7 bypass paths** hit yfinance directly (server, benchmark leg, calibrate/monitor/report/backtest, run.go fallbacks + EBM io.go), and **no provenance column** exists in any cache table. Only one `DataFetcher` interface, not the aspirational Price/Fundamentals/Sector trio. Biggest gap vs. principles. |

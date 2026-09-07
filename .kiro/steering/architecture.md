@@ -2,7 +2,7 @@
 
 The `pkg/` graph is organized into layers. **Imports must always go strictly
 downward** — a package may import only packages at a lower layer, never the same
-layer or higher. This is enforced by `scripts/checkdeps` (run via `make check-deps`,
+layer or higher. This is enforced by `devtools/checkdeps` (run via `make check-deps`,
 and part of `make cleanup`). Go rejects import *cycles* at compile time; this guard
 additionally preserves the *direction* and *leaf-ness* that phase R16 established
 (see `docs/refactor.md`).
@@ -26,7 +26,7 @@ and the rule going forward:
   methods (`attribution.Store`, `tax.Store`). `pkg/cache` must never import a
   domain package.
 
-## Layers (as enforced by scripts/checkdeps)
+## Layers (as enforced by devtools/checkdeps)
 
 | Layer | Packages | Role |
 |-------|----------|------|
@@ -44,13 +44,15 @@ layer-checked.
 ## Designated leaves (never acquire an internal import)
 
 `marketdata`, `broker/types`, `cache`, `config`, `costs`, `render`, `market`,
-`logging`, `alert`. `scripts/checkdeps` fails hard if any of these imports another
+`logging`, `alert`. `devtools/checkdeps` fails hard if any of these imports another
 internal package.
 
 ## Adding or moving a package
 
-1. Add it to the `layers` map in `scripts/checkdeps/main.go` at the correct layer
-   (the check fails on any unlisted `pkg/` package, forcing a deliberate placement).
+1. Add it to the `Layers` map in `devtools/internal/layers/layers.go` at the correct
+   layer (the check fails on any unlisted `pkg/` package, forcing a deliberate
+   placement). This map is the single source of truth shared by `devtools/checkdeps`
+   (enforcement) and `devtools/depsgraph` (visualization).
 2. If it only needs shared *types*, import the leaf (`marketdata` / `broker/types`),
    not the heavy package that re-exports them.
 3. Run `make check-deps`. If it reports a layer violation, the dependency direction
