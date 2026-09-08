@@ -55,12 +55,12 @@ type NAVPoint struct {
 
 // Config parameterizes a NAV build.
 type Config struct {
-	InitialCapital float64        // starting capital (default DefaultInitialCapital if <= 0)
 	From           time.Time      // series start (inclusive)
 	To             time.Time      // series end (inclusive)
-	Benchmark      string         // benchmark ticker (default DefaultBenchmark)
-	RiskFree       float64        // annual risk-free rate, fraction (default DefaultRiskFree)
 	Location       *time.Location // timezone for keying trading days (default America/New_York)
+	Benchmark      string         // benchmark ticker (default DefaultBenchmark)
+	InitialCapital float64        // starting capital (default DefaultInitialCapital if <= 0)
+	RiskFree       float64        // annual risk-free rate, fraction (default DefaultRiskFree)
 }
 
 // withDefaults returns a copy of cfg with unset fields filled in.
@@ -86,9 +86,9 @@ func (c Config) withDefaults() Config {
 
 // Result holds vs-benchmark performance metrics derived from a NAV series.
 type Result struct {
-	TradingDays      int
 	From             time.Time
 	To               time.Time
+	TradingDays      int
 	InitialCapital   float64
 	FinalValue       float64
 	BenchmarkFinal   float64

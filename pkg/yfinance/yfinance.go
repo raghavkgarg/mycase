@@ -97,9 +97,9 @@ func FetchFundamentals(ctx context.Context, tickers []string) (map[string]Fundam
 		ticker string
 	}
 	type fetchResult struct {
+		err    error
 		ticker string
 		fund   Fundamentals
-		err    error
 	}
 
 	jobs := make(chan fetchJob, len(uncachedTickers))

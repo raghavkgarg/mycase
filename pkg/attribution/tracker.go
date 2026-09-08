@@ -58,8 +58,8 @@ func (t *Tracker) BuildNAVSeries(ctx context.Context, holdings []Holding, cfg Co
 
 	// Fetch each holding; skip failures with a warning.
 	type held struct {
-		Holding
 		close map[string]float64
+		Holding
 	}
 	var kept []held
 	for _, h := range holdings {

@@ -19,37 +19,37 @@ type DataFetcher interface {
 
 // Options holds command line configurations.
 type Options struct {
+	DataFetcher        DataFetcher // optional; if nil, falls back to direct yfinance calls
 	IndexName          string
 	FilePath           string
-	Tickers            []string // pre-built ticker list (bypasses file/index loading)
 	Method             string
-	TopN               int
 	RangeStr           string
-	SkipScuttlebutt    bool
 	GoldenPath         string
-	RebalanceTolerance float64
-	HysteresisBuffer   int
 	DisplayName        string
 	OutputFile         string
-	DataFetcher        DataFetcher // optional; if nil, falls back to direct yfinance calls
+	Tickers            []string // pre-built ticker list (bypasses file/index loading)
+	TopN               int
+	RebalanceTolerance float64
+	HysteresisBuffer   int
+	SkipScuttlebutt    bool
 }
 
 // TickersSource encapsulates tickers list source info.
 type TickersSource struct {
-	Name    string
-	Tickers []string
 	// Sectors maps ticker -> sector when the constituents CSV carries a
 	// GICS Sector column (e.g. the S&P 500 dataset). Empty for sources that
 	// don't. Used to backfill Fundamentals.Sector on the US/Schwab path,
 	// where the fundamentals endpoint returns no sector (Phase 10a).
 	Sectors map[string]string
+	Name    string
+	Tickers []string
 }
 
 // StrategyConfig wraps optimization weights, safety filters, and governance traps.
 type StrategyConfig struct {
-	Weights     optimizer.MFSWeights
 	HardFilters *config.HardFilters
 	Governance  map[string]float64
+	Weights     optimizer.MFSWeights
 }
 
 // FilterStats holds metric elimination counts from applySafetyFilters.

@@ -5,8 +5,8 @@ package schwab
 // CandleList is the response from GET /marketdata/v1/pricehistory.
 type CandleList struct {
 	Symbol  string   `json:"symbol"`
-	Empty   bool     `json:"empty"`
 	Candles []Candle `json:"candles"`
+	Empty   bool     `json:"empty"`
 }
 
 // Candle is a single OHLCV candle from Schwab price history.
@@ -57,11 +57,11 @@ type InstrumentResponse struct {
 
 // Instrument holds instrument details including fundamental data.
 type Instrument struct {
+	Fundamental *Fundamental `json:"fundamental,omitempty"`
 	Symbol      string       `json:"symbol"`
 	Description string       `json:"description"`
 	Exchange    string       `json:"exchange"`
 	AssetType   string       `json:"assetType"`
-	Fundamental *Fundamental `json:"fundamental,omitempty"`
 }
 
 // Fundamental holds fundamental data from Schwab's instrument search.
@@ -107,11 +107,11 @@ type SecuritiesAccount struct {
 
 // Position holds a single position in the account.
 type Position struct {
+	Instrument    PositionInstrument `json:"instrument"`
 	LongQuantity  float64            `json:"longQuantity"`
 	ShortQuantity float64            `json:"shortQuantity"`
 	AveragePrice  float64            `json:"averagePrice"`
 	MarketValue   float64            `json:"marketValue"`
-	Instrument    PositionInstrument `json:"instrument"`
 }
 
 // PositionInstrument identifies the instrument in a position.
@@ -128,16 +128,16 @@ type SchwabOrder struct {
 	OrderType          string     `json:"orderType"`         // "LIMIT", "MARKET"
 	Session            string     `json:"session"`           // "NORMAL"
 	Duration           string     `json:"duration"`          // "DAY", "GOOD_TILL_CANCEL"
-	Price              float64    `json:"price,omitempty"`   // required for LIMIT orders
 	OrderStrategyType  string     `json:"orderStrategyType"` // "SINGLE"
 	OrderLegCollection []OrderLeg `json:"orderLegCollection"`
+	Price              float64    `json:"price,omitempty"` // required for LIMIT orders
 }
 
 // OrderLeg is a single leg in a Schwab order.
 type OrderLeg struct {
+	Instrument  OrderInstrument `json:"instrument"`
 	Instruction string          `json:"instruction"` // "BUY", "SELL"
 	Quantity    int             `json:"quantity"`
-	Instrument  OrderInstrument `json:"instrument"`
 }
 
 // OrderInstrument identifies what is being traded.

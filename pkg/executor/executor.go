@@ -24,11 +24,11 @@ type FailedOrderSpec struct {
 	TradingSymbol   string  `json:"trading_symbol"`
 	Exchange        string  `json:"exchange"`
 	TransactionType string  `json:"transaction_type"`
-	Quantity        int     `json:"quantity"`
-	Price           float64 `json:"price"`
 	Product         string  `json:"product"`
 	ErrorReason     string  `json:"error_reason"`
 	OrderVariety    string  `json:"order_variety"`
+	Quantity        int     `json:"quantity"`
+	Price           float64 `json:"price"`
 	IsGTT           bool    `json:"is_gtt"`
 }
 

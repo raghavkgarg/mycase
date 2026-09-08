@@ -379,9 +379,9 @@ func FetchHistoricalPrices(ctx context.Context, rawTickers []string) (map[string
 		ticker string
 	}
 	type fetchResult struct {
-		ticker string
-		hist   *yfinance.HistoricalData
 		err    error
+		hist   *yfinance.HistoricalData
+		ticker string
 	}
 
 	runBatch := func(tickers []string, workerCount int) ([]fetchResult, []string) {
@@ -482,9 +482,9 @@ func fetchHistoricalPricesWithFetcher(ctx context.Context, fetcher DataFetcher, 
 		ticker string
 	}
 	type fetchResult struct {
-		ticker string
-		hist   *yfinance.HistoricalData
 		err    error
+		hist   *yfinance.HistoricalData
+		ticker string
 	}
 
 	jobs := make(chan fetchJob, len(rawTickers))

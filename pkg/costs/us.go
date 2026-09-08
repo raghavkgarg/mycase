@@ -95,12 +95,12 @@ func (c USTaxClass) String() string {
 // USTaxWarning describes the tax treatment for a US sell order.
 type USTaxWarning struct {
 	Ticker        string
+	Note          string
 	Class         USTaxClass
 	HoldingDays   int
 	EstimatedGain float64 // (sellPrice - costBasis) × qty
 	EstimatedTax  float64 // estimated federal tax
 	WashSaleRisk  bool    // true if recently bought within 30 days
-	Note          string
 }
 
 // ClassifyUSSell returns a USTaxWarning for a US SELL order.

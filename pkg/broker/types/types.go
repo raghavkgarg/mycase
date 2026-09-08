@@ -28,9 +28,9 @@ type Order struct {
 	TradingSymbol   string
 	Exchange        string
 	TransactionType string // "BUY" or "SELL"
+	OrderType       string // "LIMIT", "MARKET"
+	Product         string // "CNC"
 	Quantity        int
-	OrderType       string  // "LIMIT", "MARKET"
-	Product         string  // "CNC"
 	Price           float64 // limit price; for GTT orders this is the GTT limit price
 	Ltp             float64 // raw last traded price
 	TriggerPrice    float64 // for GTT orders only; zero for regular/AMO
@@ -50,8 +50,8 @@ type MarketConfig struct {
 	Benchmark string // "^GSPC" for US, "^NSEI" for India
 	Exchange  string // "US" or "NSE"
 	Currency  string // "$" or "₹"
-	CloseHour int    // 16 (US ET) or 15 (India IST)
-	CloseMin  int    // 0 (US) or 30 (India)
 	Timezone  string // "America/New_York" or "Asia/Kolkata"
 	Market    string // "us" or "india"
+	CloseHour int    // 16 (US ET) or 15 (India IST)
+	CloseMin  int    // 0 (US) or 30 (India)
 }

@@ -28,12 +28,12 @@ const rupee = "₹"
 
 // ThemeGroup holds categorized holdings and configuration for a theme group.
 type ThemeGroup struct {
+	Tickers      map[string]bool
 	Name         string
 	Prefix       string
 	CSVPath      string
-	TargetWeight float64
-	Tickers      map[string]bool
 	Holdings     []brokertypes.Holding
+	TargetWeight float64
 }
 
 // PadString pads a string with spaces on the left to reach the target width in runes.

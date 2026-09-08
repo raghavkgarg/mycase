@@ -9,13 +9,13 @@ import (
 
 // PriceRecord is a single daily price row as stored in the cache.
 type PriceRecord struct {
+	// Source records which provider produced this row (e.g. "yahoo", "schwab").
+	// Empty string is stored as NULL. Provenance groundwork for R17 / Phase 10.
+	Source    string
 	Timestamp int64
 	Close     float64
 	Open      float64
 	Volume    float64
-	// Source records which provider produced this row (e.g. "yahoo", "schwab").
-	// Empty string is stored as NULL. Provenance groundwork for R17 / Phase 10.
-	Source string
 }
 
 // GetPrices returns cached price records for (ticker, rangeKey) if the data

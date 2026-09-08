@@ -16,13 +16,13 @@ import (
 // PickResult holds the structured output of a stock selection run.
 // Callers can use this to persist results to DuckDB or other stores.
 type PickResult struct {
-	SelectedKeys []string
 	Weights      map[string]float64       // ticker → weight
 	Scores       map[string]float64       // ticker → score (nil for standard method)
 	Sectors      map[string]string        // ticker → sector
 	Ranks        map[string]int           // ticker → 1-based raw rank at selection time
 	Drivers      map[string]DriverMetrics // ticker → structured driver metrics
 	PITSnapshot  *PITRunSnapshot          // point-in-time run snapshot for DuckDB persistence by the command layer
+	SelectedKeys []string
 }
 
 // DriverMetrics mirrors selectiontracker.DriverMetrics as the structured numeric

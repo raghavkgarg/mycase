@@ -34,8 +34,8 @@ type RunConfig struct {
 type RunResult struct {
 	Proposal       *Proposal
 	ReportPath     string
-	SelectionPaths []string
 	GoldenCopyPath string
+	SelectionPaths []string
 }
 
 // Compile-time assertion that *datafetcher.Router satisfies the interface the

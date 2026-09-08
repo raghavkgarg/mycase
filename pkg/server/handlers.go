@@ -513,9 +513,9 @@ type backtestRequest struct {
 	From      string  `json:"from"`
 	To        string  `json:"to"`
 	Rebalance string  `json:"rebalance"`
+	Benchmark string  `json:"benchmark"`
 	Capital   float64 `json:"capital"`
 	Slippage  float64 `json:"slippage"` // percent, e.g. 0.1
-	Benchmark string  `json:"benchmark"`
 }
 
 func (s *Server) handleBacktest(w http.ResponseWriter, r *http.Request) {
@@ -578,9 +578,9 @@ func (s *Server) handleBacktest(w http.ResponseWriter, r *http.Request) {
 
 	// Fetch price data concurrently.
 	type fetchResult struct {
-		ticker string
-		hist   *yfinance.HistoricalData
 		err    error
+		hist   *yfinance.HistoricalData
+		ticker string
 	}
 	ctx := r.Context()
 	resultCh := make(chan fetchResult, len(holdings)+1)
@@ -768,11 +768,11 @@ func (s *Server) handleExecute(w http.ResponseWriter, r *http.Request) {
 	type placeResult struct {
 		Ticker    string  `json:"ticker"`
 		Action    string  `json:"action"`
+		OrderID   string  `json:"order_id,omitempty"`
+		Error     string  `json:"error,omitempty"`
 		Qty       int     `json:"qty"`
 		Price     float64 `json:"price"`
-		OrderID   string  `json:"order_id,omitempty"`
 		TriggerID int     `json:"trigger_id,omitempty"`
-		Error     string  `json:"error,omitempty"`
 	}
 
 	placed := make([]placeResult, 0, len(kept))

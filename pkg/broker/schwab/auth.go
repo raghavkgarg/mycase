@@ -38,9 +38,9 @@ type Token struct {
 	AccessToken      string `json:"access_token"`
 	RefreshToken     string `json:"refresh_token"`
 	TokenType        string `json:"token_type"`
+	Scope            string `json:"scope"`
 	ExpiresAt        int64  `json:"expires_at"`         // Unix timestamp
 	RefreshExpiresAt int64  `json:"refresh_expires_at"` // Unix timestamp
-	Scope            string `json:"scope"`
 }
 
 // IsExpired reports whether the access token has expired or will expire
@@ -62,10 +62,10 @@ func (t *Token) IsRefreshExpired() bool {
 
 // TokenManager handles token loading, saving, and auto-refresh.
 type TokenManager struct {
-	mu        sync.Mutex
 	token     *Token
-	tokenPath string
 	app       *AppConfig
+	tokenPath string
+	mu        sync.Mutex
 }
 
 // NewTokenManager creates a TokenManager that persists tokens to the given path.

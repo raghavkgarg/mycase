@@ -8,12 +8,12 @@ import (
 
 // AlertConfig holds drift monitoring and notification configuration.
 type AlertConfig struct {
-	DriftThreshold    float64  `yaml:"drift_threshold"`
 	PortfolioFile     string   `yaml:"portfolio_file"`
-	Channels          []string `yaml:"channels"`
 	TelegramBotToken  string   `yaml:"telegram_bot_token"`
 	TelegramChatID    string   `yaml:"telegram_chat_id"`
 	DiscordWebhookURL string   `yaml:"discord_webhook_url"`
+	Channels          []string `yaml:"channels"`
+	DriftThreshold    float64  `yaml:"drift_threshold"`
 }
 
 // LoadAlertConfig reads the alerts: section from a pipeline YAML file.

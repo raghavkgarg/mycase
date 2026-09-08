@@ -28,10 +28,10 @@ type SequencePlan struct {
 // SequenceParams configures tax-aware order sequencing.
 type SequenceParams struct {
 	AsOf       time.Time
-	STCGRate   float64
-	LTCGRate   float64
 	OpenLots   map[string][]Lot     // current lots per ticker (for loss/holding classification)
 	RecentBuys map[string]time.Time // ticker → most recent buy date (wash-sale history)
+	STCGRate   float64
+	LTCGRate   float64
 }
 
 // key builds the full ticker key (EXCHANGE:SYMBOL) used across lot maps.
@@ -67,9 +67,9 @@ func TaxOptimizeOrders(orders []brokertypes.Order, prices map[string]float64, p 
 
 	type classified struct {
 		order    brokertypes.Order
+		lossAmt  float64 // negative
 		isSell   bool
 		isLoss   bool
-		lossAmt  float64 // negative
 		longTerm bool
 	}
 

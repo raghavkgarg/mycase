@@ -400,9 +400,9 @@ func PrintComparisonReport(src, dst, strategy string) {
 
 	type rowInfo struct {
 		ticker string
+		action string
 		prevW  float64
 		newW   float64
-		action string
 	}
 	var rows []rowInfo
 

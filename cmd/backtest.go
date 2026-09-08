@@ -102,9 +102,9 @@ func runBacktest(ctx context.Context, c *cli.Command) error {
 
 	// Fetch price data for all tickers + benchmark concurrently
 	type fetchResult struct {
-		ticker string
-		hist   *yfinance.HistoricalData
 		err    error
+		hist   *yfinance.HistoricalData
+		ticker string
 	}
 
 	resultCh := make(chan fetchResult, len(holdings)+1)
@@ -214,8 +214,8 @@ func printYearlyBreakdown(snapshots []backtest.DailySnapshot) {
 
 	// Find year-start snapshot (first snapshot of each year)
 	type yearMark struct {
-		year int
 		snap backtest.DailySnapshot
+		year int
 	}
 	var marks []yearMark
 	prev := snapshots[0]

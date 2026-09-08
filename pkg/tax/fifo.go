@@ -11,17 +11,17 @@ import (
 // A single sell can span multiple lots (e.g. selling 100 shares consumes two
 // 50-share lots), producing one RealizedGain per lot consumed.
 type RealizedGain struct {
-	Ticker        string
-	Quantity      float64   // shares matched from this lot
-	Proceeds      float64   // sale proceeds attributable to these shares (net of nothing; fees tracked separately)
-	CostBasis     float64   // cost basis of the matched shares
-	Gain          float64   // Proceeds - CostBasis
 	AcquiredAt    time.Time // lot acquisition date
 	SoldAt        time.Time // sale date
+	Ticker        string
+	LotID         string
+	TransactionID string  // the sell transaction that realized this gain
+	Quantity      float64 // shares matched from this lot
+	Proceeds      float64 // sale proceeds attributable to these shares (net of nothing; fees tracked separately)
+	CostBasis     float64 // cost basis of the matched shares
+	Gain          float64 // Proceeds - CostBasis
 	HoldingDays   int
 	LongTerm      bool // true if held ≥ 365 days
-	LotID         string
-	TransactionID string // the sell transaction that realized this gain
 }
 
 // FIFOResult holds the outcome of replaying a transaction history.

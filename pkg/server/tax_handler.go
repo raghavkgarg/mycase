@@ -29,13 +29,13 @@ type taxLotRow struct {
 
 type harvestRow struct {
 	Ticker         string  `json:"ticker"`
+	Substitute     string  `json:"substitute"`
+	Note           string  `json:"note"`
 	Quantity       float64 `json:"quantity"`
 	UnrealizedLoss float64 `json:"unrealized_loss"`
 	EstTaxSaving   float64 `json:"est_tax_saving"`
 	LongTerm       bool    `json:"long_term"`
 	WashSaleRisk   bool    `json:"wash_sale_risk"`
-	Substitute     string  `json:"substitute"`
-	Note           string  `json:"note"`
 }
 
 type realizedSummaryJSON struct {
@@ -53,8 +53,8 @@ type washSaleRow struct {
 	Ticker    string `json:"ticker"`
 	SellDate  string `json:"sell_date"`
 	BuyDate   string `json:"buy_date"`
-	DaysApart int    `json:"days_apart"`
 	Note      string `json:"note"`
+	DaysApart int    `json:"days_apart"`
 }
 
 func (s *Server) handleTax(w http.ResponseWriter, r *http.Request) {

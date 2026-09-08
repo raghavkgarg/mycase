@@ -37,11 +37,11 @@ func (c TaxClass) String() string {
 // TaxWarning describes the tax treatment for a single sell order.
 type TaxWarning struct {
 	Ticker        string
+	Note          string // human-readable note for warning banner
 	Class         TaxClass
 	HoldingDays   int     // -1 when purchase date is unknown
 	EstimatedGain float64 // (sellPrice - avgCost) × qty; 0 when avgCost unknown
 	EstimatedTax  float64 // estimated tax liability; 0 when gain or class unknown
-	Note          string  // human-readable note for warning banner
 }
 
 // ClassifySell returns a TaxWarning for a SELL order.

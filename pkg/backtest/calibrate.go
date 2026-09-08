@@ -47,15 +47,15 @@ type EmpiricalBounds struct {
 
 // CalibrationSummary is the full output of an empirical IC calibration run.
 type CalibrationSummary struct {
-	TotalPeriods       int                    `json:"total_periods"`
-	TrainPeriodCount   int                    `json:"train_period_count"`
-	TestPeriodCount    int                    `json:"test_period_count"`
 	TrainStats         map[string]PillarStats `json:"train_stats"`
 	TestStats          map[string]PillarStats `json:"test_stats"`
-	CalibratedBounds   EmpiricalBounds        `json:"calibrated_bounds"`
 	RecommendedWeights map[string]float64     `json:"recommended_weights"`
 	TrainResults       []PeriodICResult       `json:"train_results"`
 	TestResults        []PeriodICResult       `json:"test_results"`
+	CalibratedBounds   EmpiricalBounds        `json:"calibrated_bounds"`
+	TotalPeriods       int                    `json:"total_periods"`
+	TrainPeriodCount   int                    `json:"train_period_count"`
+	TestPeriodCount    int                    `json:"test_period_count"`
 }
 
 // RankValues converts a slice of floats into fractional/average ranks (1-based).

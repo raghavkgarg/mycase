@@ -12,12 +12,12 @@ import (
 
 // DriftResult holds the output of a single drift calculation.
 type DriftResult struct {
-	DriftIndex    float64
+	CheckedAt     time.Time
 	ActualWeights map[string]float64
 	TargetWeights map[string]float64
 	BasketKeys    []string // ordered as in the portfolio CSV
+	DriftIndex    float64
 	TotalValue    float64
-	CheckedAt     time.Time
 }
 
 // CalculateDrift computes ½ Σ|w_actual_i − w_target_i| for the given portfolio.

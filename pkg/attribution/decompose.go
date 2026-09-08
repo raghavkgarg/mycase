@@ -13,8 +13,8 @@ import (
 // Phase 5b) — one completed pipeline run == one rebalance.
 type RebalanceEvent struct {
 	When    time.Time
-	RunID   string
 	Weights map[string]float64 // ticker → target weight (need not sum to 1; renormalized on use)
+	RunID   string
 }
 
 // Decomposition splits a portfolio's excess return over the benchmark into the

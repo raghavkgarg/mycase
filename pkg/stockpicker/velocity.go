@@ -11,10 +11,10 @@ import (
 // TemporalVelocity tracks multi-session Point-in-Time score trajectories and survival consistency.
 type TemporalVelocity struct {
 	Ticker           string    `json:"ticker"`
-	RunsEvaluated    int       `json:"runs_evaluated"`
-	ConsecutivePass  int       `json:"consecutive_pass"` // Consecutive sessions passing Stage 1 ending at latest prior run
 	ScoreTrajectory  []float64 `json:"score_trajectory"` // Chronological raw scores across past runs [T-2, T-1, ...]
 	Dates            []string  `json:"dates"`            // Corresponding dates [T-2, T-1, ...]
+	RunsEvaluated    int       `json:"runs_evaluated"`
+	ConsecutivePass  int       `json:"consecutive_pass"` // Consecutive sessions passing Stage 1 ending at latest prior run
 	VelocityDelta    float64   `json:"velocity_delta"`   // Difference between most recent two past runs (T-1 - T-2)
 	AvgScore         float64   `json:"avg_score"`        // Average of past valid scores
 	LatestDelivDelta float64   `json:"latest_deliv_delta"`

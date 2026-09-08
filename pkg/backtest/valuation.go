@@ -20,15 +20,15 @@ type PriceProvider interface {
 
 // StockResult holds the per-stock P&L calculation result.
 type StockResult struct {
+	Err        error
 	Ticker     string
+	BuyTime    string
 	Weight     float64
 	Allocated  float64
 	BuyPrice   float64
-	BuyTime    string
 	ClosePrice float64
 	FinalValue float64
 	PctReturn  float64
-	Err        error
 }
 
 // ValuatePortfolio computes per-stock P&L from the target purchase time to the

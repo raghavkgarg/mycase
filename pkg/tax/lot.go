@@ -12,12 +12,12 @@ import "time"
 // acquired on a specific date at a specific per-share cost. FIFO matching
 // consumes lots oldest-first when shares are sold.
 type Lot struct {
+	AcquiredAt   time.Time // acquisition date (for holding-period classification)
 	ID           string    // stable identifier (ticker + acquired + seq)
 	Ticker       string    // full ticker with market prefix (e.g. "US:AAPL")
+	Source       string    // "schwab_txn", "schwab_position", "manual", "csv"
 	Quantity     float64   // shares remaining in this lot (fractional allowed)
 	CostPerShare float64   // acquisition cost per share, USD
-	AcquiredAt   time.Time // acquisition date (for holding-period classification)
-	Source       string    // "schwab_txn", "schwab_position", "manual", "csv"
 }
 
 // CostBasis returns the total remaining cost basis of the lot.
@@ -49,13 +49,13 @@ const (
 // Transaction is a normalized buy/sell record used to reconstruct lots.
 // It is broker-agnostic; the Schwab importer maps raw API records into these.
 type Transaction struct {
+	TradedAt time.Time // trade/settlement date
 	ID       string    // broker transaction/activity ID (idempotency key)
 	Ticker   string    // full ticker with market prefix
 	Type     TxnType   // BUY or SELL
 	Quantity float64   // shares (always positive)
 	Price    float64   // per-share price, USD
 	Fees     float64   // total fees for the transaction, USD
-	TradedAt time.Time // trade/settlement date
 }
 
 const (

@@ -10,19 +10,19 @@ import (
 type IndexPick struct {
 	IndexName string
 	Ticker    string
+	Sector    string
 	Score     float64
 	Rank      int
 	Weight    float64
-	Sector    string
 }
 
 // Proposal represents a candidate at a specific pipeline stage.
 type Proposal struct {
 	Ticker string
+	Sector string
 	Weight float64
 	Score  float64
 	Rank   int
-	Sector string
 }
 
 // Selection represents a final portfolio selection with structured driver metrics
@@ -31,10 +31,11 @@ type Proposal struct {
 // persisted at pipeline finalization.
 type Selection struct {
 	Ticker      string
+	Sector      string
+	Action      string // "new", "retained", "removed"
 	Weight      float64
 	Score       float64
 	Rank        int
-	Sector      string
 	TTMGrowth   float64
 	RevenueCagr float64
 	DSODelta    float64
@@ -42,7 +43,6 @@ type Selection struct {
 	Momentum1Y  float64
 	FCFYield    float64
 	ROIC        float64
-	Action      string  // "new", "retained", "removed"
 	PrevRank    int     // 0 if new
 	PrevWeight  float64 // 0 if new
 }

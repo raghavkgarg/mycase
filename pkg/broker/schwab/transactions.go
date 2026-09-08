@@ -20,21 +20,21 @@ import (
 
 // SchwabTransaction is one record from the transactions endpoint.
 type SchwabTransaction struct {
-	ActivityID    int64                `json:"activityId"`
 	Time          string               `json:"time"` // ISO-8601, e.g. "2026-03-14T14:30:00+0000"
 	Type          string               `json:"type"` // "TRADE", "DIVIDEND_OR_INTEREST", ...
 	Status        string               `json:"status"`
-	NetAmount     float64              `json:"netAmount"`
 	TransferItems []SchwabTransferItem `json:"transferItems"`
+	ActivityID    int64                `json:"activityId"`
+	NetAmount     float64              `json:"netAmount"`
 }
 
 // SchwabTransferItem is one leg of a transaction.
 type SchwabTransferItem struct {
 	Instrument SchwabTxnInstrument `json:"instrument"`
+	FeeType    string              `json:"feeType"` // set for fee legs (e.g. "COMMISSION", "SEC_FEE")
 	Amount     float64             `json:"amount"`  // signed share quantity (+ buy, - sell)
 	Price      float64             `json:"price"`   // per-share price
 	Cost       float64             `json:"cost"`    // total cost for this leg
-	FeeType    string              `json:"feeType"` // set for fee legs (e.g. "COMMISSION", "SEC_FEE")
 }
 
 // SchwabTxnInstrument identifies the security in a transfer item.

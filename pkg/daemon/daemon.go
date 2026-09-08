@@ -23,9 +23,9 @@ const (
 // State is persisted across daemon restarts.
 type State struct {
 	LastCheckAt   time.Time `json:"last_check_at"`
+	PortfolioFile string    `json:"portfolio_file"`
 	LastDrift     float64   `json:"last_drift"`
 	AlertsSent    int       `json:"alerts_sent"`
-	PortfolioFile string    `json:"portfolio_file"`
 }
 
 // LoadState reads the last persisted daemon state. Returns empty State (not an error)

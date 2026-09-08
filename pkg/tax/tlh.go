@@ -11,24 +11,28 @@ import (
 // identical") substitute to maintain market exposure without triggering the
 // wash-sale rule.
 type HarvestCandidate struct {
+	OldestAcquired time.Time // earliest acquisition among the loss lots
 	Ticker         string
 	Sector         string
-	Quantity       float64   // shares available to harvest at a loss
-	CostBasis      float64   // total cost basis of the loss-making shares
-	MarketValue    float64   // current market value of those shares
-	UnrealizedLoss float64   // negative number: MarketValue - CostBasis
-	LongTerm       bool      // true if the loss-making lots are long-term
-	OldestAcquired time.Time // earliest acquisition among the loss lots
-	WashSaleRisk   bool      // true if a buy occurred within 30 days of today
-	EstTaxSaving   float64   // positive: estimated federal tax reduction
-	Substitute     string    // suggested replacement ticker (same sector), if any
+	Substitute     string // suggested replacement ticker (same sector), if any
 	Note           string
+	Quantity       float64 // shares available to harvest at a loss
+	CostBasis      float64 // total cost basis of the loss-making shares
+	MarketValue    float64 // current market value of those shares
+	UnrealizedLoss float64 // negative number: MarketValue - CostBasis
+	EstTaxSaving   float64 // positive: estimated federal tax reduction
+	LongTerm       bool    // true if the loss-making lots are long-term
+	WashSaleRisk   bool    // true if a buy occurred within 30 days of today
 }
 
 // HarvestParams configures loss-harvesting analysis.
 type HarvestParams struct {
 	// AsOf is the valuation date (defaults to time.Now() if zero).
 	AsOf time.Time
+	// RecentBuys maps ticker → most recent BUY date, used for wash-sale detection.
+	RecentBuys map[string]time.Time
+	// Sectors maps ticker → sector, used to suggest substitutes.
+	Sectors map[string]string
 	// MinLoss is the minimum absolute unrealized loss (USD) to bother
 	// harvesting. Small losses aren't worth the transaction friction.
 	MinLoss float64
@@ -36,10 +40,6 @@ type HarvestParams struct {
 	STCGRate float64
 	// LTCGRate is the long-term capital gains rate.
 	LTCGRate float64
-	// RecentBuys maps ticker → most recent BUY date, used for wash-sale detection.
-	RecentBuys map[string]time.Time
-	// Sectors maps ticker → sector, used to suggest substitutes.
-	Sectors map[string]string
 }
 
 // DefaultHarvestParams returns sensible defaults matching the US cost model.
@@ -176,11 +176,11 @@ func suggestSubstitute(ticker, sector string, universe []string, sectors map[str
 // WashSaleViolation describes a detected or potential wash-sale rule breach: a
 // loss-generating sell paired with a buy of the same security within ±30 days.
 type WashSaleViolation struct {
-	Ticker    string
 	SellDate  time.Time
 	BuyDate   time.Time
-	DaysApart int
+	Ticker    string
 	Note      string
+	DaysApart int
 }
 
 // DetectWashSales scans realized losses against buy transactions and flags any

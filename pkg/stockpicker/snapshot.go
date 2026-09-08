@@ -13,9 +13,8 @@ const PITSnapshotDir = "data/pit_snapshots"
 
 type CandidateScoreDetail struct {
 	Ticker          string  `json:"ticker"`
-	PassedStage1    bool    `json:"passed_stage1"`
-	DataFetchFailed bool    `json:"data_fetch_failed"`
 	RejectionReason string  `json:"rejection_reason,omitempty"`
+	Sector          string  `json:"sector"`
 	RawScore        float64 `json:"raw_score"`
 	EffectiveScore  float64 `json:"effective_score"`
 	CompositeRS     float64 `json:"composite_rs"`
@@ -23,12 +22,14 @@ type CandidateScoreDetail struct {
 	RVOLZScore      float64 `json:"rvol_z_score"`
 	DecayedPP       float64 `json:"decayed_pp"`
 	DeliveryDelta   float64 `json:"delivery_delta"`
-	Selected        bool    `json:"selected"`
 	FinalWeight     float64 `json:"final_weight"`
-	Sector          string  `json:"sector"`
+	PassedStage1    bool    `json:"passed_stage1"`
+	DataFetchFailed bool    `json:"data_fetch_failed"`
+	Selected        bool    `json:"selected"`
 }
 
 type PITRunSnapshot struct {
+	Candidates        map[string]CandidateScoreDetail `json:"candidates"`
 	AsOfDate          string                          `json:"as_of_date"`
 	IndexName         string                          `json:"index_name"`
 	Method            string                          `json:"method"`
@@ -36,7 +37,6 @@ type PITRunSnapshot struct {
 	TotalConstituents int                             `json:"total_constituents"`
 	Stage1Count       int                             `json:"stage1_count"`
 	SelectedCount     int                             `json:"selected_count"`
-	Candidates        map[string]CandidateScoreDetail `json:"candidates"`
 }
 
 func SaveRunSnapshot(snap *PITRunSnapshot) (string, error) {

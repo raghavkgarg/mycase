@@ -26,12 +26,12 @@ type MarketDataFetcher interface {
 // Server holds all dependencies for the web dashboard.
 type Server struct {
 	broker      broker.Broker
-	cache       *cache.Cache
-	alertCfg    config.AlertConfig
 	fetcher     attribution.PriceFetcher // nil → performance tab reports "unavailable"
 	router      MarketDataFetcher        // nil → dashboard data handlers fall back to Yahoo direct
+	cache       *cache.Cache
 	mux         *http.ServeMux
 	broadcaster *SSEBroadcaster
+	alertCfg    config.AlertConfig
 }
 
 // Option configures a Server at construction.

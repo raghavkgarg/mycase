@@ -13,12 +13,12 @@ const (
 
 // SimConfig holds all parameters for a backtest run.
 type SimConfig struct {
-	InitialCapital  float64
 	From            time.Time
 	To              time.Time
 	Rebalance       RebalanceFreq
+	BenchmarkTicker string // e.g. "^NSEI"
+	InitialCapital  float64
 	SlippagePct     float64 // fraction, e.g. 0.001 = 0.1%
-	BenchmarkTicker string  // e.g. "^NSEI"
 	DriftThreshold  float64 // for FreqDrift; fraction, e.g. 0.05 = 5%
 }
 

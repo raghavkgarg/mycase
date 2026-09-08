@@ -29,7 +29,6 @@ type DriverMetrics struct {
 
 // Tracker records the lifecycle of tickers during the selection process.
 type Tracker struct {
-	InitialCount        int
 	FetchFailures       map[string]string        // ticker -> fetch failure reason
 	SafetyReasons       map[string]string        // ticker -> reason
 	ScoreThresholdDrops map[string]string        // ticker -> reason
@@ -42,6 +41,7 @@ type Tracker struct {
 	AdditionDrivers     map[string]string        // ticker -> positive driver summary
 	DriverValues        map[string]DriverMetrics // ticker -> structured numeric drivers
 	ResultDates         map[string]string        // ticker -> "24-04-26 ->  25-06-26"
+	InitialCount        int
 	RegimeMultiplier    float64
 }
 
@@ -134,7 +134,6 @@ func (t *Tracker) RecordSelected(ticker string, rank, limit int, isExisting bool
 
 // SelectionFunnel structurally models and validates exact constituent conservation across funnel stages.
 type SelectionFunnel struct {
-	InitialPool      int      `json:"initial_pool"`
 	DataFetchFailed  []string `json:"data_fetch_failed"`
 	Stage1Eliminated []string `json:"stage1_eliminated"`
 	Stage1Survivors  []string `json:"stage1_survivors"`
@@ -142,6 +141,7 @@ type SelectionFunnel struct {
 	SectorCapped     []string `json:"sector_capped"`
 	RankLimited      []string `json:"rank_limited"`
 	FinalSelected    []string `json:"final_selected"`
+	InitialPool      int      `json:"initial_pool"`
 }
 
 // Validate asserts that every Stage-1 survivor is strictly accounted for.
@@ -364,10 +364,10 @@ func (t *Tracker) SaveReport(displayName, method string, existingHoldings map[st
 	} else {
 		type selectedRow struct {
 			ticker         string
+			reason         string
 			rawScore       float64
 			effectiveScore float64
 			rank           int
-			reason         string
 		}
 		var sRows []selectedRow
 		for ticker, reason := range t.SelectedReasons {

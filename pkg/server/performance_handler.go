@@ -26,9 +26,9 @@ type navPointJSON struct {
 }
 
 type attributionJSON struct {
-	TradingDays      int     `json:"trading_days"`
 	From             string  `json:"from"`
 	To               string  `json:"to"`
+	TradingDays      int     `json:"trading_days"`
 	InitialCapital   float64 `json:"initial_capital"`
 	FinalValue       float64 `json:"final_value"`
 	BenchmarkFinal   float64 `json:"benchmark_final"`

@@ -30,9 +30,10 @@ type Client struct {
 	traderBase     string
 	marketDataBase string
 
-	// Rate limiting
-	mu         sync.Mutex
 	requestLog []time.Time
+
+	// Rate limiting
+	mu sync.Mutex
 }
 
 // NewClient creates a Schwab API client with the given token manager.
@@ -58,9 +59,9 @@ func (c *Client) SetTraderBase(url string) {
 
 // APIError represents a non-2xx response from the Schwab API.
 type APIError struct {
-	StatusCode int
-	Message    string
 	Body       map[string]any
+	Message    string
+	StatusCode int
 }
 
 func (e *APIError) Error() string {

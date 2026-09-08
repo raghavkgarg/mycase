@@ -8,6 +8,7 @@ import (
 )
 
 type RunSummaryRow struct {
+	CreatedAt         time.Time `json:"created_at"`
 	AsOfDate          string    `json:"as_of_date"`
 	IndexName         string    `json:"index_name"`
 	Method            string    `json:"method"`
@@ -15,12 +16,10 @@ type RunSummaryRow struct {
 	TotalConstituents int       `json:"total_constituents"`
 	Stage1Survivors   int       `json:"stage1_survivors"`
 	SelectedCount     int       `json:"selected_count"`
-	CreatedAt         time.Time `json:"created_at"`
 }
 
 type CandidateHistoryRow struct {
 	AsOfDate       string  `json:"as_of_date"`
-	PassedStage1   bool    `json:"passed_stage1"`
 	RawScore       float64 `json:"raw_score"`
 	EffectiveScore float64 `json:"effective_score"`
 	CompositeRS    float64 `json:"composite_rs"`
@@ -28,8 +27,9 @@ type CandidateHistoryRow struct {
 	RVOLZScore     float64 `json:"rvol_z_score"`
 	DecayedPP      float64 `json:"decayed_pp"`
 	DeliveryDelta  float64 `json:"delivery_delta"`
-	Selected       bool    `json:"selected"`
 	FinalWeight    float64 `json:"final_weight"`
+	PassedStage1   bool    `json:"passed_stage1"`
+	Selected       bool    `json:"selected"`
 }
 
 // GetEmpiricalQuantiles returns P90, P75, P50, P40, P25 for raw scores across Stage-1 survivors.

@@ -9,11 +9,11 @@ const DefaultAlphaNudgeThreshold = -0.02
 // NudgeAssessment is the outcome of evaluating whether trailing performance
 // warrants a "review your strategy" nudge.
 type NudgeAssessment struct {
-	Nudge       bool    // true if the strategy is materially underperforming
+	Reason      string  // human-readable explanation
 	Alpha       float64 // trailing annualized alpha (fraction) that was evaluated
 	Threshold   float64 // the threshold applied
 	TradingDays int     // days of data behind the assessment
-	Reason      string  // human-readable explanation
+	Nudge       bool    // true if the strategy is materially underperforming
 }
 
 // AssessNudge decides whether trailing performance is poor enough to suggest

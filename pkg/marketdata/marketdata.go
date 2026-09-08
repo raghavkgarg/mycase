@@ -30,6 +30,20 @@ type AnnualMetric struct {
 // Fundamentals represents key fundamental metrics for a security. Populated from
 // Yahoo Finance (India + US fallback) and Schwab (US-specific fields).
 type Fundamentals struct {
+	Sector           string
+	ResultPrevComing string
+
+	DeliveryDate             string
+	EarningsHistory          []AnnualFinancial
+	AnnualRevenue            []AnnualMetric
+	AnnualGrossProfit        []AnnualMetric
+	AnnualNetPPE             []AnnualMetric
+	AnnualAccountsReceivable []AnnualMetric
+	AnnualCapEx              []AnnualMetric
+	AnnualOperatingIncome    []AnnualMetric
+	AnnualTotalAssets        []AnnualMetric
+	AnnualCurrentLiabilities []AnnualMetric
+	AnnualInterestExpense    []AnnualMetric
 	PEGRatio                 float64
 	ROE                      float64
 	ForwardPE                float64
@@ -45,25 +59,12 @@ type Fundamentals struct {
 	AverageVolume            float64
 	RegularPrice             float64
 	NetIncome                float64
-	Sector                   string
-	EarningsHistory          []AnnualFinancial
-	AnnualRevenue            []AnnualMetric
-	AnnualGrossProfit        []AnnualMetric
-	AnnualNetPPE             []AnnualMetric
-	AnnualAccountsReceivable []AnnualMetric
-	AnnualCapEx              []AnnualMetric
 	DebtToEquity             float64
 	TotalDebt                float64
 	PledgedPercent           float64
-	AnnualOperatingIncome    []AnnualMetric
-	AnnualTotalAssets        []AnnualMetric
-	AnnualCurrentLiabilities []AnnualMetric
-	AnnualInterestExpense    []AnnualMetric
-	ResultPrevComing         string
 
 	// NSE delivery data (EBM strategy — populated from Yahoo/NSE)
 	DeliveryPct    float64
-	DeliveryDate   string
 	DeliverableQty float64
 
 	// US-specific fields (populated from Schwab)
