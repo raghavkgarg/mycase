@@ -27,11 +27,15 @@ var PickCommand = &cli.Command{
 		&cli.IntFlag{Name: "hysteresis-buffer", Value: 5, Usage: "Extra ranks to allow existing holdings to drift"},
 		&cli.StringFlag{Name: "name", Usage: "Custom display name for output files"},
 		&cli.StringFlag{Name: "out", Usage: "Custom output CSV path"},
+		&cli.BoolFlag{Name: "analysis", Aliases: []string{"a"}, Usage: "Run deep quantitative deduction analysis using DuckDB"},
 	},
 	Action: runPick,
 }
 
 func runPick(ctx context.Context, c *cli.Command) error {
+	if c.Bool("analysis") {
+		return RunPitAnalysisDirect(ctx, c.String("index"), c.String("method"))
+	}
 	return runPickWithOpts(ctx, pickOptsFromCmd(c))
 }
 
@@ -86,7 +90,7 @@ func pickOptsFromCmd(c *cli.Command) *stockpicker.Options {
 		SkipScuttlebutt:    c.Bool("skip-scuttlebutt"),
 		GoldenPath:         c.String("golden"),
 		RebalanceTolerance: c.Float("rebalance-tolerance"),
-		HysteresisBuffer:   c.Int("hysteresis-buffer"),
+		HysteresisBuffer:   int(c.Int("hysteresis-buffer")),
 		DisplayName:        c.String("name"),
 		OutputFile:         c.String("out"),
 	}

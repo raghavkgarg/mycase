@@ -237,3 +237,162 @@ func TestDuckDB_RegimeMultiplierConsistency(t *testing.T) {
 		t.Errorf("REJECTED_STK effective score mismatch: expected %.4f, got %.4f", expectedEffRej, histRejected[0].EffectiveScore)
 	}
 }
+
+func TestDuckDB_DataFetchFailedExcludedFromQuantiles(t *testing.T) {
+	ctx := context.Background()
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "test_quantiles.db")
+
+	db, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("failed to open test pit db: %v", err)
+	}
+	defer db.Close()
+
+	snap := &stockpicker.PITRunSnapshot{
+		AsOfDate:          "2026-09-01",
+		IndexName:         "test_index",
+		Method:            "earlymb",
+		RegimeMultiplier:  1.0,
+		TotalConstituents: 3,
+		Stage1Count:       2,
+		SelectedCount:     1,
+		Candidates: map[string]stockpicker.CandidateScoreDetail{
+			"VALID_1": {
+				Ticker:          "VALID_1",
+				PassedStage1:    true,
+				DataFetchFailed: false,
+				RawScore:        50.0,
+				EffectiveScore:  50.0,
+			},
+			"VALID_2": {
+				Ticker:          "VALID_2",
+				PassedStage1:    true,
+				DataFetchFailed: false,
+				RawScore:        30.0,
+				EffectiveScore:  30.0,
+			},
+			"FETCH_FAILED": {
+				Ticker:          "FETCH_FAILED",
+				PassedStage1:    false,
+				DataFetchFailed: true,
+				RejectionReason: "DATA_FETCH_FAILED: historical price bars unavailable",
+				RawScore:        0.0,
+				EffectiveScore:  0.0,
+			},
+		},
+	}
+
+	if err := db.SaveRunSnapshot(ctx, snap); err != nil {
+		t.Fatalf("failed to save snapshot: %v", err)
+	}
+
+	// Calculate empirical quantiles
+	q, err := db.GetEmpiricalQuantiles(ctx, "test_index", "earlymb", 0)
+	if err != nil {
+		t.Fatalf("failed to compute empirical quantiles: %v", err)
+	}
+
+	// Samples must be exactly 2 (VALID_1 and VALID_2), FETCH_FAILED must be excluded
+	if q["samples"] != 2.0 {
+		t.Errorf("expected 2 samples in quantiles, got %.0f", q["samples"])
+	}
+	if q["p50"] < 30.0 || q["p50"] > 50.0 {
+		t.Errorf("median score out of bounds: %.2f", q["p50"])
+	}
+}
+
+func TestTemporalVelocityAndBoost(t *testing.T) {
+	ctx := context.Background()
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "test_velocity.db")
+
+	db, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("failed to open test pit db: %v", err)
+	}
+	defer db.Close()
+
+	// Create 2 historical snapshots: Day 1 (T-2) and Day 2 (T-1)
+	snap1 := &stockpicker.PITRunSnapshot{
+		AsOfDate:          "2026-08-28",
+		IndexName:         "test_idx",
+		Method:            "earlymb",
+		RegimeMultiplier:  0.7,
+		TotalConstituents: 2,
+		Stage1Count:       2,
+		Candidates: map[string]stockpicker.CandidateScoreDetail{
+			"SURGER": {
+				Ticker:       "SURGER",
+				PassedStage1: true,
+				RawScore:     25.0,
+			},
+			"STABLE": {
+				Ticker:       "STABLE",
+				PassedStage1: true,
+				RawScore:     35.0,
+			},
+		},
+	}
+	snap2 := &stockpicker.PITRunSnapshot{
+		AsOfDate:          "2026-08-31",
+		IndexName:         "test_idx",
+		Method:            "earlymb",
+		RegimeMultiplier:  0.6,
+		TotalConstituents: 2,
+		Stage1Count:       2,
+		Candidates: map[string]stockpicker.CandidateScoreDetail{
+			"SURGER": {
+				Ticker:        "SURGER",
+				PassedStage1:  true,
+				RawScore:      35.0,
+				DeliveryDelta: 0.15,
+			},
+			"STABLE": {
+				Ticker:        "STABLE",
+				PassedStage1:  true,
+				RawScore:      36.0,
+				DeliveryDelta: 0.05,
+			},
+		},
+	}
+
+	_ = db.SaveRunSnapshot(ctx, snap1)
+	_ = db.SaveRunSnapshot(ctx, snap2)
+
+	velocities, err := db.GetCandidateTemporalVelocities(ctx, "test_idx", "earlymb", "2026-09-01", 5)
+	if err != nil {
+		t.Fatalf("failed to get velocities: %v", err)
+	}
+
+	surger, exists := velocities["SURGER"]
+	if !exists {
+		t.Fatalf("expected SURGER in velocities")
+	}
+	if surger.RunsEvaluated != 2 {
+		t.Errorf("expected 2 runs, got %d", surger.RunsEvaluated)
+	}
+	if surger.ConsecutivePass != 2 {
+		t.Errorf("expected 2 consecutive passes, got %d", surger.ConsecutivePass)
+	}
+
+	// Now simulate Day 3 (T) scoring:
+	// SURGER score rose to 45.0 (25 -> 35 -> 45) => 3-Session Consecutive Surge (+3.0) + Consecutive pass (+1.0) = +4.0
+	boostSurger, _ := surger.ComputeBoost(45.0, 0.20)
+	if boostSurger != 4.0 {
+		t.Errorf("expected 4.0 boost for SURGER, got %.1f", boostSurger)
+	}
+
+	// STABLE score is 37.0 (35 -> 36 -> 37) => Consecutive pass (+1.0) + Surge (+3.0) = +4.0
+	stable := velocities["STABLE"]
+	boostStable, _ := stable.ComputeBoost(37.0, 0.05)
+	if boostStable != 4.0 {
+		t.Errorf("expected 4.0 boost for STABLE, got %.1f", boostStable)
+	}
+
+	// Test a stock with no past history => 0.0 boost
+	emptyTV := stockpicker.TemporalVelocity{}
+	if b, _ := emptyTV.ComputeBoost(40.0, 0.10); b != 0.0 {
+		t.Errorf("expected 0.0 boost for new stock, got %.1f", b)
+	}
+}

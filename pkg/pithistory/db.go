@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"time"
 
 	_ "github.com/duckdb/duckdb-go/v2"
@@ -77,6 +79,7 @@ CREATE TABLE IF NOT EXISTS pit_candidate_scores (
     ticker             VARCHAR,
     sector             VARCHAR,
     passed_stage1      BOOLEAN,
+    data_fetch_failed  BOOLEAN DEFAULT false,
     rejection_reason   VARCHAR,
     raw_score          DOUBLE,
     effective_score    DOUBLE,
@@ -93,8 +96,15 @@ CREATE TABLE IF NOT EXISTS pit_candidate_scores (
 `
 
 func (p *DB) initSchema(ctx context.Context) error {
-	_, err := p.db.ExecContext(ctx, schemaDDL)
-	return err
+	if _, err := p.db.ExecContext(ctx, schemaDDL); err != nil {
+		return err
+	}
+	// Migrate existing database tables gracefully
+	_, _ = p.db.ExecContext(ctx, "ALTER TABLE pit_candidate_scores ADD COLUMN IF NOT EXISTS data_fetch_failed BOOLEAN DEFAULT false;")
+	// Clean out any artificial dummy index placeholder rows (e.g. DUMMYINXGN, DUMMYTRVN)
+	_, _ = p.db.ExecContext(ctx, "DELETE FROM pit_candidate_scores WHERE UPPER(ticker) LIKE '%DUMMY%';")
+	_, _ = p.db.ExecContext(ctx, "UPDATE pit_runs SET total_constituents = 750 WHERE index_name = 'niftytotalmarket' AND total_constituents > 750;")
+	return nil
 }
 
 // SaveRunSnapshot inserts or replaces a run snapshot and all constituent candidate scores.
@@ -134,10 +144,10 @@ INSERT OR REPLACE INTO pit_runs (
 	candidateQuery := `
 INSERT OR REPLACE INTO pit_candidate_scores (
     as_of_date, index_name, method, ticker, sector,
-    passed_stage1, rejection_reason, raw_score, effective_score,
+    passed_stage1, data_fetch_failed, rejection_reason, raw_score, effective_score,
     composite_rs, vcp_ratio, rvol_z_score, decayed_pp, delivery_delta,
     selected, final_weight, forward_return_21d
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 `
 	stmt, err := tx.PrepareContext(ctx, candidateQuery)
 	if err != nil {
@@ -153,6 +163,7 @@ INSERT OR REPLACE INTO pit_candidate_scores (
 			c.Ticker,
 			c.Sector,
 			c.PassedStage1,
+			c.DataFetchFailed,
 			c.RejectionReason,
 			c.RawScore,
 			c.EffectiveScore,
@@ -182,4 +193,136 @@ WHERE as_of_date = ? AND index_name = ? AND method = ? AND ticker = ?;
 `
 	_, err := p.db.ExecContext(ctx, query, fwdRet, asOfDate, indexName, method, ticker)
 	return err
+}
+
+// GetCandidateTemporalVelocities queries DuckDB for chronological score trajectories and survival streaks.
+func (p *DB) GetCandidateTemporalVelocities(
+	ctx context.Context,
+	indexName, method, excludeDate string,
+	lookbackRuns int,
+) (map[string]stockpicker.TemporalVelocity, error) {
+	if lookbackRuns <= 0 {
+		lookbackRuns = 5
+	}
+
+	// 1. Find the latest distinct dates (excluding excludeDate if specified)
+	dateQuery := `
+SELECT DISTINCT as_of_date 
+FROM pit_runs 
+WHERE index_name = ? AND method = ? AND (? = '' OR as_of_date != ?)
+ORDER BY as_of_date DESC 
+LIMIT ?;
+`
+	rows, err := p.db.QueryContext(ctx, dateQuery, indexName, method, excludeDate, excludeDate, lookbackRuns)
+	if err != nil {
+		return nil, fmt.Errorf("query past run dates: %w", err)
+	}
+	defer rows.Close()
+
+	var datesDesc []string
+	for rows.Next() {
+		var dt string
+		if err := rows.Scan(&dt); err == nil {
+			datesDesc = append(datesDesc, dt)
+		}
+	}
+	rows.Close()
+
+	if len(datesDesc) == 0 {
+		return make(map[string]stockpicker.TemporalVelocity), nil
+	}
+
+	// Reverse to ascending chronological order [T-2, T-1, ...]
+	var datesAsc []string
+	for _, d := range slices.Backward(datesDesc) {
+		datesAsc = append(datesAsc, d)
+	}
+
+	datePlaceholders := make([]string, len(datesAsc))
+	dateArgs := make([]any, len(datesAsc)+2)
+	dateArgs[0] = indexName
+	dateArgs[1] = method
+	for i, dt := range datesAsc {
+		datePlaceholders[i] = "?"
+		dateArgs[i+2] = dt
+	}
+
+	scoreQuery := fmt.Sprintf(`
+SELECT 
+    as_of_date,
+    ticker,
+    passed_stage1,
+    COALESCE(data_fetch_failed, false),
+    raw_score,
+    COALESCE(delivery_delta, 0.0)
+FROM pit_candidate_scores
+WHERE index_name = ? AND method = ? AND as_of_date IN (%s)
+ORDER BY as_of_date ASC;
+`, strings.Join(datePlaceholders, ","))
+
+	sRows, err := p.db.QueryContext(ctx, scoreQuery, dateArgs...)
+	if err != nil {
+		return nil, fmt.Errorf("query candidate scores: %w", err)
+	}
+	defer sRows.Close()
+
+	type runPoint struct {
+		Date         string
+		PassedStage1 bool
+		DataFailed   bool
+		RawScore     float64
+		DelivDelta   float64
+	}
+	tickerHistory := make(map[string][]runPoint)
+	for sRows.Next() {
+		var dt, t string
+		var pass, dataFailed bool
+		var score, deliv float64
+		if err := sRows.Scan(&dt, &t, &pass, &dataFailed, &score, &deliv); err == nil {
+			tickerHistory[t] = append(tickerHistory[t], runPoint{
+				Date:         dt,
+				PassedStage1: pass,
+				DataFailed:   dataFailed,
+				RawScore:     score,
+				DelivDelta:   deliv,
+			})
+		}
+	}
+
+	result := make(map[string]stockpicker.TemporalVelocity)
+	for t, points := range tickerHistory {
+		tv := stockpicker.TemporalVelocity{
+			Ticker:        t,
+			RunsEvaluated: len(points),
+		}
+
+		consec := 0
+		// Walk backwards from most recent past point
+		for _, point := range slices.Backward(points) {
+			if point.PassedStage1 && !point.DataFailed && point.RawScore > 0 {
+				consec++
+			} else {
+				break
+			}
+		}
+		tv.ConsecutivePass = consec
+
+		sumScore := 0.0
+		for _, pt := range points {
+			tv.Dates = append(tv.Dates, pt.Date)
+			tv.ScoreTrajectory = append(tv.ScoreTrajectory, pt.RawScore)
+			sumScore += pt.RawScore
+		}
+		if len(points) > 0 {
+			tv.AvgScore = sumScore / float64(len(points))
+			tv.LatestDelivDelta = points[len(points)-1].DelivDelta
+		}
+		if len(points) >= 2 {
+			tv.VelocityDelta = points[len(points)-1].RawScore - points[len(points)-2].RawScore
+		}
+
+		result[t] = tv
+	}
+
+	return result, nil
 }

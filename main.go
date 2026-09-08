@@ -52,6 +52,9 @@ func main() {
 				Name:  "verbose",
 				Usage: "Shorthand for --log-level debug",
 			},
+			&cli.StringFlag{Name: "index", Aliases: []string{"i"}, Value: "niftytotalmarket", Usage: "Index name to analyze or pick"},
+			&cli.StringFlag{Name: "method", Aliases: []string{"m"}, Value: "earlymb", Usage: "Strategy method"},
+			&cli.BoolFlag{Name: "analysis", Aliases: []string{"a"}, Usage: "Run deep quantitative deduction analysis using DuckDB"},
 		},
 		Before: func(ctx context.Context, c *cli.Command) (context.Context, error) {
 			appLogger = setupLogging(c)
@@ -92,6 +95,12 @@ func main() {
 			mycmd.ServeCommand,
 			mycmd.ConvertCommand,
 			mycmd.RetryCommand,
+		},
+		Action: func(ctx context.Context, c *cli.Command) error {
+			if c.Bool("analysis") {
+				return mycmd.RunPitAnalysisDirect(ctx, c.String("index"), c.String("method"))
+			}
+			return cli.ShowAppHelp(c)
 		},
 	}
 	if err := app.Run(context.Background(), os.Args); err != nil {

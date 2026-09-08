@@ -14,6 +14,7 @@ const PITSnapshotDir = "data/pit_snapshots"
 type CandidateScoreDetail struct {
 	Ticker          string  `json:"ticker"`
 	PassedStage1    bool    `json:"passed_stage1"`
+	DataFetchFailed bool    `json:"data_fetch_failed"`
 	RejectionReason string  `json:"rejection_reason,omitempty"`
 	RawScore        float64 `json:"raw_score"`
 	EffectiveScore  float64 `json:"effective_score"`

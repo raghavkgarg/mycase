@@ -92,7 +92,7 @@ func RunWithResult(ctx context.Context, opts *Options) (*PickResult, error) {
 		}
 	}
 
-	fullHistory, activeKeys := fetchHistoricalPricesVia(ctx, opts.DataFetcher, combinedTickers)
+	fullHistory, activeKeys, failedKeys := fetchHistoricalPricesVia(ctx, opts.DataFetcher, combinedTickers)
 	if len(activeKeys) == 0 {
 		fmt.Println("No active tickers loaded. Exiting...")
 		return nil, nil
@@ -120,6 +120,12 @@ func RunWithResult(ctx context.Context, opts *Options) (*PickResult, error) {
 
 	InjectGovernance(fundamentals, cfg.Governance)
 	tracker := selectiontracker.New()
+	// Record upstream data-fetch failures as a first-class funnel bucket (EBM
+	// DataFetchFailed thread) so failed tickers don't contaminate Stage-1
+	// survivor quantiles and are diffed separately from genuine gate exits.
+	for _, f := range failedKeys {
+		tracker.RecordFetchFailure(f, "DATA_FETCH_FAILED: historical price bars unavailable")
+	}
 
 	if opts.Method == "us_quality_momentum" {
 		// US-specific hard filters (market cap, ADV, positive FCF only)
@@ -205,9 +211,17 @@ func RunWithResult(ctx context.Context, opts *Options) (*PickResult, error) {
 	for _, s := range selectedKeys {
 		selectedSet[s] = true
 	}
+	failedSet := make(map[string]bool, len(failedKeys))
+	for _, f := range failedKeys {
+		failedSet[f] = true
+	}
 	candidateMap := make(map[string]CandidateScoreDetail, len(combinedTickers))
 	for _, t := range combinedTickers {
+		isFetchFailed := failedSet[t]
 		reason, isSafetyDrop := tracker.SafetyReasons[t]
+		if isFetchFailed {
+			reason = "DATA_FETCH_FAILED: historical price bars unavailable"
+		}
 		rawScore, hasRaw := tracker.RawScores[t]
 		effScore, hasEff := tracker.EffectiveScores[t]
 		if !hasEff && hasRaw {
@@ -215,7 +229,7 @@ func RunWithResult(ctx context.Context, opts *Options) (*PickResult, error) {
 		}
 		var compRS, vcpRatio, rvolZ, ppScore, delivDelta float64
 		if hist, ok := fullHistory[t]; ok && len(hist.Closes) >= 60 {
-			compRS, _, _, _ = yfinance.CalculateCompositeRS(hist.Closes, benchmarkPrices)
+			compRS, _, _, _ = yfinance.CalculateCompositeRS(hist.Closes, benchmarkPrices, t)
 			vcpRatio, _ = yfinance.CalculateVCPTightness(hist.Closes, hist.Opens)
 			rvolZ = yfinance.CalculateWinsorizedRVOLZScore(hist.Volumes, 5, 50, 4.0)
 			ppScore, _ = yfinance.CalculateDecayedPocketPivot(hist.Closes, hist.Opens, hist.Volumes, 10, 0.25)
@@ -223,7 +237,8 @@ func RunWithResult(ctx context.Context, opts *Options) (*PickResult, error) {
 		}
 		candidateMap[t] = CandidateScoreDetail{
 			Ticker:          t,
-			PassedStage1:    !isSafetyDrop && hasRaw,
+			PassedStage1:    !isFetchFailed && !isSafetyDrop && hasRaw,
+			DataFetchFailed: isFetchFailed,
 			RejectionReason: reason,
 			RawScore:        rawScore,
 			EffectiveScore:  effScore,
@@ -270,6 +285,14 @@ func RunWithResult(ctx context.Context, opts *Options) (*PickResult, error) {
 	}
 	if err := SavePortfolioToCSV(selectedKeys, finalWeights, outPath); err != nil {
 		return nil, fmt.Errorf("writing output file: %w", err)
+	}
+
+	// Pre-breakout incubator watchlist (EBM): high-quality Stage-1 survivors
+	// below the regime hurdle, ranked by hurdle gap + VCP tightness. Written on
+	// every earlymb run so pullback regimes still surface coiling setups.
+	if opts.Method == "earlymb" || opts.Method == "early_multibagger" {
+		incubatorPath := filepath.Join("data", "candidates", "index_picks", fmt.Sprintf("%s_%s_incubator.csv", displayNameVal, opts.Method))
+		_, _ = GenerateIncubatorWatchlist(activeKeys, scores, fundamentals, fullHistory, tracker, incubatorPath)
 	}
 
 	if opts.GoldenPath != "" && len(goldenWeights) > 0 {
@@ -362,7 +385,7 @@ func fetchFundamentalsVia(ctx context.Context, fetcher DataFetcher, tickers []st
 
 // fetchHistoricalPricesVia uses the DataFetcher if available for historical data,
 // otherwise falls back to the direct yfinance concurrent pool.
-func fetchHistoricalPricesVia(ctx context.Context, fetcher DataFetcher, rawTickers []string) (map[string]*yfinance.HistoricalData, []string) {
+func fetchHistoricalPricesVia(ctx context.Context, fetcher DataFetcher, rawTickers []string) (map[string]*yfinance.HistoricalData, []string, []string) {
 	if fetcher == nil {
 		return FetchHistoricalPrices(ctx, rawTickers)
 	}

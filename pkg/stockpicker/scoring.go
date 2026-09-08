@@ -1070,7 +1070,7 @@ func ScoreEarlyMultibagger(
 		}
 
 		// Pillar 1: Idiosyncratic Momentum (Composite RS in [-30%, +70%])
-		compRS, _, _, _ := yfinance.CalculateCompositeRS(hist.Closes, benchCloses)
+		compRS, _, _, _ := yfinance.CalculateCompositeRS(hist.Closes, benchCloses, t)
 		p1 := NormScore(compRS, CompositeRSBounds, wIdioRS, false)
 
 		// Pillar 2: Pure Volatility Contraction Tightness (VCP ATR Ratio in [0.25, 0.75])

@@ -43,4 +43,9 @@ echo "[$(date '+%Y-%m-%d %H:%M:%S')] Starting PIT update for niftytotalmarket (e
 
 mycase pit update --index niftytotalmarket --method earlymb --top 10 >> "$LOG_FILE" 2>&1
 
+# 5. Automated self-healing pass for any constituents that experienced upstream provider drops
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] Verifying snapshot completeness and retrying failed tickers if any..." >> "$LOG_FILE"
+mycase pit retry --index niftytotalmarket --method earlymb --date "$TODAY" >> "$LOG_FILE" 2>&1 || true
+
 echo "[$(date '+%Y-%m-%d %H:%M:%S')] Daily PIT update completed successfully." >> "$LOG_FILE"
+

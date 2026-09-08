@@ -121,7 +121,7 @@ func PrintEarlyMultibaggerTable(
 			weeksInBase, _ = yfinance.CalculateBaseDurationWeeks(hist.Closes, 0.85)
 			decayedPP, _ = yfinance.CalculateDecayedPocketPivot(hist.Closes, hist.Opens, hist.Volumes, 10, 0.25)
 			rvolZ = yfinance.CalculateRVOLZScore(hist.Volumes, 5, 50)
-			_, rs1m, rs3m, _ = yfinance.CalculateCompositeRS(hist.Closes, nil)
+			_, rs1m, rs3m, _ = yfinance.CalculateCompositeRS(hist.Closes, nil, t)
 		}
 
 		ppStr := "0.0"

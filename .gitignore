@@ -1,6 +1,12 @@
 # Compiled binaries
+mycase
+*.exe
 bin/
 dist/
+
+# Logs
+logs/
+*.log
 
 # Cached data & Yahoo Finance historical price cache
 data/.cache/
@@ -11,6 +17,8 @@ data/
 # DOCS files
 docs/multibagger.md
 docs/value.md
+docs/*.local.md
+docs/StaticIP.local.md
 
 # Credentials containing API keys, API secrets, and access tokens
 config/config.json
@@ -34,6 +42,8 @@ report/
 .DS_Store
 Thumbs.db
 
+# Python virtualenv (scripts/)
+.venv
 
 # Claude/Kiro agent worktrees
 .claude/

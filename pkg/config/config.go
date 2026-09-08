@@ -3,6 +3,7 @@ package config
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -82,7 +83,7 @@ func FetchPublicIP() string {
 	return ipv4
 }
 
-// Config represents Zerodha Kite API credentials
+// Config represents Zerodha Kite API credentials and proxy configuration
 type Config struct {
 	APIKey      string `json:"api_key"`
 	APISecret   string `json:"api_secret,omitempty"`
@@ -113,7 +114,7 @@ func LoadConfig(filename string) (*Config, error) {
 	return &cfg, nil
 }
 
-// SaveConfig writes config to the specified path
+// SaveConfig writes config to the specified path and synchronizes access_token across sibling projects.
 func SaveConfig(filename string, cfg *Config) error {
 	dir := filepath.Dir(filename)
 	if err := os.MkdirAll(dir, 0755); err != nil {
@@ -128,7 +129,57 @@ func SaveConfig(filename string, cfg *Config) error {
 
 	encoder := json.NewEncoder(file)
 	encoder.SetIndent("", "  ")
-	return encoder.Encode(cfg)
+	if err := encoder.Encode(cfg); err != nil {
+		return err
+	}
+
+	if cfg.AccessToken != "" && cfg.AccessToken != "your_access_token" {
+		SyncAccessTokenToAllConfigs(cfg.AccessToken)
+	}
+
+	return nil
+}
+
+// SyncAccessTokenToAllConfigs updates access_token in both mycase and myoption config.json files.
+func SyncAccessTokenToAllConfigs(newAccessToken string) {
+	if newAccessToken == "" || newAccessToken == "your_access_token" {
+		return
+	}
+
+	targets := []string{
+		"/Users/raghavgarg/Projects/myGo/mycase/config/config.json",
+		"/Users/raghavgarg/Projects/myGo/myoption/config/config.json",
+	}
+
+	for _, path := range targets {
+		if _, err := os.Stat(path); err == nil {
+			updateAccessTokenInFile(path, newAccessToken)
+		}
+	}
+}
+
+func updateAccessTokenInFile(filePath, newAccessToken string) {
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		return
+	}
+
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return
+	}
+
+	// Update access_token field while preserving all other existing configuration settings
+	raw["access_token"] = newAccessToken
+
+	updatedData, err := json.MarshalIndent(raw, "", "  ")
+	if err != nil {
+		return
+	}
+
+	if err := os.WriteFile(filePath, updatedData, 0644); err == nil {
+		fmt.Printf("🔄 Synchronized access_token to: %s\n", filePath)
+	}
 }
 
 // ThemeConfig represents a configuration for a specific holdings theme/group

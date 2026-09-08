@@ -1,10 +1,17 @@
 package yfinance
 
 import (
+	"fmt"
 	"math"
 	"sort"
 	"strings"
+	"sync"
 	"time"
+)
+
+var (
+	sanityNoticeMu  sync.Mutex
+	sanityNoticeSet = make(map[string]bool)
 )
 
 // CalculateRSI calculates the 14-day Relative Strength Index
@@ -644,7 +651,7 @@ func CalculateEarningsBeatRate(f *Fundamentals) (beats int, total int, ok bool) 
 }
 
 // CalculateCompositeRS calculates multi-timeframe relative strength (1M, 3M, 12M) vs benchmark.
-func CalculateCompositeRS(stockCloses, benchCloses []float64) (compositeRS, rs1m, rs3m, rs12m float64) {
+func CalculateCompositeRS(stockCloses, benchCloses []float64, tickerOpt ...string) (compositeRS, rs1m, rs3m, rs12m float64) {
 	nStock := len(stockCloses)
 	nBench := len(benchCloses)
 	if nStock < 2 {
@@ -684,6 +691,28 @@ func CalculateCompositeRS(stockCloses, benchCloses []float64) (compositeRS, rs1m
 
 	// Weighted composite: 40% 1-Month, 30% 3-Month, 30% 12-Month
 	compositeRS = (0.40 * rs1m) + (0.30 * rs3m) + (0.30 * rs12m)
+
+	// Sanity Bound Guardrail: Flag extreme outlier readings (|CompositeRS| > 1.0 or 100%)
+	if math.Abs(compositeRS) > 1.0 {
+		tickerLabel := ""
+		if len(tickerOpt) > 0 && tickerOpt[0] != "" {
+			tickerLabel = fmt.Sprintf(" [%s]", tickerOpt[0])
+		}
+
+		dedupKey := fmt.Sprintf("%s_%.1f", tickerLabel, compositeRS)
+		sanityNoticeMu.Lock()
+		alreadyReported := sanityNoticeSet[dedupKey]
+		if !alreadyReported {
+			sanityNoticeSet[dedupKey] = true
+		}
+		sanityNoticeMu.Unlock()
+
+		if !alreadyReported {
+			fmt.Printf("⚠️  [METRIC SANITY NOTICE%s] Extreme Composite RS detected: %+.1f%% (1M: %+.1f%%, 3M: %+.1f%%, 12M: %+.1f%%). Verify for unadjusted corporate actions / splits.\n",
+				tickerLabel, compositeRS*100.0, rs1m*100.0, rs3m*100.0, rs12m*100.0)
+		}
+	}
+
 	return compositeRS, rs1m, rs3m, rs12m
 }
 

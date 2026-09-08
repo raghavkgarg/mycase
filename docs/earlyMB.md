@@ -383,6 +383,8 @@ Verified in `pkg/yfinance/metrics_earlymb_test.go` and `pkg/stockpicker/bounds_t
 | Action | Command | Purpose |
 | :--- | :--- | :--- |
 | **Daily PIT Update & DB Persistence** | `mycase pit update --index microcap250,smallcap250 --method earlymb --top 10` | Runs the full daily screening pipeline and persists all candidate scores to `data/pit_history.db`. |
+| **Deep Quantitative Deduction Analysis (DuckDB)** | `mycase --index niftytotalmarket --method earlymb --analysis` | Executes comprehensive 8-section DuckDB analytical deductions (funnel breakdown, regime sentry, rolling quantiles, sector defense, score shifts, silent drops, pre-breakout runway incubator, and multi-run velocity). |
+| **Point-in-Time Failed Ticker Recovery** | `mycase pit retry --index niftytotalmarket --method earlymb --date YYYY-MM-DD` | Re-runs historical prices and fundamentals specifically for failed candidates, healing snapshots without re-evaluating the full 750-stock universe. |
 | **View DuckDB Empirical Quantiles** | `mycase pit stats --index microcap250_smallcap250 --method earlymb` | Queries `data/pit_history.db` for rolling empirical score distributions ($P_{40}, P_{50}, P_{75}, P_{90}$). |
 | **Track Candidate Score History** | `mycase pit stats --ticker INOXINDIA` | Displays chronological score, VCP ATR, RVOL, and selection trajectory for a specific stock. |
 | **Combined MicroCap + SmallCap Picker** | `mycase pick --index microcap250,smallcap250 --method earlymb --top 10` | Executes live 2-stage gating and invariant 4-pillar selection across combined 500-stock universe. |
@@ -390,7 +392,8 @@ Verified in `pkg/yfinance/metrics_earlymb_test.go` and `pkg/stockpicker/bounds_t
 | **Save Constituent Snapshot** | `mycase calibrate --index microcap250,smallcap250 --save-snapshot` | Saves immutable constituent roster to `data/universe_snapshots/` to eliminate survivorship bias. |
 | **Generate Execution Basket** | `mycase basket --file data/candidates/index_picks/microcap250_smallcap250_earlymb.csv --capital 100000` | Calculates exact integer share quantities for broker execution. |
 | **Run Sentry Monitoring** | `mycase monitor --file data/candidates/index_picks/microcap250_smallcap250_earlymb.csv --strategy earlymb` | Monitors trailing stop-loss, EMA breakdown, and quarterly filing health. |
-| **Run Full Pipeline** | `mycase pipeline --strategy earlymb` | Executes screening, optimization, basket generation, and reporting in a single command. |
+| **Run Full Pipeline** | `mycase pipeline --index niftytotalmarket --strategy earlymb` | Executes screening, optimization, basket generation, and reporting in a single command. *(Note: If `--index` is omitted, defaults to indices in `config/pipeline.yaml`)* |
+| **Pre-Breakout Incubator Watchlist** | Auto-generated: `data/candidates/index_picks/<index>_earlymb_incubator.csv` | Automatically generated on every run, listing top runway setups ranked by Hurdle Gap and VCP tightness with breakout pivot triggers (`52W High * 0.98`). |
 
 ---
 
@@ -422,5 +425,120 @@ To prevent divergence across in-memory tracking, CLI reporting, and OLAP storage
 * **Memory Invariant** (`TestTracker_RawAndEffectiveScoreConsistency`): Asserts that raw and effective scores remain strictly partitioned in `selectiontracker.Tracker`.
 * **Storage Invariant** (`TestDuckDB_RegimeMultiplierConsistency`): Asserts that $100\%$ of candidate rows in `data/pit_history.db` satisfy $\text{EffectiveScore} \equiv \text{RawScore} \times R_{\text{regime}}$ across both winner and rejection paths.
 * **Unified Reporting Schema**: CLI tables and text reports explicitly display `Raw Score` and `Eff Score` columns side-by-side.
+
+---
+
+## 12. Nifty Total Market Scale, Quantitative Hardening & Data Reliability (Sep 2026)
+
+Expanding the Point-in-Time screening universe from 500 stocks (MicroCap + SmallCap 250) to the **Nifty Total Market (750 Constituents)** surfaced critical operational insights, leading to the quantitative hardening of the data ingestion and calibration layers:
+
+### 1. Hard Gate Attrition Dynamics across Total Market (750 Stocks)
+Across the full 750-constituent universe, Stage-1 binary filters enforce strict quality control, yielding a consistent **~12.9% pass rate (97 survivors)**:
+* **Downtrend (< 200-Day SMA)**: **39.5% of eliminations (258 stocks)** — single largest filter bottleneck, eliminating secular laggards.
+* **Low ROCE (< 12%)**: **22.5% of eliminations (147 stocks)** — second largest bottleneck, eliminating structurally inefficient business models.
+* **Proximity to 52W High (< 85%)**: **10.1% of eliminations (66 stocks)** — ensures stocks have established relative market sponsorship.
+* **Base Duration Floor (< 4 Weeks)**: **9.3% of eliminations (61 stocks)** — filters fleeting technical noise.
+* **Low Promoter Stake (< 25%)**: **8.3% of eliminations (54 stocks)** — filters governance / agency risks.
+* **Working Capital Deterioration (DSO)**: **5.1% of eliminations (33 stocks)** — catches early balance sheet stress.
+
+### 2. Separation of Upstream Data Fetch Failures from Stage-1 Rejections (P0-1)
+* **Problem**: Previously, constituents failing historical bar fetch (e.g. rate limits or provider connection drops) defaulted to `passed_stage1 = false` with empty rejection reasons, contaminating Stage-1 survivor percentile calculations ($P_{90}/P_{75}/P_{50}/P_{40}/P_{25}$) and threshold calibrations.
+* **Solution**:
+  1. **Retry Engine with Backoff**: `FetchHistoricalPrices` runs initial concurrent batches (15 workers), followed by up to 2 retry passes with exponential backoff (`1.5s`, `3.0s`) at reduced concurrency (5 workers).
+  2. **First-Class Status**: Added `DataFetchFailed` to `selectiontracker.Tracker`, `CandidateScoreDetail`, and DuckDB (`pit_candidate_scores.data_fetch_failed`).
+  3. **Strict Quantile Cleanliness**: `GetEmpiricalQuantiles` enforces `WHERE passed_stage1 = true AND (data_fetch_failed = false OR data_fetch_failed IS NULL)`, eliminating distribution contamination.
+  4. **Hard Warning Sentry**: Raises a prominent terminal warning block if data fetch failures exceed **5.0%** of the pool.
+  5. **Two-Tier Conservation Invariant**:
+     $$\text{Initial Pool} \equiv \text{DataFetchFailed} + \text{Stage1Eliminated} + \text{Stage1Survivors}$$
+     $$\text{Stage-1 Survivors} \equiv \text{RegimeRejected} + \text{SectorCapped} + \text{RankLimited} + \text{FinalSelected}$$
+
+### 3. Outlier Sanity Guardrails & Investigation (CUPID +249.2% Composite RS) (P0-2)
+* **Forensic Investigation**: Raw analysis surfaced `NSE:CUPID` with an extreme Composite RS of `+249.2%`. A forensic audit of raw OHLCV bars and corporate action logs from Yahoo Finance confirmed:
+  - **Stock Splits**: 5:1 stock split on March 9, 2026 (`Ratio: 5:1`), preceded by a 10:1 split + 1:1 bonus in April 2024.
+  - **Price Series Integrity**: Yahoo Finance's historical series is cleanly split-adjusted across the March 9, 2026 event (`[2026-03-06] Close: ₹80.44` vs `[2026-03-09] Close: ₹91.60`). There is **zero unadjusted price jump**.
+  - **Closed-Form Arithmetic Verification**: The +249.2% reading reproduces exactly from an authentic 8.1x rally from **₹34.52 (2025-09-01) to ₹280.46 (2026-08-31)**:
+    - 12-Month Gain: $\frac{280.46 - 34.52}{34.52} = \mathbf{+712.45\%}$
+    - 3-Month Gain: $\frac{280.46 - 129.80}{129.80} = \mathbf{+116.07\%}$
+    - 1-Month Gain: $\frac{280.46 - 230.60}{230.60} = \mathbf{+21.61\%}$
+    $$\text{Composite RS} = 0.40(21.61\%) + 0.30(116.07\%) + 0.30(712.45\%) - 8.00\% = \mathbf{+249.2\%}$$
+* **Scoring & Clamp Behavior**: Pillar 1's invariant reference bounds $[-30\%, +70\%]$ properly clamped score contribution to 25.0/25.0 pts, preventing score distortion.
+* **Metric Sanity Sentry**: A warning sentry in `CalculateCompositeRS` flags $|\text{CompositeRS}| > 100\%$ with `⚠️ [METRIC SANITY NOTICE [TICKER]]` (deduplicated per process) for transparent human inspection.
+
+### 4. Structural Diff Distinction for "Silent Drops" (P0-3)
+* **Problem**: When an active portfolio holding dropped out due to upstream API unavailability (e.g. `NSE:LAURUSLABS`), diff reports marked it as a normal exit (`RemovedSelections`), masking the failure as a fundamental breakdown.
+* **Solution**: `DiffSnapshots` now checks `curr.Candidates[t].DataFetchFailed`. Holdings dropped due to data unavailability are routed to `DataDroppedSelections`:
+  ```text
+  🚨 [ACTION REQUIRED: DATA FETCH FAILURE ON ACTIVE HOLDINGS] (1): NSE:LAURUSLABS
+      ⚠️  These active holdings were NOT dropped by technical or fundamental gates; upstream data fetch failed!
+  ```
+
+### 5. Targeted PIT Retry & Self-Healing Architecture
+* **Targeted Recovery Engine (`mycase pit retry`)**: Re-evaluates only failed candidates (`data_fetch_failed = true` or empty rejection reasons) without re-running the entire 750-stock universe.
+* **2026-09-01 Run Healing Results**:
+  - Retried 74 constituents; **successfully recovered 72 (97.3% recovery rate)**.
+  - 12 candidates passed Stage 1; 60 were properly categorized by genuine fundamental criteria (25 Downtrend, 17 Low ROCE, 8 Base Duration, 4 Low Promoter, 4 52W High, 1 DSO, 1 Market Cap).
+  - **Restored `NSE:LAURUSLABS`**: Raw Score **47.3 pts**, Effective Score **26.4 pts**, Composite RS **+50.3%**, sits at **#2 in the Runway Incubator**.
+* **Two-Layer Daily Automation (`scripts/run_pit_daily.sh`)**:
+  - **Layer 1 (In-Process)**: `FetchHistoricalPrices` performs concurrent retries with exponential backoff (`1.5s`, `3.0s`, 5 workers).
+  - **Layer 2 (Post-Run Self-Healing)**: Daily shell runner automatically executes `mycase pit retry ... || true` as a secondary defense-in-depth safety net.
+
+### 6. Artificial Index Placeholder Filtration
+* **Exchange Demerger Placeholders**: NSE constituent files periodically include synthetic placeholders (e.g., `DUMMYINXGN`, `DUMMYTRVN`) representing pending spin-offs or demerger entitlements.
+* **Automated Ingestion Rejection**: `IsDummyTicker` automatically skips any symbol containing `"DUMMY"` during CSV parsing and web downloads in `loader.go`.
+* **Zero Drop Invariant**: Normalizes the Nifty Total Market universe to exactly **750 genuine operating companies** with **0.0% data drop rates** ($97 \text{ Survivors} + 653 \text{ Eliminated} = 750$).
+
+### 7. Uniform Authoritative Delta Continuity Guards
+* **Downstream Bug Discovery**: Investigating CUPID's presence in Section 8 revealed that transitioning from a failed fetch placeholder (`raw_score = 0.0` on $T_{-1}$) to an active evaluation (`raw_score = 38.0` on $T$) generated an artificial $+38\text{ pt}$ delta, falsely misclassified as a "Velocity Breakout (+5pt Δ)".
+* **Authoritative Invariant**: To guarantee that zero-score placeholders never contaminate derived metrics, a uniform continuity guard was established using `RawScore > 0` as the authoritative ground truth:
+  $$\text{PassedStage1}_T \land \text{PassedStage1}_{T-1} \land \neg\text{DataFetchFailed}_T \land \neg\text{DataFetchFailed}_{T-1} \land \text{RawScore}_T > 0 \land \text{RawScore}_{T-1} > 0$$
+* **Uniform Implementation across Surfaces**:
+  1. `DiffSnapshots` (`pkg/stockpicker/diff.go`): Enforces `pDet.RawScore > 0 && cDet.RawScore > 0 && !pDet.DataFetchFailed && !cDet.DataFetchFailed`.
+  2. **Section 5 (Significant Score Shifts)** (`pkg/pithistory/analytics.go`): Enforces `curr.raw_score > 0.0 AND prev.raw_score > 0.0 AND data_fetch_failed = false`.
+  3. **Section 8 (Accumulation Velocity)** (`pkg/pithistory/analytics.go`): Enforces `curr.raw_score > 0.0 AND prev.raw_score > 0.0 AND data_fetch_failed = false`.
+* **Result**: Complete elimination of phantom score shifts and velocity artifacts.
+
+### 8. Dynamic Sector Concentration & Sentry Transparency (Section 4)
+* **Dynamic Anchoring**: Section 4 anchors directly to `latestRun.AsOfDate`, eliminating confusing fallback dates.
+* **Transparent Allocation State**: Explicitly displays macro regime defense:
+  ```text
+  --- 4. SECTOR CONCENTRATION & SECTOR CAP DEFENSE (2026-09-01) ---
+    * Portfolio Allocation State: 100% Cash Preservation (0 stocks selected under Regime R=0.5584, Hurdle=53.7 pt)
+    * Sector Distribution of Qualified Stage-1 Survivors (97 stocks):
+  ```
+
+### 9. Pre-Breakout Incubator (The Runway Watchlist) & Multi-Run Velocity
+* **The Runway Incubator (Section 7)**: Solves the "0 selected during market pullbacks" operational dilemma. While the Market Regime Sentry elevates the hurdle during corrective regimes ($R_{\text{regime}} = 0.5584 \implies \text{Hurdle} = 53.7\text{ pt}$), high-quality Stage-1 survivors are ranked by **Hurdle Gap** ($\frac{30.0}{R_{\text{regime}}} - \text{RawScore}$), VCP ATR tightness ($< 0.65$), and Delivery Delta ($> +20\%$).
+  * *Top Runway Setups*: `NSE:NAVINFLUOR` (Raw: 48.6, Hurdle Gap: +5.1pt, VCP: 0.61, Deliv: +26.6%), `NSE:LAURUSLABS` (Raw: 47.3, Hurdle Gap: +6.4pt, Deliv: +17.5%), `NSE:PARKHOSPS` (Raw: 45.7, Hurdle Gap: +8.0pt, VCP: 0.64, Deliv: +40.3%).
+* **Multi-Run Accumulation Velocity (Section 8)**: Tracks day-over-day score compounding and delivery expansion across consecutive runs ($T_{-2} \to T_{-1} \to T$). Captures 3-session institutional accumulation surges (e.g. `PARKHOSPS` rising $26.1 \to 44.3 \to 45.7$, `SCHAEFFLER` rising $9.0 \to 27.9 \to 37.5$, `SKFINDUS` rising $12.7 \to 34.6 \to 38.6$) before stage-2 price breakouts occur.
+
+### 10. Operational Status: Shift to Empirical Observation Mode
+The quantitative engine and data pipeline are fully hardened. Active development shifts to automated data collection:
+1. Daily cron execution via `scripts/run_pit_daily.sh` accumulating 20–30 daily PIT snapshots.
+2. Tracking out-of-sample forward returns on top incubator compounders (`NAVINFLUOR`, `LAURUSLABS`, `PARKHOSPS`).
+3. Running out-of-sample Spearman Rank IC/IR calibration once 4–6 weeks of clean data accumulate.
+
+### 11. First-Class 100% Cash Defense Pipeline Support
+* **The Defensive Regime Edge Case**: Under restrictive market regimes (e.g. $R_{\text{regime}} = 0.5584 \implies \text{Hurdle} = 53.7\text{ pt}$), it is mathematically and strategically intended that **0 stocks qualify** for portfolio execution. In prior versions, updating the golden copy CSV with 0 active selections left the file with zero data rows, causing Step 3 (`report`) to crash with `CSV file contains no data rows`.
+* **First-Class Cash Defense Architecture**:
+  1. **Dedicated Cash Defense Report (`cmd/report.go`)**: When a portfolio has 0 active equities, the reporting engine generates an authoritative `03_portfolio_report.txt` stating `100% CASH DEFENSE (0 Equities Selected)`, detailing the active regime sentry cutoff and 100.0% cash reserve allocation.
+  2. **Active Holdings Detection (`pkg/csvloader/pipeline_csv.go`)**: `CountActiveHoldings` checks whether the portfolio has active positions ($w > 0$).
+  3. **Graceful Pipeline Skipping (`cmd/pipeline.go`)**: When 0 equities are selected, the pipeline automatically skips downstream simulation steps (Performance simulation, Trailing stop monitoring simulator, Zerodha authentication, and Basket execution) that require open positions, concluding smoothly with complete summary artifacts.
+
+### 12. Architectural Invariant: Strict 4-Pillar Orthogonality & Research Layer Partitioning
+* **Orthogonality & Double-Counting Avoidance**: Multi-session score acceleration (the rate of change of score across daily PIT runs) is mathematically a derivative of expanding Composite RS and volume contraction. Directly adding temporal velocity heuristics as an additive boost to live raw scores would double-count momentum already captured in Pillar 1, violating the strict orthogonal pillar design.
+* **Empirical Quantile Calibration Integrity**: The Stage-1 survivor distribution ($P_{90}, P_{75}, P_{50}, P_{40}, P_{25}$) printed during live execution must describe the exact population evaluated against the regime cutoff. Any post-hoc score mutation introduces an ordering discrepancy that corrupts the empirical calibration reference needed for future $P_{40}$ threshold tuning.
+* **Strict Research Layer Partitioning**: The 100-point orthogonal matrix ($P_1 + P_2 + P_3 + P_4 = 100\text{ pts}$) remains pure and unadulterated. Multi-session velocity trajectories and survival persistence are strictly partitioned to:
+  1. **DuckDB Section 8 Analytics**: For multi-month empirical IC/IR tracking and research.
+  2. **The Pre-Breakout Incubator Watchlist (`data/candidates/index_picks/<index>_earlymb_incubator.csv`)**: Generated automatically on every run to supply pre-calculated breakout pivots (`52W High * 0.98`) for top coiling setups.
+
+### 13. Transparent Ticker Identification in Metric Sanity Sentries
+* **Candidate Attribution**: The outlier sentry in `CalculateCompositeRS` (`math.Abs(compositeRS) > 1.0`) now accepts the candidate ticker symbol as an argument and outputs:
+  ```text
+  ⚠️  [METRIC SANITY NOTICE [NSE:CUPID]] Extreme Composite RS detected: +238.5% (1M: +22.0%, 3M: +103.9%, 12M: +661.9%). Verify for unadjusted corporate actions / splits.
+  ```
+* **Thread-Safe Process Deduplication**: Uses an in-memory thread-safe cache (`sanityNoticeSet`) to ensure each extreme outlier is announced **exactly once per execution**, eliminating repetitive console spam across scoring, snapshotting, and incubator passes.
+
+
+
 
 

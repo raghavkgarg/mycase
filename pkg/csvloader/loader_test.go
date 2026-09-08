@@ -1,6 +1,7 @@
 package csvloader
 
 import (
+	"os"
 	"strings"
 	"testing"
 	"testing/quick"
@@ -104,5 +105,49 @@ func TestParseBasket_InvalidWeight(t *testing.T) {
 	_, _, err := ParseBasket(strings.NewReader(csv))
 	if err == nil {
 		t.Error("expected error for non-numeric weight")
+	}
+}
+
+func TestCountActiveHoldings(t *testing.T) {
+	// 1. Empty / header-only CSV
+	f1, err := os.CreateTemp("", "holdings1_*.csv")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(f1.Name())
+	f1.WriteString("ticker,weight\n")
+	f1.Close()
+
+	count1, err := CountActiveHoldings(f1.Name())
+	if err != nil || count1 != 0 {
+		t.Errorf("expected 0 active holdings, got %d (err: %v)", count1, err)
+	}
+
+	// 2. All zero-weight holdings (exits)
+	f2, err := os.CreateTemp("", "holdings2_*.csv")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(f2.Name())
+	f2.WriteString("ticker,weight\nTCS,0.0000\nINFY,0.0\n")
+	f2.Close()
+
+	count2, err := CountActiveHoldings(f2.Name())
+	if err != nil || count2 != 0 {
+		t.Errorf("expected 0 active holdings for exited portfolio, got %d (err: %v)", count2, err)
+	}
+
+	// 3. Mixed active and exited holdings
+	f3, err := os.CreateTemp("", "holdings3_*.csv")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(f3.Name())
+	f3.WriteString("ticker,weight\nTCS,0.15\nINFY,0.0\nWIPRO,0.25\n")
+	f3.Close()
+
+	count3, err := CountActiveHoldings(f3.Name())
+	if err != nil || count3 != 2 {
+		t.Errorf("expected 2 active holdings, got %d (err: %v)", count3, err)
 	}
 }

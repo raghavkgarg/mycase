@@ -45,9 +45,10 @@ var Layers = map[string]int{
 	"universe":         0,
 
 	// L1 — stores / low-level impls over leaves.
-	"broker":   1, // broker/types, config, costs
-	"tax":      1, // broker/types
-	"yfinance": 1, // cache, marketdata
+	"broker":     1, // broker/types, config, costs
+	"kiteclient": 1, // config (Zerodha/Kite low-level client, India legacy)
+	"tax":        1, // broker/types
+	"yfinance":   1, // cache, marketdata
 
 	// L2 — domains + data routing.
 	"backtest":       2, // yfinance

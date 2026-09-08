@@ -90,7 +90,7 @@ func runBasketWithParams(ctx context.Context, liveMode bool, basketFilename stri
 		return nil
 	}
 
-	quoteData, currentHoldings, _, err := datafetcher.FetchMarketData(ctx, b, basketKeys)
+	quoteData, currentHoldings, holdingDetails, err := datafetcher.FetchMarketData(ctx, b, basketKeys)
 	if err != nil {
 		return fmt.Errorf("fetching market data: %w", err)
 	}
@@ -157,7 +157,7 @@ func runBasketWithParams(ctx context.Context, liveMode bool, basketFilename stri
 			}
 
 			finalQuantities = rawQuantities
-			snapshotText = printer.PrintPreviewTable(basketKeys, basket, quoteData, currentHoldings, finalQuantities)
+			snapshotText = printer.PrintPreviewTable(basketKeys, basket, quoteData, currentHoldings, finalQuantities, holdingDetails)
 			printedPreview = true
 
 			fmt.Print("\nEnter a new investment amount to recalculate (or press Enter to proceed to execution): ")
@@ -244,7 +244,7 @@ func runBasketWithParams(ctx context.Context, liveMode bool, basketFilename stri
 
 	executor.ExecuteBasketOrders(
 		basketOrders, quoteData, currentHoldings, finalQuantities,
-		basketKeys, basket, b, printedPreview, snapshotText, reader,
+		basketKeys, basket, b, printedPreview, snapshotText, reader, holdingDetails,
 	)
 	return nil
 }

@@ -1,10 +1,13 @@
 package cmd
 
 import (
+	"bufio"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/urfave/cli/v3"
 	"gopkg.in/yaml.v3"
 
 	"github.com/raghavkgarg/mycase/pkg/config"
@@ -139,7 +142,7 @@ func TestPipelineConfig_UnmarshalYAML_NegativeTolerance(t *testing.T) {
 
 func TestPipelineCommand_Flags(t *testing.T) {
 	flags := PipelineCommand.Flags
-	expectedFlags := []string{"index", "file", "strategy", "top", "golden", "capital", "purchase-date", "rebalance-tolerance", "hysteresis-buffer"}
+	expectedFlags := []string{"index", "file", "strategy", "top", "golden", "capital", "purchase-date", "rebalance-tolerance", "hysteresis-buffer", "yes"}
 	for _, ef := range expectedFlags {
 		found := false
 		for _, f := range flags {
@@ -151,4 +154,27 @@ func TestPipelineCommand_Flags(t *testing.T) {
 			t.Errorf("expected PipelineCommand to have flag %q", ef)
 		}
 	}
+}
+
+func TestPipelineYesFlag_NoPromptsBlockExecution(t *testing.T) {
+	// 1. Verify "yes" flag exists with alias "y"
+	var yesFlag *cli.BoolFlag
+	for _, f := range PipelineCommand.Flags {
+		if bf, ok := f.(*cli.BoolFlag); ok && bf.Name == "yes" {
+			yesFlag = bf
+			break
+		}
+	}
+	if yesFlag == nil {
+		t.Fatal("expected PipelineCommand to have 'yes' bool flag")
+	}
+	hasAliasY := slices.Contains(yesFlag.Aliases, "y")
+	if !hasAliasY {
+		t.Errorf("expected 'yes' flag to have alias 'y'")
+	}
+
+	// 2. Verify pipelineOfferToOpenReport does not block when autoYes=true
+	// Passing a closed empty reader with autoYes=true must return immediately without blocking or executing open
+	closedReader := bufio.NewReader(strings.NewReader(""))
+	pipelineOfferToOpenReport(closedReader, "dummy_report.txt", true)
 }
