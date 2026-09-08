@@ -68,12 +68,16 @@ type graph struct {
 
 func main() {
 	format := flag.String("format", "dot", "output format: dot | d2")
+	reduce := flag.Bool("reduce", false, "transitive reduction: drop edges already implied by a longer path (much cleaner picture, same reachability)")
 	flag.Parse()
 
 	g, err := build()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "depsgraph: %v\n", err)
 		os.Exit(1)
+	}
+	if *reduce {
+		g.edges = transitiveReduction(g.edges)
 	}
 
 	switch strings.ToLower(*format) {
@@ -85,6 +89,67 @@ func main() {
 		fmt.Fprintf(os.Stderr, "depsgraph: unknown -format %q (want dot|d2)\n", *format)
 		os.Exit(2)
 	}
+}
+
+// transitiveReduction removes edges (a→b) that are already implied by a longer
+// path a→…→b, i.e. b is reachable from a without using the direct edge. The
+// result has identical reachability but far fewer edges, which is what makes a
+// layered dependency graph legible (a composition root like autopilot need not
+// draw an edge to every leaf it can already reach through its direct deps).
+//
+// Safe here because the graph is a DAG (checkdeps enforces strictly-downward
+// imports — no cycles), so "reachable via another path" is unambiguous.
+func transitiveReduction(edges []edge) []edge {
+	adj := map[string]map[string]bool{}
+	for _, e := range edges {
+		if adj[e.from] == nil {
+			adj[e.from] = map[string]bool{}
+		}
+		adj[e.from][e.to] = true
+	}
+
+	// reachableSkipping reports whether dst is reachable from src without taking
+	// the direct src→dst edge (DFS over the DAG).
+	reachableSkipping := func(src, dst string) bool {
+		seen := map[string]bool{}
+		var stack []string
+		for n := range adj[src] {
+			if n == dst {
+				continue // skip the direct edge under test
+			}
+			stack = append(stack, n)
+		}
+		for len(stack) > 0 {
+			n := stack[len(stack)-1]
+			stack = stack[:len(stack)-1]
+			if n == dst {
+				return true
+			}
+			if seen[n] {
+				continue
+			}
+			seen[n] = true
+			for m := range adj[n] {
+				stack = append(stack, m)
+			}
+		}
+		return false
+	}
+
+	var out []edge
+	seen := map[string]bool{}
+	for _, e := range edges {
+		key := e.from + "\x00" + e.to
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		if reachableSkipping(e.from, e.to) {
+			continue // implied by a longer path — drop it
+		}
+		out = append(out, e)
+	}
+	return out
 }
 
 // build resolves the pkg/ graph into layer-grouped nodes and deduplicated edges.

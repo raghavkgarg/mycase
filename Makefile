@@ -132,15 +132,19 @@ deps-graph:
 	fi
 
 # arch-graph renders the same layer-map graph as an architecture-style diagram
-# via D2's TALA engine (orthogonal, clustered by layer). Falls back to leaving
-# the .d2 source if d2 is not installed.
+# via D2's TALA engine (orthogonal, clustered by layer). Transitive reduction is
+# on by default (REDUCE=1) — it drops edges already implied by a longer path, so
+# a composition root doesn't draw an edge to every leaf it transitively reaches;
+# far fewer crossings, identical reachability. Set REDUCE=0 for the full graph.
+# Falls back to leaving the .d2 source if d2 is not installed.
 D2_LAYOUT ?= tala
+REDUCE    ?= 1
 arch-graph:
 	@mkdir -p dist
-	@go run ./devtools/depsgraph -format=d2 > dist/deps.d2
+	@go run ./devtools/depsgraph -format=d2 $(if $(filter-out 0,$(REDUCE)),-reduce) > dist/deps.d2
 	@if command -v d2 >/dev/null 2>&1; then \
 		d2 --layout=$(D2_LAYOUT) dist/deps.d2 dist/arch.svg >/dev/null; \
-		echo "Architecture graph: dist/arch.svg (layout=$(D2_LAYOUT), source: dist/deps.d2)"; \
+		echo "Architecture graph: dist/arch.svg (layout=$(D2_LAYOUT), reduce=$(REDUCE), source: dist/deps.d2)"; \
 	else \
 		echo "Architecture graph source: dist/deps.d2"; \
 		echo "Install D2 (https://d2lang.com) to render SVG: d2 --layout=tala dist/deps.d2 dist/arch.svg"; \
@@ -174,6 +178,6 @@ help:
 	@echo "  analyze            - Advisory static analysis: deadcode + unparam + betteralign (non-blocking)"
 	@echo "  check-deps         - Enforce R16 package layering (leaves + downward imports)"
 	@echo "  deps-graph         - Render pkg/ dependency graph to dist/deps.svg (Graphviz, layer-colored)"
-	@echo "  arch-graph         - Render pkg/ architecture diagram to dist/arch.svg (D2/TALA, layer clusters)"
+	@echo "  arch-graph         - Render pkg/ architecture diagram to dist/arch.svg (D2/TALA, transitive-reduced; REDUCE=0 for full)"
 	@echo "  clean              - Remove build artifacts"
 	@echo "  fetch-echarts      - Download ECharts 5.6.0 into pkg/server/static/vendor/"
