@@ -14,6 +14,7 @@ import (
 
 	"github.com/raghavkgarg/mycase/pkg/broker"
 	"github.com/raghavkgarg/mycase/pkg/cache"
+	"github.com/raghavkgarg/mycase/pkg/config"
 	"github.com/raghavkgarg/mycase/pkg/costs"
 	"github.com/raghavkgarg/mycase/pkg/csvloader"
 	"github.com/raghavkgarg/mycase/pkg/datafetcher"
@@ -31,6 +32,7 @@ var BasketCommand = &cli.Command{
 	Flags: []cli.Flag{
 		&cli.BoolFlag{Name: "live", Usage: "Use live broker API (default: dry-run mock mode)"},
 		&cli.StringFlag{Name: "file", Value: "data/basket.csv", Usage: "Path to basket CSV file"},
+		&cli.StringFlag{Name: "broker", Usage: "Broker to use: zerodha, schwab (default from config/defaults.json)"},
 		&cli.BoolFlag{Name: "tax-optimize", Usage: "Sequence orders to maximize tax-loss harvesting (US; requires 'mycase tax import')"},
 	},
 	Action: func(ctx context.Context, c *cli.Command) error {
@@ -46,11 +48,11 @@ var BasketCommand = &cli.Command{
 				}
 			}
 		}
-		return runBasketWithParams(ctx, c.Bool("live"), filename, c.Bool("tax-optimize"))
+		return runBasketWithParams(ctx, c.Bool("live"), filename, c.Bool("tax-optimize"), c.String("broker"))
 	},
 }
 
-func runBasketWithParams(ctx context.Context, liveMode bool, basketFilename string, taxOptimize bool) error {
+func runBasketWithParams(ctx context.Context, liveMode bool, basketFilename string, taxOptimize bool, brokerOverride ...string) error {
 	mktCfg := broker.LoadMarketConfig()
 
 	mode := "DRY RUN / MOCK MODE"
@@ -60,7 +62,22 @@ func runBasketWithParams(ctx context.Context, liveMode bool, basketFilename stri
 	render.Banner(os.Stdout, fmt.Sprintf("Go Mycase Basket Engine [%s]", mode))
 	fmt.Printf("Loading basket configuration: %s\n", basketFilename)
 
-	b, err := newBroker(liveMode)
+	brokerName := ""
+	if len(brokerOverride) > 0 && brokerOverride[0] != "" {
+		brokerName = brokerOverride[0]
+	} else {
+		defaults := config.LoadUserDefaults(defaultsPath)
+		brokerName = defaults.Broker
+		if brokerName == "" {
+			brokerName = "zerodha"
+		}
+		// If basket is Indian market but default broker is schwab, automatically use zerodha
+		if !stockpicker.IsUSIndex(basketFilename) && brokerName == "schwab" {
+			brokerName = "zerodha"
+		}
+	}
+
+	b, err := newBrokerByName(brokerName, liveMode)
 	if err != nil {
 		return fmt.Errorf("creating broker: %w", err)
 	}
@@ -70,7 +87,7 @@ func runBasketWithParams(ctx context.Context, liveMode bool, basketFilename stri
 		return fmt.Errorf("loading basket config: %w", err)
 	}
 
-	if stockpicker.IsUSIndex(basketFilename) && broker.BrokerName() != "schwab" {
+	if stockpicker.IsUSIndex(basketFilename) && brokerName != "schwab" {
 		fmt.Printf("\n[Basket Engine] US market portfolio detected (%s). Configure broker=schwab in config/defaults.json for US execution.\n", basketFilename)
 		return nil
 	}

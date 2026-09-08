@@ -49,7 +49,7 @@ cooldown_bypass_rank:
   - 5
 
 # Broker configuration
-# broker: zerodha                     # "zerodha" (default) or "schwab"
+broker: zerodha                     # "zerodha" (default) or "schwab"
 # schwab_config: config/schwab.json   # Schwab app credentials
 # schwab_token: config/schwab_token.json  # Schwab OAuth tokens (auto-managed)
 
