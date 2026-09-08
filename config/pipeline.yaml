@@ -42,6 +42,12 @@ rebalance_tolerance_pct:
 hysteresis_rank_buffer:
   - 2
 
+cooldown_days:
+  - 30
+
+cooldown_bypass_rank:
+  - 5
+
 
 # Broker configuration
 # broker: zerodha                     # "zerodha" (default) or "schwab"

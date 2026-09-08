@@ -116,9 +116,10 @@ func runPerfWithParams(ctx context.Context, filePath string, capital float64, ta
 	tickerIdx, weightIdx := -1, -1
 	for i, h := range records[0] {
 		hClean := strings.ToLower(strings.TrimSpace(h))
-		if hClean == "ticker" {
+		switch hClean {
+		case "ticker":
 			tickerIdx = i
-		} else if hClean == "weight" {
+		case "weight":
 			weightIdx = i
 		}
 	}

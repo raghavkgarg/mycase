@@ -12,6 +12,7 @@ import (
 	"github.com/raghavkgarg/mycase/pkg/broker"
 	"github.com/raghavkgarg/mycase/pkg/config"
 	"github.com/raghavkgarg/mycase/pkg/csvloader"
+	"github.com/raghavkgarg/mycase/pkg/portfolio"
 	"github.com/raghavkgarg/mycase/pkg/printer"
 	"github.com/raghavkgarg/mycase/pkg/render"
 )
@@ -69,11 +70,20 @@ func runHoldings(ctx context.Context, c *cli.Command) error {
 	for _, h := range rawHoldings {
 		// Build ticker key using the holding's exchange prefix
 		tickerKey := h.Exchange + ":" + h.TradingSymbol
+		// India holdings may carry a series suffix (e.g. "-BE"); strip it for base-symbol matching.
+		baseSym := portfolio.StripSeriesSuffix(h.TradingSymbol)
+		baseKeyNSE := "NSE:" + baseSym
+		baseKeyBSE := "BSE:" + baseSym
 
 		matched := false
 		for i, g := range groups {
-			// Match by primary key or common Indian exchange variants
-			if g.Tickers[tickerKey] || g.Tickers["NSE:"+h.TradingSymbol] || g.Tickers["BSE:"+h.TradingSymbol] || g.Tickers["US:"+h.TradingSymbol] {
+			// Match by primary exchange-prefixed key, common Indian exchange variants
+			// (incl. series-stripped base), US variant, or bare symbol.
+			if g.Tickers[tickerKey] ||
+				g.Tickers["NSE:"+h.TradingSymbol] || g.Tickers["BSE:"+h.TradingSymbol] ||
+				g.Tickers["US:"+h.TradingSymbol] ||
+				g.Tickers[baseKeyNSE] || g.Tickers[baseKeyBSE] ||
+				g.Tickers[h.TradingSymbol] || g.Tickers[baseSym] {
 				groups[i].Holdings = append(groups[i].Holdings, h)
 				matched = true
 				break
@@ -83,6 +93,10 @@ func runHoldings(ctx context.Context, c *cli.Command) error {
 			uncategorizedHoldings = append(uncategorizedHoldings, h)
 		}
 	}
+
+	// Theme-return enrichment (India theme portfolios) is intentionally NOT wired
+	// into the live holdings view — it is dormant and reachable only via the
+	// `returns` command (cmd/returns.go). See docs/reconcile-main.md.
 
 	output := printer.RenderHoldingsSnapshot(rawHoldings, groups, uncategorizedHoldings)
 	fmt.Print(output)

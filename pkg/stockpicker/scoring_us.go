@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"math"
 	"sort"
+	"time"
 
 	"github.com/raghavkgarg/mycase/pkg/config"
 	"github.com/raghavkgarg/mycase/pkg/selectiontracker"
@@ -191,6 +192,24 @@ func SelectTopNUSQM(
 	hysteresisBuffer int,
 	tracker *selectiontracker.Tracker,
 ) []string {
+	return SelectTopNUSQMWithCooldown(activeKeys, scores, fundamentals, hardFilters, topN, existingHoldings, hysteresisBuffer, tracker, nil, 0, 0)
+}
+
+// SelectTopNUSQMWithCooldown selects top N US quality-momentum stocks with sector caps,
+// hysteresis, and anti-churn re-entry cooldown.
+func SelectTopNUSQMWithCooldown(
+	activeKeys []string,
+	scores map[string]float64,
+	fundamentals map[string]yfinance.Fundamentals,
+	hardFilters *config.HardFilters,
+	topN int,
+	existingHoldings map[string]float64,
+	hysteresisBuffer int,
+	tracker *selectiontracker.Tracker,
+	recentExits map[string]time.Time,
+	cooldownDays int,
+	bypassRank int,
+) []string {
 	maxPerSector := 4
 	if hardFilters != nil && hardFilters.MaxStocksPerSector > 0 {
 		maxPerSector = hardFilters.MaxStocksPerSector
@@ -235,7 +254,7 @@ func SelectTopNUSQM(
 
 	bufferLimit := topN + hysteresisBuffer
 	slog.Info("select.us_qm_hysteresis", "top_n", topN, "buffer_limit", bufferLimit)
-	return ApplyHysteresisSelection(sectorCapCandidates, existingHoldings, topN, bufferLimit, tracker)
+	return ApplyHysteresisSelectionWithCooldown(sectorCapCandidates, existingHoldings, topN, bufferLimit, tracker, recentExits, cooldownDays, bypassRank)
 }
 
 // NormalizeUSQMWeights normalizes weights proportionally to scores with stock & sector caps.

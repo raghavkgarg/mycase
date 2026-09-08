@@ -33,6 +33,8 @@ type PipelineConfig struct {
 	Capital               int            `yaml:"capital"`
 	RebalanceTolerancePct float64        `yaml:"rebalance_tolerance_pct"`
 	HysteresisRankBuffer  int            `yaml:"hysteresis_rank_buffer"`
+	CooldownDays          int            `yaml:"cooldown_days"`
+	CooldownBypassRank    int            `yaml:"cooldown_bypass_rank"`
 }
 
 // Snapshot returns a compact JSON snapshot of the resolved config, for recording
@@ -61,6 +63,8 @@ type rawPipelineConfig struct {
 	SchwabToken           string         `yaml:"schwab_token"`
 	Indices               []string       `yaml:"indices"`
 	Schedule              ScheduleConfig `yaml:"schedule"`
+	CooldownDays          any            `yaml:"cooldown_days"`
+	CooldownBypassRank    any            `yaml:"cooldown_bypass_rank"`
 }
 
 // resolveFirst extracts T from val (which may be a scalar or a []any from multi-doc YAML).
@@ -181,6 +185,18 @@ func (cfg *PipelineConfig) UnmarshalYAML(value *yaml.Node) error {
 	if cfg.SchwabToken == "" {
 		cfg.SchwabToken = "config/schwab_token.json"
 	}
+
+	// Anti-churn cooldown config (softer criterion for existing holdings).
+	cooldown := resolveFirst(a.CooldownDays, 30)
+	if cooldown < 0 {
+		cooldown = 30
+	}
+	cfg.CooldownDays = cooldown
+	bypass := resolveFirst(a.CooldownBypassRank, 5)
+	if bypass < 0 {
+		bypass = 5
+	}
+	cfg.CooldownBypassRank = bypass
 	return nil
 }
 

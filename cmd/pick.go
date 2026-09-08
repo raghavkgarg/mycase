@@ -25,6 +25,8 @@ var PickCommand = &cli.Command{
 		&cli.StringFlag{Name: "golden", Usage: "Path to golden copy CSV for hysteresis and rebalancing band"},
 		&cli.FloatFlag{Name: "rebalance-tolerance", Value: 0.10, Usage: "Rebalancing weight tolerance %% (e.g. 0.10 for 0.10%%)"},
 		&cli.IntFlag{Name: "hysteresis-buffer", Value: 5, Usage: "Extra ranks to allow existing holdings to drift"},
+		&cli.IntFlag{Name: "cooldown-days", Value: 30, Usage: "Days to bar recently exited holdings from re-entering (anti-churn)"},
+		&cli.IntFlag{Name: "cooldown-bypass-rank", Value: 5, Usage: "High-conviction rank threshold that bypasses the re-entry cooldown"},
 		&cli.StringFlag{Name: "name", Usage: "Custom display name for output files"},
 		&cli.StringFlag{Name: "out", Usage: "Custom output CSV path"},
 		&cli.BoolFlag{Name: "analysis", Aliases: []string{"a"}, Usage: "Run deep quantitative deduction analysis using DuckDB"},
@@ -91,6 +93,8 @@ func pickOptsFromCmd(c *cli.Command) *stockpicker.Options {
 		GoldenPath:         c.String("golden"),
 		RebalanceTolerance: c.Float("rebalance-tolerance"),
 		HysteresisBuffer:   int(c.Int("hysteresis-buffer")),
+		CooldownDays:       int(c.Int("cooldown-days")),
+		CooldownBypassRank: int(c.Int("cooldown-bypass-rank")),
 		DisplayName:        c.String("name"),
 		OutputFile:         c.String("out"),
 	}

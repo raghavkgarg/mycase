@@ -1,10 +1,39 @@
 # Reconcile origin/main → integration/ebm-upstream
 
-**Status**: In progress
+**Status**: ✅ DONE — merged on `integration/reconcile-main`, all gates green
 **Created**: September 8, 2026
 **Branch strategy**: work on disposable `integration/reconcile-main` cut from `integration/ebm-upstream`
 
+## Outcome (what actually happened)
+
+Merged `origin/main`'s 3 post-divergence commits under the dormant-code doctrine.
+mergiraf (Go-aware merge driver) auto-resolved the hardest Go collisions
+(`scoring.go`, `types.go`, `selectiontracker/tracker.go`) as correct **union**
+merges — main's anti-churn cooldown API and the EBM Phase-8 driver additions
+coexist. 7 live cmd/config conflicts hand-resolved. Resurrected `portfolio`
+(L1), `themereturn` (L3), `kiteauth` (L0), `stockpicker/cooldown.go` as dormant,
+layer-legal packages.
+
+Two live-path decisions (confirmed with the user):
+- **1(a) — cooldown wired LIVE** into `stockpicker.RunWithResult` for all 5
+  methods (value/multibagger/earlymb/USQM/standard). Added
+  `SelectTopNUSQMWithCooldown`, `--cooldown-days`/`--cooldown-bypass-rank`
+  flags, `LoadRecentExits`. `ApplySafetyFilters` now leniences existing holdings.
+- **2(b) — theme-return kept DORMANT**: reachable only via `cmd/returns.go`, not
+  the live `holdings` view (banner wiring removed from `cmd/holdings.go`).
+
+One layering fix required: `portfolio` first landed at L2 but is consumed by
+L2 packages (`optimizer`, `broker/zerodha`); root cause was its `Holding` alias
+importing `pkg/broker` (L1). Repointed the alias to the `broker/types` (L0)
+leaf → `portfolio` imports only L0 → correctly L1.
+
+Verification: `make check-deps` (layering intact), `make cleanup` (exit 0,
+idempotent), `make test` (all packages green, incl. the funnel-conservation
+invariant that now sums `CooldownBlocked`). Deferred debt recorded in
+`docs/refactor.md`.
+
 ---
+
 
 ## 1. Why this exists
 

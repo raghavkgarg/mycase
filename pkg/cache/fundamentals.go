@@ -9,6 +9,13 @@ import (
 // GetFundamentalsJSON returns the cached JSON blob for ticker if it was
 // fetched within the last 24 hours. Returns (nil, false, nil) on miss/stale.
 func (c *Cache) GetFundamentalsJSON(ctx context.Context, ticker string) ([]byte, bool, error) {
+	data, _, ok, err := c.GetFundamentalsJSONWithTime(ctx, ticker)
+	return data, ok, err
+}
+
+// GetFundamentalsJSONWithTime returns the cached JSON blob and the fetched timestamp for ticker
+// if it was fetched within the last 24 hours. Returns (nil, time.Time{}, false, nil) on miss/stale.
+func (c *Cache) GetFundamentalsJSONWithTime(ctx context.Context, ticker string) ([]byte, time.Time, bool, error) {
 	var fetchedAtUnix int64
 	var rawJSON string
 	err := c.db.QueryRowContext(ctx,
@@ -16,15 +23,16 @@ func (c *Cache) GetFundamentalsJSON(ctx context.Context, ticker string) ([]byte,
 		ticker,
 	).Scan(&fetchedAtUnix, &rawJSON)
 	if err == sql.ErrNoRows {
-		return nil, false, nil
+		return nil, time.Time{}, false, nil
 	}
 	if err != nil {
-		return nil, false, err
+		return nil, time.Time{}, false, err
 	}
-	if !isFreshFundamentals(time.Unix(fetchedAtUnix, 0)) {
-		return nil, false, nil
+	fetchedAt := time.Unix(fetchedAtUnix, 0)
+	if !isFreshFundamentals(fetchedAt) {
+		return nil, time.Time{}, false, nil
 	}
-	return []byte(rawJSON), true, nil
+	return []byte(rawJSON), fetchedAt, true, nil
 }
 
 // StoreFundamentalsJSON upserts the JSON blob for ticker with the current

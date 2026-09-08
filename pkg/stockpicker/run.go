@@ -132,7 +132,7 @@ func RunWithResult(ctx context.Context, opts *Options) (*PickResult, error) {
 		// US-specific hard filters (market cap, ADV, positive FCF only)
 		activeKeys = ApplyUSHardFilters(ctx, activeKeys, cfg.HardFilters, fundamentals, tracker)
 	} else if cfg.HardFilters != nil {
-		activeKeys = ApplySafetyFilters(ctx, activeKeys, opts.Method, cfg.HardFilters, fundamentals, fullHistory, tracker)
+		activeKeys = ApplySafetyFilters(ctx, activeKeys, opts.Method, cfg.HardFilters, fundamentals, fullHistory, tracker, goldenWeights)
 	} else {
 		tracker.InitialCount = len(activeKeys)
 	}
@@ -146,24 +146,36 @@ func RunWithResult(ctx context.Context, opts *Options) (*PickResult, error) {
 	var finalWeights map[string]float64
 	var scores map[string]float64
 
+	// Anti-churn cooldown: block recently-exited tickers from re-entering for a
+	// configurable window (unless they rank high enough to bypass). Loaded from
+	// prior selection reports keyed on the golden universe name.
+	goldenBase := csvloader.GetUniverseName(opts.GoldenPath)
+	if goldenBase == "" {
+		goldenBase = displayNameVal
+	}
+	recentExits := LoadRecentExits(goldenBase, goldenWeights, opts.CooldownDays, time.Now())
+	if len(recentExits) > 0 {
+		slog.InfoContext(ctx, "pick.cooldown_loaded", "recent_exits", len(recentExits), "cooldown_days", opts.CooldownDays)
+	}
+
 	if opts.Method == "value" {
 		scores = ScoreValue(ctx, activeKeys, fundamentals, fullHistory, cfg.HardFilters)
-		selectedKeys = SelectTopNValue(activeKeys, scores, fundamentals, cfg.HardFilters, opts.TopN, goldenWeights, opts.HysteresisBuffer, tracker)
+		selectedKeys = SelectTopNValueWithCooldown(activeKeys, scores, fundamentals, cfg.HardFilters, opts.TopN, goldenWeights, opts.HysteresisBuffer, tracker, recentExits, opts.CooldownDays, opts.CooldownBypassRank)
 		finalWeights = NormalizeValueWeights(selectedKeys, scores, fundamentals, cfg.HardFilters, goldenWeights, opts.RebalanceTolerance)
 	} else if opts.Method == "multibagger" {
 		scores = ScoreMultibagger(ctx, activeKeys, fundamentals, fullHistory, cfg.HardFilters)
-		selectedKeys = SelectTopNMultibagger(activeKeys, scores, fundamentals, cfg.HardFilters, opts.TopN, goldenWeights, opts.HysteresisBuffer, tracker)
+		selectedKeys = SelectTopNMultibaggerWithCooldown(activeKeys, scores, fundamentals, cfg.HardFilters, opts.TopN, goldenWeights, opts.HysteresisBuffer, tracker, recentExits, opts.CooldownDays, opts.CooldownBypassRank)
 		finalWeights = NormalizeMultibaggerWeights(selectedKeys, scores, fundamentals, cfg.HardFilters, goldenWeights, opts.RebalanceTolerance)
 	} else if opts.Method == "earlymb" || opts.Method == "early_multibagger" {
 		scores = ScoreEarlyMultibagger(ctx, activeKeys, fundamentals, fullHistory, cfg.HardFilters)
-		selectedKeys = SelectTopNEarlyMultibagger(activeKeys, scores, fundamentals, fullHistory, cfg.HardFilters, opts.TopN, goldenWeights, opts.HysteresisBuffer, tracker)
+		selectedKeys = SelectTopNEarlyMultibaggerWithCooldown(activeKeys, scores, fundamentals, fullHistory, cfg.HardFilters, opts.TopN, goldenWeights, opts.HysteresisBuffer, tracker, recentExits, opts.CooldownDays, opts.CooldownBypassRank)
 		finalWeights = NormalizeEarlyMultibaggerWeights(selectedKeys, scores, fundamentals, cfg.HardFilters, goldenWeights, opts.RebalanceTolerance)
 	} else if opts.Method == "us_quality_momentum" {
 		scores = ScoreUSQualityMomentum(ctx, activeKeys, fundamentals, fullHistory, cfg.HardFilters)
-		selectedKeys = SelectTopNUSQM(activeKeys, scores, fundamentals, cfg.HardFilters, opts.TopN, goldenWeights, opts.HysteresisBuffer, tracker)
+		selectedKeys = SelectTopNUSQMWithCooldown(activeKeys, scores, fundamentals, cfg.HardFilters, opts.TopN, goldenWeights, opts.HysteresisBuffer, tracker, recentExits, opts.CooldownDays, opts.CooldownBypassRank)
 		finalWeights = NormalizeUSQMWeights(selectedKeys, scores, fundamentals, cfg.HardFilters, goldenWeights, opts.RebalanceTolerance)
 	} else {
-		selectedKeys = SelectTopNStandard(activeKeys, slicedPrices, benchmarkPrices, fundamentals, cfg.Weights, opts.TopN, goldenWeights, opts.HysteresisBuffer, tracker)
+		selectedKeys = SelectTopNStandardWithCooldown(activeKeys, slicedPrices, benchmarkPrices, fundamentals, cfg.Weights, opts.TopN, goldenWeights, opts.HysteresisBuffer, tracker, recentExits, opts.CooldownDays, opts.CooldownBypassRank)
 		finalWeights = NormalizeStandardWeights(selectedKeys, slicedPrices, benchmarkPrices, fundamentals, cfg.Weights, goldenWeights, opts.RebalanceTolerance)
 	}
 

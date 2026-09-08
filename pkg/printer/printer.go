@@ -498,7 +498,11 @@ func renderDiscrepancies(r render.Renderer, rawHoldings []brokertypes.Holding, g
 func findMissingTickers(tickers map[string]bool, holdings []brokertypes.Holding) []string {
 	holdingSymbols := make(map[string]bool)
 	for _, h := range holdings {
+		// Index by both the raw symbol and its series-suffix-stripped base
+		// (e.g. "E2E-BE" -> "E2E") so group tickers written without the
+		// exchange series suffix still match. India-legacy robustness.
 		holdingSymbols[h.TradingSymbol] = true
+		holdingSymbols[stripSeriesSuffix(h.TradingSymbol)] = true
 	}
 	keys := make([]string, 0, len(tickers))
 	for t := range tickers {
@@ -508,11 +512,31 @@ func findMissingTickers(tickers map[string]bool, holdings []brokertypes.Holding)
 
 	var missing []string
 	for _, t := range keys {
-		if !holdingSymbols[lastSegment(t)] {
+		seg := lastSegment(t)
+		if !holdingSymbols[seg] && !holdingSymbols[stripSeriesSuffix(seg)] {
 			missing = append(missing, t)
 		}
 	}
 	return missing
+}
+
+// knownSeriesSuffixes mirrors the India exchange series suffixes recognized by
+// pkg/portfolio; kept local so printer (L3) needs no import for a string util.
+var knownSeriesSuffixes = []string{
+	"-BE", "-BZ", "-EQ", "-SM", "-ST", "-BL", "-BT", "-GC", "-IL",
+}
+
+// stripSeriesSuffix removes an Indian exchange series suffix (e.g. "-BE") from a
+// trading symbol, returning the uppercase base symbol. Hyphenated company names
+// like "BAJAJ-AUTO" are preserved (only known suffixes are stripped).
+func stripSeriesSuffix(symbol string) string {
+	sym := strings.ToUpper(strings.TrimSpace(symbol))
+	for _, suffix := range knownSeriesSuffixes {
+		if strings.HasSuffix(sym, suffix) {
+			return sym[:len(sym)-len(suffix)]
+		}
+	}
+	return sym
 }
 
 func holdingDisplaySymbol(h brokertypes.Holding) string {

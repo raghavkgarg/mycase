@@ -102,19 +102,19 @@ func storeDateRangeCache(ctx context.Context, ticker string, from, to time.Time,
 	_ = globalCache.StorePricesByDateRange(ctx, ticker, from, to, records)
 }
 
-func checkFundamentalsCache(ctx context.Context, ticker string) (*Fundamentals, bool) {
+func checkFundamentalsCache(ctx context.Context, ticker string) (*Fundamentals, time.Time, bool) {
 	if globalCache == nil {
-		return nil, false
+		return nil, time.Time{}, false
 	}
-	data, fresh, err := globalCache.GetFundamentalsJSON(ctx, ticker)
+	data, fetchedAt, fresh, err := globalCache.GetFundamentalsJSONWithTime(ctx, ticker)
 	if err != nil || !fresh {
-		return nil, false
+		return nil, time.Time{}, false
 	}
 	var f Fundamentals
 	if json.Unmarshal(data, &f) != nil {
-		return nil, false
+		return nil, time.Time{}, false
 	}
-	return &f, true
+	return &f, fetchedAt, true
 }
 
 func storeFundamentalsCache(ctx context.Context, ticker string, f *Fundamentals) {

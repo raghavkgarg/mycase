@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/raghavkgarg/mycase/pkg/broker"
+	"github.com/raghavkgarg/mycase/pkg/portfolio"
 )
 
 // DriftResult holds the output of a single drift calculation.
@@ -38,8 +39,13 @@ func CalculateDrift(_ context.Context, b broker.Broker, targetWeights map[string
 
 	heldQty := make(map[string]int, len(holdings))
 	for _, h := range holdings {
+		qty := h.Quantity + h.T1Quantity + h.T2Quantity
 		key := strings.ToUpper(h.Exchange) + ":" + h.TradingSymbol
-		heldQty[key] += h.Quantity + h.T1Quantity + h.T2Quantity
+		heldQty[key] += qty
+		baseKey := strings.ToUpper(h.Exchange) + ":" + portfolio.StripSeriesSuffix(h.TradingSymbol)
+		if baseKey != key {
+			heldQty[baseKey] += qty
+		}
 	}
 
 	values := make(map[string]float64, len(basketKeys))

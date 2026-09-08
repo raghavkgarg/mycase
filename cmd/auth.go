@@ -16,6 +16,7 @@ import (
 
 	"github.com/raghavkgarg/mycase/pkg/broker/schwab"
 	"github.com/raghavkgarg/mycase/pkg/config"
+	"github.com/raghavkgarg/mycase/pkg/kiteauth"
 	"github.com/raghavkgarg/mycase/pkg/render"
 )
 
@@ -38,6 +39,14 @@ var AuthCommand = &cli.Command{
 			Value: "config/schwab_token.json",
 			Usage: "Path to save Schwab OAuth tokens",
 		},
+		&cli.BoolFlag{
+			Name:  "manual",
+			Usage: "Force interactive browser login even if auto-login credentials exist (zerodha)",
+		},
+		&cli.BoolFlag{
+			Name:  "force",
+			Usage: "Force re-authentication even if current session/token is still valid (zerodha)",
+		},
 	},
 	Action: func(ctx context.Context, c *cli.Command) error {
 		broker := strings.ToLower(c.String("broker"))
@@ -57,7 +66,7 @@ var AuthCommand = &cli.Command{
 			tokenPath := c.String("token-path")
 			return runSchwabAuth(ctx, configPath, tokenPath)
 		case "zerodha":
-			return runAuthCmd(ctx)
+			return runAuthCmdWithFlags(ctx, c.Bool("manual"), c.Bool("force"))
 		default:
 			return fmt.Errorf("unsupported broker %q — supported: zerodha, schwab", broker)
 		}
@@ -65,6 +74,10 @@ var AuthCommand = &cli.Command{
 }
 
 func runAuthCmd(ctx context.Context) error {
+	return runAuthCmdWithFlags(ctx, false, false)
+}
+
+func runAuthCmdWithFlags(ctx context.Context, forceManual, forceRefresh bool) error {
 	render.Banner(os.Stdout, "Zerodha Kite Connect Auth Setup Utility")
 	if publicIP := config.FetchPublicIP(); publicIP != "" {
 		fmt.Printf("Current Public IP: %s\n", publicIP)
@@ -73,12 +86,13 @@ func runAuthCmd(ctx context.Context) error {
 
 	configFile := "config/config.json"
 	var apiKey, apiSecret string
-	var saveCreds bool
 
 	cfg, err := config.LoadConfig(configFile)
-	if err == nil {
+	if err == nil && cfg != nil {
 		apiKey = cfg.APIKey
 		apiSecret = cfg.APISecret
+	} else if cfg == nil {
+		cfg = &config.Config{}
 	}
 
 	reader := bufio.NewReader(os.Stdin)
@@ -87,7 +101,6 @@ func runAuthCmd(ctx context.Context) error {
 		fmt.Print("Enter your Zerodha Kite API Key: ")
 		apiKey, _ = reader.ReadString('\n')
 		apiKey = strings.TrimSpace(apiKey)
-		saveCreds = true
 	} else {
 		fmt.Printf("Using existing API Key: %s\n", apiKey)
 	}
@@ -96,13 +109,92 @@ func runAuthCmd(ctx context.Context) error {
 		fmt.Print("Enter your Zerodha Kite API Secret: ")
 		apiSecret, _ = reader.ReadString('\n')
 		apiSecret = strings.TrimSpace(apiSecret)
-		saveCreds = true
 	} else {
 		fmt.Println("Using existing API Secret from config file.")
 	}
 
 	if apiKey == "" || apiSecret == "" {
 		return fmt.Errorf("API Key and API Secret are required")
+	}
+
+	// 1. First check if current access token is already valid and active
+	if !forceManual && !forceRefresh && cfg.AccessToken != "" && cfg.AccessToken != "your_access_token" {
+		testClient := kiteconnect.New(apiKey)
+		testClient.SetAccessToken(cfg.AccessToken)
+		if cfg.HTTPProxy != "" {
+			if proxyURL, err := url.Parse(cfg.HTTPProxy); err == nil {
+				testClient.SetHTTPClient(&http.Client{
+					Timeout: 5 * time.Second,
+					Transport: &http.Transport{
+						Proxy: http.ProxyURL(proxyURL),
+					},
+				})
+			}
+		}
+		profile, pErr := testClient.GetUserProfile()
+		if pErr == nil && profile.UserID != "" {
+			fmt.Println("\n✅ Zerodha Kite Connect session is already active and authenticated!")
+			fmt.Printf("   User: %s (%s) | Broker: %s\n", profile.UserName, profile.UserID, profile.Broker)
+			fmt.Println("   Access token is valid. Webpage login not required.")
+			return nil
+		}
+	}
+
+	// 2. Check if automated headless login credentials are configured
+	if !forceManual && (cfg.UserID == "" || cfg.Password == "" || cfg.TOTPSecret == "") {
+		fmt.Println("\n🔐 Auto-login credentials ('user_id', 'password', 'totp_secret') are not yet set.")
+		fmt.Print("Would you like to configure them now to enable zero-browser login? (y/n): ")
+		ans, _ := reader.ReadString('\n')
+		ans = strings.ToLower(strings.TrimSpace(ans))
+		if ans == "y" || ans == "yes" {
+			if cfg.UserID == "" {
+				fmt.Print("Enter Zerodha User ID (e.g. CBR420): ")
+				uid, _ := reader.ReadString('\n')
+				cfg.UserID = strings.TrimSpace(uid)
+			}
+			if cfg.Password == "" {
+				fmt.Print("Enter Zerodha Password: ")
+				pwd, _ := reader.ReadString('\n')
+				cfg.Password = strings.TrimSpace(pwd)
+			}
+			if cfg.TOTPSecret == "" {
+				fmt.Print("Enter Zerodha TOTP Secret (from Kite Web -> Profile -> Password & Security -> External TOTP): ")
+				tSecret, _ := reader.ReadString('\n')
+				cfg.TOTPSecret = strings.ReplaceAll(strings.TrimSpace(tSecret), " ", "")
+			}
+			_ = config.SaveConfig(configFile, cfg)
+		}
+	}
+
+	if !forceManual && cfg.UserID != "" && cfg.Password != "" && cfg.TOTPSecret != "" {
+		fmt.Println("\n🔐 Auto-login credentials detected (user_id, password, totp_secret).")
+		fmt.Println("Attempting headless authentication & dynamic TOTP generation...")
+
+		autoParams := kiteauth.AutoAuthParams{
+			APIKey:     apiKey,
+			APISecret:  apiSecret,
+			UserID:     cfg.UserID,
+			Password:   cfg.Password,
+			TOTPSecret: cfg.TOTPSecret,
+			ProxyURL:   cfg.HTTPProxy,
+		}
+
+		accessToken, autoErr := kiteauth.PerformAutoLogin(ctx, autoParams)
+		if autoErr == nil {
+			fmt.Println("🎉 Success! Headless authentication generated daily access token.")
+			cfg.AccessToken = accessToken
+			if err := config.SaveConfig(configFile, cfg); err != nil {
+				return fmt.Errorf("saving configuration: %w", err)
+			}
+			fmt.Println("\nSuccessfully refreshed and synchronized 'config/config.json'!")
+			fmt.Println("You can now run `mycase basket --live` or `mycase holdings --live`.")
+			return nil
+		}
+
+		fmt.Printf("⚠️  Headless login failed: %v\n", autoErr)
+		fmt.Println("Falling back to interactive browser authorization...")
+	} else if !forceManual {
+		fmt.Println("\n💡 Tip: Add 'user_id', 'password', and 'totp_secret' to config/config.json for automatic zero-browser login.")
 	}
 
 	client := kiteconnect.New(apiKey)
@@ -143,8 +235,15 @@ p{font-size:16px;line-height:1.5;margin-bottom:30px}
 </style></head>
 <body><div class="container"><div class="icon">✓</div>
 <h1>Authentication Successful</h1>
-<p>Zerodha Kite has successfully authenticated. You can safely close this browser window and return to the terminal.</p>
-</div></body></html>`))
+<p>Zerodha Kite has successfully authenticated. This browser tab will close automatically...</p>
+</div>
+<script>
+setTimeout(function() {
+    window.open('', '_self', '');
+    window.close();
+}, 1000);
+</script>
+</body></html>`))
 		tokenChan <- token
 	})
 
@@ -182,26 +281,13 @@ p{font-size:16px;line-height:1.5;margin-bottom:30px}
 	}
 	fmt.Println("Success! Generated access token.")
 
-	newCfg := &config.Config{
-		APIKey:      apiKey,
-		AccessToken: session.AccessToken,
-	}
-	if cfg != nil && cfg.HTTPProxy != "" {
-		newCfg.HTTPProxy = cfg.HTTPProxy
+	cfg.APIKey = apiKey
+	cfg.AccessToken = session.AccessToken
+	if apiSecret != "" {
+		cfg.APISecret = apiSecret
 	}
 
-	if saveCreds {
-		fmt.Print("Would you like to save the API Key and API Secret to config/config.json for future runs? (y/n): ")
-		ans, _ := reader.ReadString('\n')
-		ans = strings.ToLower(strings.TrimSpace(ans))
-		if ans == "y" || ans == "yes" {
-			newCfg.APISecret = apiSecret
-		}
-	} else if apiSecret != "" {
-		newCfg.APISecret = apiSecret
-	}
-
-	if err := config.SaveConfig(configFile, newCfg); err != nil {
+	if err := config.SaveConfig(configFile, cfg); err != nil {
 		return fmt.Errorf("saving credentials: %w", err)
 	}
 

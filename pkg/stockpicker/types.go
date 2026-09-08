@@ -32,6 +32,8 @@ type Options struct {
 	RebalanceTolerance float64
 	HysteresisBuffer   int
 	SkipScuttlebutt    bool
+	CooldownDays       int
+	CooldownBypassRank int
 }
 
 // TickersSource encapsulates tickers list source info.
