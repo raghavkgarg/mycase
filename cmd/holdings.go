@@ -68,12 +68,17 @@ func runHoldings(ctx context.Context, c *cli.Command) error {
 
 	var uncategorizedHoldings []portfolio.Holding
 	for _, h := range rawHoldings {
+		baseSym := portfolio.StripSeriesSuffix(h.TradingSymbol)
 		keyNSE := "NSE:" + h.TradingSymbol
 		keyBSE := "BSE:" + h.TradingSymbol
+		baseKeyNSE := "NSE:" + baseSym
+		baseKeyBSE := "BSE:" + baseSym
 
 		matched := false
 		for i, g := range groups {
-			if g.Tickers[keyNSE] || g.Tickers[keyBSE] {
+			if g.Tickers[keyNSE] || g.Tickers[keyBSE] ||
+				g.Tickers[baseKeyNSE] || g.Tickers[baseKeyBSE] ||
+				g.Tickers[h.TradingSymbol] || g.Tickers[baseSym] {
 				groups[i].Holdings = append(groups[i].Holdings, h)
 				matched = true
 				break
@@ -88,6 +93,7 @@ func runHoldings(ctx context.Context, c *cli.Command) error {
 	ltpMap := make(map[string]float64)
 	for _, h := range rawHoldings {
 		ltpMap[h.TradingSymbol] = h.LastPrice
+		ltpMap[portfolio.StripSeriesSuffix(h.TradingSymbol)] = h.LastPrice
 	}
 
 	if db, err := themereturn.OpenDB(""); err == nil {

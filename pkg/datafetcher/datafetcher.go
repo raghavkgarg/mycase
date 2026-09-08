@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/raghavkgarg/mycase/pkg/broker"
+	"github.com/raghavkgarg/mycase/pkg/portfolio"
 	"github.com/raghavkgarg/mycase/pkg/yfinance"
 )
 
@@ -60,8 +61,12 @@ func FetchMarketData(ctx context.Context, b broker.Broker, basketKeys []string) 
 	currentHoldings := make(map[string]int, len(rawHoldings))
 	holdingDetails := make(map[string]broker.Holding, len(rawHoldings))
 	for _, h := range rawHoldings {
-		currentHoldings[h.TradingSymbol] = h.Quantity + h.T1Quantity + h.T2Quantity
+		baseSym := portfolio.StripSeriesSuffix(h.TradingSymbol)
+		qty := h.Quantity + h.T1Quantity + h.T2Quantity
+		currentHoldings[h.TradingSymbol] = qty
+		currentHoldings[baseSym] = qty
 		holdingDetails[h.TradingSymbol] = h
+		holdingDetails[baseSym] = h
 
 		// Fallback for missing quote price using holding LastPrice
 		if h.LastPrice > 0 {
@@ -69,11 +74,18 @@ func FetchMarketData(ctx context.Context, b broker.Broker, basketKeys []string) 
 			if !strings.Contains(symKey, ":") {
 				symKey = "NSE:" + symKey
 			}
+			baseKey := "NSE:" + baseSym
 			if p, ok := quoteData[symKey]; !ok || p <= 0 {
 				quoteData[symKey] = h.LastPrice
 			}
+			if p, ok := quoteData[baseKey]; !ok || p <= 0 {
+				quoteData[baseKey] = h.LastPrice
+			}
 			if p, ok := quoteData[h.TradingSymbol]; !ok || p <= 0 {
 				quoteData[h.TradingSymbol] = h.LastPrice
+			}
+			if p, ok := quoteData[baseSym]; !ok || p <= 0 {
+				quoteData[baseSym] = h.LastPrice
 			}
 		}
 	}

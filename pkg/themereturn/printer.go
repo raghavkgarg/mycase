@@ -60,7 +60,7 @@ func RenderThemeReport(r *ThemeReturnReport, opts ThemeReturnOptions) string {
 
 	// Lifecycle Rebalancing Rollup
 	if len(r.ExitedPositions) > 0 {
-		sb.WriteString("🔄 FULL THEME LIFECYCLE (ACTIVE + 9 EXITED REBALANCED POSITIONS):\n")
+		sb.WriteString(fmt.Sprintf("🔄 FULL THEME LIFECYCLE (ACTIVE + %d EXITED REBALANCED POSITIONS):\n", len(r.ExitedPositions)))
 		sb.WriteString(fmt.Sprintf("  ├─ Gross Capital Deployed (Total Buys):  %s\n", formatRupees(r.LifecycleGrossBuys, false)))
 		sb.WriteString(fmt.Sprintf("  ├─ Capital Realized / Recycled (Sells):  %s\n", formatRupees(r.LifecycleGrossSells, false)))
 		sb.WriteString(fmt.Sprintf("  ├─ Net Capital Outlay:                   %s\n", formatRupees(r.LifecycleNetOutlay, false)))

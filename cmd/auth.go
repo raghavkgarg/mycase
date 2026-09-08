@@ -15,17 +15,28 @@ import (
 	kiteconnect "github.com/zerodha/gokiteconnect/v4"
 
 	"github.com/raghavkgarg/mycase/pkg/config"
+	"github.com/raghavkgarg/mycase/pkg/kiteauth"
 )
 
 var AuthCommand = &cli.Command{
 	Name:  "auth",
 	Usage: "Set up Zerodha Kite Connect authentication",
+	Flags: []cli.Flag{
+		&cli.BoolFlag{
+			Name:  "manual",
+			Usage: "Force interactive browser login even if auto-login credentials exist",
+		},
+	},
 	Action: func(ctx context.Context, c *cli.Command) error {
-		return runAuthCmd(ctx)
+		return runAuthCmdWithFlags(ctx, c.Bool("manual"))
 	},
 }
 
-func runAuthCmd(_ context.Context) error {
+func runAuthCmd(ctx context.Context) error {
+	return runAuthCmdWithFlags(ctx, false)
+}
+
+func runAuthCmdWithFlags(ctx context.Context, forceManual bool) error {
 	fmt.Println("====================================================================")
 	fmt.Println("             Zerodha Kite Connect Auth Setup Utility               ")
 	fmt.Println("====================================================================")
@@ -66,6 +77,39 @@ func runAuthCmd(_ context.Context) error {
 
 	if apiKey == "" || apiSecret == "" {
 		return fmt.Errorf("API Key and API Secret are required")
+	}
+
+	// Check if automated headless login credentials are configured
+	if !forceManual && cfg != nil && cfg.UserID != "" && cfg.Password != "" && cfg.TOTPSecret != "" {
+		fmt.Println("\n🔐 Auto-login credentials detected (user_id, password, totp_secret).")
+		fmt.Println("Attempting headless authentication & dynamic TOTP generation...")
+
+		autoParams := kiteauth.AutoAuthParams{
+			APIKey:     apiKey,
+			APISecret:  apiSecret,
+			UserID:     cfg.UserID,
+			Password:   cfg.Password,
+			TOTPSecret: cfg.TOTPSecret,
+			ProxyURL:   cfg.HTTPProxy,
+		}
+
+		accessToken, autoErr := kiteauth.PerformAutoLogin(ctx, autoParams)
+		if autoErr == nil {
+			fmt.Println("🎉 Success! Headless authentication generated daily access token.")
+			cfg.AccessToken = accessToken
+			if err := config.SaveConfig(configFile, cfg); err != nil {
+				return fmt.Errorf("saving configuration: %w", err)
+			}
+			fmt.Println("\nSuccessfully refreshed and synchronized 'config/config.json'!")
+			fmt.Println("You can now run `mycase basket --live` to use live data.")
+			return nil
+		}
+
+		fmt.Printf("⚠️  Headless login failed: %v\n", autoErr)
+		fmt.Println("Falling back to interactive browser authorization...")
+	} else if !forceManual {
+		fmt.Println("\n💡 Tip: You can automate this daily login without opening a browser.")
+		fmt.Println("   Add 'user_id', 'password', and 'totp_secret' to config/config.json.")
 	}
 
 	client := kiteconnect.New(apiKey)
@@ -149,8 +193,11 @@ p{font-size:16px;line-height:1.5;margin-bottom:30px}
 		APIKey:      apiKey,
 		AccessToken: session.AccessToken,
 	}
-	if cfg != nil && cfg.HTTPProxy != "" {
+	if cfg != nil {
 		newCfg.HTTPProxy = cfg.HTTPProxy
+		newCfg.UserID = cfg.UserID
+		newCfg.Password = cfg.Password
+		newCfg.TOTPSecret = cfg.TOTPSecret
 	}
 
 	if saveCreds {

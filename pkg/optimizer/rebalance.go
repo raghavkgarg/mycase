@@ -5,6 +5,7 @@ import (
 
 	"github.com/raghavkgarg/mycase/pkg/broker"
 	"github.com/raghavkgarg/mycase/pkg/costs"
+	"github.com/raghavkgarg/mycase/pkg/portfolio"
 )
 
 // DetectExits returns tickers that are active (weight > 0) in the golden copy
@@ -49,8 +50,11 @@ func FilterMicroTransactionsWithExits(
 		// Full exit orders (where target weight is 0.0) bypass micro-transaction filtering to ensure complete liquidation
 		isExit := false
 		if o.TransactionType == "SELL" && basket != nil {
+			baseSym := portfolio.StripSeriesSuffix(o.TradingSymbol)
 			for k, w := range basket {
-				if (k == o.TradingSymbol || k == "NSE:"+o.TradingSymbol || k == "BSE:"+o.TradingSymbol) && w <= 0.0 {
+				cleanK := portfolio.CleanTicker(k)
+				if (k == o.TradingSymbol || k == "NSE:"+o.TradingSymbol || k == "BSE:"+o.TradingSymbol ||
+					k == baseSym || k == "NSE:"+baseSym || k == "BSE:"+baseSym || cleanK == baseSym) && w <= 0.0 {
 					isExit = true
 					break
 				}
@@ -64,6 +68,9 @@ func FilterMicroTransactionsWithExits(
 		price := o.Price
 		if price <= 0 {
 			price = quotes["NSE:"+o.TradingSymbol]
+			if price <= 0 {
+				price = quotes["NSE:"+portfolio.StripSeriesSuffix(o.TradingSymbol)]
+			}
 		}
 		bd := model.Calculate(o.TransactionType, o.Quantity, price)
 		if bd.CostRatio > thresholdPct {

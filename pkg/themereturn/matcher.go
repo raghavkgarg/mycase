@@ -9,6 +9,7 @@ import (
 
 	"github.com/raghavkgarg/mycase/pkg/config"
 	"github.com/raghavkgarg/mycase/pkg/csvloader"
+	"github.com/raghavkgarg/mycase/pkg/portfolio"
 )
 
 // MatchedTheme holds resolved symbols for active and lifecycle views.
@@ -22,13 +23,9 @@ type MatchedTheme struct {
 	SymbolWeights    map[string]float64
 }
 
-// CleanTicker strips exchange prefixes like "NSE:" or "BSE:".
+// CleanTicker strips exchange prefixes like "NSE:" or "BSE:" and series suffixes like "-BE".
 func CleanTicker(ticker string) string {
-	parts := strings.Split(ticker, ":")
-	if len(parts) > 1 {
-		return strings.ToUpper(strings.TrimSpace(parts[1]))
-	}
-	return strings.ToUpper(strings.TrimSpace(ticker))
+	return portfolio.CleanTicker(ticker)
 }
 
 // resolveFilePath resolves a relative path from the current directory or parent directories.
@@ -144,6 +141,9 @@ func ResolveTheme(themeArg, explicitCSV, themesConfigPath string) (*MatchedTheme
 	var activeSymbols []string
 	weights := make(map[string]float64)
 
+	// 3. Discover historical proposal lifecycle symbols
+	allSymbolsMap := make(map[string]bool)
+
 	// Read CSV directly to preserve ordering and target weights
 	if f, err := os.Open(csvPath); err == nil {
 		r := csv.NewReader(f)
@@ -158,26 +158,24 @@ func ResolveTheme(themeArg, explicitCSV, themesConfigPath string) (*MatchedTheme
 				// Claimed by an earlier theme in themes.json
 				continue
 			}
-			activeSymbols = append(activeSymbols, sym)
+			var w float64
 			if len(row) >= 2 {
-				var w float64
 				fmt.Sscanf(row[1], "%f", &w)
 				weights[sym] = w
+			}
+			allSymbolsMap[sym] = true
+			if len(row) < 2 || w > 0.000001 {
+				activeSymbols = append(activeSymbols, sym)
 			}
 		}
 	} else {
 		for raw := range activeMap {
 			sym := CleanTicker(raw)
 			if !priorClaimed[sym] {
+				allSymbolsMap[sym] = true
 				activeSymbols = append(activeSymbols, sym)
 			}
 		}
-	}
-
-	// 3. Discover historical proposal lifecycle symbols
-	allSymbolsMap := make(map[string]bool)
-	for _, s := range activeSymbols {
-		allSymbolsMap[s] = true
 	}
 
 	// Extract keyword for proposal discovery (careful with order!)

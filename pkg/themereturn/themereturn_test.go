@@ -102,29 +102,29 @@ func TestEvaluateThemeReturn_RealMicroSmall(t *testing.T) {
 		t.Fatalf("EvaluateThemeReturn failed: %v", err)
 	}
 
-	if math.Abs(report.ActiveInvestedValue-193226.74) > 1.0 {
-		t.Errorf("expected ActiveInvestedValue ~193226.74, got %.2f", report.ActiveInvestedValue)
+	if math.Abs(report.ActiveInvestedValue-198599.48) > 1.0 {
+		t.Errorf("expected ActiveInvestedValue ~198599.48, got %.2f", report.ActiveInvestedValue)
 	}
 
-	if math.Abs(report.ActiveCurrentValue-203101.68) > 1.0 {
-		t.Errorf("expected ActiveCurrentValue ~203101.68, got %.2f", report.ActiveCurrentValue)
+	if math.Abs(report.ActiveCurrentValue-206951.31) > 1.0 {
+		t.Errorf("expected ActiveCurrentValue ~206951.31, got %.2f", report.ActiveCurrentValue)
 	}
 
-	if report.ActiveDividends != 513.0 {
-		t.Errorf("expected ActiveDividends 513.00, got %.2f", report.ActiveDividends)
+	if report.ActiveDividends != 486.0 {
+		t.Errorf("expected ActiveDividends 486.00, got %.2f", report.ActiveDividends)
 	}
 
-	if report.ActiveMWR < 50.0 {
-		t.Errorf("expected ActiveMWR > 50%%, got %.2f%%", report.ActiveMWR)
+	if report.ActiveMWR < 40.0 {
+		t.Errorf("expected ActiveMWR > 40%%, got %.2f%%", report.ActiveMWR)
 	}
 
-	if len(report.ExitedPositions) != 9 {
-		t.Errorf("expected 9 exited positions, got %d", len(report.ExitedPositions))
+	if len(report.ExitedPositions) != 12 {
+		t.Errorf("expected 12 exited positions, got %d", len(report.ExitedPositions))
 	}
-	if math.Abs(report.LifecycleGrossSells-62312.90) > 1.0 {
-		t.Errorf("expected LifecycleGrossSells ~62312.90, got %.2f", report.LifecycleGrossSells)
+	if math.Abs(report.LifecycleGrossSells-96019.30) > 1.0 {
+		t.Errorf("expected LifecycleGrossSells ~96019.30, got %.2f", report.LifecycleGrossSells)
 	}
-	if math.Abs(report.LifecycleTotalWealth-10738.69) > 1.0 {
-		t.Errorf("expected LifecycleTotalWealth ~10738.69, got %.2f", report.LifecycleTotalWealth)
+	if math.Abs(report.LifecycleTotalWealth-10812.22) > 1.0 {
+		t.Errorf("expected LifecycleTotalWealth ~10812.22, got %.2f", report.LifecycleTotalWealth)
 	}
 }

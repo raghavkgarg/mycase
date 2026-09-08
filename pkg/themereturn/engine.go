@@ -32,9 +32,19 @@ func EvaluateThemeReturn(
 	}
 
 	// 1. Fetch all raw DB records for active + lifecycle symbols
-	allSymbols := theme.LifecycleSymbols
-	if len(allSymbols) == 0 {
-		allSymbols = theme.ActiveSymbols
+	allSymbolsMap := make(map[string]bool)
+	for _, s := range theme.LifecycleSymbols {
+		allSymbolsMap[s] = true
+	}
+	for _, s := range theme.ActiveSymbols {
+		allSymbolsMap[s] = true
+	}
+	for _, s := range theme.ExitedSymbols {
+		allSymbolsMap[s] = true
+	}
+	var allSymbols []string
+	for s := range allSymbolsMap {
+		allSymbols = append(allSymbols, s)
 	}
 
 	trades, err := db.QueryTrades(accountID, allSymbols)
@@ -68,27 +78,74 @@ func EvaluateThemeReturn(
 		divsBySym[d.Symbol] = append(divsBySym[d.Symbol], d)
 	}
 
-	// 2. Compute metrics for Active Core Holdings
+	// Determine theme inception date across active theme core holdings
 	var earliestActiveDate time.Time
+	for _, sym := range theme.ActiveSymbols {
+		for _, t := range tradesBySym[sym] {
+			if t.TradeType == "BUY" && t.TradeDate.Year() >= 2026 {
+				if earliestActiveDate.IsZero() || t.TradeDate.Before(earliestActiveDate) {
+					earliestActiveDate = t.TradeDate
+				}
+			}
+		}
+	}
+
+	// 2. Compute metrics for Active Core Holdings
 	var activeCashFlows []DatedCashFlow
+	var dynamicallyExited []string
 
 	for _, sym := range theme.ActiveSymbols {
 		sTrades := tradesBySym[sym]
 		sDivs := divsBySym[sym]
 
-		totQty := 0
+		// Determine net open quantity in portfolio.db
+		buyQty := 0
+		sellQty := 0
+		for _, t := range sTrades {
+			if t.TradeType == "BUY" {
+				buyQty += t.Quantity
+			} else if t.TradeType == "SELL" {
+				sellQty += t.Quantity
+			}
+		}
+		netOpenQty := buyQty - sellQty
+
+		if netOpenQty <= 0 {
+			// Position is completely closed / exited in portfolio.db
+			if sellQty > 0 {
+				dynamicallyExited = append(dynamicallyExited, sym)
+			}
+			continue
+		}
+
+		totQty := netOpenQty
 		totCost := 0.0
 		var tranches []TrancheDetail
 		var sFlows []DatedCashFlow
 		var earliestSymDate time.Time
 		var latestSymDate time.Time
 
+		// FIFO: Skip earliest sellQty shares across buy trades
+		sharesToSkip := sellQty
 		for _, t := range sTrades {
 			if t.TradeType != "BUY" {
 				continue
 			}
-			totQty += t.Quantity
-			cost := float64(t.Quantity)*t.Price + t.TotalCharges
+			qty := t.Quantity
+			if sharesToSkip > 0 {
+				if sharesToSkip >= qty {
+					sharesToSkip -= qty
+					continue
+				}
+				qty -= sharesToSkip
+				sharesToSkip = 0
+			}
+
+			propCharges := 0.0
+			if t.Quantity > 0 {
+				propCharges = t.TotalCharges * (float64(qty) / float64(t.Quantity))
+			}
+			cost := float64(qty)*t.Price + propCharges
 			totCost += cost
 
 			if earliestSymDate.IsZero() || t.TradeDate.Before(earliestSymDate) {
@@ -101,9 +158,9 @@ func EvaluateThemeReturn(
 			tranches = append(tranches, TrancheDetail{
 				TradeDate: t.TradeDate,
 				TradeType: t.TradeType,
-				Quantity:  t.Quantity,
+				Quantity:  qty,
 				Price:     t.Price,
-				Charges:   t.TotalCharges,
+				Charges:   propCharges,
 			})
 
 			sFlows = append(sFlows, DatedCashFlow{
@@ -236,7 +293,23 @@ func EvaluateThemeReturn(
 		}
 	}
 
+	// Combine statically detected exited symbols and dynamically detected closed positions
+	exitedSet := make(map[string]bool)
+	var allExitedSymbols []string
 	for _, sym := range theme.ExitedSymbols {
+		if !exitedSet[sym] {
+			exitedSet[sym] = true
+			allExitedSymbols = append(allExitedSymbols, sym)
+		}
+	}
+	for _, sym := range dynamicallyExited {
+		if !exitedSet[sym] {
+			exitedSet[sym] = true
+			allExitedSymbols = append(allExitedSymbols, sym)
+		}
+	}
+
+	for _, sym := range allExitedSymbols {
 		sTrades := tradesBySym[sym]
 		sClosed := closedBySym[sym]
 		sDivs := divsBySym[sym]

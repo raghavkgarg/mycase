@@ -392,6 +392,7 @@ func findMissingTickers(tickers map[string]bool, holdings []portfolio.Holding) [
 	holdingSymbols := make(map[string]bool)
 	for _, h := range holdings {
 		holdingSymbols[h.TradingSymbol] = true
+		holdingSymbols[portfolio.StripSeriesSuffix(h.TradingSymbol)] = true
 	}
 	var missing []string
 	var keys []string
@@ -401,9 +402,10 @@ func findMissingTickers(tickers map[string]bool, holdings []portfolio.Holding) [
 	slices.Sort(keys)
 
 	for _, t := range keys {
+		clean := portfolio.CleanTicker(t)
 		parts := strings.Split(t, ":")
 		symbol := parts[len(parts)-1]
-		if !holdingSymbols[symbol] {
+		if !holdingSymbols[symbol] && !holdingSymbols[clean] {
 			missing = append(missing, t)
 		}
 	}

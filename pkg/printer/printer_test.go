@@ -99,3 +99,63 @@ func TestPrintPreviewTable_WithSellReturns(t *testing.T) {
 		t.Errorf("expected output to contain Estimated Realized PnL on Sells (Net) summary line, got:\n%s", output)
 	}
 }
+
+func TestFindMissingTickers_SeriesSuffix(t *testing.T) {
+	tickers := map[string]bool{
+		"NSE:E2E":        true,
+		"NSE:SCHNEIDER":  true,
+		"NSE:BAJAJ-AUTO": true,
+	}
+	holdings := []portfolio.Holding{
+		{TradingSymbol: "E2E-BE", Exchange: "NSE", Quantity: 10},
+		{TradingSymbol: "SCHNEIDER", Exchange: "NSE", Quantity: 5},
+		{TradingSymbol: "BAJAJ-AUTO", Exchange: "NSE", Quantity: 2},
+	}
+
+	missing := findMissingTickers(tickers, holdings)
+	if len(missing) != 0 {
+		t.Errorf("expected 0 missing tickers for E2E-BE satisfying NSE:E2E, got: %v", missing)
+	}
+}
+
+func TestRenderHoldingsSnapshot_SeriesSuffixCategorization(t *testing.T) {
+	rawHoldings := []portfolio.Holding{
+		{
+			TradingSymbol: "E2E-BE",
+			Exchange:      "NSE",
+			Quantity:      5,
+			AveragePrice:  2500.0,
+			LastPrice:     3000.0,
+			PnL:           2500.0,
+			PnLPct:        20.0,
+		},
+	}
+
+	groups := []ThemeGroup{
+		{
+			Name:         "Theme AI Advice",
+			Prefix:       "My AI",
+			CSVPath:      "data/aitheme.csv",
+			TargetWeight: 1.0,
+			Tickers: map[string]bool{
+				"NSE:E2E": true,
+			},
+			Holdings: rawHoldings,
+		},
+	}
+
+	output := RenderHoldingsSnapshot(rawHoldings, groups, nil)
+
+	if strings.Contains(output, "Holdings not categorized in any group") {
+		t.Errorf("expected no uncategorized holdings warning, got:\n%s", output)
+	}
+	if strings.Contains(output, "Tickers in data/aitheme.csv not present in holdings") {
+		t.Errorf("expected no missing tickers warning, got:\n%s", output)
+	}
+	if !strings.Contains(output, "✓ All holdings are correctly categorized, and all group tickers are present in holdings.") {
+		t.Errorf("expected success verification message, got:\n%s", output)
+	}
+	if !strings.Contains(output, "E2E-BE") {
+		t.Errorf("expected E2E-BE row in output table, got:\n%s", output)
+	}
+}

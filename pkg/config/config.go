@@ -89,6 +89,9 @@ type Config struct {
 	APISecret   string `json:"api_secret,omitempty"`
 	AccessToken string `json:"access_token"`
 	HTTPProxy   string `json:"http_proxy,omitempty"`
+	UserID      string `json:"user_id,omitempty"`
+	Password    string `json:"password,omitempty"`
+	TOTPSecret  string `json:"totp_secret,omitempty"`
 }
 
 // LoadConfig reads configuration from config/config.json
@@ -109,6 +112,16 @@ func LoadConfig(filename string) (*Config, error) {
 		os.Setenv("HTTP_PROXY", cfg.HTTPProxy)
 		os.Setenv("HTTPS_PROXY", cfg.HTTPProxy)
 		os.Setenv("ALL_PROXY", cfg.HTTPProxy)
+	}
+
+	if envUserID := os.Getenv("KITE_USER_ID"); envUserID != "" && cfg.UserID == "" {
+		cfg.UserID = envUserID
+	}
+	if envPassword := os.Getenv("KITE_PASSWORD"); envPassword != "" && cfg.Password == "" {
+		cfg.Password = envPassword
+	}
+	if envTOTP := os.Getenv("KITE_TOTP_SECRET"); envTOTP != "" && cfg.TOTPSecret == "" {
+		cfg.TOTPSecret = envTOTP
 	}
 
 	return &cfg, nil
