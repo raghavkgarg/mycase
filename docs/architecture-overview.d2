@@ -1,0 +1,122 @@
+# mycase — high-level architecture overview
+#
+# A hand-authored "architecture at a glance" diagram (unlike dist/arch.svg,
+# which is the auto-generated package dependency graph). This one abstracts the
+# ~40 pkg/ packages into the conceptual pipeline described in docs/architecture.md
+# §1 and implemented by pkg/autopilot.Run.
+#
+# Render (D2's TALA engine is purpose-built for this kind of architecture layout):
+#   d2 --layout=tala docs/architecture-overview.d2 docs/architecture-overview.svg
+#
+# Kept intentionally coarse: boxes are responsibilities, not packages. For the
+# exhaustive package graph see `make arch-graph` (dist/arch.svg).
+
+direction: right
+
+title: |md
+  # mycase — automated US equity factor-tilt system
+  Quarterly rebalance · behavioral-discipline engine · investor-in-the-loop execution
+| {
+  near: top-center
+  style.font-size: 26
+}
+
+# ─────────────────────────────────────────────────────────────
+# Data sources → cache
+# ─────────────────────────────────────────────────────────────
+sources: "Data sources" {
+  style.fill: "#e3f2fd"
+  style.stroke: "#1976d2"
+
+  schwab: "Schwab Trader API\n(US prices + broker)" { shape: cylinder; style.fill: "#ffffff" }
+  yahoo: "Yahoo Finance\n(fallback / India legacy)" { shape: cylinder; style.fill: "#ffffff" }
+  edgar: "SEC EDGAR\n(fundamentals — Phase 10c)" { shape: cylinder; style.fill: "#f5f5f5"; style.stroke-dash: 4 }
+}
+
+router: "datafetcher.Router\nUS: → Schwab · else → Yahoo" {
+  shape: diamond
+  style.fill: "#fff9c4"
+  style.stroke: "#f9a825"
+}
+
+cache: "DuckDB cache\nprices · fundamentals · run history" {
+  shape: cylinder
+  style.fill: "#c8e6c9"
+  style.stroke: "#388e3c"
+}
+
+# ─────────────────────────────────────────────────────────────
+# Quarterly pipeline (pkg/autopilot.Run)
+# ─────────────────────────────────────────────────────────────
+pipeline: "Quarterly rebalance pipeline  (autopilot)" {
+  style.fill: "#ffe0b2"
+  style.stroke: "#f57c00"
+
+  pick: "pick\nscore + hard filters\n+ hysteresis" { style.fill: "#ffffff" }
+  optimize: "optimize\ninverse-vol / MFS weights\n+ sector caps" { style.fill: "#ffffff" }
+  tax: "tax\nFIFO lots · TLH\n· wash-sale" { style.fill: "#ffffff" }
+  basket: "basket\ncompute rebalance orders\n+ cost model" { style.fill: "#ffffff" }
+  proposal: "proposal\nreviewable diff\nvs golden copy" { shape: document; style.fill: "#ffffff" }
+
+  pick -> optimize -> tax -> basket -> proposal
+}
+
+golden: "Golden copy\n(current target portfolio)" {
+  shape: page
+  style.fill: "#e1bee7"
+  style.stroke: "#8e24aa"
+}
+
+# ─────────────────────────────────────────────────────────────
+# Human gate + execution
+# ─────────────────────────────────────────────────────────────
+confirm: "Investor confirms\n(never auto-executes)" {
+  shape: hexagon
+  style.fill: "#fff9c4"
+  style.stroke: "#f9a825"
+}
+
+execute: "executor\nplace orders at broker\n(Schwab / Zerodha)" {
+  style.fill: "#ffccbc"
+  style.stroke: "#e64a19"
+}
+
+# ─────────────────────────────────────────────────────────────
+# Audit + monitoring (the feedback loops)
+# ─────────────────────────────────────────────────────────────
+audit: "Audit & monitoring" {
+  style.fill: "#f8bbd0"
+  style.stroke: "#c2185b"
+
+  attribution: "attribution\nlive perf vs SPY" { style.fill: "#ffffff" }
+  monitoring: "monitoring\n4-pillar health" { style.fill: "#ffffff" }
+  daemon: "daemon\ndrift detection\n+ alerts" { style.fill: "#ffffff" }
+}
+
+serve: "serve\nweb dashboard (SSE)" {
+  shape: person
+  style.fill: "#eceff1"
+}
+
+# ─────────────────────────────────────────────────────────────
+# Edges — the data flow
+# ─────────────────────────────────────────────────────────────
+sources.schwab -> router
+sources.yahoo -> router
+sources.edgar -> router: "planned" { style.stroke-dash: 4 }
+router -> cache: "cache-first"
+cache -> pipeline.pick: "prices + fundamentals"
+
+golden -> pipeline.pick: "existing holdings\n(hysteresis)"
+pipeline.proposal -> confirm
+confirm -> execute: "y/n"
+execute -> golden: "update on fill"
+execute -> sources.schwab: "orders" { style.stroke-dash: 4 }
+
+# feedback loops — the behavioral-discipline core
+execute -> audit.attribution: "fills → NAV"
+audit.attribution -> serve
+audit.monitoring -> serve
+audit.daemon -> serve: "drift alerts"
+audit.daemon -> confirm: "rebalance trigger" { style.stroke-dash: 4 }
+cache -> audit.attribution

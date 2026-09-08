@@ -1,5 +1,5 @@
 .PHONY: build build-linux-arm64 build-linux-amd64 build-darwin-arm64 build-darwin-amd64
-.PHONY: install run test test-verbose test-race test-integration test-coverage cleanup analyze clean fetch-echarts check-deps deps-graph arch-graph help
+.PHONY: install run test test-verbose test-race test-integration test-coverage cleanup analyze clean fetch-echarts check-deps deps-graph arch-graph overview-graph help
 
 # Pinned advisory-analysis tool versions (run via `go run` — no global install needed).
 # Bump deliberately; keep reproducible per the project's determinism convention.
@@ -150,6 +150,18 @@ arch-graph:
 		echo "Install D2 (https://d2lang.com) to render SVG: d2 --layout=tala dist/deps.d2 dist/arch.svg"; \
 	fi
 
+# overview-graph re-renders the hand-authored high-level architecture diagram
+# (docs/architecture-overview.d2 → .svg). Unlike arch-graph (auto-generated
+# package dependency graph in dist/), this is a curated ~12-box conceptual view
+# and its SVG is committed under docs/ so it's viewable without D2 installed.
+overview-graph:
+	@if command -v d2 >/dev/null 2>&1; then \
+		d2 --layout=$(D2_LAYOUT) docs/architecture-overview.d2 docs/architecture-overview.svg >/dev/null; \
+		echo "Overview diagram: docs/architecture-overview.svg (layout=$(D2_LAYOUT))"; \
+	else \
+		echo "Install D2 (https://d2lang.com) to render docs/architecture-overview.d2"; \
+	fi
+
 clean:
 	@rm -f dist/mycase dist/mycase-arm64 dist/mycase-amd64 dist/mycase-darwin-arm64 dist/mycase-darwin-amd64 dist/deps.dot dist/deps.svg dist/deps.d2 dist/arch.svg
 	@echo "Cleaned"
@@ -179,5 +191,6 @@ help:
 	@echo "  check-deps         - Enforce R16 package layering (leaves + downward imports)"
 	@echo "  deps-graph         - Render pkg/ dependency graph to dist/deps.svg (Graphviz, layer-colored)"
 	@echo "  arch-graph         - Render pkg/ architecture diagram to dist/arch.svg (D2/TALA, transitive-reduced; REDUCE=0 for full)"
+	@echo "  overview-graph     - Re-render docs/architecture-overview.svg (hand-authored high-level view, D2/TALA)"
 	@echo "  clean              - Remove build artifacts"
 	@echo "  fetch-echarts      - Download ECharts 5.6.0 into pkg/server/static/vendor/"
