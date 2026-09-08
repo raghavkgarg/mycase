@@ -1,5 +1,5 @@
 .PHONY: build build-linux-arm64 build-linux-amd64 build-darwin-arm64 build-darwin-amd64
-.PHONY: install run test test-verbose test-race test-integration test-coverage cleanup analyze clean fetch-echarts check-deps deps-graph help
+.PHONY: install run test test-verbose test-race test-integration test-coverage cleanup analyze clean fetch-echarts check-deps deps-graph arch-graph help
 
 # Pinned advisory-analysis tool versions (run via `go run` — no global install needed).
 # Bump deliberately; keep reproducible per the project's determinism convention.
@@ -131,8 +131,23 @@ deps-graph:
 		echo "Install Graphviz (brew install graphviz) to render SVG: dot -Tsvg dist/deps.dot -o dist/deps.svg"; \
 	fi
 
+# arch-graph renders the same layer-map graph as an architecture-style diagram
+# via D2's TALA engine (orthogonal, clustered by layer). Falls back to leaving
+# the .d2 source if d2 is not installed.
+D2_LAYOUT ?= tala
+arch-graph:
+	@mkdir -p dist
+	@go run ./devtools/depsgraph -format=d2 > dist/deps.d2
+	@if command -v d2 >/dev/null 2>&1; then \
+		d2 --layout=$(D2_LAYOUT) dist/deps.d2 dist/arch.svg >/dev/null; \
+		echo "Architecture graph: dist/arch.svg (layout=$(D2_LAYOUT), source: dist/deps.d2)"; \
+	else \
+		echo "Architecture graph source: dist/deps.d2"; \
+		echo "Install D2 (https://d2lang.com) to render SVG: d2 --layout=tala dist/deps.d2 dist/arch.svg"; \
+	fi
+
 clean:
-	@rm -f dist/mycase dist/mycase-arm64 dist/mycase-amd64 dist/mycase-darwin-arm64 dist/mycase-darwin-amd64 dist/deps.dot dist/deps.svg
+	@rm -f dist/mycase dist/mycase-arm64 dist/mycase-amd64 dist/mycase-darwin-arm64 dist/mycase-darwin-amd64 dist/deps.dot dist/deps.svg dist/deps.d2 dist/arch.svg
 	@echo "Cleaned"
 
 fetch-echarts:
@@ -158,6 +173,7 @@ help:
 	@echo "  cleanup            - gofmt + go fix + go vet + staticcheck + govulncheck + check-deps + analyze (advisory)"
 	@echo "  analyze            - Advisory static analysis: deadcode + unparam + betteralign (non-blocking)"
 	@echo "  check-deps         - Enforce R16 package layering (leaves + downward imports)"
-	@echo "  deps-graph         - Render pkg/ dependency graph to dist/deps.svg (layer-colored)"
+	@echo "  deps-graph         - Render pkg/ dependency graph to dist/deps.svg (Graphviz, layer-colored)"
+	@echo "  arch-graph         - Render pkg/ architecture diagram to dist/arch.svg (D2/TALA, layer clusters)"
 	@echo "  clean              - Remove build artifacts"
 	@echo "  fetch-echarts      - Download ECharts 5.6.0 into pkg/server/static/vendor/"
