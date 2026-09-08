@@ -118,7 +118,6 @@ func runPickWithOpts(ctx context.Context, opts *stockpicker.Options) error {
 		fmt.Printf("Warning: Failed to load config/mfs.json: %v. Using defaults.\n", err)
 	}
 
-	fmt.Printf("Fetching fundamentals from Yahoo Finance...\n")
 	fundamentals, err := yfinance.FetchFundamentals(ctx, activeKeys)
 	if err != nil {
 		fmt.Printf("Warning: Failed to fetch fundamentals: %v. Using fallbacks.\n", err)

@@ -123,11 +123,17 @@ func PerformAutoLogin(ctx context.Context, p AutoAuthParams) (string, error) {
 		return "", fmt.Errorf("generating TOTP: %w", err)
 	}
 
+	twofaType := "totp"
+	if t, ok := loginData.Data["twofa_type"].(string); ok && t != "" {
+		twofaType = t
+	}
+
 	// Step 4: Submit TOTP to https://kite.zerodha.com/api/twofa
 	twofaForm := url.Values{
 		"user_id":     {p.UserID},
 		"request_id":  {requestID},
 		"twofa_value": {totpToken},
+		"twofa_type":  {twofaType},
 	}
 	twofaReq, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://kite.zerodha.com/api/twofa", strings.NewReader(twofaForm.Encode()))
 	if err != nil {

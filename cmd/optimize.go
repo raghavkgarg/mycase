@@ -152,7 +152,6 @@ func runOptimizeWithParams(ctx context.Context, method, basketPath, removeTicker
 			MarketCap:        mfsCfg.MarketCap,
 			InsidersPercent:  mfsCfg.InsidersPercent,
 		}
-		fmt.Printf("Fetching fundamentals from Yahoo Finance...\n")
 		fundamentals, err = yfinance.FetchFundamentals(ctx, activeKeys)
 		if err != nil {
 			fmt.Printf("Warning: Failed to fetch fundamentals: %v. Using fallbacks.\n", err)
