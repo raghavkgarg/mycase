@@ -58,19 +58,41 @@ func FetchFundamentals(ctx context.Context, tickers []string) (map[string]Fundam
 	}
 
 	var uncachedTickers []string
+	duckDBCacheCount := 0
+	var lastCacheDate time.Time
+
 	for _, t := range tickers {
 		// 1. DuckDB persistent cache
-		if f, ok := checkFundamentalsCache(ctx, t); ok && f.ResultPrevComing != "" && f.ResultPrevComing != "N/A -> N/A" {
+		if f, fetchedAt, ok := checkFundamentalsCache(ctx, t); ok {
 			fundamentals[t] = *f
+			duckDBCacheCount++
+			if fetchedAt.After(lastCacheDate) {
+				lastCacheDate = fetchedAt
+			}
 			continue
 		}
 		// 2. File cache (same-day)
 		var cached Fundamentals
-		if loadFromCache("fundamentals", t, &cached) && cached.ResultPrevComing != "" && cached.ResultPrevComing != "N/A -> N/A" {
+		if loadFromCache("fundamentals", t, &cached) {
 			fundamentals[t] = cached
 		} else {
 			uncachedTickers = append(uncachedTickers, t)
 		}
+	}
+
+	cacheDateStr := lastCacheDate.Format("2006-01-02")
+	if lastCacheDate.IsZero() {
+		cacheDateStr = time.Now().Format("2006-01-02")
+	}
+
+	if duckDBCacheCount > 0 {
+		if len(uncachedTickers) == 0 {
+			fmt.Printf("Loaded %d fundamentals cached from DuckDB on %s\n", duckDBCacheCount, cacheDateStr)
+			return fundamentals, nil
+		}
+		fmt.Printf("Loaded %d fundamentals cached from DuckDB on %s, fetching remaining %d from Yahoo Finance...\n", duckDBCacheCount, cacheDateStr, len(uncachedTickers))
+	} else {
+		fmt.Printf("Fetching fundamentals from Yahoo Finance...\n")
 	}
 
 	if len(uncachedTickers) == 0 {

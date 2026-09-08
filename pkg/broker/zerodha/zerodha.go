@@ -13,6 +13,7 @@ import (
 
 	"github.com/raghavkgarg/mycase/pkg/broker"
 	"github.com/raghavkgarg/mycase/pkg/config"
+	"github.com/raghavkgarg/mycase/pkg/portfolio"
 )
 
 var reKiteIP = regexp.MustCompile(`IP \(([^)]+)\) is not allowed`)
@@ -84,10 +85,12 @@ func (z *ZerodhaBroker) GetQuotes(keys []string) (map[string]float64, error) {
 	if holdings, hErr := z.GetHoldings(); hErr == nil {
 		for _, h := range holdings {
 			sym := h.TradingSymbol
+			baseSym := portfolio.StripSeriesSuffix(sym)
 			for _, k := range keys {
 				cleanK := strings.TrimPrefix(k, "NSE:")
 				cleanK = strings.TrimPrefix(cleanK, "BSE:")
-				if (cleanK == sym || k == sym) && h.LastPrice > 0 {
+				cleanKBase := portfolio.StripSeriesSuffix(cleanK)
+				if (cleanK == sym || cleanK == baseSym || cleanKBase == baseSym || k == sym) && h.LastPrice > 0 {
 					result[k] = h.LastPrice
 				}
 			}
@@ -209,9 +212,11 @@ func (z *ZerodhaBroker) PlaceGTT(order broker.Order) (broker.OrderResult, error)
 		TransactionType: order.TransactionType,
 		Product:         order.Product,
 		Trigger: &kiteconnect.GTTSingleLegTrigger{
-			TriggerValue: order.TriggerPrice,
-			LimitPrice:   order.Price,
-			Quantity:     float64(order.Quantity),
+			TriggerParams: kiteconnect.TriggerParams{
+				TriggerValue: order.TriggerPrice,
+				LimitPrice:   order.Price,
+				Quantity:     float64(order.Quantity),
+			},
 		},
 	})
 	if err != nil {

@@ -21,6 +21,7 @@ import (
 	"github.com/raghavkgarg/mycase/pkg/costs"
 	"github.com/raghavkgarg/mycase/pkg/market"
 	"github.com/raghavkgarg/mycase/pkg/optimizer"
+	"github.com/raghavkgarg/mycase/pkg/portfolio"
 	"github.com/raghavkgarg/mycase/pkg/render"
 )
 
@@ -34,6 +35,7 @@ type ThemeGroup struct {
 	CSVPath      string
 	Holdings     []brokertypes.Holding
 	TargetWeight float64
+	ReturnBanner string
 }
 
 // PadString pads a string with spaces on the left to reach the target width in runes.
@@ -295,6 +297,9 @@ func RenderHoldingsSnapshot(
 
 	renderThemeAllocationSummary(r, groups, uncategorized, totalCurrent)
 	for _, g := range groups {
+		if g.ReturnBanner != "" {
+			fmt.Fprintln(&sb, g.ReturnBanner)
+		}
 		title := fmt.Sprintf("%s HOLDINGS SNAPSHOT", strings.ToUpper(g.Name))
 		renderHoldingSection(r, title, g.Prefix, g.Holdings, totalCurrent)
 	}
@@ -499,6 +504,7 @@ func findMissingTickers(tickers map[string]bool, holdings []brokertypes.Holding)
 	holdingSymbols := make(map[string]bool)
 	for _, h := range holdings {
 		holdingSymbols[h.TradingSymbol] = true
+		holdingSymbols[portfolio.StripSeriesSuffix(h.TradingSymbol)] = true
 	}
 	keys := make([]string, 0, len(tickers))
 	for t := range tickers {
@@ -508,7 +514,10 @@ func findMissingTickers(tickers map[string]bool, holdings []brokertypes.Holding)
 
 	var missing []string
 	for _, t := range keys {
-		if !holdingSymbols[lastSegment(t)] {
+		clean := portfolio.CleanTicker(t)
+		parts := strings.Split(t, ":")
+		symbol := parts[len(parts)-1]
+		if !holdingSymbols[symbol] && !holdingSymbols[clean] {
 			missing = append(missing, t)
 		}
 	}

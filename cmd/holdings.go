@@ -12,8 +12,10 @@ import (
 	"github.com/raghavkgarg/mycase/pkg/broker"
 	"github.com/raghavkgarg/mycase/pkg/config"
 	"github.com/raghavkgarg/mycase/pkg/csvloader"
+	"github.com/raghavkgarg/mycase/pkg/portfolio"
 	"github.com/raghavkgarg/mycase/pkg/printer"
 	"github.com/raghavkgarg/mycase/pkg/render"
+	"github.com/raghavkgarg/mycase/pkg/themereturn"
 )
 
 var HoldingsCommand = &cli.Command{
@@ -67,13 +69,19 @@ func runHoldings(ctx context.Context, c *cli.Command) error {
 
 	var uncategorizedHoldings []broker.Holding
 	for _, h := range rawHoldings {
-		// Build ticker key using the holding's exchange prefix
 		tickerKey := h.Exchange + ":" + h.TradingSymbol
+		baseSym := portfolio.StripSeriesSuffix(h.TradingSymbol)
+		keyNSE := "NSE:" + h.TradingSymbol
+		keyBSE := "BSE:" + h.TradingSymbol
+		keyUS := "US:" + h.TradingSymbol
+		baseKeyNSE := "NSE:" + baseSym
+		baseKeyBSE := "BSE:" + baseSym
 
 		matched := false
 		for i, g := range groups {
-			// Match by primary key or common Indian exchange variants
-			if g.Tickers[tickerKey] || g.Tickers["NSE:"+h.TradingSymbol] || g.Tickers["BSE:"+h.TradingSymbol] || g.Tickers["US:"+h.TradingSymbol] {
+			if g.Tickers[tickerKey] || g.Tickers[keyNSE] || g.Tickers[keyBSE] || g.Tickers[keyUS] ||
+				g.Tickers[baseKeyNSE] || g.Tickers[baseKeyBSE] ||
+				g.Tickers[h.TradingSymbol] || g.Tickers[baseSym] {
 				groups[i].Holdings = append(groups[i].Holdings, h)
 				matched = true
 				break
@@ -81,6 +89,33 @@ func runHoldings(ctx context.Context, c *cli.Command) error {
 		}
 		if !matched {
 			uncategorizedHoldings = append(uncategorizedHoldings, h)
+		}
+	}
+
+	// Enrich each theme with audited Triple Returns if portfolio.db is available
+	ltpMap := make(map[string]float64)
+	for _, h := range rawHoldings {
+		ltpMap[h.TradingSymbol] = h.LastPrice
+		ltpMap[portfolio.StripSeriesSuffix(h.TradingSymbol)] = h.LastPrice
+	}
+
+	if db, err := themereturn.OpenDB(""); err == nil {
+		defer db.Close()
+		for i, g := range groups {
+			if len(g.Holdings) == 0 {
+				continue
+			}
+			matched, mErr := themereturn.ResolveTheme(g.Name, g.CSVPath, "config/themes.json")
+			if mErr != nil {
+				continue
+			}
+			rep, rErr := themereturn.EvaluateThemeReturn(db, matched, ltpMap, themereturn.ThemeReturnOptions{
+				AccountID:        "CBR420",
+				IncludeLifecycle: true,
+			})
+			if rErr == nil && rep.ActiveInvestedValue > 0 {
+				groups[i].ReturnBanner = themereturn.RenderBanner(rep)
+			}
 		}
 	}
 

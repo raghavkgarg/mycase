@@ -75,6 +75,7 @@ func main() {
 			return nil
 		},
 		Commands: []*cli.Command{
+			mycmd.ReturnsCommand,
 			mycmd.PipelineCommand,
 			mycmd.AutopilotCommand,
 			mycmd.PickCommand,

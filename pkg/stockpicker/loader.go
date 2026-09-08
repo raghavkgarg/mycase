@@ -321,11 +321,12 @@ func LoadConstituents(filePath, indexName string) (*TickersSource, error) {
 		// Alias check: "microsmall" -> expand to microcap250 and smallcap250
 		var subIndices []string
 		cleanRaw := strings.ToLower(strings.ReplaceAll(rawIdx, " ", ""))
-		if cleanRaw == "microsmall" || cleanRaw == "microsmall250" || cleanRaw == "micro_small" {
+		switch cleanRaw {
+		case "microsmall", "microsmall250", "micro_small":
 			subIndices = []string{"microcap250", "smallcap250"}
-		} else if cleanRaw == "midsmallmicro" || cleanRaw == "allcaps" {
+		case "midsmallmicro", "allcaps":
 			subIndices = []string{"midcap150", "smallcap250", "microcap250"}
-		} else {
+		default:
 			subIndices = []string{rawIdx}
 		}
 

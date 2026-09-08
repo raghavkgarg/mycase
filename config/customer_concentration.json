@@ -51,5 +51,9 @@
   "BALKRISIND": "PASS: No major customer concentration detected in segment notes (Scanned: 2026-08-28)",
   "IPCALAB": "PASS: No single client > 10% (Regulation compliant segment disclosure) (Scanned: 2026-08-31)",
   "DIVISLAB": "PASS: Major clients contribute 10.0% of revenue (< 40% target) (Scanned: 2026-08-31)",
-  "MASTEK": "Metric Coverage Pending (Place the Annual Report PDF in data/annual_reports/) (Scanned: 2026-09-02)"
+  "MASTEK": "Metric Coverage Pending (Place the Annual Report PDF in data/annual_reports/) (Scanned: 2026-09-02)",
+  "KPIL": "Metric Coverage Pending (Place the Annual Report PDF in data/annual_reports/) (Scanned: 2026-09-07)",
+  "LUMAXTECH": "Metric Coverage Pending (Place the Annual Report PDF in data/annual_reports/) (Scanned: 2026-09-07)",
+  "SARDAEN": "PASS: No major customer concentration detected in segment notes (Scanned: 2026-09-07)",
+  "AARTIDRUGS": "ATTENTION: Major clients contribute 40.0% of revenue (>= 40% threshold) (Scanned: 2026-09-07)"
 }

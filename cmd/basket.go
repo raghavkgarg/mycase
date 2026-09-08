@@ -127,11 +127,16 @@ func runBasketWithParams(ctx context.Context, liveMode bool, basketFilename stri
 				finalQty := rawQuantities[i]
 				diff := finalQty - currentQty
 
+				orderSymbol := symbol
+				if hd, ok := holdingDetails[symbol]; ok && hd.TradingSymbol != "" {
+					orderSymbol = hd.TradingSymbol
+				}
+
 				if diff > 0 {
 					bufferPrice := ltp + 2.0
 					roundedPrice := math.Round(bufferPrice*10.0) / 10.0
 					basketOrders = append(basketOrders, broker.Order{
-						TradingSymbol:   symbol,
+						TradingSymbol:   orderSymbol,
 						Exchange:        exchange,
 						TransactionType: "BUY",
 						Quantity:        diff,
@@ -144,7 +149,7 @@ func runBasketWithParams(ctx context.Context, liveMode bool, basketFilename stri
 					bufferPrice := ltp - 2.0
 					roundedPrice := math.Round(bufferPrice*10.0) / 10.0
 					basketOrders = append(basketOrders, broker.Order{
-						TradingSymbol:   symbol,
+						TradingSymbol:   orderSymbol,
 						Exchange:        exchange,
 						TransactionType: "SELL",
 						Quantity:        int(math.Abs(float64(diff))),
@@ -222,8 +227,12 @@ func runBasketWithParams(ctx context.Context, liveMode bool, basketFilename stri
 					bufferPrice = ltp - 2.0
 				}
 				roundedPrice := math.Round(bufferPrice*10.0) / 10.0
+				orderSymbol := symbol
+				if hd, ok := holdingDetails[symbol]; ok && hd.TradingSymbol != "" {
+					orderSymbol = hd.TradingSymbol
+				}
 				basketOrders = append(basketOrders, broker.Order{
-					TradingSymbol:   symbol,
+					TradingSymbol:   orderSymbol,
 					Exchange:        exchange,
 					TransactionType: txType,
 					Quantity:        int(math.Abs(float64(diff))),

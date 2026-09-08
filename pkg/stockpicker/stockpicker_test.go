@@ -297,6 +297,7 @@ func TestIsEligible(t *testing.T) {
 		[]float64{1000, 1000, 1000},
 		nil,
 		stats,
+		false,
 	)
 
 	if !eligible {
@@ -313,6 +314,7 @@ func TestIsEligible(t *testing.T) {
 		[]float64{1000, 1000, 1000},
 		nil,
 		stats,
+		false,
 	)
 
 	// Since mockFilters.MinMarketCap is 500 and market cap is 1000, it passes.
@@ -332,12 +334,94 @@ func TestIsEligible(t *testing.T) {
 		[]float64{1000, 1000, 1000},
 		nil,
 		stats,
+		false,
 	)
 	if eligibleLowCapFail {
 		t.Errorf("expected stock to fail due to low market cap, but it passed")
 	}
 	if stats.EliminatedSize != 1 {
 		t.Errorf("expected EliminatedSize to be 1, got %d", stats.EliminatedSize)
+	}
+}
+
+func TestSoftBandToleranceForExistingHoldings(t *testing.T) {
+	// Fundamentals with FreeCashflow / InvestedCapital = 5.5% (below 6.0% default MinCROIC)
+	f := yfinance.Fundamentals{
+		MarketCap:    100e7,
+		PBRatio:      1.0,
+		TotalDebt:    0.0,
+		FreeCashflow: 5.5e7,
+	}
+	filters := config.HardFilters{
+		MinCROIC: 0.06, // 6.0%
+	}
+	statsNew := &FilterStats{}
+	statsExisting := &FilterStats{}
+
+	// New candidate (isExisting = false) should fail CROIC 6.0% check
+	passedNew, reasonNew := isEligible("NSE:TEST", f, "balanced", &filters, nil, nil, nil, nil, statsNew, false)
+	if passedNew {
+		t.Errorf("expected new candidate with 5.5%% CROIC to fail 6.0%% check")
+	}
+	if reasonNew == "" {
+		t.Errorf("expected rejection reason for new candidate")
+	}
+
+	// Existing holding (isExisting = true) gets 20% soft buffer (0.06 * 0.8 = 4.8%), so 5.5% passes!
+	passedExisting, reasonExisting := isEligible("NSE:TEST", f, "balanced", &filters, nil, nil, nil, nil, statsExisting, true)
+	if !passedExisting {
+		t.Errorf("expected existing holding with 5.5%% CROIC to pass via soft buffer, failed with: %s", reasonExisting)
+	}
+
+	// Test 200-SMA ratio cushion (0.94 ratio vs 0.95 default limit)
+	// 200 closes of 100.0, latest close of 94.0 -> ratio 0.94
+	closes := make([]float64, 200)
+	for i := range closes {
+		closes[i] = 100.0
+	}
+	closes[199] = 94.0 // ratio = 94 / 100 = 0.94
+	smaFilters := config.HardFilters{
+		Check200DaySMA:      true,
+		Min200DaySMARatio:   0.95,
+	}
+	fBasic := yfinance.Fundamentals{
+		MarketCap: 1e11,
+	}
+	passedSMANew, _ := isEligible("NSE:TEST", fBasic, "balanced", &smaFilters, closes, nil, nil, nil, &FilterStats{}, false)
+	if passedSMANew {
+		t.Errorf("expected new candidate with 0.94 SMA ratio to fail 0.95 limit")
+	}
+	passedSMAExisting, reasonSMA := isEligible("NSE:TEST", fBasic, "balanced", &smaFilters, closes, nil, nil, nil, &FilterStats{}, true)
+	if !passedSMAExisting {
+		t.Errorf("expected existing holding with 0.94 SMA ratio to pass via 0.90 soft cushion, failed with: %s", reasonSMA)
+	}
+
+	// Test Multibagger Operational Criteria Cushion (1/3 met)
+	// Create fundamental where only DSO improvement passes (passCount = 1)
+	fOp := yfinance.Fundamentals{
+		MarketCap: 1e11,
+		AnnualAccountsReceivable: []yfinance.AnnualMetric{
+			{Date: "2024-03-31", Value: 200},
+			{Date: "2025-03-31", Value: 100}, // DSO improved!
+		},
+		AnnualRevenue: []yfinance.AnnualMetric{
+			{Date: "2024-03-31", Value: 1000},
+			{Date: "2025-03-31", Value: 1000},
+		},
+	}
+	opFilters := config.HardFilters{
+		MaxCapExYoYMultiplier: 2.0,
+	}
+	testCloses := []float64{99.0, 105.0}
+	testOpens := []float64{100.0, 100.0}
+	testVolumes := []float64{1000.0, 5000.0}
+	passedOpNew, _ := isEligible("NSE:TEST", fOp, "multibagger", &opFilters, testCloses, testOpens, testVolumes, nil, &FilterStats{}, false)
+	if passedOpNew {
+		t.Errorf("expected new candidate with 1/3 operational criteria to fail 2/3 requirement")
+	}
+	passedOpExisting, reasonOp := isEligible("NSE:TEST", fOp, "multibagger", &opFilters, testCloses, testOpens, testVolumes, nil, &FilterStats{}, true)
+	if !passedOpExisting {
+		t.Errorf("expected existing holding with 1/3 operational criteria to pass 1/3 requirement, failed with: %s", reasonOp)
 	}
 }
 
@@ -395,6 +479,41 @@ func TestApplyHysteresisSelection_RetainsExisting(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("existing holding E should be retained via hysteresis: got %v", selected)
+	}
+}
+
+func TestApplyHysteresisSelection_DisplacementByHighConviction(t *testing.T) {
+	// topN = 3, bufferLimit = 5 (buffer = 2, displacementRank = 3 - 2 = 1)
+	// Existing holdings: E1 (rank 2), E2 (rank 3), E3 (rank 4, buffer)
+	// New candidate: N1 (rank 1, strong conviction <= 1)
+	// N1 should enter and displace buffer holding E3 (rank 4)
+	sorted := []string{"N1", "E1", "E2", "E3", "N2"}
+	existing := map[string]float64{
+		"E1": 0.33,
+		"E2": 0.33,
+		"E3": 0.33,
+	}
+	tracker := selectiontracker.New()
+	selected := ApplyHysteresisSelection(sorted, existing, 3, 5, tracker)
+	if len(selected) != 3 {
+		t.Fatalf("expected 3 selected, got %d: %v", len(selected), selected)
+	}
+	// Verify N1 is selected
+	hasN1 := false
+	hasE3 := false
+	for _, s := range selected {
+		if s == "N1" {
+			hasN1 = true
+		}
+		if s == "E3" {
+			hasE3 = true
+		}
+	}
+	if !hasN1 {
+		t.Errorf("expected strong new entrant N1 (rank 1) to be selected, got: %v", selected)
+	}
+	if hasE3 {
+		t.Errorf("expected buffer holding E3 (rank 4) to be displaced by N1, but it was retained: %v", selected)
 	}
 }
 
@@ -703,7 +822,7 @@ func TestPickDeterminism(t *testing.T) {
 		"STOCK_B": {Sector: "Consumer Cyclical", MarketCap: 500e7, InsidersPercent: 0.40, DeliveryPct: 45.0},
 	}
 	hardFilters := &config.HardFilters{
-		MinEffectiveScoreThreshold: 10.0,
+		MinEffectiveScoreThreshold: 5.0,
 		MaxStocksPerSector:         5,
 		MaxSectorWeightCap:         0.50,
 		MaxStockWeightCap:          0.60,

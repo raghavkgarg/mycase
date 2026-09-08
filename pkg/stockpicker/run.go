@@ -132,7 +132,7 @@ func RunWithResult(ctx context.Context, opts *Options) (*PickResult, error) {
 		// US-specific hard filters (market cap, ADV, positive FCF only)
 		activeKeys = ApplyUSHardFilters(ctx, activeKeys, cfg.HardFilters, fundamentals, tracker)
 	} else if cfg.HardFilters != nil {
-		activeKeys = ApplySafetyFilters(ctx, activeKeys, opts.Method, cfg.HardFilters, fundamentals, fullHistory, tracker)
+		activeKeys = ApplySafetyFilters(ctx, activeKeys, opts.Method, cfg.HardFilters, fundamentals, fullHistory, tracker, goldenWeights)
 	} else {
 		tracker.InitialCount = len(activeKeys)
 	}

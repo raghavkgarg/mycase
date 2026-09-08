@@ -19,20 +19,22 @@ type ScheduleConfig struct {
 
 // PipelineConfig holds the resolved pipeline configuration.
 type PipelineConfig struct {
+	Indices               []string       `yaml:"indices"`
+	Files                 []string       `yaml:"files"`
 	File                  string         `yaml:"file"`
 	Strategy              string         `yaml:"strategy"`
+	TopN                  int            `yaml:"top_n"`
 	GoldenCopyPath        string         `yaml:"golden_copy_path"`
+	Capital               int            `yaml:"capital"`
 	PurchaseDate          string         `yaml:"purchase_date"`
+	RebalanceTolerancePct float64        `yaml:"rebalance_tolerance_pct"`
+	HysteresisRankBuffer  int            `yaml:"hysteresis_rank_buffer"`
+	CooldownDays          int            `yaml:"cooldown_days"`
+	CooldownBypassRank    int            `yaml:"cooldown_bypass_rank"`
 	Broker                string         `yaml:"broker"`        // "zerodha" or "schwab"
 	SchwabConfig          string         `yaml:"schwab_config"` // path to schwab.json
 	SchwabToken           string         `yaml:"schwab_token"`  // path to schwab_token.json
-	Indices               []string       `yaml:"indices"`
-	Files                 []string       `yaml:"files"`
 	Schedule              ScheduleConfig `yaml:"schedule"`
-	TopN                  int            `yaml:"top_n"`
-	Capital               int            `yaml:"capital"`
-	RebalanceTolerancePct float64        `yaml:"rebalance_tolerance_pct"`
-	HysteresisRankBuffer  int            `yaml:"hysteresis_rank_buffer"`
 }
 
 // Snapshot returns a compact JSON snapshot of the resolved config, for recording
@@ -47,6 +49,7 @@ func (cfg PipelineConfig) Snapshot() string {
 }
 
 type rawPipelineConfig struct {
+	Indices               []string       `yaml:"indices"`
 	Files                 any            `yaml:"files"`
 	File                  any            `yaml:"file"`
 	Strategy              any            `yaml:"strategy"`
@@ -56,10 +59,11 @@ type rawPipelineConfig struct {
 	PurchaseDate          any            `yaml:"purchase_date"`
 	RebalanceTolerancePct any            `yaml:"rebalance_tolerance_pct"`
 	HysteresisRankBuffer  any            `yaml:"hysteresis_rank_buffer"`
+	CooldownDays          any            `yaml:"cooldown_days"`
+	CooldownBypassRank    any            `yaml:"cooldown_bypass_rank"`
 	Broker                string         `yaml:"broker"`
 	SchwabConfig          string         `yaml:"schwab_config"`
 	SchwabToken           string         `yaml:"schwab_token"`
-	Indices               []string       `yaml:"indices"`
 	Schedule              ScheduleConfig `yaml:"schedule"`
 }
 
@@ -156,6 +160,17 @@ func (cfg *PipelineConfig) UnmarshalYAML(value *yaml.Node) error {
 		buf = 5
 	}
 	cfg.HysteresisRankBuffer = buf
+	cooldown := resolveFirst(a.CooldownDays, 30)
+	if cooldown < 0 {
+		cooldown = 30
+	}
+	cfg.CooldownDays = cooldown
+	bypass := resolveFirst(a.CooldownBypassRank, 5)
+	if bypass < 0 {
+		bypass = 5
+	}
+	cfg.CooldownBypassRank = bypass
+
 	// Schedule config — struct fields are decoded directly by YAML, apply defaults.
 	cfg.Schedule = a.Schedule
 	if cfg.Schedule.Frequency == "" {
