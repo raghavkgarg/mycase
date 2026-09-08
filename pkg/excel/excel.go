@@ -62,7 +62,7 @@ func ParseXLSXRows(path string) ([]sheetRow, error) {
 			if err != nil {
 				return nil, fmt.Errorf("opening sharedStrings.xml: %w", err)
 			}
-			sharedStrings, _ = parseSharedStrings(rc)
+			sharedStrings = parseSharedStrings(rc)
 			rc.Close()
 			break
 		}
@@ -89,7 +89,7 @@ func ParseXLSXRows(path string) ([]sheetRow, error) {
 	return parseWorksheetXML(rc, sharedStrings)
 }
 
-func parseSharedStrings(r io.Reader) ([]string, error) {
+func parseSharedStrings(r io.Reader) []string {
 	decoder := xml.NewDecoder(r)
 	var stringsList []string
 	var currentText strings.Builder
@@ -120,7 +120,7 @@ func parseSharedStrings(r io.Reader) ([]string, error) {
 			}
 		}
 	}
-	return stringsList, nil
+	return stringsList
 }
 
 func parseWorksheetXML(r io.Reader, sharedStrings []string) ([]sheetRow, error) {
