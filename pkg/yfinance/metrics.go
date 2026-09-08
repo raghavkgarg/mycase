@@ -2,6 +2,7 @@ package yfinance
 
 import (
 	"fmt"
+	"log/slog"
 	"math"
 	"sort"
 	"strings"
@@ -708,8 +709,11 @@ func CalculateCompositeRS(stockCloses, benchCloses []float64, tickerOpt ...strin
 		sanityNoticeMu.Unlock()
 
 		if !alreadyReported {
-			fmt.Printf("⚠️  [METRIC SANITY NOTICE%s] Extreme Composite RS detected: %+.1f%% (1M: %+.1f%%, 3M: %+.1f%%, 12M: %+.1f%%). Verify for unadjusted corporate actions / splits.\n",
-				tickerLabel, compositeRS*100.0, rs1m*100.0, rs3m*100.0, rs12m*100.0)
+			slog.Warn("metrics.composite_rs_extreme",
+				"ticker", strings.TrimSpace(tickerLabel),
+				"composite_rs_pct", compositeRS*100.0,
+				"rs_1m_pct", rs1m*100.0, "rs_3m_pct", rs3m*100.0, "rs_12m_pct", rs12m*100.0,
+				"note", "verify for unadjusted corporate actions / splits")
 		}
 	}
 

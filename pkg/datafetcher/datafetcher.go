@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"maps"
 
+	"log/slog"
 	"strings"
 
 	"github.com/raghavkgarg/mycase/pkg/broker"
@@ -17,17 +18,17 @@ func FetchMarketData(ctx context.Context, b broker.Broker, basketKeys []string) 
 	var quoteData map[string]float64
 
 	if b.IsMock() {
-		fmt.Println("\n[MOCK] Fetching mock prices for basket instruments...")
+		slog.DebugContext(ctx, "quotes.mock_fetch", "count", len(basketKeys))
 		prices, _ := b.GetQuotes(basketKeys)
 		quoteData = prices
 		for _, inst := range basketKeys {
-			fmt.Printf("[MOCK] %s Price: ₹%.2f\n", inst, quoteData[inst])
+			slog.DebugContext(ctx, "quotes.mock_price", "ticker", inst, "price", quoteData[inst])
 		}
 	} else {
-		fmt.Println("\nFetching real-time quotes via yfinance...")
+		slog.DebugContext(ctx, "quotes.fetch_start", "source", "yfinance", "count", len(basketKeys))
 		yfQuotes, err := yfinance.FetchQuotes(ctx, basketKeys)
 		if err != nil {
-			fmt.Printf("Failed to fetch some/all quotes using yfinance. Error: %v\n", err)
+			slog.WarnContext(ctx, "quotes.fetch_partial_failure", "source", "yfinance", "err", err)
 		}
 		if yfQuotes != nil {
 			quoteData = yfQuotes
@@ -44,10 +45,10 @@ func FetchMarketData(ctx context.Context, b broker.Broker, basketKeys []string) 
 		}
 
 		if len(missingKeys) > 0 {
-			fmt.Printf("Falling back to broker GetQuotes for %d missing key(s): %v...\n", len(missingKeys), missingKeys)
+			slog.WarnContext(ctx, "quotes.broker_fallback", "count", len(missingKeys), "tickers", strings.Join(missingKeys, ","))
 			kiteQuotes, err := b.GetQuotes(missingKeys)
 			if err != nil {
-				fmt.Printf("Broker GetQuotes fallback warning: %v\n", err)
+				slog.WarnContext(ctx, "quotes.broker_fallback_failure", "err", err)
 			} else {
 				maps.Copy(quoteData, kiteQuotes)
 			}
@@ -94,7 +95,7 @@ func FetchMarketData(ctx context.Context, b broker.Broker, basketKeys []string) 
 	var unpriced []string
 	for _, inst := range basketKeys {
 		if price, ok := quoteData[inst]; ok && price > 0 {
-			fmt.Printf("Fetched %s Price: ₹%.2f\n", inst, price)
+			slog.DebugContext(ctx, "quotes.priced", "ticker", inst, "price", price)
 		} else {
 			unpriced = append(unpriced, inst)
 		}

@@ -5,9 +5,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"sync"
 	"time"
+
+	"github.com/raghavkgarg/mycase/pkg/logging"
 )
 
 const (
@@ -145,7 +148,14 @@ func (c *Client) executeRequest(ctx context.Context, method, url string, body io
 	}
 
 	c.recordRequest()
-	return c.httpClient.Do(req)
+	start := time.Now()
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		slog.WarnContext(ctx, "schwab.request_error", "method", method, "url", logging.TruncateURL(url), "err", err, "duration_ms", time.Since(start).Milliseconds())
+		return nil, err
+	}
+	logging.LogResponse(ctx, slog.Default(), method, url, resp.StatusCode, time.Since(start))
+	return resp, nil
 }
 
 // waitForRateLimit blocks until a request slot is available.

@@ -102,7 +102,7 @@ func runMonitorWithParams(ctx context.Context, filePath string, interactive bool
 		activeStrategy = monitorGetPipelineStrategy()
 	}
 
-	params := monitorPresetParams(style, activeStrategy)
+	params := monitoring.PresetParams(style, activeStrategy)
 	params.StartDate = date
 
 	if interactive {
@@ -156,43 +156,6 @@ func runMonitorWithParams(ctx context.Context, filePath string, interactive bool
 	return nil
 }
 
-func monitorPresetParams(style, strategy string) monitoring.PolicyParams {
-	p := monitoring.PolicyParams{
-		Strategy: strategy,
-	}
-	isVal := strings.ToLower(strategy) == "value"
-	switch strings.ToLower(style) {
-	case "hyper-aggressive":
-		p.ConsecutiveQuartersExit = 1
-		p.DSODeteriorationThreshold = 0.10
-		p.SMADays = 5
-		p.RebalanceMonths = 3
-		p.MaxWeightDrift = 0.12
-		if isVal {
-			p.DSODeteriorationThreshold = 0.20
-		}
-	case "passive":
-		p.ConsecutiveQuartersExit = 3
-		p.DSODeteriorationThreshold = 0.25
-		p.SMADays = 20
-		p.RebalanceMonths = 12
-		p.MaxWeightDrift = 0.20
-		if isVal {
-			p.DSODeteriorationThreshold = 0.35
-		}
-	default:
-		p.ConsecutiveQuartersExit = 2
-		p.DSODeteriorationThreshold = 0.15
-		p.SMADays = 10
-		p.RebalanceMonths = 6
-		p.MaxWeightDrift = 0.15
-		if isVal {
-			p.DSODeteriorationThreshold = 0.30
-		}
-	}
-	return p
-}
-
 func monitorInteractiveMenu(defaults monitoring.PolicyParams) monitoring.PolicyParams {
 	render.Banner(os.Stdout, "PORTFOLIO MONITORING POLICY SIMULATOR")
 	fmt.Println("Choose a monitoring style:")
@@ -208,9 +171,9 @@ func monitorInteractiveMenu(defaults monitoring.PolicyParams) monitoring.PolicyP
 
 	switch choice {
 	case 1:
-		return monitorPresetParams("hyper-aggressive", defaults.Strategy)
+		return monitoring.PresetParams("hyper-aggressive", defaults.Strategy)
 	case 3:
-		return monitorPresetParams("passive", defaults.Strategy)
+		return monitoring.PresetParams("passive", defaults.Strategy)
 	case 4:
 		var quarters, smaDays, rebalanceMonths int
 		var dsoDeterioration, maxDrift float64
@@ -249,7 +212,7 @@ func monitorInteractiveMenu(defaults monitoring.PolicyParams) monitoring.PolicyP
 			MaxWeightDrift:            maxDrift / 100.0,
 		}
 	default:
-		return monitorPresetParams("moderate", defaults.Strategy)
+		return monitoring.PresetParams("moderate", defaults.Strategy)
 	}
 }
 

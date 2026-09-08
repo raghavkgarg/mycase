@@ -58,13 +58,13 @@ type rawPipelineConfig struct {
 	PurchaseDate          any            `yaml:"purchase_date"`
 	RebalanceTolerancePct any            `yaml:"rebalance_tolerance_pct"`
 	HysteresisRankBuffer  any            `yaml:"hysteresis_rank_buffer"`
+	CooldownDays          any            `yaml:"cooldown_days"`
+	CooldownBypassRank    any            `yaml:"cooldown_bypass_rank"`
 	Broker                string         `yaml:"broker"`
 	SchwabConfig          string         `yaml:"schwab_config"`
 	SchwabToken           string         `yaml:"schwab_token"`
 	Indices               []string       `yaml:"indices"`
 	Schedule              ScheduleConfig `yaml:"schedule"`
-	CooldownDays          any            `yaml:"cooldown_days"`
-	CooldownBypassRank    any            `yaml:"cooldown_bypass_rank"`
 }
 
 // resolveFirst extracts T from val (which may be a scalar or a []any from multi-doc YAML).

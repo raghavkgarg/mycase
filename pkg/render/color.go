@@ -6,15 +6,6 @@ import (
 	"sync"
 )
 
-// ANSI escape sequences.
-const (
-	ansiReset = "\033[0m"
-	ansiRed   = "\033[31m"
-	ansiGreen = "\033[32m"
-	ansiBold  = "\033[1m"
-	ansiDim   = "\033[2m"
-)
-
 var (
 	colorEnabled bool
 	colorOnce    sync.Once
@@ -67,26 +58,6 @@ func detectColor() {
 	}
 	colorEnabled = (info.Mode() & os.ModeCharDevice) != 0
 }
-
-// wrap applies ANSI code if color is enabled; returns plain string otherwise.
-func wrap(code, s string) string {
-	if !IsTTY() {
-		return s
-	}
-	return code + s + ansiReset
-}
-
-// Green returns s in green if output is a TTY.
-func Green(s string) string { return wrap(ansiGreen, s) }
-
-// Red returns s in red if output is a TTY.
-func Red(s string) string { return wrap(ansiRed, s) }
-
-// Bold returns s in bold if output is a TTY.
-func Bold(s string) string { return wrap(ansiBold, s) }
-
-// Dim returns s in dim/faint if output is a TTY.
-func Dim(s string) string { return wrap(ansiDim, s) }
 
 // sectionChar returns the box-drawing character for section headers.
 func sectionChar() string {

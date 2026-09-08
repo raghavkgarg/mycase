@@ -15,13 +15,13 @@ import (
 
 // MatchedTheme holds resolved symbols for active and lifecycle views.
 type MatchedTheme struct {
+	SymbolWeights    map[string]float64
 	Name             string
 	Prefix           string
 	CSVPath          string
 	ActiveSymbols    []string // Symbols currently in Golden Copy CSV (after prior theme deduction)
 	LifecycleSymbols []string // Active symbols + historically exited proposal symbols
 	ExitedSymbols    []string // Symbols that were pruned during rebalancings
-	SymbolWeights    map[string]float64
 }
 
 // CleanTicker strips exchange prefixes like "NSE:" or "BSE:" and series suffixes like "-BE".

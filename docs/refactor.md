@@ -25,6 +25,7 @@ A one-line ledger of completed refactor phases is kept at the bottom for git-arc
 | R14 | Structured logging (slog) — R14.5–R14.7 migration | 🟡 R14.1–R14.4 + steering done | none |
 | R15 | Test strategy & E2E testing | ⬜ Next (unblocked — R16 seams landed) | R16 ✅ |
 | R17 | Router-bypass cleanup (route 7 paths through `datafetcher.Router`) | ✅ Done (roadmap Phase 10b) | none |
+| R19 | Post-reconcile cleanup — R14.5 API-layer slog migration + dedup (ticker helpers, monitor presets) + wire-or-delete render surface + betteralign | ✅ Done | none |
 
 **R14 progress**: `pkg/logging` package (fanout handler, req_id tracing, timing/HTTP/DB helpers, rotation) + `main.go` wiring (global flags `--log-level`/`--log-dir`/`--quiet`/`--verbose`, `Before`/`After` hooks, `slog.SetDefault`) + `config/defaults.json` `logging` block are **done and verified**. R14.3 (new Phase 5 code written slog-native) shipped with Phase 5a/5b. Remaining: R14.4–R14.7 (incremental `fmt`→slog migration of existing packages), and the `.kiro/steering/logging.md` conventions file.
 
@@ -34,7 +35,7 @@ A one-line ledger of completed refactor phases is kept at the bottom for git-arc
 
 ## Phase R14 — Structured Logging (slog) — DESIGN
 
-**Status**: 🟡 R14.1–R14.4 shipped (`pkg/logging` + `main.go` wiring + slog-native Phase 5 + `pkg/daemon` migration + `.kiro/steering/logging.md`); R14.5–R14.7 (migrate remaining packages) pending. `pkg/alert` needed no migration — its error paths already return errors cleanly rather than printing.
+**Status**: 🟡 R14.1–R14.4 shipped (`pkg/logging` + `main.go` wiring + slog-native Phase 5 + `pkg/daemon` migration + `.kiro/steering/logging.md`); **R14.5 (API layer: `broker/schwab`, `yfinance`, `datafetcher`) landed as part of R19**; R14.6–R14.7 (remaining packages / `cmd/*`) pending. `pkg/alert` needed no migration — its error paths already return errors cleanly rather than printing.
 **Motivation**: The codebase has **no structured logging**. All diagnostic output is ad-hoc `fmt.Print*`/`fmt.Fprint*` to stdout/stderr (verified: zero imports of `log/slog`, `log`, `logrus`, or `zap` across 112 source files). Operational events — daemon lifecycle, Schwab API errors, cache warnings, pipeline stage transitions — are indistinguishable from user-facing CLI output and cannot be filtered, leveled, traced, or persisted. The API steering rules mandate "Log API errors, don't panic" but there is no logging primitive to do so consistently.
 
 Phase 5 (Live Performance Attribution) introduces a **background NAV tracker** and **alert nudges** that need proper leveled, persistable logging. Rather than bolt logging onto that one package, R14 standardizes the pattern for the whole codebase now.
@@ -487,6 +488,46 @@ E2E tests double as logging-integration checks: assert that a full command run p
 
 ---
 
+## Phase R19 — Post-Reconcile Cleanup — DONE
+
+**Status**: ✅ Done (this session). `make check-deps` / `cleanup` / `test` all green.
+**Motivation**: A codebase-health audit after the reconcile-main merge surfaced a
+cluster of the recurring *build-it-then-never-wire-it* / copy-paste-drift issues.
+None block the hard gates (`check-deps`/`cleanup`/`test` are green), but they
+erode the conventions the project already committed to. Each is **wire-or-delete**
+or **dedup-to-one-source**.
+
+Audit method: `make analyze` (deadcode/unparam/betteralign) + targeted `grep`
+verification of each finding (deadcode traces reachability from `main`, so its
+output was hand-classified — dormant vs false-positive vs genuinely-loose).
+
+### Findings & fixes
+
+| # | Finding | Verified evidence | Fix |
+|---|---------|-------------------|-----|
+| R19.1 | **R14.5 never landed.** `pkg/logging` `Timer`/`LogRequest`/`LogResponse`/`LogDBOp` were built (R14.1) and the logging steering mandates them on the API paths, but there are **zero call sites**. `pkg/broker/schwab` has zero `slog` calls; `yfinance`/`datafetcher` still emit diagnostics via `fmt.Printf` to **stdout** (two-channel violation). | `grep logging.LogResponse\|LogRequest\|LogDBOp\|Timer` → defs only; `grep slog.` in `broker/schwab` → none; `fmt.Printf` diagnostics in `yfinance/{yfinance,prices,metrics,screener}.go`, `datafetcher.go` | Migrate API-layer diagnostics to `slog` (Debug/Warn/Error per level rules); route HTTP outcomes through `logging.LogResponse` where an `*http.Response` is in hand. Keep genuine user-facing/interactive lines (auth "Opening browser…") on stdout. |
+| R19.2 | **Ticker-normalization duplicated 4×.** `portfolio.StripSeriesSuffix`/`CleanTicker` (canonical) vs `printer.stripSeriesSuffix` + a **copy-pasted `knownSeriesSuffixes`** list (comment admits the copy); plus `broker.SymbolFromTicker`, `yfinance.MapTickerToYahoo` overlap. Two suffix lists identical today, nothing keeps them in sync → latent drift bug. | `grep` for the four funcs + both `[kK]nownSeriesSuffixes` vars (byte-identical) | Delete `printer`'s copy; `printer` (L3) imports `portfolio` (L2) for the string util. `themereturn.CleanTicker` already delegates — same pattern. (`broker.SymbolFromTicker`/`yfinance.MapTickerToYahoo` left as-is — distinct enough purposes, cross-layer consolidation not worth it.) |
+| R19.3 | **`monitorPresetParams` duplicated** in `cmd/monitor.go` (`style, strategy`) and `pkg/server/handlers.go` (`style`) with divergent signatures → two sources of truth for monitoring presets. | `grep func monitorPresetParams` → 2 defs | Consolidate into `pkg/monitoring` as the single preset source; both callers delegate. |
+| R19.4 | **Unused `pkg/render` surface.** `Pct`, `Change`, `ChangeRaw`, `Sparkline` + color helpers `Green/Red/Bold/Dim` have no non-test callers (tested but unused). | `grep .Green(\|.Red(\|.Bold(\|.Dim(` (non-test) → none; deadcode flags each | **Deleted** the dead formatters + their color-application helpers (`Green/Red/Bold/Dim/wrap` + ANSI color consts) and their tests — per the project's own "stop carrying aspirational surface area" doctrine. Kept `IsTTY`/`ForceColor`/`detectColor`/`sectionChar`/`sectionLine` (live — drive `Section`/`Banner`) and the used formatters (`PctRaw`/`Currency`/`PnL`/`PnLPct`). If colored output is wanted later, reintroduce against a live call site. |
+| R19.5 | **`betteralign` field-ordering** advisories across `config`/`pipeline`/`autopilot`/`cooldown`/`themereturn`/`kiteauth` structs. | `make analyze` betteralign section | `betteralign -apply ./...` (cosmetic, zero behavior change). |
+
+**Non-goals**: not touching the intentionally **dormant** code (themereturn,
+kiteauth, kiteclient, universe, the `SelectTopN*` non-cooldown wrappers) — those
+`deadcode`/`unreachable` findings are the documented, intended state of the
+dormant-code doctrine and stay as-is in their packages. Not chasing every
+deadcode hit; only the genuinely-loose ones above.
+
+**Verification (actual)**: `gofmt` clean · `go build ./...` clean · `make check-deps`
+OK (layering intact — `printer→portfolio` is a legal L3→L1 edge) · `make test`
+all green · `make cleanup` exit 0 (vet / staticcheck / govulncheck / unparam /
+betteralign all clean). `deadcode` advisory confirms the intended delta: `render`
+findings dropped 6→1 (`ForceColor` deliberately kept as the `--color`/test
+toggle), `logging.LogResponse` no longer flagged (now wired into `broker/schwab`),
+`printer.stripSeriesSuffix` and both `monitorPresetParams` gone. Net diff: 26
+files, +145 / −574 (incl. the 171-line `reconcile-main.md` deletion).
+
+---
+
 ## Known Loose Ends (tracked debt)
 
 Half-finished or orphaned pieces discovered during Phase 5b. None are urgent, but they should be closed rather than left to accumulate. Listed so they are visible and can be scheduled.
@@ -546,7 +587,8 @@ Durable design/algorithm details live in `docs/architecture.md`; this is a chron
 | **Phase 5b** | Live perf attribution (decomposition + dashboard + nudge) — `attribution.Decompose` (selection/rebalancing/tax) + `LoadRebalanceHistory`, dashboard Performance tab (`performance_handler.go` + `performance-tab.js` + `WithFetcher` option), trailing-alpha strategy-review nudge (`AssessNudge` + autopilot dispatch); first tests for `pkg/server` + `pkg/autopilot`; removed dead code (`isNumeric`, `newTestClient`) | — |
 | **R16** | Dependency untangling — broke all 4 cycle-magnet edges. Fix D: tax persistence → `pkg/tax.Store` (`cache` now a zero-import leaf). Fix B: dropped `datafetcher→stockpicker` back-edge. Fix C: extracted `pkg/broker/types` leaf (DTOs) + aliases; type-only consumers off the hub. Fix A: extracted `pkg/marketdata` leaf; `broker/schwab`/`optimizer`/`attribution` off `yfinance`. Guard: `scripts/checkdeps` + `.kiro/steering/architecture.md`. Move-and-reimport only, all tests + race green. | `31e5b3f`, `0ca0762`, `d52d205`, `bbf5a4d`, `5a2e4f9` |
 
-| **Reconcile-main** | Merged `origin/main`'s 3 post-divergence commits (PIT display bugs, misc bugs, "New Theme Return + Softer Criterion") into the EBM/R16 integration branch under the **dormant-code doctrine**: bring in *all* features layer-legally, port genuine fixes into the live US path, keep unused (India/theme) flows dormant. mergiraf (Go-aware merge driver) auto-resolved the core `scoring.go`/`types.go`/`selectiontracker` collisions as correct union merges. Resurrected `portfolio` (L1, alias repointed to `broker/types` leaf), `themereturn` (L3), `kiteauth` (L0), `stockpicker/cooldown.go` as dormant packages; registered in `layers.go`. **Decision 1(a)**: wired the anti-churn cooldown (softer criterion) LIVE into `stockpicker.RunWithResult` for all 5 methods (added `SelectTopNUSQMWithCooldown`, `--cooldown-days`/`--cooldown-bypass-rank` flags, `LoadRecentExits`); `ApplySafetyFilters` now leniences existing holdings. **Decision 2(b)**: theme-return kept dormant (reachable only via `cmd/returns.go`, not the live `holdings` view). `make check-deps`/`cleanup`/`test` all green. See `docs/reconcile-main.md`. | (this branch) |
+| **Reconcile-main** | Merged `origin/main`'s 3 post-divergence commits (PIT display bugs, misc bugs, "New Theme Return + Softer Criterion") into the EBM/R16 integration branch under the **dormant-code doctrine**: bring in *all* features layer-legally, port genuine fixes into the live US path, keep unused (India/theme) flows dormant. mergiraf (Go-aware merge driver) auto-resolved the core `scoring.go`/`types.go`/`selectiontracker` collisions as correct union merges. Resurrected `portfolio` (L1, alias repointed to `broker/types` leaf), `themereturn` (L3), `kiteauth` (L0), `stockpicker/cooldown.go` as dormant packages; registered in `layers.go`. **Decision 1(a)**: wired the anti-churn cooldown (softer criterion) LIVE into `stockpicker.RunWithResult` for all 5 methods (added `SelectTopNUSQMWithCooldown`, `--cooldown-days`/`--cooldown-bypass-rank` flags, `LoadRecentExits`); `ApplySafetyFilters` now leniences existing holdings. **Decision 2(b)**: theme-return kept dormant (reachable only via `cmd/returns.go`, not the live `holdings` view). `make check-deps`/`cleanup`/`test` all green. (Detailed plan doc `docs/reconcile-main.md` retired once merged — this ledger entry + the deferred-debt section below are the durable record.) | (this branch) |
+| **R19** | Post-reconcile cleanup. **R14.5** API-layer slog migration: `datafetcher`/`yfinance` diagnostics `fmt.Printf`→`slog.*Context` (dotted events, Warn on skips); `broker/schwab` `executeRequest` now routes every call through `logging.LogResponse` (status→level), wiring the previously-dead helper (exported `logging.TruncateURL`). **Dedup**: removed `printer.stripSeriesSuffix` + copy-pasted suffix list → `printer` calls `portfolio.StripSeriesSuffix` (L3→L1); consolidated `monitorPresetParams` into `pkg/monitoring.PresetParams` (single source, cmd + server delegate). **Wire-or-delete**: deleted dead `render` surface (`Pct`/`Change`/`ChangeRaw`/`Sparkline` + `Green/Red/Bold/Dim/wrap` + ANSI consts + tests), kept live `IsTTY`/`ForceColor`/`Section` engine + used formatters. **betteralign** field reordering across 8 structs. All gates green; dormant deadcode left in place per doctrine. | (this branch) |
 
 ### Deferred debt from Reconcile-main
 

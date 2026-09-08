@@ -465,13 +465,13 @@ func LoadCSVLinks(filename string) (map[string]string, error) {
 // UserDefaults holds user-level preference defaults loaded from config/defaults.json.
 // These provide convenience defaults for CLI flags; explicit flags always override.
 type UserDefaults struct {
-	Logging        LoggingConfig `json:"logging"`
 	Broker         string        `json:"broker"`
 	Market         string        `json:"market"`
 	Index          string        `json:"index"`
 	Method         string        `json:"method"`
 	Range          string        `json:"range"`
 	PipelineConfig string        `json:"pipeline_config"`
+	Logging        LoggingConfig `json:"logging"`
 	TopN           int           `json:"top_n"`
 }
 

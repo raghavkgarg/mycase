@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/exec"
@@ -494,7 +495,7 @@ func FetchCustomerConcentrationData(ctx context.Context, tickers []string) (map[
 				if exitErr, ok := err.(*exec.ExitError); ok {
 					stderrStr = string(exitErr.Stderr)
 				}
-				fmt.Printf("[DEBUG] Command failed for %s: %v. Stderr: %s. Output: %s\n", cleanSym, err, stderrStr, string(out))
+				slog.DebugContext(subCtx, "screener.command_failed", "ticker", cleanSym, "err", err, "stderr", strings.TrimSpace(stderrStr))
 				resultMap[ticker] = "Metric Coverage Pending"
 				resultMap[cleanSym] = "Metric Coverage Pending"
 			}

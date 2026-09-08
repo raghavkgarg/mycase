@@ -25,9 +25,9 @@ import (
 
 // RunConfig holds all parameters needed for a non-interactive autopilot run.
 type RunConfig struct {
-	PipelineCfg config.PipelineConfig
 	Broker      broker.Broker
 	ConfigPath  string // path to pipeline.yaml (for report context)
+	PipelineCfg config.PipelineConfig
 }
 
 // RunResult holds the outcome of an autopilot pipeline run.

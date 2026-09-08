@@ -26,7 +26,7 @@ func Timer(ctx context.Context, logger *slog.Logger, msg string, args ...any) fu
 // LogRequest logs an outbound HTTP request at Debug level.
 func LogRequest(ctx context.Context, logger *slog.Logger, method, url string) {
 	logger.LogAttrs(ctx, slog.LevelDebug, "http.request",
-		toAttrs(withReqID(ctx, []any{"method", method, "url", truncateURL(url)}))...)
+		toAttrs(withReqID(ctx, []any{"method", method, "url", TruncateURL(url)}))...)
 }
 
 // LogResponse logs an HTTP response with timing. Level scales with status:
@@ -42,7 +42,7 @@ func LogResponse(ctx context.Context, logger *slog.Logger, method, url string, s
 	logger.LogAttrs(ctx, level, "http.response",
 		toAttrs(withReqID(ctx, []any{
 			"method", method,
-			"url", truncateURL(url),
+			"url", TruncateURL(url),
 			"status", status,
 			"duration_ms", d.Milliseconds(),
 		}))...)
@@ -78,9 +78,9 @@ func toAttrs(args []any) []slog.Attr {
 	return attrs
 }
 
-// truncateURL shortens long URLs for log readability, preferring to cut at the
+// TruncateURL shortens long URLs for log readability, preferring to cut at the
 // query string.
-func truncateURL(url string) string {
+func TruncateURL(url string) string {
 	const max = 120
 	if len(url) <= max {
 		return url

@@ -396,7 +396,7 @@ func (s *Server) handleMonitor(w http.ResponseWriter, r *http.Request) {
 		portfolio = append(portfolio, monitoring.StockInfo{Ticker: k, Weight: weights[k]})
 	}
 
-	params := monitorPresetParams(style)
+	params := monitoring.PresetParams(style, "")
 	params.MaxCapExYoYMultiplier = 2.0
 
 	ctx := r.Context()
@@ -475,36 +475,6 @@ func (s *Server) handleMonitor(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, result)
-}
-
-// monitorPresetParams returns PolicyParams for the given style name.
-func monitorPresetParams(style string) monitoring.PolicyParams {
-	switch strings.ToLower(style) {
-	case "hyper-aggressive":
-		return monitoring.PolicyParams{
-			ConsecutiveQuartersExit:   1,
-			DSODeteriorationThreshold: 0.10,
-			SMADays:                   5,
-			RebalanceMonths:           3,
-			MaxWeightDrift:            0.12,
-		}
-	case "passive":
-		return monitoring.PolicyParams{
-			ConsecutiveQuartersExit:   3,
-			DSODeteriorationThreshold: 0.25,
-			SMADays:                   20,
-			RebalanceMonths:           12,
-			MaxWeightDrift:            0.20,
-		}
-	default:
-		return monitoring.PolicyParams{
-			ConsecutiveQuartersExit:   2,
-			DSODeteriorationThreshold: 0.15,
-			SMADays:                   10,
-			RebalanceMonths:           6,
-			MaxWeightDrift:            0.15,
-		}
-	}
 }
 
 // ── POST /api/portfolio/{name}/backtest ──────────────────────────────────────

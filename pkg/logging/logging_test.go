@@ -219,16 +219,16 @@ func TestToAttrs_DanglingKeyDropped(t *testing.T) {
 
 func TestTruncateURL(t *testing.T) {
 	short := "https://x.com/a"
-	if truncateURL(short) != short {
+	if TruncateURL(short) != short {
 		t.Error("short URL should be unchanged")
 	}
 	long := "https://api.example.com/path?" + strings.Repeat("q", 200)
-	got := truncateURL(long)
+	got := TruncateURL(long)
 	if len(got) > 130 || !strings.HasSuffix(got, "?...") {
 		t.Errorf("query-truncation failed: %q (len %d)", got, len(got))
 	}
 	longNoQuery := "https://api.example.com/" + strings.Repeat("p", 200)
-	got = truncateURL(longNoQuery)
+	got = TruncateURL(longNoQuery)
 	if len(got) != 120 || !strings.HasSuffix(got, "...") {
 		t.Errorf("plain truncation failed: len %d", len(got))
 	}

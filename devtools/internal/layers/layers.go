@@ -62,7 +62,7 @@ var Layers = map[string]int{
 	// L3 — higher-level domains.
 	"attribution": 3, // backtest, cache, marketdata
 	"datafetcher": 3, // broker, broker/schwab, yfinance
-	"printer":     3, // broker/types, market, optimizer, render
+	"printer":     3, // broker/types, market, optimizer, portfolio, render
 	"stockpicker": 3, // config, csvloader, excel, optimizer, selectiontracker, yfinance
 	"themereturn": 3, // config, csvloader, portfolio (India legacy) — dormant; wired only via cmd/returns
 

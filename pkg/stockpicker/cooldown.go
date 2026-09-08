@@ -51,8 +51,8 @@ func LoadRecentExits(goldenBase string, existingHoldings map[string]float64, cut
 	bkMatches, err := filepath.Glob(filepath.Join(backupDir, "bk_*.csv"))
 	if err == nil && len(bkMatches) > 0 {
 		type bkFile struct {
-			path string
 			date time.Time
+			path string
 		}
 		var validBackups []bkFile
 		for _, bPath := range bkMatches {
