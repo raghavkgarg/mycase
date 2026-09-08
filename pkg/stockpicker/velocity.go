@@ -1,7 +1,7 @@
 package stockpicker
 
 import (
-	"fmt"
+	"log/slog"
 	"sort"
 	"strings"
 
@@ -103,7 +103,7 @@ func ApplyPITVelocityBoost(
 	}
 
 	if appliedCount > 0 {
-		fmt.Printf("Applied DuckDB PIT Temporal Velocity Boosts to %d candidates (capped at +5.0 pt max)\n", appliedCount)
+		slog.Info("pick.velocity_boost_applied", "count", appliedCount, "cap_pt", 5.0)
 		// Re-sort activeKeys based on boosted scores
 		sort.Slice(activeKeys, func(i, j int) bool {
 			return scores[activeKeys[i]] > scores[activeKeys[j]]

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/csv"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -128,7 +129,7 @@ func GetBenchmarkSymbolForIndex(indexName string, tickers []string) string {
 
 func loadLocalCSVConstituents(filePath string) ([]string, map[string]string, error) {
 	if excel.IsXLSXFile(filePath) {
-		fmt.Printf("Detected Excel (.xlsx) file format in %s, auto-converting...\n", filePath)
+		slog.Info("constituents.xlsx_autoconvert", "path", filePath)
 		tmpCSV := filePath + ".converted.csv"
 		defer os.Remove(tmpCSV)
 		if _, err := excel.ConvertXLSXToCSV(filePath, tmpCSV); err != nil {
@@ -282,12 +283,12 @@ func IsDummyTicker(ticker string) bool {
 // LoadConstituents loads constituent tickers from local file path or downloads them from web.
 func LoadConstituents(filePath, indexName string) (*TickersSource, error) {
 	if filePath != "" {
-		fmt.Printf("\nLoading constituents from custom file %s...\n", filePath)
+		slog.Info("constituents.load_file", "path", filePath)
 		tickers, sectors, err := loadLocalCSVConstituents(filePath)
 		if err != nil {
 			return nil, fmt.Errorf("failed to load custom file: %w", err)
 		}
-		fmt.Printf("Loaded %d constituents from file.\n", len(tickers))
+		slog.Info("constituents.loaded", "source", "file", "count", len(tickers))
 		return &TickersSource{
 			Name:    csvloader.GetUniverseName(filePath),
 			Tickers: tickers,
@@ -335,12 +336,12 @@ func LoadConstituents(filePath, indexName string) (*TickersSource, error) {
 				return nil, fmt.Errorf("unsupported index '%s'. Please check docs/stockpicker.md for the list of supported indices", subIdx)
 			}
 
-			fmt.Printf("\nDownloading index constituents for %s...\n", subIdx)
+			slog.Info("constituents.download", "index", subIdx)
 			tickers, sectors, err := downloadConstituents(cleanIndex, url)
 			if err != nil {
 				return nil, fmt.Errorf("failed to download index '%s': %w", subIdx, err)
 			}
-			fmt.Printf("Loaded %d constituents from %s.\n", len(tickers), subIdx)
+			slog.Info("constituents.loaded", "source", "download", "index", subIdx, "count", len(tickers))
 
 			for _, t := range tickers {
 				if !seen[t] {
@@ -356,7 +357,7 @@ func LoadConstituents(filePath, indexName string) (*TickersSource, error) {
 		}
 	}
 
-	fmt.Printf("Total combined unique constituents: %d.\n", len(allTickers))
+	slog.Info("constituents.combined", "unique_count", len(allTickers))
 
 	displayName := indexName
 	if len(rawNames) > 1 {
@@ -374,7 +375,7 @@ func LoadConstituents(filePath, indexName string) (*TickersSource, error) {
 // with automatic retry passes and backoff for failed fetches.
 // Returns: (fullHistory, activeKeys, failedKeys)
 func FetchHistoricalPrices(ctx context.Context, rawTickers []string) (map[string]*yfinance.HistoricalData, []string, []string) {
-	fmt.Printf("\nFetching historical prices (1y) for constituents...\n")
+	slog.InfoContext(ctx, "prices.fetch_start", "range", "1y", "count", len(rawTickers))
 	type fetchJob struct {
 		ticker string
 	}
@@ -434,8 +435,7 @@ func FetchHistoricalPrices(ctx context.Context, rawTickers []string) (map[string
 	backoffs := []time.Duration{1500 * time.Millisecond, 3000 * time.Millisecond}
 retryLoop:
 	for retry := 0; retry < maxRetries && len(pendingRetries) > 0; retry++ {
-		fmt.Printf("Retrying %d failed ticker fetches (attempt %d/%d after %v backoff)...\n",
-			len(pendingRetries), retry+1, maxRetries, backoffs[retry])
+		slog.WarnContext(ctx, "prices.retry", "pending", len(pendingRetries), "attempt", retry+1, "max", maxRetries, "backoff", backoffs[retry].String())
 		select {
 		case <-ctx.Done():
 			break retryLoop
@@ -454,21 +454,18 @@ retryLoop:
 	sort.Strings(activeKeys)
 	sort.Strings(failedKeys)
 
-	fmt.Printf("Successfully fetched historical data for %d / %d active tickers.\n", len(activeKeys), len(rawTickers))
+	slog.InfoContext(ctx, "prices.fetch_complete", "active", len(activeKeys), "total", len(rawTickers))
 
 	if len(failedKeys) > 0 {
 		failPct := float64(len(failedKeys)) * 100.0 / float64(len(rawTickers))
+		sampleCount := min(len(failedKeys), 10)
 		if failPct >= 5.0 {
-			fmt.Printf("\n========================================================================================\n")
-			fmt.Printf("🚨 [HARD WARNING: CRITICAL DATA FETCH FAILURE RATE: %.1f%% (%d / %d tickers)] 🚨\n",
-				failPct, len(failedKeys), len(rawTickers))
-			fmt.Printf("Over 5%% of index constituents failed historical price retrieval. Stage-1 candidate pool is incomplete!\n")
-			sampleCount := min(len(failedKeys), 10)
-			fmt.Printf("Failed sample (first 10): %s\n", strings.Join(failedKeys[:sampleCount], ", "))
-			fmt.Printf("========================================================================================\n\n")
+			slog.ErrorContext(ctx, "prices.fetch_failure_critical",
+				"fail_pct", failPct, "failed", len(failedKeys), "total", len(rawTickers),
+				"sample", strings.Join(failedKeys[:sampleCount], ","))
 		} else {
-			fmt.Printf("Notice: %d / %d tickers (%.1f%%) failed price fetch and will be tagged with DATA_FETCH_FAILED.\n",
-				len(failedKeys), len(rawTickers), failPct)
+			slog.WarnContext(ctx, "prices.fetch_failure",
+				"failed", len(failedKeys), "total", len(rawTickers), "fail_pct", failPct)
 		}
 	}
 
@@ -477,7 +474,7 @@ retryLoop:
 
 // fetchHistoricalPricesWithFetcher is like FetchHistoricalPrices but routes through a DataFetcher.
 func fetchHistoricalPricesWithFetcher(ctx context.Context, fetcher DataFetcher, rawTickers []string) (map[string]*yfinance.HistoricalData, []string, []string) {
-	fmt.Printf("\nFetching historical prices (1y) for constituents via router...\n")
+	slog.InfoContext(ctx, "prices.fetch_start", "range", "1y", "count", len(rawTickers), "source", "router")
 	type fetchJob struct {
 		ticker string
 	}
@@ -523,14 +520,14 @@ func fetchHistoricalPricesWithFetcher(ctx context.Context, fetcher DataFetcher, 
 		}
 	}
 
-	fmt.Printf("Successfully fetched historical data for %d / %d active tickers.\n", len(activeKeys), len(rawTickers))
+	slog.InfoContext(ctx, "prices.fetch_complete", "active", len(activeKeys), "total", len(rawTickers), "source", "router")
 	return fullHistory, activeKeys, failedKeys
 }
 
 // GetBenchmarkAndSlicedPrices fetches benchmark prices and aligns stock prices with benchmark range.
 func GetBenchmarkAndSlicedPrices(ctx context.Context, indexName string, activeKeys []string, fullHistory map[string]*yfinance.HistoricalData, rangeStr string) (map[string][]float64, []float64, error) {
 	benchSym := GetBenchmarkSymbolForIndex(indexName, activeKeys)
-	fmt.Printf("Fetching historical benchmark prices for %s (%s)...\n", benchSym, rangeStr)
+	slog.InfoContext(ctx, "pick.benchmark_fetch", "symbol", benchSym, "range", rangeStr)
 	benchmarkPrices, err := yfinance.FetchHistoricalPrices(ctx, benchSym, rangeStr)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to fetch benchmark %s: %w", benchSym, err)

@@ -30,11 +30,11 @@ and the rule going forward:
 
 | Layer | Packages | Role |
 |-------|----------|------|
-| **L0 — leaves** | `alert`, `broker/types`, `cache`, `config`, `costs`, `csvloader`, `excel`, `logging`, `market`, `marketdata`, `render`, `selectiontracker` | Zero internal imports. Pure types, config, generic stores, rendering primitives. |
-| **L1 — stores/impls** | `broker`, `tax`, `yfinance` | Thin layers over leaves. |
+| **L0 — leaves** | `alert`, `broker/types`, `cache`, `config`, `costs`, `csvloader`, `excel`, `logging`, `market`, `marketdata`, `render`, `selectiontracker`, `universe` | Zero internal imports. Pure types, config, generic stores, rendering primitives. |
+| **L1 — stores/impls** | `broker`, `kiteclient`, `tax`, `yfinance` | Thin layers over leaves. (`kiteclient` = Zerodha/Kite low-level client, India legacy.) |
 | **L2 — domains/data** | `backtest`, `broker/schwab`, `broker/zerodha`, `monitoring`, `optimizer` | Strategy math, broker clients, data providers. |
 | **L3 — higher domains** | `attribution`, `datafetcher`, `printer`, `stockpicker` | Compose L0–L2. |
-| **L4 — orchestration/IO** | `daemon`, `executor` | Long-running / order placement. |
+| **L4 — orchestration/IO** | `daemon`, `executor`, `pithistory` | Long-running / order placement / PIT snapshot analytics (`pithistory` imports `stockpicker`). |
 | **L5 — top composition** | `autopilot` | Wires the pipeline. |
 | **L6 — server** | `server` | Embeds autopilot + most domains. |
 

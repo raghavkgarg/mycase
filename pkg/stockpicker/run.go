@@ -3,6 +3,7 @@ package stockpicker
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"path/filepath"
 	"sort"
 	"time"
@@ -94,7 +95,7 @@ func RunWithResult(ctx context.Context, opts *Options) (*PickResult, error) {
 
 	fullHistory, activeKeys, failedKeys := fetchHistoricalPricesVia(ctx, opts.DataFetcher, combinedTickers)
 	if len(activeKeys) == 0 {
-		fmt.Println("No active tickers loaded. Exiting...")
+		slog.WarnContext(ctx, "pick.no_active_tickers", "index", tickersSrc.Name)
 		return nil, nil
 	}
 
@@ -105,12 +106,12 @@ func RunWithResult(ctx context.Context, opts *Options) (*PickResult, error) {
 
 	cfg, err := LoadStrategyConfig(opts.Method)
 	if err != nil {
-		fmt.Printf("Warning: Failed to load config/mfs.json: %v. Using defaults.\n", err)
+		slog.WarnContext(ctx, "pick.config_load_failed", "path", "config/mfs.json", "err", err, "fallback", "defaults")
 	}
 
 	fundamentals, err := fetchFundamentalsVia(ctx, opts.DataFetcher, activeKeys)
 	if err != nil {
-		fmt.Printf("Warning: Failed to fetch fundamentals: %v. Using fallbacks.\n", err)
+		slog.WarnContext(ctx, "pick.fundamentals_fetch_failed", "err", err, "fallback", "imputed")
 	}
 
 	// Backfill sectors from the constituents CSV where the provider left them
@@ -137,7 +138,7 @@ func RunWithResult(ctx context.Context, opts *Options) (*PickResult, error) {
 	}
 
 	if len(activeKeys) == 0 {
-		fmt.Println("No candidate stocks remaining after hard filters. Exiting...")
+		slog.WarnContext(ctx, "pick.no_candidates_after_filters")
 		return nil, nil
 	}
 
@@ -193,7 +194,7 @@ func RunWithResult(ctx context.Context, opts *Options) (*PickResult, error) {
 
 	// Structural funnel accounting validation (non-fatal).
 	if _, fErr := tracker.BuildFunnel(); fErr != nil {
-		fmt.Printf("⚠️  Funnel Validation Notice: %v\n", fErr)
+		slog.WarnContext(ctx, "pick.funnel_validation", "err", fErr)
 	}
 
 	// Build a point-in-time run snapshot: file-based save + run-to-run diff here
@@ -266,12 +267,12 @@ func RunWithResult(ctx context.Context, opts *Options) (*PickResult, error) {
 		PrintDiffReport(DiffSnapshots(prevSnap, pitSnapshot))
 	}
 	if snapPath, sErr := SaveRunSnapshot(pitSnapshot); sErr == nil {
-		fmt.Printf("Saved PIT Run Snapshot to %s\n", snapPath)
+		slog.InfoContext(ctx, "pick.snapshot_saved", "path", snapPath)
 	}
 
 	prevDrivers := loadPreviousDriverStrings(ctx, displayNameVal, opts.Method)
 	if err := tracker.SaveReport(displayNameVal, opts.Method, goldenWeights, sectors, finalWeights, resultDates, prevDrivers); err != nil {
-		fmt.Printf("Warning: Failed to save selection reasons report: %v\n", err)
+		slog.WarnContext(ctx, "pick.report_save_failed", "err", err)
 	}
 
 	outPath := opts.OutputFile
@@ -376,10 +377,10 @@ func formatDriverStringFromMetrics(method string, s cache.Selection) string {
 // fetchFundamentalsVia uses the DataFetcher if available, otherwise falls back to yfinance.
 func fetchFundamentalsVia(ctx context.Context, fetcher DataFetcher, tickers []string) (map[string]yfinance.Fundamentals, error) {
 	if fetcher != nil {
-		fmt.Printf("Fetching fundamentals via router...\n")
+		slog.InfoContext(ctx, "pick.fundamentals_fetch", "source", "router", "count", len(tickers))
 		return fetcher.FetchFundamentals(ctx, tickers)
 	}
-	fmt.Printf("Fetching fundamentals from Yahoo Finance...\n")
+	slog.InfoContext(ctx, "pick.fundamentals_fetch", "source", "yahoo", "count", len(tickers))
 	return yfinance.FetchFundamentals(ctx, tickers)
 }
 
@@ -399,7 +400,7 @@ func getBenchmarkAndSlicedPricesVia(ctx context.Context, fetcher DataFetcher, in
 	}
 
 	benchSym := GetBenchmarkSymbolForIndex(indexName, activeKeys)
-	fmt.Printf("Fetching historical benchmark prices for %s (%s)...\n", benchSym, rangeStr)
+	slog.InfoContext(ctx, "pick.benchmark_fetch", "symbol", benchSym, "range", rangeStr)
 	benchmarkPrices, err := fetcher.FetchHistoricalPrices(ctx, benchSym, rangeStr)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to fetch benchmark %s: %w", benchSym, err)

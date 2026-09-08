@@ -3,6 +3,7 @@ package stockpicker
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"sort"
 	"strings"
 	"time"
@@ -47,7 +48,7 @@ func LoadStrategyConfig(method string) (*StrategyConfig, error) {
 
 	govMap, govErr := config.LoadGovernance("config/governance.json")
 	if govErr != nil {
-		fmt.Printf("Warning: Failed to load governance data from governance.json: %v. Using default 0%% pledging.\n", govErr)
+		slog.Warn("config.governance_load_failed", "err", govErr, "fallback", "0pct_pledging")
 		govMap = make(map[string]float64)
 	}
 
@@ -335,7 +336,7 @@ func isEligible(
 					return false, fmt.Sprintf("Declining Operating Margin fallback (latest: %.1f%% < prev: %.1f%%)", latestOM*100.0, prevOM*100.0)
 				}
 			} else {
-				fmt.Printf("Warning: Missing both Gross Margin and Operating Margin history for %s. Bypassing check.\n", t)
+				slog.Debug("filter.margin_history_missing", "ticker", t, "action", "bypass")
 			}
 		}
 	}

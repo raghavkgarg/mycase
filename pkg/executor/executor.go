@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"math"
 	"os"
 	"path/filepath"
@@ -152,7 +153,7 @@ func ExecuteBasketOrders(
 		return
 	}
 
-	fmt.Println("\nExecuting orders live...")
+	slog.Info("executor.live_start", "orders", len(basketOrders))
 	mktCfg := broker.LoadMarketConfig()
 	loc, err := time.LoadLocation(mktCfg.Timezone)
 	if err != nil {
@@ -263,21 +264,21 @@ func ExecuteBasketOrders(
 
 func SaveSuccessLog(snapshotText, logContent, nowStr string) {
 	if err := os.MkdirAll("Order", 0755); err != nil {
-		fmt.Printf("Failed to create Order directory: %v\n", err)
+		slog.Error("executor.log_dir_failed", "dir", "Order", "err", err)
 		return
 	}
 	filename := filepath.Join("Order", "Order_"+nowStr+".txt")
 	content := snapshotText + "\n\nExecuting orders live...\n" + logContent + "\n"
 	if err := os.WriteFile(filename, []byte(content), 0644); err != nil {
-		fmt.Printf("Failed to save order log: %v\n", err)
+		slog.Error("executor.log_save_failed", "path", filename, "err", err)
 	} else {
-		fmt.Printf("\nSuccessful order details logged to %s\n", filename)
+		slog.Info("executor.success_log_saved", "path", filename)
 	}
 }
 
 func SaveErrorLog(snapshotText, logContent string, failedSpecs []FailedOrderSpec, nowStr string) string {
 	if err := os.MkdirAll("Error", 0755); err != nil {
-		fmt.Printf("Failed to create Error directory: %v\n", err)
+		slog.Error("executor.error_dir_failed", "dir", "Error", "err", err)
 		return ""
 	}
 
@@ -295,7 +296,7 @@ func SaveErrorLog(snapshotText, logContent string, failedSpecs []FailedOrderSpec
 		_ = os.WriteFile(jsonFilename, bytes, 0644)
 	}
 
-	fmt.Printf("\nFailed order details logged to %s and temporary payload %s\n", txtFilename, jsonFilename)
+	slog.Warn("executor.error_log_saved", "txt", txtFilename, "json", jsonFilename, "failed_orders", len(failedSpecs))
 	return jsonFilename
 }
 
@@ -324,20 +325,20 @@ func ExecuteRetryPayload(jsonPath string, b broker.Broker, reader *bufio.Reader)
 		var err error
 		jsonPath, err = FindLatestErrorPayload()
 		if err != nil {
-			fmt.Printf("Retry error: %v\n", err)
+			slog.Error("executor.retry_payload_missing", "err", err)
 			return
 		}
 	}
 
 	data, err := os.ReadFile(jsonPath)
 	if err != nil {
-		fmt.Printf("Failed to read retry file %s: %v\n", jsonPath, err)
+		slog.Error("executor.retry_file_read_failed", "path", jsonPath, "err", err)
 		return
 	}
 
 	var payload RetryPayload
 	if err := json.Unmarshal(data, &payload); err != nil {
-		fmt.Printf("Failed to parse JSON retry payload from %s: %v\n", jsonPath, err)
+		slog.Error("executor.retry_payload_parse_failed", "path", jsonPath, "err", err)
 		return
 	}
 

@@ -3,6 +3,7 @@ package stockpicker
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"math"
 	"sort"
 
@@ -26,7 +27,7 @@ func ScoreUSQualityMomentum(
 	fullHistory map[string]*yfinance.HistoricalData,
 	hardFilters *config.HardFilters,
 ) map[string]float64 {
-	fmt.Printf("Calculating 100-Point US Quality-Momentum Relative Scoring Matrix for %d candidates...\n", len(activeKeys))
+	slog.InfoContext(ctx, "score.us_qm_start", "candidates", len(activeKeys))
 
 	// Raw indicator maps for normalization
 	roics := make(map[string]float64)
@@ -194,7 +195,7 @@ func SelectTopNUSQM(
 	if hardFilters != nil && hardFilters.MaxStocksPerSector > 0 {
 		maxPerSector = hardFilters.MaxStocksPerSector
 	}
-	fmt.Printf("Applying US Quality-Momentum Sector Caps (max %d stocks per sector)...\n", maxPerSector)
+	slog.Info("select.us_qm_sector_caps", "max_per_sector", maxPerSector)
 
 	var sectorCapCandidates []string
 	sectorCounts := make(map[string]int)
@@ -233,7 +234,7 @@ func SelectTopNUSQM(
 	}
 
 	bufferLimit := topN + hysteresisBuffer
-	fmt.Printf("Applying Hysteresis Buffer Zone (Top %d target, existing kept up to rank %d)...\n", topN, bufferLimit)
+	slog.Info("select.us_qm_hysteresis", "top_n", topN, "buffer_limit", bufferLimit)
 	return ApplyHysteresisSelection(sectorCapCandidates, existingHoldings, topN, bufferLimit, tracker)
 }
 
@@ -246,7 +247,7 @@ func NormalizeUSQMWeights(
 	existingHoldings map[string]float64,
 	rebalanceTolerance float64,
 ) map[string]float64 {
-	fmt.Printf("Normalizing weights for selected top %d US quality-momentum stocks...\n", len(selectedKeys))
+	slog.Info("normalize.us_qm_weights", "selected", len(selectedKeys))
 	finalWeights := make(map[string]float64)
 	var sumScore float64
 	for _, t := range selectedKeys {
@@ -342,7 +343,7 @@ func ApplyUSHardFilters(
 		passed = append(passed, t)
 	}
 
-	fmt.Printf("US Hard Filters: %d eliminated, %d candidates remaining.\n", eliminated, len(passed))
+	slog.InfoContext(ctx, "filter.us_hard_filters", "eliminated", eliminated, "remaining", len(passed))
 	return passed
 }
 
