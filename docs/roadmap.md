@@ -107,6 +107,8 @@ Automation eliminates all four. The system runs quarterly, follows its rules, an
 |------|----------|--------|-----------|
 | ~~`yfinance.GetCache()` still exists (deprecated)~~ | ~~`pkg/yfinance/duckdbcache.go`~~ | **RESOLVED (Phase 10a)** — deleted; zero callers | ✅ |
 | Seven command paths bypass `datafetcher.Router` | `cmd/report.go`, `cmd/monitor.go`, `cmd/optimize.go`, `pkg/server/handlers.go`, `pkg/executor/executor.go`, `pkg/backtest/valuation.go`, `pkg/autopilot/schedule.go` | US holdings got Yahoo data even when Schwab is configured | **RESOLVED (Phase 10b / R17)** — all seven routed through the Router; `US:SPY` benchmark; `source` column + slog fallback logging | ✅ |
+| Diagnostic output still on `fmt.Print*` instead of `slog` (violates logging steering two-channel rule) | `pkg/stockpicker/*` (io.go 74, run.go 10, loader.go 18, diff.go 11, retry.go 13, scoring.go 16, +others), `pkg/pithistory/analytics.go` (57), `pkg/executor/executor.go` (39) | Operational trace ("Warning: ...", counts, retry summaries) pollutes stdout; a user piping `mycase holdings` into a script gets diagnostics mixed with results. The R14 slog migration never reached these packages. | **OPEN → Phase R18** (see below) |
+| Steering `architecture.md` layer table is stale | `.kiro/steering/architecture.md` | Table omits `universe` (L0), `kiteclient` (L1), `pithistory` (L4) that now exist in `devtools/internal/layers/layers.go` (the real source of truth, green). Misleads readers; not an enforcement gap. | **OPEN → R18** — doc-only refresh |
 | ~~Schwab fundamentals mapper drops derivable fields~~ | ~~`pkg/broker/schwab/market.go` `mapSchwabFundamentals`~~ | **PARTLY RESOLVED (Phase 10a)** — `NetIncome` + `RegularPrice` now derived; `Sector` backfilled from constituents CSV via `stockpicker.InjectSectors` | 🟧 sector-via-CSV done, EDGAR statements → 10c |
 
 ---
@@ -126,6 +128,37 @@ Completed and dropped phases have been removed from this roadmap; their design d
 Small items left open by shipped phases, not yet scheduled:
 - Plumb `rsi` / `momentum_1y` from the scoring pass to the `selectiontracker.RecordDriverMetrics` site so the `selections` columns persist non-zero (they exist, currently zero).
 - Extend `mycase pipeline diff` to compare selection-level driver metrics between runs (today it diffs proposals only).
+
+---
+
+### Phase R18: Finish the slog migration + doc/tooling hygiene
+
+**What**: Close the two principle gaps surfaced by the EBM union-merge review (commit `53d99d6`). The merge itself preserved R16 layering (verified: `check-deps` green, no reverse imports, all designated leaves clean), but two pre-existing debts remain:
+
+1. **Complete the R14 slog migration into `stockpicker`, `pithistory`, and `executor`.** These packages predate R14 and still emit *diagnostic/operational* trace via `fmt.Print*` — violating the logging steering's two-channel rule (results→stdout, diagnostics→slog/stderr). The new EBM code (`retry.go`, `velocity.go`, `incubator.go`) correctly followed the surrounding convention, so it inherited the debt rather than introducing it.
+2. **Refresh `.kiro/steering/architecture.md`** so its layer table matches `devtools/internal/layers/layers.go` (add `universe` L0, `kiteclient` L1, `pithistory` L4). The checker is the source of truth and is green; this is a doc-accuracy fix only.
+
+**Why**: The two-channel rule exists so `mycase holdings | script` yields clean tabular stdout. Today ~200 `fmt.Print*` sites across these packages mix operational trace ("Warning: Failed to fetch fundamentals... Using fallbacks", "PIT RETRY SUMMARY", per-item counts) into stdout. Migrating them to `slog.*Context` (threading `ctx` for `req_id`) gives end-to-end tracing and keeps the product output clean.
+
+**Classification discipline (per logging steering — do NOT blind find-replace)**: each `fmt.Print*` site is one of:
+- **User-facing result** (proposal tables, harvest candidates, diff summary the investor reads) → leave on stdout or migrate to `pkg/render`. *No slog.*
+- **Diagnostic / operational** ("Warning:", counts, durations, retry summaries, "No active tickers... Exiting") → convert to `slog` at the right level (Warn for recoverable skips/fallbacks, Info for stage transitions/counts, Debug for per-item internals).
+- **Interactive UX** → keep on stdout only if genuinely interactive.
+
+**Scope (site counts from review)**:
+- `pkg/stockpicker/io.go` (74), `scoring.go` (16), `loader.go` (18), `retry.go` (13), `diff.go` (11), `run.go` (10), `scoring_us.go` (5), `filters.go` (2), `incubator.go` (1), `velocity.go` (1)
+- `pkg/pithistory/analytics.go` (57) — note much of `analytics.go` is likely the `pit analysis` *report* (user-facing → stays stdout/`render`); classify carefully.
+- `pkg/executor/executor.go` (39) — order-placement trace vs. the order-preview result (user-facing).
+
+**Deliverables**:
+- `stockpicker`/`pithistory`/`executor` diagnostic sites on `slog.*Context(ctx, "dotted.event", attrs...)`; user-facing results untouched or moved to `pkg/render`.
+- Where a genuine result is being printed ad-hoc, migrate to `pkg/render` for consistency.
+- `.kiro/steering/architecture.md` layer table synced to `layers.go`.
+- Consider a lightweight guard (test or `checkdeps`-style lint) asserting no new bare `fmt.Print*` in already-migrated files — optional.
+
+**Effort**: ~2–3 days. Mechanical but requires per-site judgment; no algorithm change, no layering change. Verify with `make cleanup` + `make test` + a manual `mycase pick ... > /tmp/out` to confirm stdout stays clean (diagnostics go to stderr/file).
+
+**Dependency**: none. Independent of Phase 10.
 
 ---
 
@@ -182,6 +215,7 @@ Active and planned phases only (completed/dropped phases removed):
 
 | Phase | Target | Dependency | Core value delivered | Status |
 |-------|--------|------------|---------------------|--------|
+| R18. slog migration + doc/tooling hygiene | Q4 2026 | none | Clean stdout/stderr separation in stockpicker/pithistory/executor; accurate layer docs | ⬜ |
 | 10. Data Source Resilience | Q4 2026 | Phase 2 (Schwab) | Authoritative US data (SEC EDGAR), Schwab everywhere, provenance | 🟧 10a+10b done |
 | 6. Options Overlay | H2 2027 | 6mo live data | Income optimization | ⬜ |
 

@@ -1,5 +1,11 @@
 .PHONY: build build-linux-arm64 build-linux-amd64 build-darwin-arm64 build-darwin-amd64
-.PHONY: install run test test-verbose test-race test-integration test-coverage cleanup clean fetch-echarts check-deps deps-graph help
+.PHONY: install run test test-verbose test-race test-integration test-coverage cleanup analyze clean fetch-echarts check-deps deps-graph help
+
+# Pinned advisory-analysis tool versions (run via `go run` — no global install needed).
+# Bump deliberately; keep reproducible per the project's determinism convention.
+DEADCODE_VER    ?= v0.49.0
+BETTERALIGN_VER ?= v0.15.0
+UNPARAM_VER     ?= v0.0.0-20260823230713-2fa3d841b0c8
 
 UNAME_S := $(shell uname -s)
 ifeq ($(UNAME_S),Darwin)
@@ -92,7 +98,24 @@ cleanup:
 	@govulncheck ./...
 	@echo "=== Dependency layering ==="
 	@go run ./devtools/checkdeps
+	@echo "=== Advisory analysis (non-blocking) ==="
+	@$(MAKE) --no-print-directory analyze || true
 	@echo "=== All clean ==="
+
+# analyze runs advisory static-analysis tools that surface refactor opportunities
+# but are NOT hard gates: each has known false positives (reflection/interface
+# reachability for deadcode, exported-but-unused for unparam, intentional layout
+# for betteralign). Run it directly to review findings; `cleanup` invokes it
+# non-blocking so a finding never fails the build. All three run via `go run` at
+# pinned versions — no global install required, and always built against the
+# current toolchain (a stale global `unparam` binary errors on newer go/types).
+analyze:
+	@echo "--- deadcode (unreachable funcs from main; verify before deleting) ---"
+	@go run golang.org/x/tools/cmd/deadcode@$(DEADCODE_VER) ./... || true
+	@echo "--- unparam (unused params / always-same args) ---"
+	@go run mvdan.cc/unparam@$(UNPARAM_VER) ./... || true
+	@echo "--- betteralign (struct field ordering; run 'betteralign -apply ./...' to fix) ---"
+	@go run github.com/dkorunic/betteralign/cmd/betteralign@$(BETTERALIGN_VER) ./... || true
 
 check-deps:
 	@go run ./devtools/checkdeps
@@ -132,7 +155,8 @@ help:
 	@echo "  test-race          - Run tests with race detector"
 	@echo "  test-integration   - Run integration tests (requires network)"
 	@echo "  test-coverage      - Run tests and generate coverage.html"
-	@echo "  cleanup            - gofmt + go fix + go vet + staticcheck + govulncheck + check-deps"
+	@echo "  cleanup            - gofmt + go fix + go vet + staticcheck + govulncheck + check-deps + analyze (advisory)"
+	@echo "  analyze            - Advisory static analysis: deadcode + unparam + betteralign (non-blocking)"
 	@echo "  check-deps         - Enforce R16 package layering (leaves + downward imports)"
 	@echo "  deps-graph         - Render pkg/ dependency graph to dist/deps.svg (layer-colored)"
 	@echo "  clean              - Remove build artifacts"
