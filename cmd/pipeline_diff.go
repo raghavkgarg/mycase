@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 
 	"github.com/urfave/cli/v3"
@@ -18,6 +19,7 @@ var pipelineDiffCmd = &cli.Command{
 	ArgsUsage: "<run_id_1> <run_id_2>",
 	Flags: []cli.Flag{
 		&cli.StringFlag{Name: "stage", Aliases: []string{"s"}, Value: "optimized", Usage: "Proposal stage to compare (draft, optimized, final)"},
+		&cli.BoolFlag{Name: "metrics", Aliases: []string{"m"}, Usage: "Also compare selection-level driver metrics (RSI, momentum, FCF yield, ROIC) between the two runs"},
 	},
 	Action: runPipelineDiff,
 }
@@ -148,7 +150,130 @@ func runPipelineDiff(ctx context.Context, c *cli.Command) error {
 		}
 	}
 	fmt.Printf("\n  Summary: +%d added, -%d removed, ~%d changed\n", added, removed, changed)
+
+	if c.Bool("metrics") {
+		if err := diffSelectionMetrics(ctx, db, runID1, runID2); err != nil {
+			return err
+		}
+	}
 	return nil
+}
+
+// driverMetric describes one comparable selection-level driver metric.
+type driverMetric struct {
+	name string
+	get  func(cache.Selection) float64
+	// pct=true renders the value as a percentage (fraction × 100); otherwise a
+	// plain 2-decimal number (used for RSI, which is already 0–100).
+	pct bool
+}
+
+var selectionDriverMetrics = []driverMetric{
+	{name: "RSI", get: func(s cache.Selection) float64 { return s.RSI }, pct: false},
+	{name: "Momentum 1Y", get: func(s cache.Selection) float64 { return s.Momentum1Y }, pct: true},
+	{name: "FCF Yield", get: func(s cache.Selection) float64 { return s.FCFYield }, pct: true},
+	{name: "ROIC", get: func(s cache.Selection) float64 { return s.ROIC }, pct: true},
+	{name: "TTM Growth", get: func(s cache.Selection) float64 { return s.TTMGrowth }, pct: true},
+	{name: "Revenue CAGR", get: func(s cache.Selection) float64 { return s.RevenueCagr }, pct: true},
+	{name: "DSO Delta", get: func(s cache.Selection) float64 { return s.DSODelta }, pct: false},
+}
+
+// diffSelectionMetrics compares the persisted selection-level driver metrics
+// (RSI, momentum, FCF yield, ROIC, ...) for tickers held in both runs, emitting
+// one row per (ticker, metric) whose value changed. It reads from the
+// selections table via GetSelections; runs recorded before driver metrics were
+// plumbed will simply show zeros.
+func diffSelectionMetrics(ctx context.Context, db *cache.Cache, runID1, runID2 string) error {
+	sel1, err := db.GetSelections(ctx, runID1)
+	if err != nil {
+		return fmt.Errorf("reading selections for %s: %w", runID1, err)
+	}
+	sel2, err := db.GetSelections(ctx, runID2)
+	if err != nil {
+		return fmt.Errorf("reading selections for %s: %w", runID2, err)
+	}
+
+	out := os.Stdout
+	fmt.Fprintln(out)
+	render.Section(out, "Selection Driver Metrics")
+
+	if len(sel1) == 0 && len(sel2) == 0 {
+		fmt.Println("  No selection metrics recorded for either run (run with a scoring method that records drivers).")
+		return nil
+	}
+
+	map1 := make(map[string]cache.Selection, len(sel1))
+	for _, s := range sel1 {
+		map1[s.Ticker] = s
+	}
+	map2 := make(map[string]cache.Selection, len(sel2))
+	for _, s := range sel2 {
+		map2[s.Ticker] = s
+	}
+
+	// Compare only tickers present in both runs; added/removed tickers are
+	// already surfaced by the proposals diff above.
+	common := make([]string, 0, len(map1))
+	for ticker := range map2 {
+		if _, ok := map1[ticker]; ok {
+			common = append(common, ticker)
+		}
+	}
+	sort.Strings(common)
+
+	var rows [][]string
+	for _, ticker := range common {
+		a, b := map1[ticker], map2[ticker]
+		for _, m := range selectionDriverMetrics {
+			va, vb := m.get(a), m.get(b)
+			if va == 0 && vb == 0 {
+				continue // metric not recorded by either run's method
+			}
+			if abs(va-vb) < 1e-9 {
+				continue // unchanged
+			}
+			rows = append(rows, []string{
+				ticker,
+				m.name,
+				fmtMetric(va, m.pct),
+				fmtMetric(vb, m.pct),
+				fmtMetricDelta(vb-va, m.pct),
+			})
+		}
+	}
+
+	if len(rows) == 0 {
+		fmt.Println("  No driver-metric changes between the two runs for commonly-held tickers.")
+		return nil
+	}
+
+	render.TableWithOpts(out, render.TableOpts{
+		Headers: []string{"Ticker", "Metric", "A", "B", "Δ"},
+		Rows:    rows,
+		Align: []render.Alignment{
+			render.AlignLeft, render.AlignLeft, render.AlignRight, render.AlignRight, render.AlignRight,
+		},
+	})
+	return nil
+}
+
+func fmtMetric(v float64, pct bool) string {
+	if pct {
+		return fmt.Sprintf("%.2f%%", v*100.0)
+	}
+	return fmt.Sprintf("%.2f", v)
+}
+
+func fmtMetricDelta(d float64, pct bool) string {
+	sign := "+"
+	if d < 0 {
+		sign = "-"
+		d = -d
+	}
+	if pct {
+		return fmt.Sprintf("%s%.2f%%", sign, d*100.0)
+	}
+	return fmt.Sprintf("%s%.2f", sign, d)
 }
 
 func diffIndexPicks(ctx context.Context, db *cache.Cache, run1, run2 cache.PipelineRun) error {

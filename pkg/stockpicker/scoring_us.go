@@ -186,13 +186,14 @@ func SelectTopNUSQM(
 	activeKeys []string,
 	scores map[string]float64,
 	fundamentals map[string]yfinance.Fundamentals,
+	fullHistory map[string]*yfinance.HistoricalData,
 	hardFilters *config.HardFilters,
 	topN int,
 	existingHoldings map[string]float64,
 	hysteresisBuffer int,
 	tracker *selectiontracker.Tracker,
 ) []string {
-	return SelectTopNUSQMWithCooldown(activeKeys, scores, fundamentals, hardFilters, topN, existingHoldings, hysteresisBuffer, tracker, nil, 0, 0)
+	return SelectTopNUSQMWithCooldown(activeKeys, scores, fundamentals, fullHistory, hardFilters, topN, existingHoldings, hysteresisBuffer, tracker, nil, 0, 0)
 }
 
 // SelectTopNUSQMWithCooldown selects top N US quality-momentum stocks with sector caps,
@@ -201,6 +202,7 @@ func SelectTopNUSQMWithCooldown(
 	activeKeys []string,
 	scores map[string]float64,
 	fundamentals map[string]yfinance.Fundamentals,
+	fullHistory map[string]*yfinance.HistoricalData,
 	hardFilters *config.HardFilters,
 	topN int,
 	existingHoldings map[string]float64,
@@ -238,9 +240,20 @@ func SelectTopNUSQMWithCooldown(
 		driverStr := fmt.Sprintf("ROE: %.1f%%, FCF Yield: %.1f%%, OpMargin: %.1f%%",
 			f.ROE*100.0, fcfY, f.OperatingMargins*100.0)
 		tracker.RecordAdditionDriver(t, driverStr)
+		// Momentum (12-mo skip-1-mo) and RSI (14-day) are recomputed here from
+		// price history so they persist to the selections table for transparency
+		// (pipeline show / diff). Momentum matches the scoring pass's
+		// computeMomentumSkip1Mo; RSI is not a scoring input, purely diagnostic.
+		mom := computeMomentumSkip1Mo(fullHistory[t])
+		rsi := 0.0
+		if h := fullHistory[t]; h != nil {
+			rsi = yfinance.CalculateRSI(h.Closes)
+		}
 		tracker.RecordDriverMetrics(t, selectiontracker.DriverMetrics{
-			FCFYield: fcfY / 100.0,
-			ROIC:     computeROIC(&f),
+			FCFYield:   fcfY / 100.0,
+			ROIC:       computeROIC(&f),
+			Momentum1Y: mom,
+			RSI:        rsi,
 		})
 
 		if sectorCounts[sec] >= maxPerSector {

@@ -301,7 +301,7 @@ proposal CSV between draft and prune (interactive workflow).
 ### Phase D: Cleanup + CLI Tooling ✅ Done
 
 1. ✅ `mycase pipeline history` — list past runs with dates, status, stock counts
-2. ✅ `mycase pipeline diff <run1> <run2>` — show what changed between runs
+2. ✅ `mycase pipeline diff <run1> <run2>` — show what changed between runs (add `--metrics`/`-m` to also diff selection-level driver metrics: RSI, momentum, FCF yield, ROIC, TTM growth, revenue CAGR, DSO delta)
 3. ✅ `mycase pipeline show <run_id>` — show proposals/selections for a specific run
 4. Remove file-writing code paths (keep `--export-csv` flag for manual export if needed) — defer to after Phase C
 5. Remove `data/candidates/` directory from active use (archive existing files) — defer to after Phase C

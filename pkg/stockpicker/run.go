@@ -172,7 +172,7 @@ func RunWithResult(ctx context.Context, opts *Options) (*PickResult, error) {
 		finalWeights = NormalizeEarlyMultibaggerWeights(selectedKeys, scores, fundamentals, cfg.HardFilters, goldenWeights, opts.RebalanceTolerance)
 	} else if opts.Method == "us_quality_momentum" {
 		scores = ScoreUSQualityMomentum(ctx, activeKeys, fundamentals, fullHistory, cfg.HardFilters)
-		selectedKeys = SelectTopNUSQMWithCooldown(activeKeys, scores, fundamentals, cfg.HardFilters, opts.TopN, goldenWeights, opts.HysteresisBuffer, tracker, recentExits, opts.CooldownDays, opts.CooldownBypassRank)
+		selectedKeys = SelectTopNUSQMWithCooldown(activeKeys, scores, fundamentals, fullHistory, cfg.HardFilters, opts.TopN, goldenWeights, opts.HysteresisBuffer, tracker, recentExits, opts.CooldownDays, opts.CooldownBypassRank)
 		finalWeights = NormalizeUSQMWeights(selectedKeys, scores, fundamentals, cfg.HardFilters, goldenWeights, opts.RebalanceTolerance)
 	} else {
 		selectedKeys = SelectTopNStandardWithCooldown(activeKeys, slicedPrices, benchmarkPrices, fundamentals, cfg.Weights, opts.TopN, goldenWeights, opts.HysteresisBuffer, tracker, recentExits, opts.CooldownDays, opts.CooldownBypassRank)

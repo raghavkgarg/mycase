@@ -126,9 +126,9 @@ Completed and dropped phases have been removed from this roadmap; their design d
 
 ### Carried-over follow-ups (non-blocking)
 
-Small items left open by shipped phases, not yet scheduled:
-- Plumb `rsi` / `momentum_1y` from the scoring pass to the `selectiontracker.RecordDriverMetrics` site so the `selections` columns persist non-zero (they exist, currently zero).
-- Extend `mycase pipeline diff` to compare selection-level driver metrics between runs (today it diffs proposals only).
+Small items left open by shipped phases:
+- ✅ **DONE** — Plumb `rsi` / `momentum_1y` from the scoring pass to the `selectiontracker.RecordDriverMetrics` site so the `selections` columns persist non-zero. The US quality-momentum selector (`SelectTopNUSQMWithCooldown`) now receives `fullHistory` and records `Momentum1Y` (via `computeMomentumSkip1Mo`) and `RSI` (via `yfinance.CalculateRSI`) at the `RecordDriverMetrics` call site; the round-trip to the `selections` table was already wired.
+- ✅ **DONE** — Extend `mycase pipeline diff` to compare selection-level driver metrics between runs. Added a `--metrics`/`-m` flag that appends a "Selection Driver Metrics" section diffing per-ticker RSI, momentum, FCF yield, ROIC, TTM growth, revenue CAGR, and DSO delta (via `cache.GetSelections`) for tickers held in both runs, rendered through `pkg/render`.
 
 ---
 
