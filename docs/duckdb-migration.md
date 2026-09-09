@@ -1,8 +1,23 @@
 # DuckDB Migration — Intermediate Pipeline Data
 
-**Status**: Planned — Phase 7 in [roadmap](roadmap.md)  
+**Status**: ✅ **Done** — shipped as Phase 7 (see [roadmap](roadmap.md) alpha-source appendix).  
+The pipeline no longer passes intermediate state via `data/candidates/` CSVs: runs,
+proposals, and selections live in DuckDB (`pkg/cache`), and `mycase pipeline
+history|show|diff` read them back. This document is retained as the **design record** for
+that completed work (schema, rationale, data-flow) — it is no longer an open plan.
+
+**What shipped vs. what was deferred**:
+- Phases A (schema), B (write path), D (CLI tooling: `history`/`show`/`diff`) — **done**.
+- Phase C: C1+C2 **done**. The literal C3/C4 line items ("selection tracker reads from
+  DB", "MergeGoldenCopy from DB") were marked deferred, **but the problem C3 existed to
+  solve is already resolved**: the selection tracker no longer parses its own previous
+  `.txt` report. Previous-run driver strings are sourced from the structured `selections`
+  history (`GetPreviousSelections`) and threaded in by the caller; the tracker only *writes*
+  a human-readable `.txt` report. The remaining deferred work (golden copy → DB) is gated on
+  the SwiftUI editing UI (roadmap Appendix B) and is intentionally still file-based.
+
 **Depends on**: Existing `pkg/cache/` DuckDB infrastructure  
-**Blocked by**: Nothing — can proceed independently of TLH / Performance Attribution
+**Blocked by**: Nothing
 
 ---
 
