@@ -14,7 +14,6 @@ import (
 	"math"
 	"slices"
 	"strings"
-	"unicode/utf8"
 
 	"github.com/raghavkgarg/mycase/pkg/broker"
 	brokertypes "github.com/raghavkgarg/mycase/pkg/broker/types"
@@ -35,24 +34,6 @@ type ThemeGroup struct {
 	CSVPath      string
 	Holdings     []brokertypes.Holding
 	TargetWeight float64
-}
-
-// PadString pads a string with spaces on the left to reach the target width in runes.
-func PadString(s string, width int) string {
-	res := s
-	for utf8.RuneCountInString(res) < width {
-		res = " " + res
-	}
-	return res
-}
-
-// PadStringRight pads a string with spaces on the left to reach the target width in runes
-func PadStringRight(s string, width int) string {
-	res := s
-	for utf8.RuneCountInString(res) < width {
-		res = " " + res
-	}
-	return res
 }
 
 // SellReturnItem holds calculated metrics for selling/exiting a holding.
@@ -195,12 +176,10 @@ func PrintPreviewTable(
 
 	// Render Exits & Sell Orders Return Breakdown if any sells exist
 	if len(sellItems) > 0 {
-		sb.WriteString("\n---------------------------------------------------------------------------------------------------------------------------------------------\n")
-		sb.WriteString("EXITS & SELL ORDERS RETURN BREAKDOWN:\n")
-		sb.WriteString("---------------------------------------------------------------------------------------------------------------------------------------------\n")
-		sb.WriteString("Symbol          | Type     | Sell Qty | Avg Buy Price | LTP         | Cost Basis     | Gross Inflow   | DP Charge  | Realized PnL (Net) | Return %  \n")
-		sb.WriteString("---------------------------------------------------------------------------------------------------------------------------------------------\n")
+		fmt.Fprintln(&sb)
+		r.Section("EXITS & SELL ORDERS RETURN BREAKDOWN")
 
+		breakdownRows := make([][]string, 0, len(sellItems))
 		for _, item := range sellItems {
 			avgPriceStr := "N/A"
 			costBasisStr := "N/A"
@@ -208,43 +187,58 @@ func PrintPreviewTable(
 			pnlPctStr := "N/A"
 
 			if item.HasAvgPrice {
-				avgPriceStr = fmt.Sprintf("₹%.2f", item.AvgBuyPrice)
-				costBasisStr = fmt.Sprintf("₹%.2f", item.CostBasis)
+				avgPriceStr = render.Currency(item.AvgBuyPrice, rupee)
+				costBasisStr = render.Currency(item.CostBasis, rupee)
 				pnlStr = FormatPnL(item.PnL)
 				pnlPctStr = FormatPnLPct(item.PnLPct)
 			}
 
-			sb.WriteString(fmt.Sprintf("%s | %s | %s | %s | %s | %s | %s | %s | %s | %s\n",
-				PadString(item.Symbol, 15),
-				PadString(item.Action, 8),
-				PadString(fmt.Sprintf("%d", item.SellQty), 8),
-				PadStringRight(avgPriceStr, 13),
-				PadStringRight(fmt.Sprintf("₹%.2f", item.LTP), 11),
-				PadStringRight(costBasisStr, 14),
-				PadStringRight(fmt.Sprintf("₹%.2f", item.GrossInflow), 14),
-				PadStringRight(fmt.Sprintf("₹%.2f", item.DPCharge), 10),
-				PadStringRight(pnlStr, 18),
-				PadStringRight(pnlPctStr, 9),
-			))
+			breakdownRows = append(breakdownRows, []string{
+				item.Symbol,
+				item.Action,
+				fmt.Sprintf("%d", item.SellQty),
+				avgPriceStr,
+				render.Currency(item.LTP, rupee),
+				costBasisStr,
+				render.Currency(item.GrossInflow, rupee),
+				render.Currency(item.DPCharge, rupee),
+				pnlStr,
+				pnlPctStr,
+			})
 		}
+
+		r.Table(render.TableOpts{
+			Headers: []string{"Symbol", "Type", "Sell Qty", "Avg Buy Price", "LTP", "Cost Basis", "Gross Inflow", "DP Charge", "Realized PnL (Net)", "Return %"},
+			Rows:    breakdownRows,
+			Align: []render.Alignment{
+				render.AlignLeft, render.AlignLeft, render.AlignRight, render.AlignRight, render.AlignRight,
+				render.AlignRight, render.AlignRight, render.AlignRight, render.AlignRight, render.AlignRight,
+			},
+			Border: render.BorderPipe,
+		})
 
 		var totalSellPnLPct float64
 		if totalSellCostBasis > 0 {
 			totalSellPnLPct = (totalSellPnL / totalSellCostBasis) * 100.0
 		}
 
-		sb.WriteString("---------------------------------------------------------------------------------------------------------------------------------------------\n")
+		var breakdownKV []render.KVPair
 		if anySellHasAvgPrice {
-			sb.WriteString(fmt.Sprintf("Total Cost Basis of Sold Shares:       ₹%.2f\n", totalSellCostBasis))
-			sb.WriteString(fmt.Sprintf("Total Gross Inflow from Sells:         ₹%.2f\n", totalSellGrossInflow))
-			sb.WriteString(fmt.Sprintf("Total DP Charges (₹15.05/stock):       ₹%.2f\n", totalSellDPCharges))
-			sb.WriteString(fmt.Sprintf("Total Net Realized Inflow from Sells:  ₹%.2f\n", totalSellNetInflow))
-			sb.WriteString(fmt.Sprintf("Total Realized Gain/Loss (Net of DP):  %s (%s)\n", FormatPnL(totalSellPnL), FormatPnLPct(totalSellPnLPct)))
+			breakdownKV = []render.KVPair{
+				{Key: "Total Cost Basis of Sold Shares", Value: render.Currency(totalSellCostBasis, rupee)},
+				{Key: "Total Gross Inflow from Sells", Value: render.Currency(totalSellGrossInflow, rupee)},
+				{Key: "Total DP Charges (₹15.05/stock)", Value: render.Currency(totalSellDPCharges, rupee)},
+				{Key: "Total Net Realized Inflow from Sells", Value: render.Currency(totalSellNetInflow, rupee)},
+				{Key: "Total Realized Gain/Loss (Net of DP)", Value: fmt.Sprintf("%s (%s)", FormatPnL(totalSellPnL), FormatPnLPct(totalSellPnLPct))},
+			}
 		} else {
-			sb.WriteString(fmt.Sprintf("Total Gross Inflow from Sells:         ₹%.2f\n", totalSellGrossInflow))
-			sb.WriteString(fmt.Sprintf("Total DP Charges (₹15.05/stock):       ₹%.2f\n", totalSellDPCharges))
-			sb.WriteString(fmt.Sprintf("Total Net Realized Inflow from Sells:  ₹%.2f\n", totalSellNetInflow))
+			breakdownKV = []render.KVPair{
+				{Key: "Total Gross Inflow from Sells", Value: render.Currency(totalSellGrossInflow, rupee)},
+				{Key: "Total DP Charges (₹15.05/stock)", Value: render.Currency(totalSellDPCharges, rupee)},
+				{Key: "Total Net Realized Inflow from Sells", Value: render.Currency(totalSellNetInflow, rupee)},
+			}
 		}
+		render.KV(&sb, breakdownKV)
 	}
 
 	netCashFlow := totalBuys - totalSells

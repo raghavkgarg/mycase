@@ -79,8 +79,8 @@ func TestPrintPreviewTable_WithSellReturns(t *testing.T) {
 		t.Errorf("expected output to contain 'PORTFOLIO SNAPSHOT', got:\n%s", output)
 	}
 
-	if !strings.Contains(output, "EXITS & SELL ORDERS RETURN BREAKDOWN:") {
-		t.Errorf("expected output to contain 'EXITS & SELL ORDERS RETURN BREAKDOWN:', got:\n%s", output)
+	if !strings.Contains(output, "EXITS & SELL ORDERS RETURN BREAKDOWN") {
+		t.Errorf("expected output to contain 'EXITS & SELL ORDERS RETURN BREAKDOWN', got:\n%s", output)
 	}
 
 	if !strings.Contains(output, "MINDACORP") || !strings.Contains(output, "EXIT") {

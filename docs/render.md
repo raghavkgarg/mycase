@@ -176,8 +176,12 @@ report output, and `pkg/printer` was rebuilt on top of it.
   monitor, optimize, cache, daemon, auth, autopilot, basket, pipeline all render through
   `render` (Banner/Section/KV/Table). Progress/status chatter stays on `fmt` (that is logging
   territory, tracked under R14, not reporting).
-- **`pkg/printer`** — holdings snapshot + basket preview rebuilt as `render` compositions; all
-  hand-rolled `PadString`/pipe-table/`FormatPnL` code deleted.
+- **`pkg/printer`** — holdings snapshot + basket preview are `render` compositions
+  (`render.New` + `Section`/`Banner`/`Table`/`KV`); the basket preview's "EXITS & SELL ORDERS
+  RETURN BREAKDOWN" section was the last hand-rolled `PadString`/pipe-table block and is now a
+  `render.Table` + `render.KV` (the `PadString`/`PadStringRight` helpers were deleted). The
+  `FormatPnL`/`FormatPnLPct` sign-formatting helpers remain as small pure string functions
+  (they are value formatting, not table/padding code).
 - **`pkg/executor`** — IP-whitelist banner via `render.Banner`.
 - **Removed** — every `strings.Repeat("-", N)` separator and `====` banner in `cmd/` and
   `pkg/executor/`.
