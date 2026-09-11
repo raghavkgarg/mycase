@@ -19,23 +19,23 @@ type DataFetcher interface {
 
 // Options holds command line configurations.
 type Options struct {
-	DataFetcher        DataFetcher // optional; if nil, falls back to direct yfinance calls
-	IndexName          string
-	FilePath           string
-	Method             string
-	RangeStr           string
-	GoldenPath         string
-	RebalanceTolerance float64
+	DataFetcher                         DataFetcher // optional; if nil, falls back to direct yfinance calls
+	IndexName                           string
+	FilePath                            string
+	Method                              string
+	RangeStr                            string
+	GoldenPath                          string
+	RebalanceTolerance                  float64
 	HysteresisBuffer                    int
 	HysteresisMinScoreDelta             float64
 	HysteresisRequireGrowthAcceleration bool
 	DisplayName                         string
-	OutputFile         string
-	Tickers            []string // pre-built ticker list (bypasses file/index loading)
-	TopN               int
-	SkipScuttlebutt    bool
-	CooldownDays       int
-	CooldownBypassRank int
+	OutputFile                          string
+	Tickers                             []string // pre-built ticker list (bypasses file/index loading)
+	TopN                                int
+	SkipScuttlebutt                     bool
+	CooldownDays                        int
+	CooldownBypassRank                  int
 }
 
 // TickersSource encapsulates tickers list source info.

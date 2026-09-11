@@ -19,24 +19,24 @@ type ScheduleConfig struct {
 
 // PipelineConfig holds the resolved pipeline configuration.
 type PipelineConfig struct {
-	Indices               []string       `yaml:"indices"`
-	Files                 []string       `yaml:"files"`
-	File                  string         `yaml:"file"`
-	Strategy              string         `yaml:"strategy"`
-	TopN                  int            `yaml:"top_n"`
-	GoldenCopyPath        string         `yaml:"golden_copy_path"`
-	Capital               int            `yaml:"capital"`
-	PurchaseDate          string         `yaml:"purchase_date"`
-	RebalanceTolerancePct float64        `yaml:"rebalance_tolerance_pct"`
-	HysteresisRankBuffer                   int            `yaml:"hysteresis_rank_buffer"`
-	HysteresisMinScoreDelta                float64        `yaml:"hysteresis_min_score_delta"`
-	HysteresisRequireGrowthAcceleration    bool           `yaml:"hysteresis_require_growth_acceleration"`
-	CooldownDays                           int            `yaml:"cooldown_days"`
-	CooldownBypassRank                     int            `yaml:"cooldown_bypass_rank"`
-	Broker                                 string         `yaml:"broker"`        // "zerodha" or "schwab"
-	SchwabConfig                           string         `yaml:"schwab_config"` // path to schwab.json
-	SchwabToken                            string         `yaml:"schwab_token"`  // path to schwab_token.json
-	Schedule                               ScheduleConfig `yaml:"schedule"`
+	Indices                             []string       `yaml:"indices"`
+	Files                               []string       `yaml:"files"`
+	File                                string         `yaml:"file"`
+	Strategy                            string         `yaml:"strategy"`
+	TopN                                int            `yaml:"top_n"`
+	GoldenCopyPath                      string         `yaml:"golden_copy_path"`
+	Capital                             int            `yaml:"capital"`
+	PurchaseDate                        string         `yaml:"purchase_date"`
+	RebalanceTolerancePct               float64        `yaml:"rebalance_tolerance_pct"`
+	HysteresisRankBuffer                int            `yaml:"hysteresis_rank_buffer"`
+	HysteresisMinScoreDelta             float64        `yaml:"hysteresis_min_score_delta"`
+	HysteresisRequireGrowthAcceleration bool           `yaml:"hysteresis_require_growth_acceleration"`
+	CooldownDays                        int            `yaml:"cooldown_days"`
+	CooldownBypassRank                  int            `yaml:"cooldown_bypass_rank"`
+	Broker                              string         `yaml:"broker"`        // "zerodha" or "schwab"
+	SchwabConfig                        string         `yaml:"schwab_config"` // path to schwab.json
+	SchwabToken                         string         `yaml:"schwab_token"`  // path to schwab_token.json
+	Schedule                            ScheduleConfig `yaml:"schedule"`
 }
 
 // Snapshot returns a compact JSON snapshot of the resolved config, for recording

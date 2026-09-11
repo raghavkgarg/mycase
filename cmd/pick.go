@@ -84,21 +84,21 @@ func pickOptsFromCmd(c *cli.Command) *stockpicker.Options {
 	}
 
 	return &stockpicker.Options{
-		IndexName:          indexName,
-		FilePath:           c.String("file"),
-		Method:             method,
-		TopN:               topN,
-		RangeStr:           rangeStr,
-		SkipScuttlebutt:    c.Bool("skip-scuttlebutt"),
-		GoldenPath:         c.String("golden"),
-		RebalanceTolerance: c.Float("rebalance-tolerance"),
+		IndexName:                           indexName,
+		FilePath:                            c.String("file"),
+		Method:                              method,
+		TopN:                                topN,
+		RangeStr:                            rangeStr,
+		SkipScuttlebutt:                     c.Bool("skip-scuttlebutt"),
+		GoldenPath:                          c.String("golden"),
+		RebalanceTolerance:                  c.Float("rebalance-tolerance"),
 		HysteresisBuffer:                    int(c.Int("hysteresis-buffer")),
 		HysteresisMinScoreDelta:             3.0,
 		HysteresisRequireGrowthAcceleration: true,
 		CooldownDays:                        int(c.Int("cooldown-days")),
-		CooldownBypassRank: int(c.Int("cooldown-bypass-rank")),
-		DisplayName:        c.String("name"),
-		OutputFile:         c.String("out"),
+		CooldownBypassRank:                  int(c.Int("cooldown-bypass-rank")),
+		DisplayName:                         c.String("name"),
+		OutputFile:                          c.String("out"),
 	}
 }
 

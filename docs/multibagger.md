@@ -261,14 +261,12 @@ flowchart TD
 4. **Scoring & Relative Ranking**:
    - **Multibagger Path (`pkg/stockpicker/scoring.go`)**: Evaluation is performed relative to the surviving cohort. Tickers are scored out of 100 (weighted across Revenue Acceleration, Asset Turnover, PEG, ROCE, Volume, and RS), and sorted with a lower market-cap tie-breaker.
    - **Standard Paths (`pkg/optimizer/mfs.go`)**: Evaluation uses `OptimizeMultiFactor` to score and rank tickers across 16 technical and fundamental dimensions.
-5. **Anti-Churn Cooldown & 5-Phase Displacement Hysteresis Selection**:
+5. **Anti-Churn Cooldown & Smart 5-Phase Hysteresis Selection (Hybrid 3A + 3B)**:
    - **Re-Entry Cooldown**: Exited tickers cannot re-enter within 30 days unless ranked $\le 5$ (exceptional conviction bypass).
-   - **5-Phase Hysteresis**:
-     1. Retain Core Existing Holdings ($Rank \le 20$).
-     2. Add High-Conviction New Entrants ($Rank \le 15$), displacing buffer holdings.
-     3. Fill remaining slots from Buffer Zone Holdings ($21 \le Rank \le 25$) by rank.
-     4. Fill leftover vacant slots with Marginal New Entrants ($16 \le Rank \le 20$).
-     5. Audit tracking with exact funnel conservation (`SelectionFunnel.Validate()`).
+   - **Smart Hysteresis (Hybrid 3A + 3B)**:
+     - **Rule 3B (Fundamental Health Eligibility)**: Buffer zone holdings ($21 \le Rank \le 25$) forfeit buffer protection if sales growth decelerates ($TTM \le 3Y\text{ CAGR}$).
+     - **Rule 3A (Score-Dominance Displacement)**: New entrants in Top $N$ ($Rank \le 20$) displace eligible buffer holdings when their score advantage $\ge \Delta_{conviction}$ (default: $3.0\text{ pts}$).
+     - **5-Phase Ordering**: Core existing holdings $\to$ High-conviction & score-dominant new entrants $\to$ Eligible undisplaced buffer holdings $\to$ Marginal new entrants $\to$ Structural funnel audit tracking (`SelectionFunnel.Validate()`).
 6. **Sector Risk Management & Persistence**: Sector concentration is capped at **25%** (or max stocks per sector). The selected portfolio is saved to `data/stockpicker_<source>_<method>.csv` and comprehensive audit reports are written to `report/<universe>_multibagger/executions/`.
 
 ### Configuration vs. Hardcoded Logic
@@ -299,6 +297,8 @@ For the `multibagger` method, the following filter parameters are mapped:
 * `"volume_breakout_multiplier"`: Minimum volume multiplier threshold on green days compared to average red days (default `2.0`x).
 * `"max_stocks_per_sector"`: Maximum number of stocks allowed from the same sector in the selection portfolio (default `3`).
 * `"max_sector_weight_cap"`: Maximum concentration weight allowed for any single sector (default `0.25` / 25%).
+* `"hysteresis_min_score_delta"`: Minimum score advantage required for a Top $N$ new entrant to displace a buffer holding (default `3.0` pts in `config/pipeline.yaml`).
+* `"hysteresis_require_growth_acceleration"`: If true, existing holdings in the buffer zone forfeit buffer protection if sales growth decelerates ($TTM \le 3Y\text{ CAGR}$) (default `true` in `config/pipeline.yaml`).
 
 #### 2. Hardcoded Rules & Logics
 While all parameters and thresholds are now configurable in [mfs.json](file:///Users/raghavgarg/Projects/myGo/mycase/config/mfs.json), the underlying core mathematical check logic remains built into the Go packages:
@@ -349,7 +349,7 @@ Adjust the lookback range (e.g. 6 months or 1 year) for benchmark tracking:
 
 A fundamental vulnerability of purely quantitative screeners is **portfolio whipsaw and turnover**:
 * A stock is eliminated on a temporary 1-week dip or metric normalization, only to be re-added two weeks later (e.g. `NSE:ARVIND`).
-* A high-conviction compounder entering at Rank 10 is blocked from entering because lower-ranked buffer laggards at Ranks 24–25 rigidly consume all slots (e.g. `NSE:LTFOODS`).
+* **The Jamna Auto vs. Data Patterns Paradox**: A decelerating legacy holding (e.g. `NSE:JAMNAAUTO` at Rank 21, Score 33.5, revenue growth decelerating from +4.1% 3Y CAGR to +3.4% TTM, flagged for `⚠️ AUTO EXIT`) exploits ordinal hysteresis to block a high-conviction breakout compounder (e.g. `NSE:DATAPATTNS` at Rank 17, Score 40.0, TTM growth +32.9%).
 * A stock with a rising 200-SMA closes at 0.94 of its 200-SMA on a single volatile day and gets 100% liquidated (binary cliff).
 
 To solve these live production challenges, `mycase` implements a **4-pillar anti-churn system**:
@@ -378,41 +378,85 @@ To eliminate binary cliff liquidations, the system applies asymmetric thresholds
    - **CFO/PAT**: Floor relaxes from 25% to 20% (20% buffer).
    - **Promoter Stake**: Floor relaxes from 25% to 22.5% (10% buffer).
 
-### Pillar 3: 5-Phase Hysteresis Selection with High-Conviction Displacement
-In standard portfolios ($Top N = 20, \text{Buffer} = 5 \implies \text{Buffer Limit} = 25$):
-* **Displacement Threshold**: $\text{Displacement Rank} = Top N - \text{Buffer} = 20 - 5 = 15$.
-* **The 5 Ordered Phases**:
-  1. **Phase 1 (Core Existing Holdings)**: Retain all existing holdings that are solidly within the Top 20 ($Rank \le 20$).
-  2. **Phase 2 (High-Conviction Entrants)**: New candidates with $Rank \le 15$ (e.g. `SARDAEN` #2, `MSTCLTD` #9, `LTFOODS` #10) take precedence over buffer-zone laggards and displace them.
-  3. **Phase 3 (Buffer Zone Holdings)**: Remaining available slots are filled by existing holdings in the buffer zone ($21 \le Rank \le 25$, e.g. `WABAG` #21, `CCL` #23, `GOKULAGRO` #24) ordered by rank. Lowest buffer holdings (e.g. `ACUTAAS` #25) are displaced if slots are consumed by Phase 2.
-  4. **Phase 4 (Marginal New Entrants)**: New candidates in the marginal zone ($16 \le Rank \le 20$, e.g. `DATAPATTNS` #17, `AVALON` #18, `KPIL` #20) can only fill leftover vacant slots; they **cannot** displace buffer holdings.
-  5. **Phase 5 (Rejection Tracking)**: Accurately classifies why each candidate was dropped (`"Displaced from buffer"`, `"Fell below buffer limit"`, `"Portfolio full"`, or `"On Cooldown"`).
+### Pillar 3: Smart Hysteresis Selection with Score-Dominance Displacement & Fundamental Health Eligibility (Hybrid 3A + 3B)
+
+A naive rank-based hysteresis buffer introduces two critical failure modes in live trading:
+1. **Rigid Ordinal Barricade**: In a standard Top 20 portfolio with buffer 5 ($\text{Displacement Rank} = Top N - \text{Buffer} = 20 - 5 = 15$), all new entrants ranking between 16 and 20 are strictly barred from displacing buffer holdings, regardless of whether their score advantage is colossal or negligible.
+2. **Double-Grace Exploitation**: In Stage 1 hard filters, active holdings receive soft cushions (only need 1/3 operational criteria, e.g. `minPassCount = 1`). In Stage 2, rank hysteresis grants them a *second* grace, allowing decelerating zombie holdings to linger at Ranks 21–25 and block top compounders—even while the portfolio monitor simultaneously recommends an `AUTO EXIT`.
+
+To resolve this paradox without introducing churning on healthy compounders, `mycase` implements **Smart Hysteresis (Hybrid 3A + 3B)**:
+
+#### 1. Rule 3B: Fundamental Health Eligibility Check (Buffer Grace Forfeiture)
+* **Core Philosophy**: The hysteresis buffer ($TopN < Rank \le \text{BufferLimit}$, e.g. Ranks 21–25) is a *grace zone* designed to protect high-conviction compounders from temporary price consolidation or market noise. It is **not** a sanctuary for fundamentally deteriorating businesses.
+* **The Gate**: When an existing holding falls into the buffer zone ($21 \le Rank \le 25$), the engine evaluates its revenue acceleration via `yfinance.CalculateSalesGrowth(&f)`:
+  - If its sales growth has decelerated below its 3-year CAGR:
+    $$\text{TTM Revenue Growth} \le \text{3-Year Revenue CAGR} \implies \text{Buffer Grace Forfeited}$$
+  - **IPO Protection**: Forfeiture only applies if the stock has at least 3 years of reported annual revenue (`len(f.AnnualRevenue) >= 3`), preventing young listings from premature eviction.
+* **Action**: Decelerating buffer holdings are disqualified from buffer grace and immediately dropped, freeing slots for top-ranked compounders.
+* **Audit Reason**: Categorized in tracker logs as:
+  `"Removed: Rank %d buffer protection forfeited due to decelerating sales growth (TTM %+.1f%% <= 3Y CAGR %+.1f%%)"`.
+
+#### 2. Rule 3A: Cardinal Score-Dominance Displacement
+* **Core Philosophy**: When a new candidate qualifies solidly within the Top $N$ ($1 \le Rank \le TopN$), its score difference relative to buffer holdings reflects decisive conviction. If that advantage is substantial, it must displace the buffer holding.
+* **Displacement Condition**: A new entrant $B$ ($1 \le Rank_B \le TopN$) displaces an eligible buffer holding $A$ ($TopN < Rank_A \le \text{BufferLimit}$) if:
+  $$\text{Score}_B - \text{Score}_A \ge \Delta_{\text{conviction}} \quad (\text{Configurable: } \texttt{hysteresis\_min\_score\_delta: 3.0})$$
+* **1-for-1 Displacement Balancing**: Each displacement increments `displacedCount`. The engine calculates:
+  $$\text{numEligibleBufferToRetain} = \max\Big(0, \; |\text{eligibleBufferHoldings}| - \text{displacedCount}\Big)$$
+  Ensuring the final selection count remains exactly $TopN$ without overfilling or diluting portfolio quality.
+* **Noise Protection (Zero Churn on Marginal Flips)**:
+  - `DATAPATTNS` (Rank 17, Score 40.0) vs `JAMNAAUTO` (Rank 21, Score 33.5): $\Delta = +6.5\text{ pts} \ge 3.0\text{ pts} \implies$ **Displaces `JAMNAAUTO`**.
+  - Minor rank wobble (e.g. New Entrant Score 34.0 vs Buffer Holding Score 33.5, $\Delta = 0.5 < 3.0\text{ pts}$) $\implies$ **Hysteresis protects holding, zero churn**.
+
+#### 3. The 5 Ordered Phases of Smart Hysteresis Selection
+
+1. **Phase 1 (Core Existing Holdings)**: Retain all existing holdings solidly within the target portfolio ($Rank \le TopN$, e.g. $Rank \le 20$).
+2. **Phase 2 (High-Conviction & Score-Dominant Entrants)**: New candidates in Top $N$ are evaluated. A candidate enters and displaces a buffer holding if:
+   - $Rank \le \text{Displacement Rank}$ (classical ordinal conviction: $TopN - \text{Buffer}$, e.g. $Rank \le 15$), **OR**
+   - Rule 3A is met: Its score exceeds an undisplaced eligible buffer holding by $\ge \Delta_{conviction}$ (3.0 pts).
+3. **Phase 3 (Undisplaced Eligible Buffer Holdings)**: Remaining available slots are filled by existing buffer holdings ($TopN < Rank \le \text{BufferLimit}$) that:
+   - Passed Rule 3B (sales growth non-decelerating), **AND**
+   - Were not displaced by score-dominant Phase 2 entrants.
+4. **Phase 4 (Marginal New Entrants)**: Any remaining vacant slots are filled by leftover new entrants in Top $N$ ($16 \le Rank \le 20$).
+5. **Phase 5 (Audit & Rejection Tracking)**: Records exact drop classifications:
+   - `"Displaced from buffer zone by high-conviction candidate"`
+   - `"Removed: Rank %d buffer protection forfeited due to decelerating sales growth"`
+   - `"Not added: portfolio full (slots filled by existing holdings retained via hysteresis)"`
+   - `"Dropped due to anti-churn cooldown"`
 
 ```text
  ┌────────────────────────────────────────────────────────────────────────────────────────┐
- │ Phase 1: Core Existing Holdings (Rank <= 20)                                           │
- │ Retain all existing holdings that are solidly within the Top 20.                      │
+ │ Phase 1: Core Existing Holdings (Rank <= TopN, e.g. Rank <= 20)                        │
+ │ Retain all existing holdings that are solidly within the Top N target.                │
  └───────────────────────────────────┬────────────────────────────────────────────────────┘
                                      │
  ┌───────────────────────────────────▼────────────────────────────────────────────────────┐
- │ Phase 2: High-Conviction Entrants (Rank <= 15, e.g. SARDAEN #2, MSTCLTD #9, LTFOODS #10)│
- │ Strong new additions take precedence over buffer-zone laggards and displace them.       │
+ │ Buffer Zone Pre-Filter: Rule 3B Fundamental Health Audit (Rank TopN+1 to BufferLimit)  │
+ │ Sales growth accelerating (TTM > 3Y CAGR)?                                             │
+ │   ├─ NO  ──> ❌ FORFEIT BUFFER GRACE (Evicted, slot freed for Top N compounders)       │
+ │   └─ YES ──> ✅ Eligible Buffer Holdings (Eligible for hysteresis protection)          │
  └───────────────────────────────────┬────────────────────────────────────────────────────┘
                                      │
  ┌───────────────────────────────────▼────────────────────────────────────────────────────┐
- │ Phase 3: Buffer Zone Holdings (Rank 21 to 25, e.g. WABAG #21, CCL #23, GOKULAGRO #24)   │
- │ Remaining slots are filled by existing holdings in the buffer (best rank first).       │
- │ Displaces the lowest buffer holdings (e.g. ACUTAAS #25) if slots are taken by Phase 2. │
+ │ Phase 2: High-Conviction & Score-Dominant Entrants (Rank <= TopN)                      │
+ │ Candidate qualifies if:                                                                │
+ │   1. Classical Ordinal: Rank <= Displacement Rank (e.g. Rank <= 15), OR                │
+ │   2. Rule 3A: Score >= Eligible Buffer Score + 3.0 pts (e.g. DATAPATTNS 40 vs JAMNA 33)│
+ │ Each admitted candidate consumes 1 slot and displaces 1 buffer holding.               │
  └───────────────────────────────────┬────────────────────────────────────────────────────┘
                                      │
  ┌───────────────────────────────────▼────────────────────────────────────────────────────┐
- │ Phase 4: Marginal New Entrants (Rank 16 to 20, e.g. DATAPATTNS #17, AVALON #18)        │
- │ Only fill leftover slots if available. CANNOT displace protected buffer holdings.      │
+ │ Phase 3: Undisplaced Eligible Buffer Holdings (Rank 21 to 25)                          │
+ │ Fill remaining open slots with eligible buffer holdings not displaced by Phase 2.      │
  └───────────────────────────────────┬────────────────────────────────────────────────────┘
                                      │
  ┌───────────────────────────────────▼────────────────────────────────────────────────────┐
- │ Phase 5: Rejection Recording & Audit                                                   │
- │ Exact audit classifications: "Displaced from buffer", "Portfolio full", "On Cooldown". │
+ │ Phase 4: Marginal New Entrants (Rank 16 to 20)                                         │
+ │ Fill any leftover vacant slots if portfolio count < TopN.                             │
+ └───────────────────────────────────┬────────────────────────────────────────────────────┘
+                                     │
+ ┌───────────────────────────────────▼────────────────────────────────────────────────────┐
+ │ Phase 5: Selection Audit & Rejection Recording                                         │
+ │ Structural tracking with exact reasons (Rule 3B forfeiture, displacement, cooldown).   │
  └────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 

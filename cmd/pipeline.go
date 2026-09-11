@@ -225,17 +225,17 @@ func runPipeline(ctx context.Context, c *cli.Command) error {
 		for _, src := range sources {
 			outPath := filepath.Join("data", "candidates", "index_picks", fmt.Sprintf("%s_%s.csv", src.name, cfg.Strategy))
 			opts := &stockpicker.Options{
-				Method:             cfg.Strategy,
-				TopN:               cfg.TopN,
-				RangeStr:           "3mo",
-				GoldenPath:         cfg.GoldenCopyPath,
+				Method:                              cfg.Strategy,
+				TopN:                                cfg.TopN,
+				RangeStr:                            "3mo",
+				GoldenPath:                          cfg.GoldenCopyPath,
 				RebalanceTolerance:                  cfg.RebalanceTolerancePct,
 				HysteresisBuffer:                    cfg.HysteresisRankBuffer,
 				HysteresisMinScoreDelta:             cfg.HysteresisMinScoreDelta,
 				HysteresisRequireGrowthAcceleration: cfg.HysteresisRequireGrowthAcceleration,
 				CooldownDays:                        cfg.CooldownDays,
-				CooldownBypassRank: cfg.CooldownBypassRank,
-				OutputFile:         outPath,
+				CooldownBypassRank:                  cfg.CooldownBypassRank,
+				OutputFile:                          outPath,
 			}
 			if src.isIndex {
 				fmt.Printf("\n[Step %d/%d] Running %s stock selection on index %s...\n", stepCounter, totalSteps, cfg.Strategy, src.name)
@@ -308,11 +308,11 @@ func runPipeline(ctx context.Context, c *cli.Command) error {
 			fmt.Printf("\n[Step %d/%d] Running stockpicker on combined candidates to select top %d candidates...\n", stepCounter, totalSteps, proposalTopN)
 			outPath := filepath.Join("data", "candidates", "proposals", fmt.Sprintf("%s_%s_%s.csv", dateStr, goldenBase, cfg.Strategy))
 			opts := &stockpicker.Options{
-				Tickers:            combinedTickers,
-				Method:             cfg.Strategy,
-				TopN:               proposalTopN,
-				RangeStr:           "3mo",
-				GoldenPath:         cfg.GoldenCopyPath,
+				Tickers:                             combinedTickers,
+				Method:                              cfg.Strategy,
+				TopN:                                proposalTopN,
+				RangeStr:                            "3mo",
+				GoldenPath:                          cfg.GoldenCopyPath,
 				RebalanceTolerance:                  cfg.RebalanceTolerancePct,
 				HysteresisBuffer:                    cfg.HysteresisRankBuffer,
 				HysteresisMinScoreDelta:             cfg.HysteresisMinScoreDelta,
@@ -361,9 +361,9 @@ func runPipeline(ctx context.Context, c *cli.Command) error {
 				HysteresisMinScoreDelta:             cfg.HysteresisMinScoreDelta,
 				HysteresisRequireGrowthAcceleration: cfg.HysteresisRequireGrowthAcceleration,
 				CooldownDays:                        cfg.CooldownDays,
-				CooldownBypassRank: cfg.CooldownBypassRank,
-				DisplayName:        goldenBase,
-				OutputFile:         optimPath,
+				CooldownBypassRank:                  cfg.CooldownBypassRank,
+				DisplayName:                         goldenBase,
+				OutputFile:                          optimPath,
 			}
 			if err := runPickWithOpts(ctx, opts2); err != nil {
 				return fmt.Errorf("step %d (pick prune): %w", stepCounter, err)
