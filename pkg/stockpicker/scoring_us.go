@@ -211,6 +211,7 @@ func SelectTopNUSQMWithCooldown(
 	recentExits map[string]time.Time,
 	cooldownDays int,
 	bypassRank int,
+	smartHysteresis ...SmartHysteresisConfig,
 ) []string {
 	maxPerSector := 4
 	if hardFilters != nil && hardFilters.MaxStocksPerSector > 0 {
@@ -267,7 +268,8 @@ func SelectTopNUSQMWithCooldown(
 
 	bufferLimit := topN + hysteresisBuffer
 	slog.Info("select.us_qm_hysteresis", "top_n", topN, "buffer_limit", bufferLimit)
-	return ApplyHysteresisSelectionWithCooldown(sectorCapCandidates, existingHoldings, topN, bufferLimit, tracker, recentExits, cooldownDays, bypassRank)
+	smartCfg := resolveSmartHysteresis(scores, fundamentals, smartHysteresis)
+	return ApplyHysteresisSelectionSmart(sectorCapCandidates, existingHoldings, topN, bufferLimit, tracker, recentExits, cooldownDays, bypassRank, smartCfg)
 }
 
 // NormalizeUSQMWeights normalizes weights proportionally to scores with stock & sector caps.

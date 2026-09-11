@@ -44,6 +44,10 @@ rebalance_tolerance_pct:
 hysteresis_rank_buffer:
   - 5
 
+# Smart Hysteresis (Hybrid 3A + 3B)
+hysteresis_min_score_delta: 3.0              # New candidate in top N displaces buffer holding if score advantage >= 3.0 pts
+hysteresis_require_growth_acceleration: true # Buffer grace forfeited if holding has decelerating revenue growth (TTM < 3Y CAGR)
+
 cooldown_days:
   - 30
 

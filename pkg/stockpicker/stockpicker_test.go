@@ -5,6 +5,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -515,6 +516,182 @@ func TestApplyHysteresisSelection_DisplacementByHighConviction(t *testing.T) {
 	if hasE3 {
 		t.Errorf("expected buffer holding E3 (rank 4) to be displaced by N1, but it was retained: %v", selected)
 	}
+}
+
+func TestApplyHysteresisSelectionSmart_ScoreDominanceDisplacement(t *testing.T) {
+	// Scenario matching JAMNAAUTO vs DATAPATTNS:
+	// topN = 3, bufferLimit = 5 (displacementRank = 3 - 2 = 1)
+	// E1 (rank 1, score 50.0, existing)
+	// E2 (rank 2, score 45.0, existing)
+	// N1 (rank 3, score 40.0, new entrant)
+	// E3 (rank 4, score 33.5, existing holding in buffer zone)
+	// N2 (rank 5, score 25.0, new entrant)
+	sorted := []string{"E1", "E2", "N1", "E3", "N2"}
+	existing := map[string]float64{
+		"E1": 0.33,
+		"E2": 0.33,
+		"E3": 0.33,
+	}
+
+	t.Run("Score dominance delta >= 3.0 displaces buffer holding", func(t *testing.T) {
+		scores := map[string]float64{
+			"E1": 50.0,
+			"E2": 45.0,
+			"N1": 40.0, // delta vs E3 = +6.5 pts >= 3.0
+			"E3": 33.5,
+			"N2": 25.0,
+		}
+		tracker := selectiontracker.New()
+		cfg := SmartHysteresisConfig{
+			MinScoreDelta: 3.0,
+			Scores:        scores,
+		}
+		selected := ApplyHysteresisSelectionSmart(sorted, existing, 3, 5, tracker, nil, 0, 0, cfg)
+		if len(selected) != 3 {
+			t.Fatalf("expected 3 selected, got %d: %v", len(selected), selected)
+		}
+		hasN1 := false
+		hasE3 := false
+		for _, s := range selected {
+			if s == "N1" {
+				hasN1 = true
+			}
+			if s == "E3" {
+				hasE3 = true
+			}
+		}
+		if !hasN1 {
+			t.Errorf("expected N1 (score 40.0) to displace E3 (score 33.5), but N1 was not selected: %v", selected)
+		}
+		if hasE3 {
+			t.Errorf("expected E3 to be displaced by N1, but E3 was retained: %v", selected)
+		}
+	})
+
+	t.Run("Score difference < 3.0 preserves hysteresis (no churn)", func(t *testing.T) {
+		scores := map[string]float64{
+			"E1": 50.0,
+			"E2": 45.0,
+			"N1": 34.0, // delta vs E3 = +0.5 pts < 3.0 (minor noise)
+			"E3": 33.5,
+			"N2": 25.0,
+		}
+		tracker := selectiontracker.New()
+		cfg := SmartHysteresisConfig{
+			MinScoreDelta: 3.0,
+			Scores:        scores,
+		}
+		selected := ApplyHysteresisSelectionSmart(sorted, existing, 3, 5, tracker, nil, 0, 0, cfg)
+		if len(selected) != 3 {
+			t.Fatalf("expected 3 selected, got %d: %v", len(selected), selected)
+		}
+		hasN1 := false
+		hasE3 := false
+		for _, s := range selected {
+			if s == "N1" {
+				hasN1 = true
+			}
+			if s == "E3" {
+				hasE3 = true
+			}
+		}
+		if hasN1 {
+			t.Errorf("expected N1 (+0.5 pts) NOT to displace E3 due to hysteresis buffer, but N1 was selected: %v", selected)
+		}
+		if !hasE3 {
+			t.Errorf("expected E3 to be retained by hysteresis for small delta, but E3 was dropped: %v", selected)
+		}
+	})
+
+	t.Run("Classic hysteresis without smart config retains buffer holding", func(t *testing.T) {
+		tracker := selectiontracker.New()
+		selected := ApplyHysteresisSelectionSmart(sorted, existing, 3, 5, tracker, nil, 0, 0, SmartHysteresisConfig{})
+		if len(selected) != 3 {
+			t.Fatalf("expected 3 selected, got %d: %v", len(selected), selected)
+		}
+		hasE3 := false
+		for _, s := range selected {
+			if s == "E3" {
+				hasE3 = true
+			}
+		}
+		if !hasE3 {
+			t.Errorf("classic hysteresis should retain E3 in buffer zone: %v", selected)
+		}
+	})
+}
+
+func TestApplyHysteresisSelectionSmart_FundamentalHealthForfeiture(t *testing.T) {
+	// topN = 2, bufferLimit = 3
+	// N1 (rank 1, new)
+	// N2 (rank 2, new)
+	// E_DECEL (rank 3, buffer zone, decelerating sales growth)
+	sorted := []string{"N1", "N2", "E_DECEL"}
+	existing := map[string]float64{
+		"E_DECEL": 0.5,
+	}
+
+	decelFundamentals := map[string]yfinance.Fundamentals{
+		"E_DECEL": {
+			AnnualRevenue: []yfinance.AnnualMetric{
+				{Date: "2022-03-31", Value: 100.0},
+				{Date: "2023-03-31", Value: 125.0},
+				{Date: "2024-03-31", Value: 150.0}, // 3Y CAGR ~22.5%
+			},
+			TTMRevenue: 155.0, // TTM growth = +3.3% (< 22.5% CAGR, decelerating)
+		},
+	}
+
+	t.Run("Decelerating growth forfeits buffer grace", func(t *testing.T) {
+		tracker := selectiontracker.New()
+		cfg := SmartHysteresisConfig{
+			RequireGrowthAcceleration: true,
+			Fundamentals:              decelFundamentals,
+		}
+		selected := ApplyHysteresisSelectionSmart(sorted, existing, 2, 3, tracker, nil, 0, 0, cfg)
+		if len(selected) != 2 {
+			t.Fatalf("expected 2 selected, got %d: %v", len(selected), selected)
+		}
+		for _, s := range selected {
+			if s == "E_DECEL" {
+				t.Errorf("expected E_DECEL to forfeit buffer grace due to decelerating growth, but was selected: %v", selected)
+			}
+		}
+		if selected[0] != "N1" || selected[1] != "N2" {
+			t.Errorf("expected [N1, N2], got %v", selected)
+		}
+
+		// Verify tracker logged the drop reason
+		droppedReason, exists := tracker.HysteresisDrops["E_DECEL"]
+		if !exists || !strings.Contains(droppedReason, "decelerating sales growth") {
+			t.Errorf("expected tracker to record decelerating drop reason for E_DECEL, got: %q", droppedReason)
+		}
+	})
+
+	t.Run("Without growth acceleration requirement, buffer grace is retained", func(t *testing.T) {
+		tracker := selectiontracker.New()
+		cfg := SmartHysteresisConfig{
+			RequireGrowthAcceleration: false,
+			Fundamentals:              decelFundamentals,
+		}
+		// topN = 2, bufferLimit = 3. displacementRank = 2 - 1 = 1.
+		// N1 (rank 1 <= 1) enters as high conviction.
+		// E_DECEL (rank 3 in buffer) enters in Phase 3.
+		// N2 (rank 2 > 1) is blocked.
+		selected := ApplyHysteresisSelectionSmart(sorted, existing, 2, 3, tracker, nil, 0, 0, cfg)
+		if len(selected) != 2 {
+			t.Fatalf("expected 2 selected, got %d: %v", len(selected), selected)
+		}
+		hasDecel := false
+		for _, s := range selected {
+			if s == "E_DECEL" {
+				hasDecel = true
+			}
+		}
+		if !hasDecel {
+			t.Errorf("expected E_DECEL to be retained when RequireGrowthAcceleration is false, got %v", selected)
+		}
+	})
 }
 
 func TestApplyRebalancingBand_NoExisting(t *testing.T) {

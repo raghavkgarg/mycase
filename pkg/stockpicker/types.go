@@ -26,8 +26,10 @@ type Options struct {
 	RangeStr           string
 	GoldenPath         string
 	RebalanceTolerance float64
-	HysteresisBuffer   int
-	DisplayName        string
+	HysteresisBuffer                    int
+	HysteresisMinScoreDelta             float64
+	HysteresisRequireGrowthAcceleration bool
+	DisplayName                         string
 	OutputFile         string
 	Tickers            []string // pre-built ticker list (bypasses file/index loading)
 	TopN               int

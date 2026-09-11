@@ -123,6 +123,11 @@ func (t *Tracker) RecordHysteresisDrop(ticker string, rank, topN, bufferLimit in
 	}
 }
 
+// RecordHysteresisDropWithReason logs an explicit rejection explanation for a hysteresis drop.
+func (t *Tracker) RecordHysteresisDropWithReason(ticker string, reason string) {
+	t.HysteresisDrops[ticker] = reason
+}
+
 // RecordAdditionDriver logs key positive metric drivers for new additions or selected stocks.
 func (t *Tracker) RecordAdditionDriver(ticker, driverSummary string) {
 	t.AdditionDrivers[ticker] = driverSummary
