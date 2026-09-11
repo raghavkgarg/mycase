@@ -160,7 +160,7 @@ Small items left open by shipped phases:
 
 - **Phase 10a — Cheap correctness wins** ✅ **DONE**: populate `Fundamentals.Sector` from the constituents CSV via `stockpicker.InjectSectors` (fixes broken US sector caps that collapsed to "Unknown"); enrich `mapSchwabFundamentals` to derive `NetIncome` (net-profit-margin × TTM revenue) and `RegularPrice` (market cap ÷ shares); deleted the dead `yfinance.GetCache()`. No new source. Note: `RegularPrice`/`NetIncome` are *derived* here; authoritative statement-level figures still arrive in 10c (EDGAR).
 - **Phase 10b — Router-bypass cleanup** (refactor **R17**) ✅ **DONE**: threaded a `datafetcher.Router` into the seven bypass paths so every US command routes through Schwab (Yahoo fallback); `cmd/*` uses the `newDataRouter()` factory, `pkg/server` gained a `MarketDataFetcher`/`WithRouter` seam, and `pkg/backtest`/`pkg/autopilot/schedule` use consumer-side interfaces over the `marketdata` leaf to stay within the layering. The benchmark now resolves to `US:SPY` via Schwab (`Router.GetBenchmarkSymbol`/`NormalizeBenchmarkSymbol`) with `^GSPC`/Yahoo fallback. Added `Router.FetchIntradayData` (Yahoo-only), `slog` which-source-served logging on the fallback branches, and a `source` provenance column on the cache `prices`+`fundamentals` tables (idempotent `ADD COLUMN IF NOT EXISTS`; yfinance path tags `"yahoo"`). Schwab-side `source` tagging + the composite merger are deferred to 10c.
-- **Phase 10c — SEC EDGAR fundamentals source** (~5–8 days): new `pkg/edgar` client (ticker→CIK map cached, `companyfacts` fetch, XBRL concept mapper with ordered candidate tags, mandatory `User-Agent` + 10 req/s limiter); populate operating cash flow, net income, and all annual series from EDGAR; a `FundamentalsMerger` composes Schwab ratios + EDGAR statements + CSV sector; per-source cache freshness (EDGAR facts stable until next quarterly filing).
+- **Phase 10c — SEC EDGAR fundamentals source** ✅ **DONE**: new `pkg/edgar` client (L1; ticker→CIK map cached weekly in `edgar_cik_map`, `companyfacts` fetch cached ~quarterly in `edgar_facts`, both owned via `cache.Conn()`; mandatory `User-Agent` validated at construction + 10 req/s token-bucket limiter via `golang.org/x/time/rate`). The XBRL concept mapper tries an ordered list of candidate us-gaap tags per concept and populates operating cash flow, net income, authoritative FCF (annual OCF − capex), and the full annual series. A `datafetcher` `FundamentalsMerger` composes Schwab TTM ratios + EDGAR statement facts (field-level, non-destructive; EDGAR wins for statements, sector stays from the 10a CSV backfill) with a `source` provenance tag. Wired opt-in into the `Router` (`WithEDGAR`, nil-safe) and gated by `edgar.enabled` in `config/defaults.json` (default **false**). Hermetic tests cover the mapper/merger/overlay against fixtures; a live EDGAR test is `//go:build integration`.
 - **Phase 10d — Provider abstraction hardening** (optional, ~2–3 days): split `DataFetcher` into capability interfaces (`PriceSource`, `FundamentalsSource`, `SectorSource`); formalize the ordered fallback chain; surface provenance in `pipeline show`/reports ("FCF: $2.1B [source: EDGAR 10-K 2025-Q4]").
 
 **Deliverables**:
@@ -173,7 +173,7 @@ Small items left open by shipped phases:
 
 **Effort**: ~2–3 weeks total across the four sub-phases. The hard part is Phase 10c's XBRL parsing — filers use custom taxonomy extensions and tags drift over time, so the concept mapper must try an ordered list of candidate tags per concept. The open question (see `docs/datasources.md` §10) is whether to parse EDGAR ourselves or pay a commercial fundamentals vendor to skip it.
 
-**Dependency**: Phase 10a and 10b are independent and both shipped. Phase 10c depends on 10b (the merger plugs into the routed path). Phase 10d depends on 10c.
+**Dependency**: Phase 10a and 10b are independent and both shipped. Phase 10c (shipped) depended on 10b (the merger plugs into the routed path). Phase 10d depends on 10c.
 
 ---
 
@@ -204,7 +204,7 @@ Active and planned phases only (completed/dropped phases removed):
 | Phase | Target | Dependency | Core value delivered | Status |
 |-------|--------|------------|---------------------|--------|
 | R18. slog migration + doc/tooling hygiene | Q4 2026 | none | Clean stdout/stderr separation in stockpicker/executor; accurate layer docs | ✅ Done |
-| 10. Data Source Resilience | Q4 2026 | Phase 2 (Schwab) | Authoritative US data (SEC EDGAR), Schwab everywhere, provenance | 🟧 10a+10b done |
+| 10. Data Source Resilience | Q4 2026 | Phase 2 (Schwab) | Authoritative US data (SEC EDGAR), Schwab everywhere, provenance | 🟧 10a+10b+10c done, 10d pending |
 | 6. Options Overlay | H2 2027 | 6mo live data | Income optimization | ⬜ |
 
 ---

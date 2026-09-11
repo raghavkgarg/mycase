@@ -489,7 +489,21 @@ type UserDefaults struct {
 	Range          string        `json:"range"`
 	PipelineConfig string        `json:"pipeline_config"`
 	Logging        LoggingConfig `json:"logging"`
+	EDGAR          EDGARConfig   `json:"edgar"`
 	TopN           int           `json:"top_n"`
+}
+
+// EDGARConfig holds SEC EDGAR fundamentals-source settings (Phase 10c). EDGAR is
+// opt-in: Enabled defaults to false so the data pipeline is unchanged until a
+// deliberate turn-on. UserAgent is mandatory when enabled — data.sec.gov blocks
+// requests with a missing or generic User-Agent, so it must declare identity +
+// contact (e.g. "mycase/1.0 you@example.com"). The env var
+// MYCASE_EDGAR_USER_AGENT overrides UserAgent (flag > env > config > default).
+type EDGARConfig struct {
+	UserAgent    string `json:"user_agent"`
+	Enabled      bool   `json:"enabled"`
+	FactsTTLDays int    `json:"facts_ttl_days"` // EDGAR companyfacts freshness (default 80 ≈ one quarter with margin)
+	CIKTTLDays   int    `json:"cik_ttl_days"`   // ticker→CIK map freshness (default 7)
 }
 
 // LoggingConfig holds structured-logging defaults. CLI flags and env vars

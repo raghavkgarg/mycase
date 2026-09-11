@@ -47,6 +47,7 @@ var Layers = map[string]int{
 
 	// L1 — stores / low-level impls over leaves.
 	"broker":     1, // broker/types, config, costs
+	"edgar":      1, // cache, marketdata — SEC EDGAR fundamentals client; owns its CIK-map + facts tables via cache.Conn()
 	"kiteclient": 1, // config (Zerodha/Kite low-level client, India legacy)
 	"portfolio":  1, // broker/types (India legacy) — dormant; string utils + Holding alias, consumed by optimizer/zerodha/themereturn
 	"tax":        1, // broker/types
@@ -62,7 +63,7 @@ var Layers = map[string]int{
 
 	// L3 — higher-level domains.
 	"attribution": 3, // backtest, cache, marketdata
-	"datafetcher": 3, // broker, broker/schwab, yfinance
+	"datafetcher": 3, // broker, broker/schwab, edgar, yfinance
 	"printer":     3, // broker/types, market, optimizer, portfolio, render
 	"stockpicker": 3, // config, csvloader, excel, optimizer, selectiontracker, yfinance
 	"themereturn": 3, // config, csvloader, portfolio, themedb (India legacy) — dormant; wired only via cmd/returns
