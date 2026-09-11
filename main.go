@@ -23,8 +23,9 @@ var BuildDate = "unknown"
 var appLogger *logging.Logger
 
 func main() {
-	// Open DuckDB cache (best-effort; non-fatal if data/ doesn't exist yet).
-	if c, err := cache.Open("data/cache.db"); err == nil {
+	// Open DuckDB cache in data/mycase.db (best-effort; non-fatal if data/ doesn't exist yet).
+	if c, err := cache.Open("data/mycase.db"); err == nil {
+		cache.SetGlobal(c)
 		yfinance.SetCache(c)
 		defer c.Close()
 	}
@@ -55,6 +56,9 @@ func main() {
 			&cli.StringFlag{Name: "index", Aliases: []string{"i"}, Value: "niftytotalmarket", Usage: "Index name to analyze or pick"},
 			&cli.StringFlag{Name: "method", Aliases: []string{"m"}, Value: "earlymb", Usage: "Strategy method"},
 			&cli.BoolFlag{Name: "analysis", Aliases: []string{"a"}, Usage: "Run deep quantitative deduction analysis using DuckDB"},
+			&cli.BoolFlag{Name: "database", Aliases: []string{"db"}, Usage: "Operate on consolidated data/mycase.db"},
+			&cli.BoolFlag{Name: "update", Aliases: []string{"u"}, Usage: "Execute unified EOD database update across market data, PIT, and themes"},
+			&cli.BoolFlag{Name: "dry-run", Usage: "Preview the update sequence without executing database writes"},
 		},
 		Before: func(ctx context.Context, c *cli.Command) (context.Context, error) {
 			appLogger = setupLogging(c)
@@ -96,8 +100,13 @@ func main() {
 			mycmd.ServeCommand,
 			mycmd.ConvertCommand,
 			mycmd.RetryCommand,
+			mycmd.ThemeCommand,
+			mycmd.DBCommand,
 		},
 		Action: func(ctx context.Context, c *cli.Command) error {
+			if c.Bool("update") {
+				return mycmd.RunDBUpdateDirect(ctx, true, c.String("index"), c.String("method"), 10, c.Bool("dry-run"), "")
+			}
 			if c.Bool("analysis") {
 				return mycmd.RunPitAnalysisDirect(ctx, c.String("index"), c.String("method"))
 			}

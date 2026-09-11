@@ -47,6 +47,10 @@ var AuthCommand = &cli.Command{
 			Name:  "force",
 			Usage: "Force re-authentication even if current session/token is still valid (zerodha)",
 		},
+		&cli.BoolFlag{
+			Name:  "no-browser",
+			Usage: "Do not launch interactive browser on headless login failure; fail immediately (ideal for scripts/cron)",
+		},
 	},
 	Action: func(ctx context.Context, c *cli.Command) error {
 		broker := strings.ToLower(c.String("broker"))
@@ -66,7 +70,7 @@ var AuthCommand = &cli.Command{
 			tokenPath := c.String("token-path")
 			return runSchwabAuth(ctx, configPath, tokenPath)
 		case "zerodha":
-			return runAuthCmdWithFlags(ctx, c.Bool("manual"), c.Bool("force"))
+			return runAuthCmdWithFlags(ctx, c.Bool("manual"), c.Bool("force"), c.Bool("no-browser"))
 		default:
 			return fmt.Errorf("unsupported broker %q — supported: zerodha, schwab", broker)
 		}
@@ -74,10 +78,10 @@ var AuthCommand = &cli.Command{
 }
 
 func runAuthCmd(ctx context.Context) error {
-	return runAuthCmdWithFlags(ctx, false, false)
+	return runAuthCmdWithFlags(ctx, false, false, false)
 }
 
-func runAuthCmdWithFlags(ctx context.Context, forceManual, forceRefresh bool) error {
+func runAuthCmdWithFlags(ctx context.Context, forceManual, forceRefresh, noBrowser bool) error {
 	render.Banner(os.Stdout, "Zerodha Kite Connect Auth Setup Utility")
 	if publicIP := config.FetchPublicIP(); publicIP != "" {
 		fmt.Printf("Current Public IP: %s\n", publicIP)
@@ -98,6 +102,9 @@ func runAuthCmdWithFlags(ctx context.Context, forceManual, forceRefresh bool) er
 	reader := bufio.NewReader(os.Stdin)
 
 	if apiKey == "" {
+		if noBrowser {
+			return fmt.Errorf("Zerodha Kite API Key is missing and --no-browser is set")
+		}
 		fmt.Print("Enter your Zerodha Kite API Key: ")
 		apiKey, _ = reader.ReadString('\n')
 		apiKey = strings.TrimSpace(apiKey)
@@ -106,6 +113,9 @@ func runAuthCmdWithFlags(ctx context.Context, forceManual, forceRefresh bool) er
 	}
 
 	if apiSecret == "" {
+		if noBrowser {
+			return fmt.Errorf("Zerodha Kite API Secret is missing and --no-browser is set")
+		}
 		fmt.Print("Enter your Zerodha Kite API Secret: ")
 		apiSecret, _ = reader.ReadString('\n')
 		apiSecret = strings.TrimSpace(apiSecret)
@@ -124,7 +134,7 @@ func runAuthCmdWithFlags(ctx context.Context, forceManual, forceRefresh bool) er
 		if cfg.HTTPProxy != "" {
 			if proxyURL, err := url.Parse(cfg.HTTPProxy); err == nil {
 				testClient.SetHTTPClient(&http.Client{
-					Timeout: 5 * time.Second,
+					Timeout: 15 * time.Second,
 					Transport: &http.Transport{
 						Proxy: http.ProxyURL(proxyURL),
 					},
@@ -138,10 +148,14 @@ func runAuthCmdWithFlags(ctx context.Context, forceManual, forceRefresh bool) er
 			fmt.Println("   Access token is valid. Webpage login not required.")
 			return nil
 		}
+		fmt.Printf("ℹ️  Existing session check failed (%v), proceeding to authentication...\n", pErr)
 	}
 
 	// 2. Check if automated headless login credentials are configured
 	if !forceManual && (cfg.UserID == "" || cfg.Password == "" || cfg.TOTPSecret == "") {
+		if noBrowser {
+			return fmt.Errorf("auto-login credentials ('user_id', 'password', 'totp_secret') are not set and --no-browser is set")
+		}
 		fmt.Println("\n🔐 Auto-login credentials ('user_id', 'password', 'totp_secret') are not yet set.")
 		fmt.Print("Would you like to configure them now to enable zero-browser login? (y/n): ")
 		ans, _ := reader.ReadString('\n')
@@ -192,8 +206,14 @@ func runAuthCmdWithFlags(ctx context.Context, forceManual, forceRefresh bool) er
 		}
 
 		fmt.Printf("⚠️  Headless login failed: %v\n", autoErr)
+		if noBrowser {
+			return fmt.Errorf("headless authentication failed and --no-browser is set: %w", autoErr)
+		}
 		fmt.Println("Falling back to interactive browser authorization...")
 	} else if !forceManual {
+		if noBrowser {
+			return fmt.Errorf("cannot authenticate in --no-browser mode without auto-login credentials")
+		}
 		fmt.Println("\n💡 Tip: Add 'user_id', 'password', and 'totp_secret' to config/config.json for automatic zero-browser login.")
 	}
 

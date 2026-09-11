@@ -112,6 +112,23 @@ func LoadConfig(filename string) (*Config, error) {
 		os.Setenv("HTTP_PROXY", cfg.HTTPProxy)
 		os.Setenv("HTTPS_PROXY", cfg.HTTPProxy)
 		os.Setenv("ALL_PROXY", cfg.HTTPProxy)
+
+		// StaticIP.in / broker proxies only whitelist broker/exchange endpoints (Zerodha Kite).
+		// Non-broker external services like Yahoo Finance must bypass the proxy to prevent 403 Forbidden errors.
+		bypassList := "yahoo.com,.yahoo.com,query1.finance.yahoo.com,query2.finance.yahoo.com,fc.yahoo.com,finance.yahoo.com,screener.in,.screener.in,niftyindices.com,.niftyindices.com,raw.githubusercontent.com,github.com,nseindia.com,.nseindia.com,bseindia.com,.bseindia.com"
+		existingNoProxy := os.Getenv("NO_PROXY")
+		if existingNoProxy == "" {
+			existingNoProxy = os.Getenv("no_proxy")
+		}
+		if existingNoProxy != "" {
+			if !strings.Contains(existingNoProxy, "yahoo.com") {
+				bypassList = existingNoProxy + "," + bypassList
+			} else {
+				bypassList = existingNoProxy
+			}
+		}
+		os.Setenv("NO_PROXY", bypassList)
+		os.Setenv("no_proxy", bypassList)
 	}
 
 	if envUserID := os.Getenv("KITE_USER_ID"); envUserID != "" && cfg.UserID == "" {

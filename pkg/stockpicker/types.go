@@ -36,6 +36,7 @@ type Options struct {
 	SkipScuttlebutt                     bool
 	CooldownDays                        int
 	CooldownBypassRank                  int
+	AsOfDate                            string // Target EOD market date (YYYY-MM-DD); if empty, defaults to EODSettlementDate(now)
 }
 
 // TickersSource encapsulates tickers list source info.

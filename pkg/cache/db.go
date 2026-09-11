@@ -7,9 +7,13 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"os"
 
 	_ "github.com/duckdb/duckdb-go/v2"
 )
+
+// DefaultDBPath is the consolidated DuckDB database path.
+const DefaultDBPath = "data/mycase.db"
 
 // globalDB holds the application-wide DuckDB cache instance.
 var globalDB *Cache
@@ -28,6 +32,13 @@ type Cache struct {
 
 // Open opens (or creates) the DuckDB cache at path and initialises the schema.
 func Open(path string) (*Cache, error) {
+	if path == "" {
+		if env := os.Getenv("MYCASE_DB"); env != "" {
+			path = env
+		} else {
+			path = DefaultDBPath
+		}
+	}
 	db, err := sql.Open("duckdb", path)
 	if err != nil {
 		return nil, fmt.Errorf("open cache db: %w", err)
@@ -44,11 +55,17 @@ func Open(path string) (*Cache, error) {
 		db.Close()
 		return nil, fmt.Errorf("init cache schema: %w", err)
 	}
+	SetGlobal(c)
 	return c, nil
 }
 
 // Close closes the underlying database connection.
-func (c *Cache) Close() error { return c.db.Close() }
+func (c *Cache) Close() error {
+	if globalDB == c {
+		globalDB = nil
+	}
+	return c.db.Close()
+}
 
 // Conn returns the underlying *sql.DB so that domain packages can own their
 // persistence (define their own tables + queries) without pkg/cache importing

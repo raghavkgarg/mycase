@@ -4,9 +4,11 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/urfave/cli/v3"
 
+	"github.com/raghavkgarg/mycase/pkg/marketdata"
 	"github.com/raghavkgarg/mycase/pkg/pithistory"
 	"github.com/raghavkgarg/mycase/pkg/stockpicker"
 )
@@ -33,6 +35,7 @@ var PitCommand = &cli.Command{
 				&cli.StringFlag{Name: "index", Aliases: []string{"i"}, Value: "microcap250,smallcap250", Usage: "Indices to evaluate"},
 				&cli.StringFlag{Name: "method", Aliases: []string{"m"}, Value: "earlymb", Usage: "Strategy method (earlymb, multibagger)"},
 				&cli.IntFlag{Name: "top", Aliases: []string{"t"}, Value: 10, Usage: "Number of top stocks to select"},
+				&cli.BoolFlag{Name: "force", Aliases: []string{"f"}, Usage: "Force re-running PIT calculation even if file already exists"},
 			},
 			Action: runPitUpdate,
 		},
@@ -60,6 +63,8 @@ var PitCommand = &cli.Command{
 			Flags: []cli.Flag{
 				&cli.StringFlag{Name: "index", Aliases: []string{"i"}, Value: "niftytotalmarket", Usage: "Index name to analyze"},
 				&cli.StringFlag{Name: "method", Aliases: []string{"m"}, Value: "earlymb", Usage: "Strategy method to analyze"},
+				&cli.IntFlag{Name: "days", Value: 60, Usage: "Rolling history lookback window in calendar days (0 for all)"},
+				&cli.StringFlag{Name: "ticker", Usage: "Optional specific ticker to view score trajectory for"},
 			},
 			Action: runPitAnalysis,
 		},
@@ -81,14 +86,39 @@ func runPitUpdate(ctx context.Context, c *cli.Command) error {
 	indexVal := c.String("index")
 	methodVal := c.String("method")
 	topN := int(c.Int("top"))
+	isForce := c.Bool("force")
 
-	fmt.Printf("Executing Point-in-Time Daily Screening Update for %s (%s)...\n", indexVal, methodVal)
+	now := time.Now()
+	targetEOD := marketdata.EODSettlementDate(now)
+	targetDateStr := targetEOD.Format("2006-01-02")
+	nextAvailable := marketdata.NextEODAvailableDate(now)
+
+	cleanIndex := strings.NewReplacer(",", "_", " ", "_", "^", "").Replace(indexVal)
+	pitDB, err := pithistory.Open("")
+	if err == nil {
+		hasRun, _ := pitDB.HasRun(ctx, targetDateStr, cleanIndex, methodVal)
+		if !hasRun {
+			hasRun, _ = pitDB.HasRun(ctx, targetDateStr, indexVal, methodVal)
+		}
+		pitDB.Close()
+		if hasRun && !isForce {
+			targetDayStr := marketdata.FormatOrdinalDay(targetEOD.Day())
+			nextDayStr := marketdata.FormatOrdinalDay(nextAvailable.Day())
+			nextMonthStr := nextAvailable.Format("Jan")
+			fmt.Printf("✓ File available for %s. Latest file is of %s and %s file will be available after 21:00 PM %s %s.\n",
+				targetDateStr, targetDayStr, nextDayStr, nextDayStr, nextMonthStr)
+			return nil
+		}
+	}
+
+	fmt.Printf("Executing Point-in-Time Daily Screening Update for %s (%s) [Target: %s]...\n", indexVal, methodVal, targetDateStr)
 	opts := &stockpicker.Options{
 		IndexName:          indexVal,
 		Method:             methodVal,
 		TopN:               topN,
 		RangeStr:           "1y",
 		RebalanceTolerance: 0.10,
+		AsOfDate:           targetDateStr,
 	}
 
 	if err := runPickWithOpts(ctx, opts); err != nil {

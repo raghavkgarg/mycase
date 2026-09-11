@@ -293,15 +293,18 @@ To guarantee that empirical reference bounds and weights are never overfitted in
 
 ---
 
-## 8. Point-in-Time Research Database (`data/pit_history.db`)
+## 8. Point-in-Time Research Database (Unified `data/mycase.db`)
 
-To ensure institutional reproducibility, eliminate lookahead bias, and enable instant empirical recalibration, the quantitative architecture maintains a dedicated embedded **DuckDB OLAP Database** (`data/pit_history.db`).
+To ensure institutional reproducibility, eliminate lookahead bias, and enable instant empirical recalibration, the quantitative architecture maintains a unified, embedded **DuckDB OLAP Database** (`data/mycase.db`).
 
-### Architecture & Separation of Concerns:
-* **`data/cache.db` (DuckDB)**: Ephemeral cache for raw HTTP responses and daily OHLCV bars. May be cleared without losing research history.
-* **`data/pit_history.db` (DuckDB)**: Curated, permanent, Point-in-Time quantitative research repository storing full cross-sectional scoring arrays, gate results, individual pillar values, and realized forward returns.
+### Consolidated Architecture & Elimination of Redundant DBs
+Previously, the system maintained two separate DuckDB files:
+- `data/cache.db`: Ephemeral price/fundamental market data and pipeline runs.
+- `data/pit_history.db`: Historical point-in-time candidate scores and runs.
 
-### Table Schemas:
+On **September 11, 2026**, both databases were merged into a single ACID-compliant master analytical store: **`data/mycase.db`**. All legacy database files were purged.
+
+### Table Schemas in `data/mycase.db`:
 ```sql
 -- 1. Run Metadata & Funnel Accounting
 CREATE TABLE IF NOT EXISTS pit_runs (
@@ -313,10 +316,12 @@ CREATE TABLE IF NOT EXISTS pit_runs (
     stage1_survivors   INTEGER,
     selected_count     INTEGER,
     created_at         TIMESTAMP,
+    pillar4_uncalibrated BOOLEAN DEFAULT false,
+    pillar4_insufficient_history BOOLEAN DEFAULT false,
     PRIMARY KEY (as_of_date, index_name, method)
 );
 
--- 2. Granular Candidate Metrics (Every Stock, Every Day)
+-- 2. Granular Candidate Metrics (Master Table: niftytotalmarket)
 CREATE TABLE IF NOT EXISTS pit_candidate_scores (
     as_of_date         DATE,
     index_name         VARCHAR,
@@ -335,9 +340,79 @@ CREATE TABLE IF NOT EXISTS pit_candidate_scores (
     selected           BOOLEAN,
     final_weight       DOUBLE,
     forward_return_21d DOUBLE,
+    data_fetch_failed  BOOLEAN DEFAULT false,
+    pillar4_uncalibrated BOOLEAN DEFAULT false,
+    pillar4_insufficient_history BOOLEAN DEFAULT false,
     PRIMARY KEY (as_of_date, index_name, method, ticker)
 );
+
+-- 3. Canonical Index Constituent Roster Table
+CREATE TABLE IF NOT EXISTS index_constituents (
+    index_name VARCHAR,
+    ticker     VARCHAR,
+    PRIMARY KEY (index_name, ticker)
+);
 ```
+
+### Dynamic Sub-Index Relational Views (`v_pit_candidate_scores` & `v_pit_runs`)
+**The Redundancy Problem:**
+Historically, daily screening was independently executed across multiple sub-indices (`NIFTY50`, `microcap250`, `smallcap250`, `small250`, `microcap250_smallcap250`). Because the **Nifty Total Market (750 stocks)** is the mathematical superset of all these sub-indices, physically scoring each sub-index caused 1,592 redundant duplicate rows in `pit_candidate_scores` and repeated heavy API evaluations.
+
+**The Solution: Relational Slicing via Dynamic Views:**
+Sub-index physical rows were purged from `pit_candidate_scores`. Instead, the system evaluates and persists scores **strictly once** for `niftytotalmarket`, and creates dynamic SQL views backed by `index_constituents`:
+
+```sql
+CREATE VIEW IF NOT EXISTS v_pit_candidate_scores AS
+SELECT 
+    s.as_of_date,
+    c.index_name,
+    s.method,
+    s.ticker,
+    s.sector,
+    s.passed_stage1,
+    s.rejection_reason,
+    s.raw_score,
+    s.effective_score,
+    s.composite_rs,
+    s.vcp_ratio,
+    s.rvol_z_score,
+    s.decayed_pp,
+    s.delivery_delta,
+    s.selected,
+    s.final_weight,
+    s.forward_return_21d,
+    s.data_fetch_failed,
+    s.pillar4_uncalibrated,
+    s.pillar4_insufficient_history
+FROM pit_candidate_scores s
+JOIN index_constituents c ON s.ticker = c.ticker
+WHERE s.index_name = 'niftytotalmarket';
+
+CREATE VIEW IF NOT EXISTS v_pit_runs AS
+SELECT 
+    s.as_of_date,
+    c.index_name,
+    s.method,
+    MAX(r.regime_multiplier) AS regime_multiplier,
+    COUNT(c.ticker) AS total_constituents,
+    COUNT(CASE WHEN s.passed_stage1 THEN 1 END) AS stage1_survivors,
+    COUNT(CASE WHEN s.selected THEN 1 END) AS selected_count,
+    MAX(r.created_at) AS created_at,
+    BOOL_OR(s.pillar4_uncalibrated) AS pillar4_uncalibrated,
+    BOOL_OR(s.pillar4_insufficient_history) AS pillar4_insufficient_history
+FROM pit_candidate_scores s
+JOIN index_constituents c ON s.ticker = c.ticker
+LEFT JOIN pit_runs r ON s.as_of_date = r.as_of_date 
+                    AND r.index_name = 'niftytotalmarket' 
+                    AND s.method = r.method
+WHERE s.index_name = 'niftytotalmarket'
+GROUP BY s.as_of_date, c.index_name, s.method;
+```
+
+**Benefits:**
+1. **Zero Data Duplication**: Scores exist in a single physical row under `niftytotalmarket`.
+2. **100% Backward Compatibility**: Queries like `mycase pit stats --index microcap250` or `--index NIFTY50` query `v_pit_candidate_scores` seamlessly and return identical sub-index statistics.
+3. **Canonicalization**: `NormalizeIndexName` canonicalizes aliases (`small250` → `smallcap250`) transparently.
 
 ### Real-Time SQL Analytical Queries:
 DuckDB calculates rolling empirical quantiles across Stage-1 survivors in sub-milliseconds:
@@ -348,8 +423,10 @@ SELECT
     quantile_cont(raw_score, 0.50) AS p50_median,
     quantile_cont(raw_score, 0.40) AS p40_empirical_cutoff,
     quantile_cont(raw_score, 0.25) AS p25_lower_quartile
-FROM pit_candidate_scores
+FROM v_pit_candidate_scores
 WHERE passed_stage1 = true 
+  AND index_name = 'microcap250'
+  AND (data_fetch_failed = false OR data_fetch_failed IS NULL)
   AND as_of_date >= CURRENT_DATE - INTERVAL 60 DAY;
 ```
 
@@ -386,16 +463,18 @@ Verified in `pkg/yfinance/metrics_earlymb_test.go` and `pkg/stockpicker/bounds_t
 
 | Action | Command | Purpose |
 | :--- | :--- | :--- |
-| **Daily PIT Update & DB Persistence** | `mycase pit update --index microcap250,smallcap250 --method earlymb --top 10` | Runs the full daily screening pipeline and persists all candidate scores to `data/pit_history.db`. |
+| **Unified EOD Database Update** | `mycase --database --update` *(or `mycase -db -u`)* | **Single post-market run (4:00 PM IST)**: Warms market cache, executes daily PIT screening on `niftytotalmarket`, and syncs theme rebalances into `data/mycase.db`. |
+| **Consolidated DB Table Status** | `mycase db stats` | Displays row counts, online status, and domain breakdown across all 14 tables/views in `data/mycase.db`. |
+| **Daily PIT Update & DB Persistence** | `mycase pit update --index niftytotalmarket --method earlymb --top 10` | Runs the full daily screening pipeline and persists candidate scores directly into `data/mycase.db`. |
 | **Deep Quantitative Deduction Analysis (DuckDB)** | `mycase --index niftytotalmarket --method earlymb --analysis` | Executes comprehensive 8-section DuckDB analytical deductions (funnel breakdown, regime sentry, rolling quantiles, sector defense, score shifts, silent drops, pre-breakout runway incubator, and multi-run velocity). |
 | **Point-in-Time Failed Ticker Recovery** | `mycase pit retry --index niftytotalmarket --method earlymb --date YYYY-MM-DD` | Re-runs historical prices and fundamentals specifically for failed candidates, healing snapshots without re-evaluating the full 750-stock universe. |
-| **View DuckDB Empirical Quantiles** | `mycase pit stats --index microcap250_smallcap250 --method earlymb` | Queries `data/pit_history.db` for rolling empirical score distributions ($P_{40}, P_{50}, P_{75}, P_{90}$). |
-| **Track Candidate Score History** | `mycase pit stats --ticker INOXINDIA` | Displays chronological score, VCP ATR, RVOL, and selection trajectory for a specific stock. |
-| **Combined MicroCap + SmallCap Picker** | `mycase pick --index microcap250,smallcap250 --method earlymb --top 10` | Executes live 2-stage gating and invariant 4-pillar selection across combined 500-stock universe. |
-| **Run Rolling IC Calibration** | `mycase calibrate --index microcap250,smallcap250 --method earlymb --step 21 --forward 21` | Evaluates multi-period Spearman Rank IC, IR, and empirical bounds on a 70/30 train/test split. |
-| **Save Constituent Snapshot** | `mycase calibrate --index microcap250,smallcap250 --save-snapshot` | Saves immutable constituent roster to `data/universe_snapshots/` to eliminate survivorship bias. |
-| **Generate Execution Basket** | `mycase basket --file data/candidates/index_picks/microcap250_smallcap250_earlymb.csv --capital 100000` | Calculates exact integer share quantities for broker execution. |
-| **Run Sentry Monitoring** | `mycase monitor --file data/candidates/index_picks/microcap250_smallcap250_earlymb.csv --strategy earlymb` | Monitors trailing stop-loss, EMA breakdown, and quarterly filing health. |
+| **View DuckDB Empirical Quantiles** | `mycase pit stats --index microcap250 --method earlymb` | Queries `v_pit_candidate_scores` in `data/mycase.db` for rolling empirical score distributions ($P_{40}, P_{50}, P_{75}, P_{90}$). |
+| **Track Candidate Score History** | `mycase pit stats --ticker INOXINDIA` | Displays chronological score, VCP ATR, RVOL, and selection trajectory for a specific stock in `data/mycase.db`. |
+| **Combined MicroCap + SmallCap Picker** | `mycase pick --index microcap250_smallcap250 --method earlymb --top 10` | Executes live 2-stage gating and invariant 4-pillar selection across combined 500-stock universe. |
+| **Run Rolling IC Calibration** | `mycase calibrate --index niftytotalmarket --method earlymb --step 21 --forward 21` | Evaluates multi-period Spearman Rank IC, IR, and empirical bounds on a 70/30 train/test split. |
+| **Save Constituent Snapshot** | `mycase calibrate --index niftytotalmarket --save-snapshot` | Saves immutable constituent roster to `data/universe_snapshots/` to eliminate survivorship bias. |
+| **Generate Execution Basket** | `mycase basket --file data/candidates/index_picks/niftytotalmarket_earlymb.csv --capital 100000` | Calculates exact integer share quantities for broker execution. |
+| **Run Sentry Monitoring** | `mycase monitor --file data/microsmall.csv --strategy earlymb` | Monitors trailing stop-loss, EMA breakdown, and quarterly filing health for active portfolio holdings. |
 | **Run Full Pipeline** | `mycase pipeline --index niftytotalmarket --strategy earlymb` | Executes screening, optimization, basket generation, and reporting in a single command. *(Note: If `--index` is omitted, defaults to indices in `config/pipeline.yaml`)* |
 | **Pre-Breakout Incubator Watchlist** | Auto-generated: `data/candidates/index_picks/<index>_earlymb_incubator.csv` | Automatically generated on every run, listing top runway setups ranked by Hurdle Gap and VCP tightness with breakout pivot triggers (`52W High * 0.98`). |
 
@@ -427,7 +506,7 @@ Two consecutive live Point-in-Time screening runs (2026-08-26 and 2026-08-27) ac
 ### 4. Closed-Loop Dual Invariant Test Architecture
 To prevent divergence across in-memory tracking, CLI reporting, and OLAP storage:
 * **Memory Invariant** (`TestTracker_RawAndEffectiveScoreConsistency`): Asserts that raw and effective scores remain strictly partitioned in `selectiontracker.Tracker`.
-* **Storage Invariant** (`TestDuckDB_RegimeMultiplierConsistency`): Asserts that $100\%$ of candidate rows in `data/pit_history.db` satisfy $\text{EffectiveScore} \equiv \text{RawScore} \times R_{\text{regime}}$ across both winner and rejection paths.
+* **Storage Invariant** (`TestDuckDB_RegimeMultiplierConsistency`): Asserts that $100\%$ of candidate rows in `data/mycase.db` satisfy $\text{EffectiveScore} \equiv \text{RawScore} \times R_{\text{regime}}$ across both winner and rejection paths.
 * **Unified Reporting Schema**: CLI tables and text reports explicitly display `Raw Score` and `Eff Score` columns side-by-side.
 
 ---
@@ -656,6 +735,171 @@ Compare the `Avg DelivΔ` column across the last few runs in the `--analysis` ou
 
 > [!IMPORTANT]
 > If any of these checks fail, the issue should be investigated before treating the Pillar 4 fix as production-validated. The unit tests verify the calculation logic in isolation; this live checklist verifies the end-to-end data pipeline from NSE fetch → Python cache → Go deserialization → disjoint windowing → DuckDB persistence.
+
+---
+
+### 16. Database Consolidation, Sub-Index Deduplication & Single EOD Update (Sep 11, 2026)
+
+On September 11, 2026, the data storage, point-in-time architecture, and scheduled execution layers were overhauled to resolve file fragmentation, eliminate physical row duplication, and establish a single post-market EOD operational sequence.
+
+#### 1. Consolidation into Unified Master Analytical Database (`data/mycase.db`)
+* **Legacy State**: Market data cache (`data/cache.db`, ~49 MB) and research history (`data/pit_history.db`, ~4.4 MB) were maintained as separate DuckDB files. This required dual connection lifecycles, disparate transaction boundaries, and awkward cross-database joins.
+* **Master Consolidated Store**: Merged all 14 tables and views into **`data/mycase.db`**.
+  - Market data domain: `prices`, `fundamentals`, `cache_meta`
+  - Research & PIT domain: `pit_runs`, `pit_candidate_scores`, `index_constituents`, `v_pit_candidate_scores`, `v_pit_runs`
+  - Staging & proposals domain: `pipeline_runs`, `index_picks`, `proposals`, `selections`
+  - Theme lifecycle domain: `theme_rebalances`, `theme_history`
+* **Clean Purge**: Legacy database files `data/cache.db` and `data/pit_history.db` were safely backed up to `data/backups/archive_pre_cleanup_20260911.tar.gz` and permanently removed from disk, saving **~53.5 MB**.
+
+#### 2. Root Cause Analysis: Cross-Sub-Index Row Duplication in `pit_candidate_scores`
+* **The Problem**: Previously, daily screening was executed independently for individual sub-indices:
+  - `NIFTY50` (50 stocks)
+  - `microcap250` (250 stocks)
+  - `smallcap250` (250 stocks)
+  - `small250` (alias for smallcap250)
+  - `microcap250_smallcap250` (500 stocks)
+  - `niftytotalmarket` (750 stocks)
+* **The Mathematical Redundancy**: Because the **Nifty Total Market (750 constituents)** is the strict superset of all these sub-indices, scoring each sub-index individually physically inserted identical score rows ($1,592\text{ redundant rows}$ in `pit_candidate_scores` and $7\text{ duplicate runs}$ in `pit_runs`). It also triggered redundant HTTP calls and multiple executions of the heavy screening pipeline.
+
+#### 3. Relational Sub-Index Slicing via Dynamic Views (`v_pit_candidate_scores`)
+* **Purge of Physical Duplicates**: All redundant sub-index rows were deleted from `pit_candidate_scores`, leaving strictly canonical `niftytotalmarket` records.
+* **Canonical Roster Seeding**: Built the canonical `index_constituents` table in `mycase.db` seeded from `data/universe_snapshots/` (`NIFTY50.csv`, `microcap250.csv`, `smallcap250.csv`, `microcap250_smallcap250.csv`).
+* **Dynamic Views**:
+  - `v_pit_candidate_scores`: Joins `pit_candidate_scores` (filtered on `index_name = 'niftytotalmarket'`) against `index_constituents`.
+  - `v_pit_runs`: Reaggregates stage-1 survivors, selected counts, and regime multipliers by joining against `index_constituents` on the fly.
+* **Seamless Compatibility**:
+  ```bash
+  # Queries v_pit_candidate_scores on the fly with ZERO physical duplicate rows:
+  mycase pit stats --index microcap250 --method earlymb
+  mycase pit stats --index smallcap250 --method earlymb
+  mycase pit stats --index NIFTY50 --method earlymb
+  ```
+
+#### 4. Index Name Canonicalization
+* Implemented `NormalizeIndexName` in `pkg/pithistory/analytics.go` and `pkg/pithistory/db.go`.
+* Automatically resolves common aliases:
+  - `small250` $\to$ `smallcap250`
+  - `micro250` $\to$ `microcap250`
+  - `microcap250,smallcap250` $\to$ `microcap250_smallcap250`
+  - Case-insensitive (`nifty50` $\to$ `NIFTY50`)
+
+#### 5. Guardrails Against Orphaned Drafts & Typo Keys
+* **Transactional Staging**: Added deferred `DeleteRunData` rollbacks in `cmd/pipeline.go` so aborted or failed optimization runs do not leave orphaned draft rows in `pipeline_runs`, `index_picks`, and `proposals`.
+* **Date Key Validation**: Implemented strict sanity bounds (`minYear = 2000`, `maxYear = currentYear + 1`) in `pkg/cache/prices.go` and `pkg/yfinance/` to prevent typo year keys (e.g. `2026-09-08_1970-01-01` or year `0001`) from entering `cache_meta`.
+
+#### 6. Single Unified Post-Market Update Sequence (`21:00 IST / 9:00 PM`)
+To replace fragmented ad-hoc terminal runs, a single unified update command is executed daily:
+```bash
+mycase db update --all --index niftytotalmarket --method earlymb --top 10
+# Or global flag:
+mycase -db -u
+```
+**Execution Pipeline (runs once post-market after 21:00 IST close):**
+1. **Market Data Sync**: Warms daily OHLCV bars and fundamentals for all active holdings and index constituents.
+2. **PIT Screening**: Executes the full 4-pillar earlyMB screening across `niftytotalmarket` (750 stocks) and commits a single master set of scores into `pit_candidate_scores`.
+3. **Theme Lifecycle Sync**: Scans active themes (`microsmall`, `aitheme`, `modularmicro`, `myall`, `hydrogen`) and backfills turnover events and version history into `theme_rebalances`.
+
+**Automated Daemon Scheduling:**
+Scheduled via macOS LaunchAgent (`~/Library/LaunchAgents/com.mycase.daily_sync.plist`):
+```xml
+<key>StartCalendarInterval</key>
+<dict>
+    <key>Hour</key>
+    <integer>21</integer>
+    <key>Minute</key>
+    <integer>0</integer>
+</dict>
+```
+Runs autonomously Monday through Friday at 21:00 IST with zero human intervention required. Running at 21:00 IST ensures that NSE Bhavcopy, Security-wise Deliverable Positions (MTO), and Yahoo Finance daily candles are fully settled and published before ingestion.
+
+---
+
+### 17. EOD Cycle Architecture & Automated 9:00 PM Boundary (Sep 11, 2026)
+
+#### 1. Root Cause Analysis: Upstream Exchange Settlement Windows
+On September 11, 2026, investigations into identical factor score outputs between consecutive dates revealed the upstream data release schedule on the Indian markets:
+* **NSE Equity Trading Close**: Continuous order matching ends at **15:30 IST**. Closing Auction Session (CAS) concludes at **15:35–15:40 IST**.
+* **NSE Official Bhavcopy (PR.zip / CSV)**: Published between **16:15 and 16:45 IST**.
+* **NSE Security-wise Deliverables (MTO file)**: Requires clearing member settlement across depositories (CDSL/NSDL). The official `MTO_DDMMYYYY.DAT` file is typically published between **16:30 and 18:00 IST** (and occasionally later during high-volume sessions).
+* **Yahoo Finance Daily Candles**: Settles and publishes finalized daily OHLCV bars for NSE symbols between **17:00 and 18:30 IST**.
+* **Operational Flaw of 16:00 Run**: Running at 16:00 IST (4:00 PM) created race conditions where either partial intraday bars or stale prior-day caches were ingested because delivery files and settled candles were not yet published on exchange servers.
+
+#### 2. Establishment of 21:00 IST as the Sole Daily Cutoff
+To eliminate upstream timing races, **21:00 IST (9:00 PM)** was established as the authoritative daily boundary across the system:
+* **`com.mycase.daily_sync.plist` & `scripts/daily_sync.sh`**: Schedule shifted from 16:00 to **21:00 IST** (Monday through Friday).
+* **Purge of Interim 16:00 Logic**: Removed intermediate 16:00 cache invalidation rules from [`pkg/cache/prices.go`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/cache/prices.go) and [`pkg/yfinance/prices.go`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/yfinance/prices.go), making 21:00 IST the sole cutoff:
+  ```go
+  // Post-market / EOD settlement boundary (21:00 IST):
+  // 21:00 IST is the sole cutoff for the daily market cycle.
+  // If current time is at or after official sync (>= 21:00 IST) on a trading day,
+  // but data was fetched prior to 21:00 IST, it is considered stale so the confirmed EOD snapshot is pulled.
+  if nowIST.Hour() >= 21 && modIST.Hour() < 21 {
+      return false
+  }
+  ```
+
+#### 3. EOD Market Date Resolution & Mathematical Cycle Model
+Implemented canonical EOD settlement resolution helpers in [`pkg/marketdata/marketdata.go`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/marketdata/marketdata.go):
+* **Trading Cycle Window**: Between 21:00 PM of Day $T$ and 20:59 PM of Day $T+1$, the effective settled market EOD date is Day $T$.
+* **Forward Availability**: Day $T+1$'s EOD file is recognized as only becoming available after 21:00 PM on Day $T+1$.
+* **Formulas**:
+  $$\text{EffectiveEODDate}(t) = \begin{cases} t_{\text{date}} & \text{if } t.\text{Hour}() \ge 21 \\ t_{\text{date}} - 1\text{ day} & \text{if } t.\text{Hour}() < 21 \end{cases}$$
+
+#### 4. Idempotent Skip Guard (`HasRun` Detection)
+To prevent redundant or accidental double-runs during the trading day:
+* When `./mycase db update` or `./mycase pit update` is triggered, the system checks whether a valid snapshot for the effective EOD date already exists in `data/mycase.db` (`v_pit_runs`).
+* If the run for the target date is already present, the PIT screening calculation is skipped automatically, printing:
+  ```
+  ✓ File available for 2026-09-10. Latest file is of 10th and 11th file will be available after 21:00 PM 11th Sep.
+  Skipping redundant PIT screening calculation.
+  ```
+* **Override Support**: Added `--force` (`-f`) flag across commands (`mycase db update -f`, `mycase pit update -f`) for manual re-evaluations when desired.
+
+---
+
+### 18. Live NSE Delivery Ingestion Debugging & Resiliency Overhaul (Sep 11, 2026)
+
+During the initial production execution of `./mycase db update --all --index niftytotalmarket --method earlymb --top 10` on September 11, 2026, the pre-breakout incubator table showed flat $+0.0\%$ delivery deltas across all Stage-1 survivor candidates (e.g. `CUPID: +0.0%`, `ASAHIINDIA: +0.0%`, `IPCALAB: +0.0%`). Investigation uncovered three distinct bugs spanning the Python data adapter, exchange data formatting, and Go IPC deserialization.
+
+#### 1. Bug 1: `nselib` 3-Month Window Fallback (`records_count: 1`)
+* **Root Cause**: The underlying library `nselib.capital_market.price_volume_and_deliverable_position_data` only supports literal string periods `["1D", "1W", "1M", "6M", "1Y"]`. Passing `period="3M"` was unhandled in `nselib`'s `if/elif` branches, silently falling back to `(today - 1 day)`. As a result, only **1 single trading session** was returned (`records_count: 1`).
+* **The Safety Invariant**: Because `CalculateDeliveryDelta` mathematically enforces a strict $\ge 25$ settled session invariant for the disjoint window ($5\text{D} + 20\text{D}$ baseline), it detected insufficient history, returned `ErrInsufficientDeliveryHistory`, and defaulted to neutral $\Delta = 0.0$ ($+0.0\%$).
+* **The Fix ([`scripts/fetch_nse_data.py`](file:///Users/raghavgarg/Projects/myGo/mycase/scripts/fetch_nse_data.py))**:
+  When `period == "3M"`, the script computes an explicit calendar range of 100 days (`from_date` to `to_date`), fetching **64–72 settled trading sessions**, comfortably satisfying the $\ge 25$ session requirement.
+
+#### 2. Bug 2: Dirty NSE String Deserialization Crash (`"-"`)
+* **Root Cause**: On market holidays, newly listed securities, or corporate action adjustment days, the NSE API publishes dirty strings like `"-"`, `" - "`, `"N/A"`, or `""` for numerical fields (`%DlyQttoTradedQty` / `DeliverableQty`).
+* **Silent Batch Drop**: In `scripts/fetch_nse_data.py`, `sanitize_val` was returning `str(val)` (`"-"`), which caused Go's `json.Unmarshal` to fail with:
+  ```
+  json: cannot unmarshal string into Go struct field DeliveryRecord.DeliveryPct of type float64
+  ```
+  Because the error occurred in multi-symbol unmarshaling, the failure silently discarded delivery records for the entire batch of surviving stocks.
+* **The Fix**:
+  1. Updated `sanitize_val` in `scripts/fetch_nse_data.py` to identify dirty tokens (`"-"`, `" - "`, `"N/A"`, `""`) and convert them to Python `None` (emitted as JSON `null`).
+  2. Implemented a resilient custom `UnmarshalJSON` for `DeliveryRecord` in [`pkg/marketdata/marketdata.go`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/marketdata/marketdata.go) utilizing `parseFlexibleFloat` to safely absorb string numbers, dirty tokens, and nulls into `float64(0.0)`.
+  3. Purged stale 1-day and corrupted files from `data/cache/delivery/*.json`.
+
+#### 3. Bug 3: Script & Python Path Resolution Across Working Directories
+* **Root Cause**: When invoked from subdirectories, background Daemons, or alternate working directories, relative paths to `scripts/fetch_nse_data.py` and `.venv/bin/python3` broke silently.
+* **The Fix ([`pkg/yfinance/screener.go`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/yfinance/screener.go))**:
+  - Anchored path discovery to candidate search paths (`scripts/fetch_nse_data.py`, `../../scripts/fetch_nse_data.py`, `/Users/raghavgarg/Projects/myGo/mycase/scripts/fetch_nse_data.py`).
+  - Automatically resolved absolute path for the Python binary (`.venv/bin/python3`) anchored to the project root.
+  - Set `cmd.Dir = projectDir` and propagated explicit `stderr` diagnostics on exit failures rather than swallowing errors.
+
+#### 4. Architecture: Stage-1 Survivor Delivery Enrichment & Persistence
+* In [`pkg/stockpicker/run.go`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/stockpicker/run.go), `enrichDeliveryHistory` identifies all Stage-1 survivors lacking delivery series and triggers a single consolidated batch fetch (`FetchNselibDeliveryDataSeries`).
+* The resulting delivery series is updated in-memory on `Fundamentals` and immediately persisted to DuckDB's `fundamentals` table via `StoreFundamentalsCache`.
+* Subsequent pipeline stages, Incubator reports, and DuckDB snapshot persisting (`pit_candidate_scores`) now receive genuine, non-zero institutional delivery deltas:
+  ```
+  Ticker          | Sector             | Raw Score | Eff Score | Hurdle Gap | VCP ATR  | Comp RS  | Deliv Δ   
+  ---------------------------------------------------------------------------------------------------------
+  NSE:CUPID       | Consumer Defensive |      41.3 |     12.3 |    +59.8pt |     0.57 |  +199.0% |     +9.3% 
+  NSE:ASAHIINDIA  | Consumer Cyclical  |      34.9 |     10.4 |    +66.2pt |     0.40 |   +14.2% |     +4.6% 
+  NSE:IPCALAB     | Healthcare         |      34.1 |     10.1 |    +67.0pt |     0.50 |   +30.5% |     +5.8% 
+  ```
+
+
+
 
 
 

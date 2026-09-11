@@ -493,13 +493,14 @@ func TestIsFreshToday(t *testing.T) {
 	ist := time.FixedZone("IST", 5*3600+30*60)
 	nowIST := time.Now().In(ist)
 
+	wantStartOfDay := (nowIST.Hour() < 21)
 	tests := []struct {
 		name      string
 		fetchedAt time.Time
 		want      bool
 	}{
 		{"just now", time.Now(), true},
-		{"start of today IST", time.Date(nowIST.Year(), nowIST.Month(), nowIST.Day(), 0, 0, 0, 0, ist), true},
+		{"start of today IST", time.Date(nowIST.Year(), nowIST.Month(), nowIST.Day(), 0, 0, 0, 0, ist), wantStartOfDay},
 		{"yesterday", time.Now().AddDate(0, 0, -1), false},
 		{"last week", time.Now().AddDate(0, 0, -7), false},
 	}

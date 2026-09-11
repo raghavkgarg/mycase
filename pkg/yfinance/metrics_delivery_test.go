@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"os"
 	"testing"
 	"time"
 
@@ -194,3 +195,25 @@ func TestCalculateDeliveryDelta_ZeroDeliveryRecordsExcluded(t *testing.T) {
 		t.Errorf("expected 30 settled days (5 zero-value excluded), got %d", res.SettledDays)
 	}
 }
+
+func TestCalculateDeliveryDelta_CachedCupid(t *testing.T) {
+	cachePath := "../../data/cache/delivery/CUPID.json"
+	data, err := os.ReadFile(cachePath)
+	if err != nil {
+		t.Skip("CUPID.json not found, skipping")
+	}
+	var records []marketdata.DeliveryRecord
+	if err := json.Unmarshal(data, &records); err != nil {
+		t.Fatalf("unmarshal error: %v", err)
+	}
+	if len(records) < 25 {
+		t.Fatalf("expected >= 25 records, got %d", len(records))
+	}
+	res, err := CalculateDeliveryDelta(records, time.Now(), 1)
+	if err != nil {
+		t.Fatalf("CalculateDeliveryDelta error: %v", err)
+	}
+	t.Logf("CUPID Delivery Delta: %+0.4f (5D Avg: %+0.2f%%, 20D Avg: %+0.2f%%, Settled Days: %d)",
+		res.Delta5D20D, res.Avg5D*100, res.Avg20D*100, res.SettledDays)
+}
+

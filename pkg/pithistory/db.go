@@ -12,18 +12,28 @@ import (
 
 	_ "github.com/duckdb/duckdb-go/v2"
 
+	"github.com/raghavkgarg/mycase/pkg/cache"
 	"github.com/raghavkgarg/mycase/pkg/stockpicker"
 )
 
-const DefaultDBPath = "data/pit_history.db"
+const DefaultDBPath = "data/mycase.db"
 
 // DB wraps a DuckDB connection dedicated to Point-in-Time research and calibration data.
 type DB struct {
-	db *sql.DB
+	db     *sql.DB
+	ownsDB bool
 }
 
 // Open opens (or creates) the DuckDB database at path and initializes the schema.
 func Open(path string) (*DB, error) {
+	if (path == "" || path == DefaultDBPath) && cache.GetDB() != nil {
+		p := &DB{db: cache.GetDB().Conn(), ownsDB: false}
+		if err := p.initSchema(context.Background()); err != nil {
+			return nil, fmt.Errorf("init pit schema: %w", err)
+		}
+		return p, nil
+	}
+
 	if path == "" {
 		path = DefaultDBPath
 	}
@@ -43,7 +53,7 @@ func Open(path string) (*DB, error) {
 		return nil, fmt.Errorf("ping pit db: %w", err)
 	}
 
-	p := &DB{db: db}
+	p := &DB{db: db, ownsDB: true}
 	if err := p.initSchema(context.Background()); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("init pit schema: %w", err)
@@ -53,7 +63,7 @@ func Open(path string) (*DB, error) {
 
 // Close closes the underlying DuckDB connection.
 func (p *DB) Close() error {
-	if p.db != nil {
+	if p.ownsDB && p.db != nil {
 		return p.db.Close()
 	}
 	return nil
@@ -111,7 +121,8 @@ func (p *DB) initSchema(ctx context.Context) error {
 	_, _ = p.db.ExecContext(ctx, "UPDATE pit_runs SET pillar4_uncalibrated = TRUE WHERE as_of_date <= '2026-09-10';")
 	// Clean out any artificial dummy index placeholder rows (e.g. DUMMYINXGN, DUMMYTRVN)
 	_, _ = p.db.ExecContext(ctx, "DELETE FROM pit_candidate_scores WHERE UPPER(ticker) LIKE '%DUMMY%';")
-	_, _ = p.db.ExecContext(ctx, "UPDATE pit_runs SET total_constituents = 750 WHERE index_name = 'niftytotalmarket' AND total_constituents > 750;")
+	_ = p.initIndexConstituents(ctx)
+	_ = p.initViews(ctx)
 	return nil
 }
 
@@ -154,14 +165,16 @@ INSERT OR REPLACE INTO pit_candidate_scores (
     as_of_date, index_name, method, ticker, sector,
     passed_stage1, data_fetch_failed, rejection_reason, raw_score, effective_score,
     composite_rs, vcp_ratio, rvol_z_score, decayed_pp, delivery_delta,
-    selected, final_weight, forward_return_21d, pillar4_insufficient_history
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+    selected, final_weight, forward_return_21d, pillar4_uncalibrated, pillar4_insufficient_history
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 `
 	stmt, err := tx.PrepareContext(ctx, candidateQuery)
 	if err != nil {
 		return fmt.Errorf("prepare candidate insert: %w", err)
 	}
 	defer stmt.Close()
+
+	isUncalibrated := (snap.AsOfDate <= "2026-09-10")
 
 	for _, c := range snap.Candidates {
 		_, err := stmt.ExecContext(ctx,
@@ -183,6 +196,7 @@ INSERT OR REPLACE INTO pit_candidate_scores (
 			c.Selected,
 			c.FinalWeight,
 			0.0, // forward return initialized to 0.0, backfilled after 21 days
+			isUncalibrated,
 			c.Pillar4InsufficientHistory,
 		)
 		if err != nil {
@@ -204,6 +218,35 @@ WHERE as_of_date = ? AND index_name = ? AND method = ? AND ticker = ?;
 	return err
 }
 
+// HasRun returns whether a run snapshot exists for the given asOfDate, indexName, and method.
+func (p *DB) HasRun(ctx context.Context, asOfDate, indexName, method string) (bool, error) {
+	var count int64
+	cleanIndex := strings.NewReplacer(",", "_", " ", "_", "^", "").Replace(indexName)
+	query := `SELECT count(*) FROM v_pit_runs WHERE as_of_date = ? AND (index_name = ? OR index_name = ? OR index_name = 'niftytotalmarket') AND method = ?;`
+	err := p.db.QueryRowContext(ctx, query, asOfDate, cleanIndex, indexName, method).Scan(&count)
+	if err != nil {
+		// Fallback to base pit_runs if view not ready
+		query = `SELECT count(*) FROM pit_runs WHERE as_of_date = ? AND (index_name = ? OR index_name = ? OR index_name = 'niftytotalmarket') AND method = ?;`
+		err = p.db.QueryRowContext(ctx, query, asOfDate, cleanIndex, indexName, method).Scan(&count)
+		if err != nil {
+			return false, err
+		}
+	}
+	return count > 0, nil
+}
+
+// GetLatestRunDate returns the most recent as_of_date for the given indexName and method.
+func (p *DB) GetLatestRunDate(ctx context.Context, indexName, method string) (string, error) {
+	var dt string
+	cleanIndex := strings.NewReplacer(",", "_", " ", "_", "^", "").Replace(indexName)
+	query := `SELECT as_of_date::VARCHAR FROM v_pit_runs WHERE (index_name = ? OR index_name = ? OR index_name = 'niftytotalmarket') AND method = ? ORDER BY as_of_date DESC LIMIT 1;`
+	err := p.db.QueryRowContext(ctx, query, cleanIndex, indexName, method).Scan(&dt)
+	if err != nil {
+		return "", err
+	}
+	return dt, nil
+}
+
 // GetCandidateTemporalVelocities queries DuckDB for chronological score trajectories and survival streaks.
 func (p *DB) GetCandidateTemporalVelocities(
 	ctx context.Context,
@@ -217,7 +260,7 @@ func (p *DB) GetCandidateTemporalVelocities(
 	// 1. Find the latest distinct dates (excluding excludeDate if specified)
 	dateQuery := `
 SELECT DISTINCT as_of_date 
-FROM pit_runs 
+FROM v_pit_runs 
 WHERE index_name = ? AND method = ? AND (? = '' OR as_of_date != ?)
 ORDER BY as_of_date DESC 
 LIMIT ?;
@@ -264,7 +307,7 @@ SELECT
     COALESCE(data_fetch_failed, false),
     raw_score,
     COALESCE(delivery_delta, 0.0)
-FROM pit_candidate_scores
+FROM v_pit_candidate_scores
 WHERE index_name = ? AND method = ? AND as_of_date IN (%s)
 ORDER BY as_of_date ASC;
 `, strings.Join(datePlaceholders, ","))
@@ -334,4 +377,177 @@ ORDER BY as_of_date ASC;
 	}
 
 	return result, nil
+}
+
+func (p *DB) initIndexConstituents(ctx context.Context) error {
+	schema := `
+CREATE TABLE IF NOT EXISTS index_constituents (
+    index_name VARCHAR NOT NULL,
+    ticker VARCHAR NOT NULL,
+    PRIMARY KEY (index_name, ticker)
+);
+`
+	if _, err := p.db.ExecContext(ctx, schema); err != nil {
+		return err
+	}
+
+	// Check if already populated
+	var count int64
+	_ = p.db.QueryRowContext(ctx, "SELECT count(*) FROM index_constituents;").Scan(&count)
+	if count > 0 {
+		return nil
+	}
+
+	files := []struct {
+		indexName string
+		path      string
+	}{
+		{"NIFTY50", "data/universe_snapshots/NIFTY50.csv"},
+		{"microcap250", "data/universe_snapshots/microcap250.csv"},
+		{"smallcap250", "data/universe_snapshots/smallcap250.csv"},
+		{"microcap250_smallcap250", "data/universe_snapshots/microcap250_smallcap250.csv"},
+	}
+
+	for _, f := range files {
+		candidates := []string{
+			f.path,
+			filepath.Join("..", f.path),
+			filepath.Join("..", "..", f.path),
+		}
+		for _, cp := range candidates {
+			if _, err := os.Stat(cp); err == nil {
+				query := fmt.Sprintf(`
+INSERT OR REPLACE INTO index_constituents
+SELECT '%s' as index_name, 'NSE:' || trim(symbol) as ticker 
+FROM read_csv_auto('%s', header=false, names=['symbol'])
+WHERE trim(symbol) != '' AND trim(symbol) NOT LIKE '%%%%DUMMY%%%%';
+`, f.indexName, cp)
+				_, _ = p.db.ExecContext(ctx, query)
+				break
+			}
+		}
+	}
+	return nil
+}
+
+func (p *DB) initViews(ctx context.Context) error {
+	viewDDL := `
+CREATE OR REPLACE VIEW v_pit_candidate_scores AS
+SELECT * FROM pit_candidate_scores
+UNION ALL
+SELECT 
+    p.as_of_date,
+    c.index_name,
+    p.method,
+    p.ticker,
+    p.sector,
+    p.passed_stage1,
+    p.data_fetch_failed,
+    p.rejection_reason,
+    p.raw_score,
+    p.effective_score,
+    p.composite_rs,
+    p.vcp_ratio,
+    p.rvol_z_score,
+    p.decayed_pp,
+    p.delivery_delta,
+    p.selected,
+    p.final_weight,
+    p.forward_return_21d,
+    p.pillar4_uncalibrated,
+    p.pillar4_insufficient_history
+FROM pit_candidate_scores p
+JOIN index_constituents c ON p.ticker = c.ticker
+WHERE p.index_name = 'niftytotalmarket'
+  AND NOT EXISTS (
+      SELECT 1 FROM pit_candidate_scores existing
+      WHERE existing.as_of_date = p.as_of_date 
+        AND existing.index_name = c.index_name 
+        AND existing.method = p.method 
+        AND existing.ticker = p.ticker
+  )
+UNION ALL
+SELECT 
+    p.as_of_date,
+    'small250' as index_name,
+    p.method,
+    p.ticker,
+    p.sector,
+    p.passed_stage1,
+    p.data_fetch_failed,
+    p.rejection_reason,
+    p.raw_score,
+    p.effective_score,
+    p.composite_rs,
+    p.vcp_ratio,
+    p.rvol_z_score,
+    p.decayed_pp,
+    p.delivery_delta,
+    p.selected,
+    p.final_weight,
+    p.forward_return_21d,
+    p.pillar4_uncalibrated,
+    p.pillar4_insufficient_history
+FROM pit_candidate_scores p
+JOIN index_constituents c ON p.ticker = c.ticker
+WHERE p.index_name = 'niftytotalmarket'
+  AND c.index_name = 'smallcap250'
+  AND NOT EXISTS (
+      SELECT 1 FROM pit_candidate_scores existing
+      WHERE existing.as_of_date = p.as_of_date 
+        AND existing.index_name = 'small250' 
+        AND existing.method = p.method 
+        AND existing.ticker = p.ticker
+  );
+
+CREATE OR REPLACE VIEW v_pit_runs AS
+SELECT * FROM pit_runs
+UNION ALL
+SELECT 
+    p.as_of_date,
+    c.index_name,
+    p.method,
+    r.regime_multiplier,
+    count(*)::INT as total_constituents,
+    count(CASE WHEN p.passed_stage1 THEN 1 END)::INT as stage1_survivors,
+    count(CASE WHEN p.selected THEN 1 END)::INT as selected_count,
+    r.pillar4_uncalibrated,
+    r.created_at
+FROM pit_candidate_scores p
+JOIN index_constituents c ON p.ticker = c.ticker
+JOIN pit_runs r ON p.as_of_date = r.as_of_date AND r.index_name = 'niftytotalmarket' AND r.method = p.method
+WHERE p.index_name = 'niftytotalmarket'
+  AND NOT EXISTS (
+      SELECT 1 FROM pit_runs existing
+      WHERE existing.as_of_date = p.as_of_date
+        AND existing.index_name = c.index_name
+        AND existing.method = p.method
+  )
+GROUP BY p.as_of_date, c.index_name, p.method, r.regime_multiplier, r.pillar4_uncalibrated, r.created_at
+UNION ALL
+SELECT 
+    p.as_of_date,
+    'small250' as index_name,
+    p.method,
+    r.regime_multiplier,
+    count(*)::INT as total_constituents,
+    count(CASE WHEN p.passed_stage1 THEN 1 END)::INT as stage1_survivors,
+    count(CASE WHEN p.selected THEN 1 END)::INT as selected_count,
+    r.pillar4_uncalibrated,
+    r.created_at
+FROM pit_candidate_scores p
+JOIN index_constituents c ON p.ticker = c.ticker
+JOIN pit_runs r ON p.as_of_date = r.as_of_date AND r.index_name = 'niftytotalmarket' AND r.method = p.method
+WHERE p.index_name = 'niftytotalmarket'
+  AND c.index_name = 'smallcap250'
+  AND NOT EXISTS (
+      SELECT 1 FROM pit_runs existing
+      WHERE existing.as_of_date = p.as_of_date
+        AND existing.index_name = 'small250'
+        AND existing.method = p.method
+  )
+GROUP BY p.as_of_date, p.method, r.regime_multiplier, r.pillar4_uncalibrated, r.created_at;
+`
+	_, err := p.db.ExecContext(ctx, viewDDL)
+	return err
 }

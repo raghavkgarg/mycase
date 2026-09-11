@@ -1,6 +1,7 @@
 package themereturn
 
 import (
+	"context"
 	"encoding/csv"
 	"fmt"
 	"os"
@@ -11,6 +12,7 @@ import (
 	"github.com/raghavkgarg/mycase/pkg/config"
 	"github.com/raghavkgarg/mycase/pkg/csvloader"
 	"github.com/raghavkgarg/mycase/pkg/portfolio"
+	"github.com/raghavkgarg/mycase/pkg/themedb"
 )
 
 // MatchedTheme holds resolved symbols for active and lifecycle views.
@@ -131,9 +133,58 @@ func ResolveTheme(themeArg, explicitCSV, themesConfigPath string) (*MatchedTheme
 		}
 	}
 
+	// 2. Check if data/mycase.db has structured theme history for this theme
+	uName := csvloader.GetUniverseName(matchedConfig.CSVPath)
+	if tdb, err := themedb.Open(""); err == nil {
+		defer tdb.Close()
+		ctx := context.Background()
+		targetTheme := uName
+		if has, _ := tdb.HasTheme(ctx, targetTheme); !has {
+			if has2, _ := tdb.HasTheme(ctx, matchedConfig.Name); has2 {
+				targetTheme = matchedConfig.Name
+			}
+		}
+		if has, _ := tdb.HasTheme(ctx, targetTheme); has {
+			dbActive, aErr := tdb.GetActiveHoldings(ctx, targetTheme)
+			dbExited, eErr := tdb.GetExitedHoldings(ctx, targetTheme)
+			if aErr == nil && eErr == nil && len(dbActive) > 0 {
+				var activeSyms []string
+				var lifecycleSyms []string
+				var exitedSyms []string
+				dbWeights := make(map[string]float64)
+
+				for _, it := range dbActive {
+					sym := CleanTicker(it.Symbol)
+					if !priorClaimed[sym] {
+						activeSyms = append(activeSyms, sym)
+						lifecycleSyms = append(lifecycleSyms, sym)
+						dbWeights[sym] = it.TargetWeight
+					}
+				}
+				for _, it := range dbExited {
+					sym := CleanTicker(it.Symbol)
+					if !priorClaimed[sym] && !slices.Contains(activeSyms, sym) {
+						exitedSyms = append(exitedSyms, sym)
+						lifecycleSyms = append(lifecycleSyms, sym)
+					}
+				}
+
+				return &MatchedTheme{
+					Name:             matchedConfig.Name,
+					Prefix:           matchedConfig.Prefix,
+					CSVPath:          matchedConfig.CSVPath,
+					ActiveSymbols:    activeSyms,
+					LifecycleSymbols: lifecycleSyms,
+					ExitedSymbols:    exitedSyms,
+					SymbolWeights:    dbWeights,
+				}, nil
+			}
+		}
+	}
+
 	csvPath := resolveFilePath(matchedConfig.CSVPath)
 
-	// 2. Load active symbols from Golden Copy CSV
+	// 3. Fallback: Load active symbols from Golden Copy CSV
 	activeMap, err := csvloader.LoadMyAllCSV(csvPath)
 	if err != nil {
 		return nil, fmt.Errorf("loading Golden Copy CSV %s: %w", csvPath, err)

@@ -12,7 +12,13 @@
 // marketdata.HistoricalData, etc.) so existing yfinance.* call sites are unchanged.
 package marketdata
 
-import "time"
+import (
+	"encoding/json"
+	"fmt"
+	"strconv"
+	"strings"
+	"time"
+)
 
 // AnnualFinancial holds annual revenue and earnings.
 type AnnualFinancial struct {
@@ -33,6 +39,52 @@ type DeliveryRecord struct {
 	ClosePrice     float64 `json:"close_price"`
 	DeliverableQty float64 `json:"deliverable_qty"`
 	DeliveryPct    float64 `json:"delivery_pct"`
+}
+
+// UnmarshalJSON provides resilient unmarshaling for DeliveryRecord, handling
+// numeric values, nulls, and dirty NSE strings (such as "-", " - ", or "N/A") safely.
+func (d *DeliveryRecord) UnmarshalJSON(data []byte) error {
+	var aux struct {
+		Date           string      `json:"date"`
+		ClosePrice     interface{} `json:"close_price"`
+		DeliverableQty interface{} `json:"deliverable_qty"`
+		DeliveryPct    interface{} `json:"delivery_pct"`
+	}
+	if err := json.Unmarshal(data, &aux); err != nil {
+		return err
+	}
+	d.Date = aux.Date
+	d.ClosePrice = parseFlexibleFloat(aux.ClosePrice)
+	d.DeliverableQty = parseFlexibleFloat(aux.DeliverableQty)
+	d.DeliveryPct = parseFlexibleFloat(aux.DeliveryPct)
+	return nil
+}
+
+func parseFlexibleFloat(v interface{}) float64 {
+	if v == nil {
+		return 0.0
+	}
+	switch val := v.(type) {
+	case float64:
+		return val
+	case float32:
+		return float64(val)
+	case int:
+		return float64(val)
+	case int64:
+		return float64(val)
+	case string:
+		clean := strings.TrimSpace(strings.ReplaceAll(val, ",", ""))
+		if clean == "" || clean == "-" || clean == "--" || clean == "N/A" || clean == "None" || clean == "null" {
+			return 0.0
+		}
+		if f, err := strconv.ParseFloat(clean, 64); err == nil {
+			return f
+		}
+		return 0.0
+	default:
+		return 0.0
+	}
 }
 
 // Fundamentals represents key fundamental metrics for a security. Populated from
@@ -156,3 +208,44 @@ func (h *HistoricalData) truncateLast() {
 		h.Timestamps = h.Timestamps[:len(h.Timestamps)-1]
 	}
 }
+
+// EODSettlementDate returns the effective settled EOD market date for a given time t in IST.
+// The sole daily cutoff is 21:00 IST (9:00 PM):
+// - Any time before 21:00 IST belongs to the previous day's completed EOD cycle.
+// - Any time at or after 21:00 IST belongs to today's completed EOD cycle.
+// Example: From 21:00 PM on Sept 21 until 20:59 PM on Sept 22, the effective EOD date is Sept 21.
+func EODSettlementDate(t time.Time) time.Time {
+	ist := time.FixedZone("IST", 5*3600+30*60)
+	tIST := t.In(ist)
+	if tIST.Hour() < 21 {
+		yesterday := tIST.AddDate(0, 0, -1)
+		return time.Date(yesterday.Year(), yesterday.Month(), yesterday.Day(), 0, 0, 0, 0, ist)
+	}
+	return time.Date(tIST.Year(), tIST.Month(), tIST.Day(), 0, 0, 0, 0, ist)
+}
+
+// NextEODAvailableDate returns the date on which the next day's EOD file will be available (at 21:00 IST).
+func NextEODAvailableDate(t time.Time) time.Time {
+	ist := time.FixedZone("IST", 5*3600+30*60)
+	tIST := t.In(ist)
+	if tIST.Hour() < 21 {
+		return time.Date(tIST.Year(), tIST.Month(), tIST.Day(), 21, 0, 0, 0, ist)
+	}
+	nextDay := tIST.AddDate(0, 0, 1)
+	return time.Date(nextDay.Year(), nextDay.Month(), nextDay.Day(), 21, 0, 0, 0, ist)
+}
+
+// FormatOrdinalDay returns e.g. "21st", "22nd", "23rd", "24th" for a day number.
+func FormatOrdinalDay(d int) string {
+	switch d {
+	case 1, 21, 31:
+		return fmt.Sprintf("%dst", d)
+	case 2, 22:
+		return fmt.Sprintf("%dnd", d)
+	case 3, 23:
+		return fmt.Sprintf("%drd", d)
+	default:
+		return fmt.Sprintf("%dth", d)
+	}
+}
+

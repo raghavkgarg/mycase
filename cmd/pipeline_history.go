@@ -24,7 +24,7 @@ var pipelineHistoryCmd = &cli.Command{
 func runPipelineHistory(ctx context.Context, c *cli.Command) error {
 	db := cache.GetDB()
 	if db == nil {
-		fmt.Println("Cache is not initialised (data/cache.db could not be opened at startup).")
+		fmt.Println("Cache is not initialised (data/mycase.db could not be opened at startup).")
 		return nil
 	}
 

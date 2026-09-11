@@ -24,7 +24,7 @@ func FetchCookieAndCrumb(ctx context.Context, client *http.Client) (string, erro
 	}
 	req1.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36")
 
-	resp1, err := client.Do(req1)
+	resp1, err := executeYFinanceRequest(client, req1)
 	if err != nil {
 		return "", err
 	}
@@ -36,7 +36,7 @@ func FetchCookieAndCrumb(ctx context.Context, client *http.Client) (string, erro
 	}
 	req2.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36")
 
-	resp2, err := client.Do(req2)
+	resp2, err := executeYFinanceRequest(client, req2)
 	if err != nil {
 		return "", err
 	}
@@ -107,10 +107,7 @@ func FetchFundamentals(ctx context.Context, tickers []string) (map[string]Fundam
 		return nil, fmt.Errorf("failed to create cookie jar: %w", err)
 	}
 
-	client := &http.Client{
-		Timeout: 8 * time.Second,
-		Jar:     jar,
-	}
+	client := newYFinanceHTTPClient(8*time.Second, jar)
 
 	// Fetch Cookie and Crumb once to reuse
 	crumb, err := FetchCookieAndCrumb(ctx, client)
@@ -147,7 +144,7 @@ func FetchFundamentals(ctx context.Context, tickers []string) (map[string]Fundam
 				}
 				req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36")
 
-				resp, err := client.Do(req)
+				resp, err := executeYFinanceRequest(client, req)
 				if err != nil {
 					results <- fetchResult{ticker: job.ticker, err: err}
 					continue

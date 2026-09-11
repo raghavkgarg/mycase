@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
@@ -132,8 +133,8 @@ func FetchScreenerEarningsDates(ctx context.Context, ticker string) ([]time.Time
 	}
 	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36")
 
-	client := &http.Client{Timeout: 8 * time.Second}
-	resp, err := client.Do(req)
+	client := newYFinanceHTTPClient(8*time.Second, nil)
+	resp, err := executeYFinanceRequest(client, req)
 	if err != nil {
 		return nil, err
 	}
@@ -211,16 +212,34 @@ func FetchNselibDeliveryDataSeries(ctx context.Context, tickers []string) (map[s
 		return make(map[string][]NSEDeliveryRecord), nil
 	}
 
+	scriptCandidates := []string{
+		"scripts/fetch_nse_data.py",
+		"../../scripts/fetch_nse_data.py",
+		"/Users/raghavgarg/Projects/myGo/mycase/scripts/fetch_nse_data.py",
+	}
+	var chosenScript string
+	for _, sPath := range scriptCandidates {
+		if _, err := os.Stat(sPath); err == nil {
+			if abs, err := filepath.Abs(sPath); err == nil {
+				chosenScript = abs
+			} else {
+				chosenScript = sPath
+			}
+			break
+		}
+	}
+	if chosenScript == "" {
+		return nil, fmt.Errorf("script not found: scripts/fetch_nse_data.py")
+	}
+
+	projectDir := filepath.Dir(filepath.Dir(chosenScript))
+
 	pyCandidates := []string{
+		filepath.Join(projectDir, ".venv/bin/python3"),
 		".venv/bin/python3",
-		"./.venv/bin/python3",
 		"/Users/raghavgarg/Projects/myGo/mycase/.venv/bin/python3",
 		"python3",
 		"python",
-	}
-	chosenScript := "scripts/fetch_nse_data.py"
-	if _, err := os.Stat(chosenScript); os.IsNotExist(err) {
-		return nil, fmt.Errorf("script not found: %s", chosenScript)
 	}
 
 	var chosenPy string
@@ -241,13 +260,18 @@ func FetchNselibDeliveryDataSeries(ctx context.Context, tickers []string) (map[s
 		return nil, fmt.Errorf("python interpreter not found")
 	}
 
-	subCtx, cancel := context.WithTimeout(ctx, 35*time.Second)
+	timeout := time.Duration(max(120, len(cleanSyms)*4)) * time.Second
+	subCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
 	symArg := strings.Join(cleanSyms, ",")
 	cmd := exec.CommandContext(subCtx, chosenPy, chosenScript, "--symbol", symArg, "--mode", "delivery_data", "--period", "3M")
+	cmd.Dir = projectDir
 	out, err := cmd.Output()
 	if err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			return nil, fmt.Errorf("nselib delivery execution failed: %w, stderr: %s", err, string(exitErr.Stderr))
+		}
 		return nil, fmt.Errorf("nselib delivery execution failed: %w", err)
 	}
 
@@ -262,16 +286,17 @@ func FetchNselibDeliveryDataSeries(ctx context.Context, tickers []string) (map[s
 		}
 	} else {
 		var multiRes map[string]NSEDeliverySymbolResult
-		if err := json.Unmarshal(out, &multiRes); err == nil {
-			for cSym, item := range multiRes {
-				if len(item.Records) > 0 {
-					orig, ok := symToOriginal[cSym]
-					if !ok {
-						orig = cSym
-					}
-					resultMap[orig] = item.Records
-					resultMap[cSym] = item.Records
+		if err := json.Unmarshal(out, &multiRes); err != nil {
+			return nil, fmt.Errorf("unmarshal multi-ticker delivery json: %w (output: %.500s)", err, string(out))
+		}
+		for cSym, item := range multiRes {
+			if len(item.Records) > 0 {
+				orig, ok := symToOriginal[cSym]
+				if !ok {
+					orig = cSym
 				}
+				resultMap[orig] = item.Records
+				resultMap[cSym] = item.Records
 			}
 		}
 	}

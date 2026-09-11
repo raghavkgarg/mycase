@@ -35,7 +35,7 @@ var CacheCommand = &cli.Command{
 func runCacheStatus(ctx context.Context, _ *cli.Command) error {
 	c := cache.GetDB()
 	if c == nil {
-		fmt.Println("Cache is not initialised (data/cache.db could not be opened at startup).")
+		fmt.Println("Cache is not initialised (data/mycase.db could not be opened at startup).")
 		return nil
 	}
 	entries, err := c.Status(ctx)

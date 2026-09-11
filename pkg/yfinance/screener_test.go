@@ -3,6 +3,7 @@ package yfinance
 import (
 	"context"
 	"sort"
+	"strings"
 	"testing"
 	"time"
 )
@@ -47,6 +48,9 @@ func TestScreenerEarningsDates(t *testing.T) {
 	for _, sym := range tickers {
 		dates, err := FetchScreenerEarningsDates(ctx, sym)
 		if err != nil {
+			if strings.Contains(err.Error(), "no such host") || strings.Contains(err.Error(), "dial tcp") {
+				t.Skipf("skipping: screener.in network unavailable in this environment: %v", err)
+			}
 			t.Errorf("Error fetching %s: %v", sym, err)
 			continue
 		}

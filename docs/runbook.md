@@ -11,11 +11,15 @@ Practical usage guide: common workflows, every command with realistic examples, 
 3. [Backtesting](#3-backtesting)
 4. [Performance Tracking](#4-performance-tracking)
 5. [Portfolio Health & Drift Monitoring](#5-portfolio-health--drift-monitoring)
-6. [Cache Management](#6-cache-management)
+6. [Cache Management & Consolidated DuckDB](#6-cache-management)
 7. [Pipeline (Full Automation)](#7-pipeline-full-automation)
 7b. [Tax-Loss Harvesting (US)](#7b-tax-loss-harvesting-us)
-8. [Web Dashboard Server](#8-web-dashboard-server)
-9. [Command Reference](#9-command-reference)
+8. [Unified Database Operations (`db`)](#8-unified-database-operations-db)
+9. [Theme Lifecycle & Versioning (`theme`)](#9-theme-lifecycle--versioning-theme)
+10. [Point-in-Time Quantitative Research (`pit`)](#10-point-in-time-quantitative-research-pit)
+11. [Automated Daily Sync (`daily_sync.sh`)](#11-automated-daily-sync-dailysyncsh)
+12. [Web Dashboard Server](#12-web-dashboard-server)
+13. [Command Reference](#13-command-reference)
 
 ---
 
@@ -289,10 +293,11 @@ mycase cache clear --ticker NSE:TCS
 mycase cache clear --all
 ```
 
-The DuckDB cache (`data/cache.db`) stores:
+The unified DuckDB database (`data/mycase.db`) stores:
 - **Prices**: permanent for historical dates; same-day freshness for today's prices
 - **Fundamentals**: 24h TTL (re-fetched if older than 24 hours)
 - **Date-range queries** (used by backtest): historical ranges never expire
+- **Metadata**: tracked in `cache_meta` with validated date bounds to guarantee cache integrity
 
 ---
 
@@ -488,7 +493,97 @@ The dashboard **Tax** tab (`#/tax`) shows the same data: realized gains (YTD + a
 
 ---
 
-## 8. Web Dashboard Server
+---
+
+## 8. Unified Database Operations (`db`)
+
+All market data, quantitative research snapshots, pipeline staging, and theme history reside in a single ACID-compliant DuckDB database: **`data/mycase.db`**.
+
+```bash
+# View table row counts, domain layers, and online status across all 14 tables/views
+mycase db stats
+
+# Run unified EOD update across market cache, PIT screening, and theme sync
+mycase db update --all --index niftytotalmarket --method earlymb --top 10
+
+# Shorthand via top-level flags:
+mycase --database --update
+# or:
+mycase -db -u
+
+# Preview update sequence without writing to DuckDB:
+mycase db update --dry-run
+```
+
+The database partitions into 4 architectural domains:
+1. **Market Data Cache**: `prices`, `fundamentals`, `cache_meta`
+2. **PIT Quant Research**: `pit_runs`, `pit_candidate_scores`, `v_pit_candidate_scores`, `v_pit_runs`, `index_constituents`
+3. **Pipeline Staging**: `pipeline_runs`, `index_picks`, `proposals`, `selections`
+4. **Theme Lifecycle**: `theme_rebalances`, `theme_history`
+
+---
+
+## 9. Theme Lifecycle & Versioning (`theme`)
+
+Manage active investment themes (configured in `config/themes.json`) with version-controlled constituent turnover and rebalance history.
+
+```bash
+# Display active constituent roster and weight breakdown for a theme
+mycase theme show microsmall
+
+# Display chronological rebalance history, dates, sources, and turnover %
+mycase theme history microsmall
+
+# Synchronize or backfill theme rebalances from proposal CSVs into mycase.db
+mycase theme sync
+
+# Filter by exit state (e.g. view dropped constituents)
+mycase theme show microsmall --exited
+```
+
+---
+
+## 10. Point-in-Time Quantitative Research (`pit`)
+
+Institutional-grade quantitative research framework that evaluates stocks using 2-stage gating and invariant 4-pillar scoring.
+
+```bash
+# Run daily PIT screening and persist candidate scores to data/mycase.db
+mycase pit update --index niftytotalmarket --method earlymb --top 10
+
+# Query rolling empirical score quantiles (P40, P50, P75, P90) across Stage-1 survivors
+# (Uses dynamic SQL views to query sub-indices on-the-fly with zero row duplication!)
+mycase pit stats --index microcap250 --method earlymb
+mycase pit stats --index smallcap250 --method earlymb
+mycase pit stats --index NIFTY50 --method earlymb
+
+# Inspect chronological score, VCP ATR tightness, and RVOL trajectory for a specific stock
+mycase pit stats --ticker INOXINDIA
+
+# Targeted recovery: re-fetch and re-score failed candidates without re-evaluating 750 stocks
+mycase pit retry --index niftytotalmarket --method earlymb --date 2026-09-10
+
+# Run deep 8-section quantitative deduction analysis (funnel, sentry, quantiles, incubator, velocity)
+mycase --index niftytotalmarket --method earlymb --analysis
+```
+
+---
+
+## 11. Automated Daily Sync (`daily_sync.sh`)
+
+To eliminate manual daily terminal commands, post-market updates are automated via `scripts/daily_sync.sh` scheduled via macOS LaunchAgent (`~/Library/LaunchAgents/com.mycase.daily_sync.plist`) at **21:00 IST (9:00 PM)** Monday through Friday. Running at 9:00 PM IST guarantees that NSE Bhavcopy, Security-wise Deliverable Positions (MTO), and Yahoo Finance settled daily candles are 100% available without race conditions.
+
+### Execution Flow:
+1. **Weekend & Holiday Guard**: Skips execution on Saturdays, Sundays, and NSE market holidays.
+2. **Broker Authentication**: Runs `mycase auth` to refresh or verify the Zerodha Kite session.
+3. **Trade Ingestion**: Navigates to `myportfolio` and runs `./dist/myportfolio fetch-trades` to pull today's broker fills into `portfolio.db`.
+4. **Unified Database Update**: Runs `./mycase db update --all --index niftytotalmarket --method earlymb --top 10` to warm caches, screen Nifty Total Market, and sync theme rebalances into `data/mycase.db`.
+
+Logs stream with timestamps to `logs/pit_update.log`.
+
+---
+
+## 12. Web Dashboard Server
 
 Launch the web UI dashboard in your browser to visualize portfolio allocations, factor scores, backtest forms, drift timelines, and order previews:
 
@@ -514,7 +609,7 @@ Features included in the web dashboard:
 
 ---
 
-## 9. Command Reference
+## 13. Command Reference
 
 ### `auth`
 
@@ -672,6 +767,29 @@ Features included in the web dashboard:
 | `dismiss` | — | Dismiss pending proposal without executing |
 | `install` | `--config` | Install launchd plist (macOS) or print systemd unit (Linux) |
 | `uninstall` | — | Remove installed service |
+
+### `db`
+
+| Subcommand | Flags | Description |
+|-----------|-------|-------------|
+| `stats` | — | Display row counts, domain layers, and online status across all 14 tables/views in `data/mycase.db` |
+| `update` | `--all`, `--index`, `--method`, `--top`, `--dry-run` | Run unified EOD sequence (market cache warming, PIT quant screening, and theme lifecycle sync) |
+
+### `theme`
+
+| Subcommand | Arguments / Flags | Description |
+|-----------|-------------------|-------------|
+| `show` | `<theme_name> [--exited]` | Display active (or exited) constituent roster and weights for a theme |
+| `history` | `<theme_name>` | Display chronological rebalance versions, dates, sources, and constituent turnover |
+| `sync` | — | Synchronize/backfill theme rebalances from proposal CSVs into `data/mycase.db` |
+
+### `pit`
+
+| Subcommand | Flags | Description |
+|-----------|-------|-------------|
+| `update` | `--index`, `--method`, `--top` | Execute daily 4-pillar PIT screening and persist candidate scores to `data/mycase.db` |
+| `stats` | `--index`, `--method`, `--ticker` | Query rolling empirical quantiles ($P_{40}, P_{50}, P_{75}, P_{90}$) or individual stock trajectories |
+| `retry` | `--index`, `--method`, `--date` | Targeted recovery: re-fetch and re-score failed candidates for a historical date |
 
 ---
 

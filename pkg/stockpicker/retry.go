@@ -129,7 +129,7 @@ func RetryFailedSnapshotCandidates(ctx context.Context, indexName, method, asOfD
 				vcpRatio, _ := yfinance.CalculateVCPTightness(hist.Closes, hist.Opens)
 				rvolZ := yfinance.CalculateWinsorizedRVOLZScore(hist.Volumes, 5, 50, 4.0)
 				ppScore, _ := yfinance.CalculateDecayedPocketPivot(hist.Closes, hist.Opens, hist.Volumes, 10, 0.25)
-				delivDelta, _, _, _ := yfinance.GetDeliveryDelta(f.DeliveryHistory, time.Now(), 1)
+				delivDelta, _, _, dErr := yfinance.GetDeliveryDelta(f.DeliveryHistory, time.Now(), 1)
 
 				wIdioRS, wVCP, wVol, wDeliv := 25.0, 25.0, 25.0, 25.0
 				if cfg != nil && cfg.HardFilters != nil {
@@ -156,19 +156,20 @@ func RetryFailedSnapshotCandidates(ctx context.Context, indexName, method, asOfD
 				effScore := rawScore * snap.RegimeMultiplier
 
 				snap.Candidates[t] = CandidateScoreDetail{
-					Ticker:          t,
-					PassedStage1:    true,
-					DataFetchFailed: false,
-					RawScore:        rawScore,
-					EffectiveScore:  effScore,
-					CompositeRS:     compRS,
-					VCPRatio:        vcpRatio,
-					RVOLZScore:      rvolZ,
-					DecayedPP:       ppScore,
-					DeliveryDelta:   delivDelta,
-					Selected:        false,
-					FinalWeight:     0.0,
-					Sector:          sec,
+					Ticker:                     t,
+					PassedStage1:               true,
+					DataFetchFailed:            false,
+					Pillar4InsufficientHistory: (dErr != nil),
+					RawScore:                   rawScore,
+					EffectiveScore:             effScore,
+					CompositeRS:                compRS,
+					VCPRatio:                   vcpRatio,
+					RVOLZScore:                 rvolZ,
+					DecayedPP:                  ppScore,
+					DeliveryDelta:              delivDelta,
+					Selected:                   false,
+					FinalWeight:                0.0,
+					Sector:                     sec,
 				}
 			} else {
 				reason := tracker.SafetyReasons[t]

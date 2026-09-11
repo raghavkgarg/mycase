@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 )
 
@@ -34,8 +35,31 @@ type CandidateHistoryRow struct {
 	Selected       bool    `json:"selected"`
 }
 
+// NormalizeIndexName canonicalizes informal aliases (e.g. "small250" -> "smallcap250").
+func NormalizeIndexName(name string) string {
+	clean := strings.ToLower(strings.TrimSpace(name))
+	clean = strings.ReplaceAll(clean, " ", "")
+	clean = strings.ReplaceAll(clean, "-", "")
+	clean = strings.ReplaceAll(clean, "_", "")
+	switch clean {
+	case "small250", "smallcap250", "niftysmallcap250":
+		return "smallcap250"
+	case "micro250", "microcap250", "niftymicrocap250":
+		return "microcap250"
+	case "nifty50", "n50":
+		return "NIFTY50"
+	case "totalmarket", "niftytotalmarket":
+		return "niftytotalmarket"
+	case "microsmall", "microsmall250", "microcap250smallcap250":
+		return "microcap250_smallcap250"
+	default:
+		return name
+	}
+}
+
 // GetEmpiricalQuantiles returns P90, P75, P50, P40, P25 for raw scores across Stage-1 survivors.
 func (p *DB) GetEmpiricalQuantiles(ctx context.Context, indexName, method string, days int) (map[string]float64, error) {
+	indexName = NormalizeIndexName(indexName)
 	dateFilter := ""
 	if days > 0 {
 		dateFilter = fmt.Sprintf("AND as_of_date >= CURRENT_DATE - INTERVAL %d DAY", days)
@@ -49,7 +73,7 @@ SELECT
     COALESCE(quantile_cont(raw_score, 0.40), 0.0) AS p40,
     COALESCE(quantile_cont(raw_score, 0.25), 0.0) AS p25,
     COUNT(*) as total_samples
-FROM pit_candidate_scores
+FROM v_pit_candidate_scores
 WHERE passed_stage1 = true 
   AND (data_fetch_failed = false OR data_fetch_failed IS NULL)
   AND index_name = ? 
@@ -77,6 +101,7 @@ WHERE passed_stage1 = true
 
 // GetRunHistory returns chronological run records for an index/method.
 func (p *DB) GetRunHistory(ctx context.Context, indexName, method string, limit int) ([]RunSummaryRow, error) {
+	indexName = NormalizeIndexName(indexName)
 	if limit <= 0 {
 		limit = 30
 	}
@@ -90,7 +115,7 @@ SELECT
     stage1_survivors,
     selected_count,
     created_at
-FROM pit_runs
+FROM v_pit_runs
 WHERE index_name = ? AND method = ?
 ORDER BY as_of_date DESC
 LIMIT ?;
@@ -141,7 +166,7 @@ SELECT
     delivery_delta,
     selected,
     final_weight
-FROM pit_candidate_scores
+FROM v_pit_candidate_scores
 WHERE ticker = ?
 ORDER BY as_of_date DESC, method ASC
 LIMIT ?;
@@ -181,7 +206,7 @@ LIMIT ?;
 func (p *DB) GetPendingForwardDates(ctx context.Context, minDaysAgo int) ([]string, error) {
 	query := `
 SELECT DISTINCT strftime(as_of_date, '%Y-%m-%d')
-FROM pit_candidate_scores
+FROM v_pit_candidate_scores
 WHERE forward_return_21d = 0.0 
   AND passed_stage1 = true
   AND as_of_date <= CURRENT_DATE - INTERVAL ? DAY
@@ -205,6 +230,7 @@ ORDER BY as_of_date ASC;
 
 // RunDeepAnalysis performs institutional deduction analytics purely from DuckDB tables.
 func (p *DB) RunDeepAnalysis(ctx context.Context, indexName, method string) error {
+	indexName = NormalizeIndexName(indexName)
 	runs, err := p.GetRunHistory(ctx, indexName, method, 10)
 	if err != nil {
 		return fmt.Errorf("failed to fetch run history: %w", err)
@@ -263,7 +289,7 @@ SELECT
         ELSE 'Other Hard Filter'
     END AS cat,
     COUNT(*) as cnt
-FROM pit_candidate_scores
+FROM v_pit_candidate_scores
 WHERE as_of_date = ? AND index_name = ? AND method = ? AND passed_stage1 = false
 GROUP BY cat
 ORDER BY cnt DESC;
@@ -316,7 +342,7 @@ ORDER BY cnt DESC;
 SELECT 
     COALESCE(SUM(final_weight), 0.0),
     COALESCE(SUM(CASE WHEN passed_stage1 = true AND effective_score < 30.0 THEN 1 ELSE 0 END), 0)
-FROM pit_candidate_scores
+FROM v_pit_candidate_scores
 WHERE as_of_date = ? AND index_name = ? AND method = ?;
 `
 		_ = p.db.QueryRowContext(ctx, q, r.AsOfDate, indexName, method).Scan(&equityWeight, &regimeRejected)
@@ -350,7 +376,7 @@ SELECT
     COALESCE(AVG(vcp_ratio), 0.0),
     COALESCE(AVG(rvol_z_score), 0.0),
     COALESCE(AVG(delivery_delta), 0.0)
-FROM pit_candidate_scores
+FROM v_pit_candidate_scores
 WHERE as_of_date = ? AND index_name = ? AND method = ? AND passed_stage1 = true;
 `
 		var p90, p75, p50, p40, p25, avgRS, avgVCP, avgRVOL, avgDeliv float64
@@ -380,7 +406,7 @@ SELECT
     COUNT(*) as survivor_cnt,
     SUM(CASE WHEN selected THEN 1 ELSE 0 END) as sel_cnt,
     COALESCE(SUM(final_weight), 0.0) * 100.0 as tot_weight
-FROM pit_candidate_scores
+FROM v_pit_candidate_scores
 WHERE as_of_date = ? AND index_name = ? AND method = ? AND passed_stage1 = true
 GROUP BY sec
 ORDER BY tot_weight DESC, survivor_cnt DESC;
@@ -419,8 +445,8 @@ SELECT
     curr.vcp_ratio,
     curr.composite_rs,
     curr.delivery_delta
-FROM pit_candidate_scores curr
-JOIN pit_candidate_scores prev 
+FROM v_pit_candidate_scores curr
+JOIN v_pit_candidate_scores prev 
   ON curr.ticker = prev.ticker 
  AND curr.index_name = prev.index_name 
  AND curr.method = prev.method
@@ -468,8 +494,8 @@ SELECT
     prev.raw_score,
     prev.effective_score,
     prev.final_weight
-FROM pit_candidate_scores prev
-JOIN pit_candidate_scores curr
+FROM v_pit_candidate_scores prev
+JOIN v_pit_candidate_scores curr
   ON prev.ticker = curr.ticker
  AND prev.index_name = curr.index_name
  AND prev.method = curr.method
@@ -520,7 +546,7 @@ SELECT
     composite_rs,
     delivery_delta,
     rvol_z_score
-FROM pit_candidate_scores
+FROM v_pit_candidate_scores
 WHERE as_of_date = ? AND index_name = ? AND method = ? AND passed_stage1 = true
 ORDER BY raw_score DESC
 LIMIT 12;
@@ -586,10 +612,10 @@ SELECT
     curr.raw_score as score_t0,
     curr.vcp_ratio,
     curr.delivery_delta
-FROM pit_candidate_scores curr
-JOIN pit_candidate_scores prev 
+FROM v_pit_candidate_scores curr
+JOIN v_pit_candidate_scores prev 
   ON curr.ticker = prev.ticker AND curr.index_name = prev.index_name AND curr.method = prev.method
-LEFT JOIN pit_candidate_scores prev2
+LEFT JOIN v_pit_candidate_scores prev2
   ON curr.ticker = prev2.ticker AND curr.index_name = prev2.index_name AND curr.method = prev2.method AND prev2.as_of_date = ?
 WHERE curr.as_of_date = ? 
   AND prev.as_of_date = ?

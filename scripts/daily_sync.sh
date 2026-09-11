@@ -38,14 +38,26 @@ if [[ -n "${NSE_HOLIDAYS[$TODAY]:-}" ]]; then
     exit 0
 fi
 
-# 4. Run the PIT update command
-echo "[$(date '+%Y-%m-%d %H:%M:%S')] Starting PIT update for niftytotalmarket (earlymb)..." >> "$LOG_FILE"
+# 4. Authenticate with broker (Zerodha Kite)
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] Authenticating broker session (mycase auth)..." >> "$LOG_FILE"
+cd "$PROJECT_DIR"
+./mycase auth --no-browser >> "$LOG_FILE" 2>&1
 
-mycase pit update --index niftytotalmarket --method earlymb --top 10 >> "$LOG_FILE" 2>&1
+# 5. Fetch today's executed trades into myportfolio
+PORTFOLIO_DIR="/Users/raghavgarg/Projects/myGo/myportfolio"
+if [ -d "$PORTFOLIO_DIR" ] && [ -x "$PORTFOLIO_DIR/dist/myportfolio" ]; then
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] Fetching today's trades into myportfolio..." >> "$LOG_FILE"
+    cd "$PORTFOLIO_DIR"
+    ./dist/myportfolio fetch-trades >> "$LOG_FILE" 2>&1
+else
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] WARNING: myportfolio directory or binary not found. Skipping trade fetch." >> "$LOG_FILE"
+fi
 
-# 5. Automated self-healing pass for any constituents that experienced upstream provider drops
-echo "[$(date '+%Y-%m-%d %H:%M:%S')] Verifying snapshot completeness and retrying failed tickers if any..." >> "$LOG_FILE"
-mycase pit retry --index niftytotalmarket --method earlymb --date "$TODAY" >> "$LOG_FILE" 2>&1 || true
+# 6. Run the unified EOD database update (Market Data Cache, PIT Quant Research, and Theme Lifecycle)
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] Starting unified EOD database update for data/mycase.db..." >> "$LOG_FILE"
+cd "$PROJECT_DIR"
+./mycase db update --all --index niftytotalmarket --method earlymb --top 10 >> "$LOG_FILE" 2>&1
 
-echo "[$(date '+%Y-%m-%d %H:%M:%S')] Daily PIT update completed successfully." >> "$LOG_FILE"
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] Unified EOD database update completed successfully." >> "$LOG_FILE"
+
 

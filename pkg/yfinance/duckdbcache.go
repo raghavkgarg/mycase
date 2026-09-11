@@ -127,3 +127,9 @@ func storeFundamentalsCache(ctx context.Context, ticker string, f *Fundamentals)
 	}
 	_ = globalCache.StoreFundamentalsJSON(ctx, ticker, data, sourceYahoo)
 }
+
+// StoreFundamentalsCache stores or updates a ticker's fundamentals JSON in the persistent DuckDB cache.
+func StoreFundamentalsCache(ctx context.Context, ticker string, f *Fundamentals) {
+	storeFundamentalsCache(ctx, ticker, f)
+}
+

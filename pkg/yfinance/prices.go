@@ -21,6 +21,20 @@ func getCachePath(prefix, key string) string {
 
 func loadFromCache(prefix, key string, target any) bool {
 	path := getCachePath(prefix, key)
+	info, err := os.Stat(path)
+	if err != nil {
+		return false
+	}
+	// Post-market / EOD settlement boundary (21:00 IST):
+	// 21:00 IST is the sole cutoff for the daily market cycle.
+	// If current time is at or after official sync (>= 21:00 IST),
+	// but cache file was created prior to 21:00 IST, it is considered stale so the confirmed EOD snapshot is pulled.
+	ist := time.FixedZone("IST", 5*3600+30*60)
+	nowIST := time.Now().In(ist)
+	modIST := info.ModTime().In(ist)
+	if nowIST.Hour() >= 21 && modIST.Hour() < 21 {
+		return false
+	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return false
@@ -82,66 +96,98 @@ func FetchQuotes(ctx context.Context, tickers []string) (map[string]float64, err
 	var wg sync.WaitGroup
 	errChan := make(chan error, len(tickers))
 
-	client := &http.Client{
-		Timeout: 8 * time.Second,
+	client := newYFinanceHTTPClient(8*time.Second, nil)
+
+	type quoteJob struct {
+		ticker string
+	}
+	jobs := make(chan quoteJob, len(tickers))
+
+	workerCount := min(len(tickers), 10)
+	if workerCount < 1 {
+		workerCount = 1
 	}
 
-	for _, t := range tickers {
-		wg.Add(1)
-		go func(ticker string) {
-			defer wg.Done()
+	fetchSingleQuote := func(ticker string) (float64, error) {
+		ySym := MapTickerToYahoo(ticker)
+		endpoints := []string{
+			fmt.Sprintf("https://query1.finance.yahoo.com/v8/finance/chart/%s?range=1d&interval=1d", ySym),
+			fmt.Sprintf("https://query2.finance.yahoo.com/v8/finance/chart/%s?range=1d&interval=1d", ySym),
+		}
 
-			ySym := MapTickerToYahoo(ticker)
-
-			url := fmt.Sprintf("https://query1.finance.yahoo.com/v8/finance/chart/%s?range=1d&interval=1d", ySym)
+		var lastErr error
+		for _, url := range endpoints {
 			req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 			if err != nil {
-				errChan <- fmt.Errorf("failed to create request for %s: %w", ticker, err)
-				return
+				lastErr = fmt.Errorf("failed to create request for %s: %w", ticker, err)
+				continue
 			}
 
 			req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36")
 			req.Header.Set("Accept", "application/json")
 
-			resp, err := client.Do(req)
+			resp, err := executeYFinanceRequest(client, req)
 			if err != nil {
-				errChan <- fmt.Errorf("network error for %s: %w", ticker, err)
-				return
+				lastErr = fmt.Errorf("network error for %s: %w", ticker, err)
+				continue
 			}
-			defer resp.Body.Close()
 
 			if resp.StatusCode != http.StatusOK {
-				errChan <- fmt.Errorf("http status %d for %s", resp.StatusCode, ticker)
-				return
+				resp.Body.Close()
+				lastErr = fmt.Errorf("http status %d for %s", resp.StatusCode, ticker)
+				continue
 			}
 
 			var chartRes ChartResponse
-			if err := json.NewDecoder(resp.Body).Decode(&chartRes); err != nil {
-				errChan <- fmt.Errorf("failed to parse json for %s: %w", ticker, err)
-				return
+			decodeErr := json.NewDecoder(resp.Body).Decode(&chartRes)
+			resp.Body.Close()
+			if decodeErr != nil {
+				lastErr = fmt.Errorf("failed to parse json for %s: %w", ticker, decodeErr)
+				continue
 			}
 
 			if chartRes.Chart.Error != nil {
-				errChan <- fmt.Errorf("yahoo error for %s: %v", ticker, chartRes.Chart.Error)
-				return
+				lastErr = fmt.Errorf("yahoo error for %s: %v", ticker, chartRes.Chart.Error)
+				continue
 			}
 
 			if len(chartRes.Chart.Result) == 0 {
-				errChan <- fmt.Errorf("no quote data returned for %s", ticker)
-				return
+				lastErr = fmt.Errorf("no quote data returned for %s", ticker)
+				continue
 			}
 
 			price := chartRes.Chart.Result[0].Meta.RegularMarketPrice
 			if price <= 0 {
-				errChan <- fmt.Errorf("invalid price %f fetched for %s", price, ticker)
-				return
+				lastErr = fmt.Errorf("invalid price %f fetched for %s", price, ticker)
+				continue
 			}
 
-			mu.Lock()
-			prices[ticker] = price
-			mu.Unlock()
-		}(t)
+			return price, nil
+		}
+		return 0, lastErr
 	}
+
+	for range workerCount {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for job := range jobs {
+				price, err := fetchSingleQuote(job.ticker)
+				if err != nil {
+					errChan <- err
+					continue
+				}
+				mu.Lock()
+				prices[job.ticker] = price
+				mu.Unlock()
+			}
+		}()
+	}
+
+	for _, t := range tickers {
+		jobs <- quoteJob{ticker: t}
+	}
+	close(jobs)
 
 	wg.Wait()
 	close(errChan)
@@ -187,7 +233,7 @@ func FetchHistoricalDataWithTimestamps(ctx context.Context, ticker string, range
 	ySym := MapTickerToYahoo(ticker)
 	url := fmt.Sprintf("https://query1.finance.yahoo.com/v8/finance/chart/%s?range=%s&interval=1d", ySym, rangeStr)
 
-	client := &http.Client{Timeout: 8 * time.Second}
+	client := newYFinanceHTTPClient(8*time.Second, nil)
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
@@ -196,7 +242,19 @@ func FetchHistoricalDataWithTimestamps(ctx context.Context, ticker string, range
 	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36")
 	req.Header.Set("Accept", "application/json")
 
-	resp, err := client.Do(req)
+	resp, err := executeYFinanceRequest(client, req)
+	if err != nil {
+		// Fallback to query2 if query1 failed
+		url2 := fmt.Sprintf("https://query2.finance.yahoo.com/v8/finance/chart/%s?range=%s&interval=1d", ySym, rangeStr)
+		if req2, err2 := http.NewRequestWithContext(ctx, "GET", url2, nil); err2 == nil {
+			req2.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36")
+			req2.Header.Set("Accept", "application/json")
+			if resp2, err2 := executeYFinanceRequest(client, req2); err2 == nil {
+				resp = resp2
+				err = nil
+			}
+		}
+	}
 	if err != nil {
 		return nil, fmt.Errorf("network error: %w", err)
 	}
@@ -284,7 +342,7 @@ func FetchHistoricalByDateRange(ctx context.Context, ticker string, from, to tim
 		ySym, from.Unix(), to.Unix(),
 	)
 
-	client := &http.Client{Timeout: 15 * time.Second}
+	client := newYFinanceHTTPClient(15*time.Second, nil)
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
@@ -292,7 +350,21 @@ func FetchHistoricalByDateRange(ctx context.Context, ticker string, from, to tim
 	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36")
 	req.Header.Set("Accept", "application/json")
 
-	resp, err := client.Do(req)
+	resp, err := executeYFinanceRequest(client, req)
+	if err != nil {
+		url2 := fmt.Sprintf(
+			"https://query2.finance.yahoo.com/v8/finance/chart/%s?period1=%d&period2=%d&interval=1d",
+			ySym, from.Unix(), to.Unix(),
+		)
+		if req2, err2 := http.NewRequestWithContext(ctx, "GET", url2, nil); err2 == nil {
+			req2.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36")
+			req2.Header.Set("Accept", "application/json")
+			if resp2, err2 := executeYFinanceRequest(client, req2); err2 == nil {
+				resp = resp2
+				err = nil
+			}
+		}
+	}
 	if err != nil {
 		return nil, fmt.Errorf("network error: %w", err)
 	}
@@ -362,7 +434,7 @@ func FetchIntradayData(ctx context.Context, ticker string, rangeStr string) (*In
 	ySym := MapTickerToYahoo(ticker)
 	url := fmt.Sprintf("https://query1.finance.yahoo.com/v8/finance/chart/%s?range=%s&interval=1m", ySym, rangeStr)
 
-	client := &http.Client{Timeout: 8 * time.Second}
+	client := newYFinanceHTTPClient(8*time.Second, nil)
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
@@ -371,7 +443,18 @@ func FetchIntradayData(ctx context.Context, ticker string, rangeStr string) (*In
 	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36")
 	req.Header.Set("Accept", "application/json")
 
-	resp, err := client.Do(req)
+	resp, err := executeYFinanceRequest(client, req)
+	if err != nil {
+		url2 := fmt.Sprintf("https://query2.finance.yahoo.com/v8/finance/chart/%s?range=%s&interval=1m", ySym, rangeStr)
+		if req2, err2 := http.NewRequestWithContext(ctx, "GET", url2, nil); err2 == nil {
+			req2.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36")
+			req2.Header.Set("Accept", "application/json")
+			if resp2, err2 := executeYFinanceRequest(client, req2); err2 == nil {
+				resp = resp2
+				err = nil
+			}
+		}
+	}
 	if err != nil {
 		return nil, fmt.Errorf("network error: %w", err)
 	}

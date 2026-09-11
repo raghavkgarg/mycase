@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -160,6 +161,9 @@ func TestLoadConfig_HTTPProxy(t *testing.T) {
 	}
 	if os.Getenv("HTTP_PROXY") != "http://proxy.example.com:8080" {
 		t.Errorf("expected HTTP_PROXY env var to be set, got %s", os.Getenv("HTTP_PROXY"))
+	}
+	if !strings.Contains(os.Getenv("NO_PROXY"), "yahoo.com") {
+		t.Errorf("expected NO_PROXY to contain yahoo.com, got %s", os.Getenv("NO_PROXY"))
 	}
 }
 

@@ -6,10 +6,12 @@ import (
 	"log/slog"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/raghavkgarg/mycase/pkg/cache"
 	"github.com/raghavkgarg/mycase/pkg/csvloader"
+	"github.com/raghavkgarg/mycase/pkg/marketdata"
 	"github.com/raghavkgarg/mycase/pkg/selectiontracker"
 	"github.com/raghavkgarg/mycase/pkg/yfinance"
 )
@@ -142,6 +144,12 @@ func RunWithResult(ctx context.Context, opts *Options) (*PickResult, error) {
 		return nil, nil
 	}
 
+	// For EarlyMB, ensure Stage-1 survivors have full delivery history (>= 25 sessions)
+	// for Pillar 4 institutional accumulation delta scoring and PIT snapshotting.
+	if (opts.Method == "earlymb" || opts.Method == "early_multibagger") && len(activeKeys) > 0 {
+		enrichDeliveryHistory(ctx, activeKeys, fundamentals)
+	}
+
 	var selectedKeys []string
 	var finalWeights map[string]float64
 	var scores map[string]float64
@@ -218,7 +226,10 @@ func RunWithResult(ctx context.Context, opts *Options) (*PickResult, error) {
 	// (all within pkg/stockpicker). DuckDB persistence is done by the command layer
 	// (cmd/pick.go) to keep stockpicker from importing pithistory (layering: pithistory
 	// imports stockpicker, so the reverse edge would be a cycle).
-	todayStr := time.Now().Format("2006-01-02")
+	todayStr := opts.AsOfDate
+	if todayStr == "" {
+		todayStr = marketdata.EODSettlementDate(time.Now()).Format("2006-01-02")
+	}
 	rRegime := 1.0
 	if tracker.RegimeMultiplier > 0 {
 		rRegime = tracker.RegimeMultiplier
@@ -439,3 +450,52 @@ func getBenchmarkAndSlicedPricesVia(ctx context.Context, fetcher DataFetcher, in
 
 	return slicedPriceHistory, benchmarkPrices, nil
 }
+
+// enrichDeliveryHistory checks if any Stage-1 survivor tickers are missing delivery history
+// (less than 25 settled sessions) and batch-fetches the complete series from NSE via Python,
+// attaching the history to the in-memory fundamentals map and updating the DuckDB cache.
+func enrichDeliveryHistory(ctx context.Context, tickers []string, fundamentals map[string]yfinance.Fundamentals) {
+	var missing []string
+	for _, t := range tickers {
+		if strings.HasPrefix(t, "NSE:") || strings.HasPrefix(t, "BSE:") || strings.HasSuffix(t, ".NS") {
+			if f, ok := fundamentals[t]; ok && len(f.DeliveryHistory) < 25 {
+				missing = append(missing, t)
+			}
+		}
+	}
+	if len(missing) == 0 {
+		return
+	}
+
+	fmt.Printf("📦 Fetching NSE delivery data for %d Stage-1 candidates...\n", len(missing))
+	slog.InfoContext(ctx, "pick.enrich_delivery_history", "count", len(missing))
+	delSeries, err := yfinance.FetchNselibDeliveryDataSeries(ctx, missing)
+	if err != nil {
+		fmt.Printf("⚠️ Warning: NSE delivery fetch failed: %v\n", err)
+		slog.WarnContext(ctx, "pick.enrich_delivery_failed", "err", err)
+		return
+	}
+
+	updatedCount := 0
+	for _, t := range missing {
+		cleanSym := strings.TrimSuffix(strings.TrimPrefix(strings.TrimPrefix(t, "NSE:"), "BSE:"), ".NS")
+		var series []yfinance.NSEDeliveryRecord
+		if s, ok := delSeries[t]; ok {
+			series = s
+		} else if s, ok := delSeries[cleanSym]; ok {
+			series = s
+		}
+		if len(series) > 0 {
+			f := fundamentals[t]
+			f.DeliveryHistory = series
+			f.DeliveryPct = series[0].DeliveryPct
+			f.DeliveryDate = series[0].Date
+			f.DeliverableQty = series[0].DeliverableQty
+			fundamentals[t] = f
+			yfinance.StoreFundamentalsCache(ctx, t, &f)
+			updatedCount++
+		}
+	}
+	fmt.Printf("✅ Delivery history enriched: %d / %d candidates have full delivery history\n", updatedCount, len(missing))
+}
+

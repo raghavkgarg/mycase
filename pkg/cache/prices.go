@@ -109,7 +109,17 @@ func isFreshToday(fetchedAt time.Time) bool {
 	ist := time.FixedZone("IST", 5*3600+30*60)
 	nowIST := time.Now().In(ist)
 	f := fetchedAt.In(ist)
-	return f.Year() == nowIST.Year() && f.YearDay() == nowIST.YearDay()
+	if f.Year() != nowIST.Year() || f.YearDay() != nowIST.YearDay() {
+		return false
+	}
+	// Post-market / EOD settlement boundary (21:00 IST):
+	// 21:00 IST is the sole cutoff for the daily market cycle.
+	// If current time is at or after official sync (>= 21:00 IST) on a trading day,
+	// but data was fetched prior to 21:00 IST, it is considered stale so the confirmed EOD snapshot is pulled.
+	if nowIST.Hour() >= 21 && f.Hour() < 21 {
+		return false
+	}
+	return true
 }
 
 // GetPricesByDateRange returns cached price records for [from, to] for a ticker.
@@ -168,6 +178,9 @@ func (c *Cache) GetPricesByDateRange(ctx context.Context, ticker string, from, t
 
 // StorePricesByDateRange upserts price rows and marks the date range as fetched in cache_meta.
 func (c *Cache) StorePricesByDateRange(ctx context.Context, ticker string, from, to time.Time, records []PriceRecord) error {
+	if from.Year() < 1990 || from.Year() > 2100 || to.Year() < 1990 || to.Year() > 2100 {
+		return fmt.Errorf("invalid price date range %s to %s (years must be between 1990 and 2100)", from.Format("2006-01-02"), to.Format("2006-01-02"))
+	}
 	rangeKey := fmt.Sprintf("dr_%s_%s", from.Format("20060102"), to.Format("20060102"))
 	return c.StorePrices(ctx, ticker, rangeKey, records)
 }

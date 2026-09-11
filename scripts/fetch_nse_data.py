@@ -11,7 +11,8 @@ import os
 import json
 import re
 import argparse
-from datetime import datetime
+import concurrent.futures
+from datetime import datetime, timedelta
 from html.parser import HTMLParser
 
 try:
@@ -58,12 +59,14 @@ def sanitize_val(val):
     if isinstance(val, (int, float)):
         return val
     val_str = str(val).strip().replace(",", "")
+    if val_str in ["-", "", "None", "nan", "N/A", "--", "null"]:
+        return None
     try:
         if "." in val_str:
             return float(val_str)
         return int(val_str)
     except ValueError:
-        return str(val)
+        return None
 
 
 def fetch_earnings_dates(symbols: list):
@@ -234,59 +237,89 @@ def save_cached_delivery(sym: str, records: list):
         pass
 
 
-def fetch_delivery_data(symbols: list, period: str = "3M"):
-    symbols_clean = [clean_symbol(s) for s in symbols if clean_symbol(s)]
-    results = {}
-
-    for sym in symbols_clean:
-        cached_records = load_cached_delivery(sym)
-        fetched_records = []
-        try:
-            df_pv = capital_market.price_volume_and_deliverable_position_data(symbol=sym, period=period)
-            if df_pv is not None and hasattr(df_pv, 'iterrows') and len(df_pv) > 0:
-                for _, row in df_pv.iterrows():
-                    d_str = str(row.get('Date', '')).strip()
-                    p_dt = parse_nse_date(d_str)
-                    fetched_records.append({
-                        "date": p_dt.strftime("%Y-%m-%d") if p_dt else d_str,
-                        "close_price": sanitize_val(row.get('ClosePrice')),
-                        "prev_close": sanitize_val(row.get('PrevClose')),
-                        "open_price": sanitize_val(row.get('OpenPrice')),
-                        "high_price": sanitize_val(row.get('HighPrice')),
-                        "low_price": sanitize_val(row.get('LowPrice')),
-                        "total_traded_qty": sanitize_val(row.get('TotalTradedQuantity')),
-                        "deliverable_qty": sanitize_val(row.get('DeliverableQty')),
-                        "delivery_pct": sanitize_val(row.get('%DlyQttoTradedQty')),
-                        "turnover_rs": sanitize_val(row.get('TurnoverInRs')),
-                    })
-        except Exception as e:
-            if not cached_records:
-                results[sym] = {"error": f"Failed to fetch delivery data for {sym}: {e}"}
-                continue
-
-        # Merge fetched records with cached records, deduplicating by date
-        merged_by_date = {}
-        for r in cached_records:
-            if isinstance(r, dict) and r.get("date"):
-                merged_by_date[r["date"]] = r
-        for r in fetched_records:
-            if isinstance(r, dict) and r.get("date"):
-                merged_by_date[r["date"]] = r
-
-        all_records = list(merged_by_date.values())
-        # Sort descending by date (newest first)
-        all_records.sort(key=lambda x: str(x.get("date", "")), reverse=True)
-
-        if all_records:
-            save_cached_delivery(sym, all_records)
-
-        results[sym] = {
+def fetch_single_delivery(sym: str, period: str = "3M") -> dict:
+    cached_records = load_cached_delivery(sym)
+    cutoff_date = (datetime.now() - timedelta(days=4)).strftime("%Y-%m-%d")
+    if len(cached_records) >= 25 and any(str(r.get("date", "")) >= cutoff_date for r in cached_records[:3]):
+        return {
             "symbol": sym,
-            "records_count": len(all_records),
-            "records": all_records
+            "records_count": len(cached_records),
+            "records": cached_records
         }
 
-    return results if len(symbols_clean) > 1 else results[symbols_clean[0]]
+    fetched_records = []
+    try:
+        p_upper = (period or "3M").upper()
+        if p_upper == "3M":
+            to_date = datetime.now().strftime("%d-%m-%Y")
+            from_date = (datetime.now() - timedelta(days=100)).strftime("%d-%m-%Y")
+            df_pv = capital_market.price_volume_and_deliverable_position_data(symbol=sym, from_date=from_date, to_date=to_date)
+        elif p_upper in ["1D", "1W", "1M", "6M", "1Y"]:
+            df_pv = capital_market.price_volume_and_deliverable_position_data(symbol=sym, period=p_upper)
+        else:
+            to_date = datetime.now().strftime("%d-%m-%Y")
+            from_date = (datetime.now() - timedelta(days=100)).strftime("%d-%m-%Y")
+            df_pv = capital_market.price_volume_and_deliverable_position_data(symbol=sym, from_date=from_date, to_date=to_date)
+        if df_pv is not None and hasattr(df_pv, 'iterrows') and len(df_pv) > 0:
+            for _, row in df_pv.iterrows():
+                d_str = str(row.get('Date', '')).strip()
+                p_dt = parse_nse_date(d_str)
+                fetched_records.append({
+                    "date": p_dt.strftime("%Y-%m-%d") if p_dt else d_str,
+                    "close_price": sanitize_val(row.get('ClosePrice')),
+                    "prev_close": sanitize_val(row.get('PrevClose')),
+                    "open_price": sanitize_val(row.get('OpenPrice')),
+                    "high_price": sanitize_val(row.get('HighPrice')),
+                    "low_price": sanitize_val(row.get('LowPrice')),
+                    "total_traded_qty": sanitize_val(row.get('TotalTradedQuantity')),
+                    "deliverable_qty": sanitize_val(row.get('DeliverableQty')),
+                    "delivery_pct": sanitize_val(row.get('%DlyQttoTradedQty')),
+                    "turnover_rs": sanitize_val(row.get('TurnoverInRs')),
+                })
+    except Exception as e:
+        if not cached_records:
+            return {"symbol": sym, "error": f"Failed to fetch delivery data for {sym}: {e}"}
+
+    merged_by_date = {}
+    for r in cached_records:
+        if isinstance(r, dict) and r.get("date"):
+            merged_by_date[r["date"]] = r
+    for r in fetched_records:
+        if isinstance(r, dict) and r.get("date"):
+            merged_by_date[r["date"]] = r
+
+    all_records = list(merged_by_date.values())
+    all_records.sort(key=lambda x: str(x.get("date", "")), reverse=True)
+    if all_records:
+        save_cached_delivery(sym, all_records)
+
+    return {
+        "symbol": sym,
+        "records_count": len(all_records),
+        "records": all_records
+    }
+
+
+def fetch_delivery_data(symbols: list, period: str = "3M"):
+    symbols_clean = [clean_symbol(s) for s in symbols if clean_symbol(s)]
+    if not symbols_clean:
+        return {}
+
+    if len(symbols_clean) == 1:
+        return fetch_single_delivery(symbols_clean[0], period)
+
+    results = {}
+    max_workers = min(8, len(symbols_clean))
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        future_to_sym = {executor.submit(fetch_single_delivery, sym, period): sym for sym in symbols_clean}
+        for future in concurrent.futures.as_completed(future_to_sym):
+            sym = future_to_sym[future]
+            try:
+                results[sym] = future.result()
+            except Exception as e:
+                results[sym] = {"symbol": sym, "error": str(e)}
+
+    return results
 
 
 class ScreenerAnnParser(HTMLParser):

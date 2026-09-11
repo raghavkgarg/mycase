@@ -27,7 +27,7 @@ var ServeCommand = &cli.Command{
 		}
 
 		var dc *cache.Cache
-		if cc, err := cache.Open("data/cache.db"); err == nil {
+		if cc, err := cache.Open("data/mycase.db"); err == nil {
 			yfinance.SetCache(cc)
 			dc = cc
 			defer dc.Close()

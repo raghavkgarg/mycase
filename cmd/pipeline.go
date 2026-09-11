@@ -21,6 +21,7 @@ import (
 	"github.com/raghavkgarg/mycase/pkg/csvloader"
 	"github.com/raghavkgarg/mycase/pkg/render"
 	"github.com/raghavkgarg/mycase/pkg/stockpicker"
+	"github.com/raghavkgarg/mycase/pkg/themedb"
 )
 
 var PipelineCommand = &cli.Command{
@@ -215,7 +216,8 @@ func runPipeline(ctx context.Context, c *cli.Command) error {
 			} else {
 				defer func() {
 					if db != nil {
-						_ = db.FailRun(ctx, runID)
+						// Clean up uncommitted staging data from aborted or failed pipeline runs
+						_ = db.DeleteRunData(ctx, runID)
 					}
 				}()
 			}
@@ -414,6 +416,16 @@ func runPipeline(ctx context.Context, c *cli.Command) error {
 				return fmt.Errorf("updating golden copy: %w", err)
 			}
 			fmt.Printf("Successfully updated %s with new candidates. Exited tickers kept at 0.0000 weight.\n", goldenCSV)
+
+			// Record rebalance version and constituent transitions in data/mycase.db
+			if tdb, err := themedb.Open(""); err == nil {
+				if rErr := tdb.RecordPipelineRebalance(ctx, goldenBase, sourceCSV, runID); rErr != nil {
+					fmt.Printf("[pipeline] Warning: failed to record theme history in mycase.db: %v\n", rErr)
+				} else {
+					fmt.Printf("Recorded theme rebalance history for '%s' in data/mycase.db\n", goldenBase)
+				}
+				tdb.Close()
+			}
 			if !autoYes {
 				fmt.Printf("\n>>> ACTION REQUIRED: If you wish to manually tweak the golden copy (%s), do it now.\n", goldenCSV)
 				fmt.Print("Press Enter to continue once you have reviewed the file...")
