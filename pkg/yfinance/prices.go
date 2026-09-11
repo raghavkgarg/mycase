@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -155,7 +156,7 @@ func FetchQuotes(ctx context.Context, tickers []string) (map[string]float64, err
 	}
 
 	if len(errMsgs) > 0 {
-		fmt.Printf("yfinance quote warnings (%d failed): %s\n", len(errMsgs), strings.Join(errMsgs, "; "))
+		slog.WarnContext(ctx, "quotes.partial_failure", "source", "yfinance", "failed", len(errMsgs), "detail", strings.Join(errMsgs, "; "))
 	}
 
 	return prices, nil

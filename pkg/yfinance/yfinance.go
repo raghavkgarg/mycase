@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/cookiejar"
 	"sort"
@@ -87,12 +88,12 @@ func FetchFundamentals(ctx context.Context, tickers []string) (map[string]Fundam
 
 	if duckDBCacheCount > 0 {
 		if len(uncachedTickers) == 0 {
-			fmt.Printf("Loaded %d fundamentals cached from DuckDB on %s\n", duckDBCacheCount, cacheDateStr)
+			slog.InfoContext(ctx, "fundamentals.cache_hit", "source", "duckdb", "count", duckDBCacheCount, "as_of", cacheDateStr)
 			return fundamentals, nil
 		}
-		fmt.Printf("Loaded %d fundamentals cached from DuckDB on %s, fetching remaining %d from Yahoo Finance...\n", duckDBCacheCount, cacheDateStr, len(uncachedTickers))
+		slog.InfoContext(ctx, "fundamentals.cache_partial", "source", "duckdb", "cached", duckDBCacheCount, "as_of", cacheDateStr, "fetch_remaining", len(uncachedTickers))
 	} else {
-		fmt.Printf("Fetching fundamentals from Yahoo Finance...\n")
+		slog.InfoContext(ctx, "fundamentals.fetch_start", "source", "yahoo", "count", len(uncachedTickers))
 	}
 
 	if len(uncachedTickers) == 0 {
@@ -119,9 +120,9 @@ func FetchFundamentals(ctx context.Context, tickers []string) (map[string]Fundam
 		ticker string
 	}
 	type fetchResult struct {
+		err    error
 		ticker string
 		fund   Fundamentals
-		err    error
 	}
 
 	jobs := make(chan fetchJob, len(uncachedTickers))
@@ -431,8 +432,8 @@ func FetchFundamentals(ctx context.Context, tickers []string) (map[string]Fundam
 			storeFundamentalsCache(ctx, res.ticker, &fund)
 			saveToCache("fundamentals", res.ticker, res.fund)
 		} else {
-			// Print warning but don't fail the whole execution
-			fmt.Printf("Warning: Failed to fetch fundamentals for %s: %v\n", res.ticker, res.err)
+			// Skip this ticker but don't fail the whole execution (API discipline: fail gracefully).
+			slog.WarnContext(ctx, "fundamentals.ticker_skipped", "ticker", res.ticker, "err", res.err)
 		}
 	}
 

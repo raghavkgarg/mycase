@@ -3,6 +3,7 @@ package stockpicker
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"sort"
 	"strings"
 	"time"
@@ -47,7 +48,7 @@ func LoadStrategyConfig(method string) (*StrategyConfig, error) {
 
 	govMap, govErr := config.LoadGovernance("config/governance.json")
 	if govErr != nil {
-		fmt.Printf("Warning: Failed to load governance data from governance.json: %v. Using default 0%% pledging.\n", govErr)
+		slog.Warn("config.governance_load_failed", "err", govErr, "fallback", "0pct_pledging")
 		govMap = make(map[string]float64)
 	}
 
@@ -64,6 +65,27 @@ func InjectGovernance(fundamentals map[string]yfinance.Fundamentals, govMap map[
 		pledge := govMap[t] // defaults to 0.0 if not found
 		f.PledgedPercent = pledge
 		fundamentals[t] = f
+	}
+}
+
+// InjectSectors backfills Fundamentals.Sector from a ticker->sector map derived
+// from the constituents CSV (e.g. the S&P 500 GICS Sector column). It only fills
+// a sector that is currently empty, so provider-supplied sectors (Yahoo populates
+// Sector; Schwab does not) are preserved. This is the Phase 10a fix for US sector
+// caps collapsing to "Unknown" because the Schwab fundamentals endpoint carries
+// no sector. A nil/empty map is a no-op.
+func InjectSectors(fundamentals map[string]yfinance.Fundamentals, sectorByTicker map[string]string) {
+	if len(sectorByTicker) == 0 {
+		return
+	}
+	for t, f := range fundamentals {
+		if f.Sector != "" {
+			continue
+		}
+		if sec := sectorByTicker[t]; sec != "" {
+			f.Sector = sec
+			fundamentals[t] = f
+		}
 	}
 }
 
@@ -348,7 +370,7 @@ func isEligible(
 					return false, fmt.Sprintf("Declining Operating Margin fallback (latest: %.1f%% < prev: %.1f%%)", latestOM*100.0, prevOM*100.0)
 				}
 			} else {
-				fmt.Printf("Warning: Missing both Gross Margin and Operating Margin history for %s. Bypassing check.\n", t)
+				slog.Debug("filter.margin_history_missing", "ticker", t, "action", "bypass")
 			}
 		}
 	}
@@ -650,7 +672,7 @@ func check200DaySMATrend(prices []float64, minRatio float64) (bool, string) {
 			sumPast += prices[i]
 		}
 		sma200Past := sumPast / 200.0
-		if sma200Past > 0 && sma200Current < (0.995 * sma200Past) {
+		if sma200Past > 0 && sma200Current < (0.995*sma200Past) {
 			return false, fmt.Sprintf("Below 200-Day SMA with downward 200-SMA trend (Ratio %.2f < 1.0, SMA 20d decline > 0.5%%)", ratio)
 		}
 	}

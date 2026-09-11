@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
@@ -29,7 +30,7 @@ func RetryFailedSnapshotCandidates(ctx context.Context, indexName, method, asOfD
 		}
 		sort.Strings(files)
 		snapPath = files[len(files)-1]
-		fmt.Printf("Snapshot for date %s not found. Using latest found: %s\n", asOfDate, filepath.Base(snapPath))
+		slog.WarnContext(ctx, "pit.snapshot_date_fallback", "requested", asOfDate, "using", filepath.Base(snapPath))
 	}
 
 	data, err := os.ReadFile(snapPath)
@@ -69,7 +70,7 @@ func RetryFailedSnapshotCandidates(ctx context.Context, indexName, method, asOfD
 	// 3. Fetch fundamentals for recovered active tickers
 	fundamentals := make(map[string]yfinance.Fundamentals)
 	if len(activeKeys) > 0 {
-		fmt.Printf("Fetching fundamentals for %d recovered tickers...\n", len(activeKeys))
+		slog.InfoContext(ctx, "pit.fundamentals_fetch", "recovered", len(activeKeys))
 		fMap, fErr := yfinance.FetchFundamentals(ctx, activeKeys)
 		if fErr == nil {
 			fundamentals = fMap
@@ -206,7 +207,7 @@ func RetryFailedSnapshotCandidates(ctx context.Context, indexName, method, asOfD
 	if err != nil {
 		return nil, fmt.Errorf("saving updated snapshot: %w", err)
 	}
-	fmt.Printf("Updated PIT Run Snapshot saved to: %s\n", savedPath)
+	slog.InfoContext(ctx, "pit.snapshot_saved", "path", savedPath)
 
 	fmt.Printf("\n=== PIT RETRY SUMMARY (%s) ===\n", snap.AsOfDate)
 	fmt.Printf("  * Tickers Retried             : %d\n", len(failedTickers))

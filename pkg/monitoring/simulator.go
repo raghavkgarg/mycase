@@ -83,10 +83,7 @@ func RunSimulation(
 
 	// Maximum days we can simulate without running out of SMA 200 history:
 	maxSimDays := minHistory - 199
-	simDays := min(maxSimDays, 252)
-	if simDays < 1 {
-		simDays = 1
-	}
+	simDays := max(min(maxSimDays, 252), 1)
 
 	if params.StartDate != "" {
 		if tTarget, err := time.Parse("2006-01-02", params.StartDate); err == nil {
@@ -109,10 +106,7 @@ func RunSimulation(
 			}
 			if foundIdx >= 0 && foundIdx < len(benchData.Closes) {
 				requestedDays := len(benchData.Closes) - foundIdx
-				simDays = min(requestedDays, maxSimDays)
-				if simDays < 1 {
-					simDays = 1
-				}
+				simDays = max(min(requestedDays, maxSimDays), 1)
 			}
 		}
 	}

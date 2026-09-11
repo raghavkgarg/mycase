@@ -7,6 +7,8 @@ import (
 	"os"
 	"time"
 
+	"log/slog"
+
 	"github.com/raghavkgarg/mycase/pkg/alert"
 	"github.com/raghavkgarg/mycase/pkg/broker"
 	"github.com/raghavkgarg/mycase/pkg/config"
@@ -21,9 +23,9 @@ const (
 // State is persisted across daemon restarts.
 type State struct {
 	LastCheckAt   time.Time `json:"last_check_at"`
+	PortfolioFile string    `json:"portfolio_file"`
 	LastDrift     float64   `json:"last_drift"`
 	AlertsSent    int       `json:"alerts_sent"`
-	PortfolioFile string    `json:"portfolio_file"`
 }
 
 // LoadState reads the last persisted daemon state. Returns empty State (not an error)
@@ -68,15 +70,17 @@ func RunCheck(ctx context.Context, b broker.Broker, cfg config.AlertConfig, port
 	state.PortfolioFile = portfolioFile
 
 	if result.DriftIndex > cfg.DriftThreshold {
+		mktCfg := broker.LoadMarketConfig()
 		msg := alert.Alert{
 			Title: fmt.Sprintf("Portfolio drift %.1f%%", result.DriftIndex*100),
-			Body: fmt.Sprintf("Drift index %.4f exceeds threshold %.4f\nPortfolio: %s\nTotal value: ₹%.0f",
-				result.DriftIndex, cfg.DriftThreshold, portfolioFile, result.TotalValue),
+			Body: fmt.Sprintf("Drift index %.4f exceeds threshold %.4f\nPortfolio: %s\nTotal value: %s%.0f",
+				result.DriftIndex, cfg.DriftThreshold, portfolioFile, mktCfg.Currency, result.TotalValue),
 			Level: "warn",
 		}
 		for _, a := range buildAlerters(cfg) {
 			if err := a.Send(msg); err != nil {
-				fmt.Fprintf(os.Stderr, "alert error: %v\n", err)
+				slog.WarnContext(ctx, "daemon.alert_failed",
+					"portfolio", portfolioFile, "err", err)
 			}
 		}
 		state.AlertsSent++
@@ -86,16 +90,19 @@ func RunCheck(ctx context.Context, b broker.Broker, cfg config.AlertConfig, port
 	return result, nil
 }
 
-// RunLoop blocks, running RunCheck at 15:45 IST each day until ctx is cancelled.
+// RunLoop blocks, running RunCheck at market close each day until ctx is cancelled.
 func RunLoop(ctx context.Context, b broker.Broker, cfg config.AlertConfig, portfolioFile string) error {
 	if err := writePID(); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: could not write PID file: %v\n", err)
+		slog.WarnContext(ctx, "daemon.pid_write_failed", "path", PIDFile, "err", err)
 	}
 	defer os.Remove(PIDFile)
 
+	mktCfg := broker.LoadMarketConfig()
+
 	for {
-		next := nextIST1545()
-		fmt.Printf("Next drift check at %s\n", next.Local().Format("2006-01-02 15:04:05 MST"))
+		next := nextMarketClose(mktCfg)
+		slog.InfoContext(ctx, "daemon.next_check_scheduled",
+			"at", next.Local().Format("2006-01-02 15:04:05 MST"))
 
 		select {
 		case <-ctx.Done():
@@ -105,28 +112,29 @@ func RunLoop(ctx context.Context, b broker.Broker, cfg config.AlertConfig, portf
 
 		result, err := RunCheck(ctx, b, cfg, portfolioFile)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "drift check error: %v\n", err)
+			slog.ErrorContext(ctx, "daemon.check_failed", "portfolio", portfolioFile, "err", err)
 			continue
 		}
-		level := "OK"
-		if result.DriftIndex > cfg.DriftThreshold {
-			level = "DRIFT"
-		}
-		fmt.Printf("[%s] %s drift=%.4f threshold=%.4f value=₹%.0f\n",
-			result.CheckedAt.Format("2006-01-02 15:04:05"),
-			level, result.DriftIndex, cfg.DriftThreshold, result.TotalValue)
+		exceeded := result.DriftIndex > cfg.DriftThreshold
+		slog.InfoContext(ctx, "daemon.check_completed",
+			"checked_at", result.CheckedAt.Format("2006-01-02 15:04:05"),
+			"drift_exceeded", exceeded,
+			"drift", result.DriftIndex,
+			"threshold", cfg.DriftThreshold,
+			"currency", mktCfg.Currency,
+			"total_value", result.TotalValue)
 	}
 }
 
-// nextIST1545 returns the next 15:45 IST as a UTC time.
-func nextIST1545() time.Time {
-	ist, err := time.LoadLocation("Asia/Kolkata")
+// nextMarketClose returns the next market close time based on market config.
+func nextMarketClose(mktCfg broker.MarketConfig) time.Time {
+	loc, err := time.LoadLocation(mktCfg.Timezone)
 	if err != nil {
-		// Fallback: IST is UTC+5:30
-		ist = time.FixedZone("IST", 5*60*60+30*60)
+		loc = time.UTC
 	}
-	now := time.Now().In(ist)
-	target := time.Date(now.Year(), now.Month(), now.Day(), 15, 45, 0, 0, ist)
+	now := time.Now().In(loc)
+	// Schedule check 15 minutes after market close
+	target := time.Date(now.Year(), now.Month(), now.Day(), mktCfg.CloseHour, mktCfg.CloseMin+15, 0, 0, loc)
 	if !now.Before(target) {
 		target = target.Add(24 * time.Hour)
 	}

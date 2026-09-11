@@ -1,8 +1,9 @@
 package stockpicker
 
 import (
-	"fmt"
+	"log/slog"
 	"sort"
+	"strings"
 
 	"github.com/raghavkgarg/mycase/pkg/yfinance"
 )
@@ -10,12 +11,12 @@ import (
 // TemporalVelocity tracks multi-session Point-in-Time score trajectories and survival consistency.
 type TemporalVelocity struct {
 	Ticker           string    `json:"ticker"`
+	ScoreTrajectory  []float64 `json:"score_trajectory"` // Chronological raw scores across past runs [T-2, T-1, ...]
+	Dates            []string  `json:"dates"`            // Corresponding dates [T-2, T-1, ...]
 	RunsEvaluated    int       `json:"runs_evaluated"`
-	ConsecutivePass  int       `json:"consecutive_pass"`  // Consecutive sessions passing Stage 1 ending at latest prior run
-	ScoreTrajectory  []float64 `json:"score_trajectory"`  // Chronological raw scores across past runs [T-2, T-1, ...]
-	Dates            []string  `json:"dates"`             // Corresponding dates [T-2, T-1, ...]
-	VelocityDelta    float64   `json:"velocity_delta"`    // Difference between most recent two past runs (T-1 - T-2)
-	AvgScore         float64   `json:"avg_score"`         // Average of past valid scores
+	ConsecutivePass  int       `json:"consecutive_pass"` // Consecutive sessions passing Stage 1 ending at latest prior run
+	VelocityDelta    float64   `json:"velocity_delta"`   // Difference between most recent two past runs (T-1 - T-2)
+	AvgScore         float64   `json:"avg_score"`        // Average of past valid scores
 	LatestDelivDelta float64   `json:"latest_deliv_delta"`
 }
 
@@ -59,14 +60,14 @@ func (tv *TemporalVelocity) ComputeBoost(currentRawScore, currentDelivDelta floa
 	if boost > 5.0 {
 		boost = 5.0
 	}
-	patternStr := ""
+	var patternStr strings.Builder
 	for i, p := range patterns {
 		if i > 0 {
-			patternStr += " | "
+			patternStr.WriteString(" | ")
 		}
-		patternStr += p
+		patternStr.WriteString(p)
 	}
-	return boost, patternStr
+	return boost, patternStr.String()
 }
 
 // ApplyPITVelocityBoost applies temporal accumulation velocity bonuses to raw candidate scores.
@@ -102,7 +103,7 @@ func ApplyPITVelocityBoost(
 	}
 
 	if appliedCount > 0 {
-		fmt.Printf("Applied DuckDB PIT Temporal Velocity Boosts to %d candidates (capped at +5.0 pt max)\n", appliedCount)
+		slog.Info("pick.velocity_boost_applied", "count", appliedCount, "cap_pt", 5.0)
 		// Re-sort activeKeys based on boosted scores
 		sort.Slice(activeKeys, func(i, j int) bool {
 			return scores[activeKeys[i]] > scores[activeKeys[j]]

@@ -5,6 +5,8 @@ export const api = {
   drift: (name) => fetch(`/api/portfolio/${name}/drift`).then(r => r.json()),
   orders: (name, freshCash = 0) => fetch(`/api/portfolio/${name}/orders?fresh_cash=${freshCash}`).then(r => r.json()),
   monitor: (name, style = 'moderate') => fetch(`/api/portfolio/${name}/monitor?style=${style}`).then(r => r.json()),
+  tax: (name) => fetch(`/api/portfolio/${name}/tax`).then(r => r.json()),
+  performance: (name) => fetch(`/api/portfolio/${name}/performance`).then(r => r.json()),
   cacheStatus: () => fetch('/api/cache/status').then(r => r.json()),
   daemonHistory: () => fetch('/api/daemon/history').then(r => r.json()),
 
@@ -42,6 +44,11 @@ export const api = {
   },
 
   execute: (name) => fetch(`/api/portfolio/${name}/execute`, { method: 'POST' }).then(r => r.json()),
+
+  // Autopilot proposal endpoints
+  autopilotProposal: () => fetch('/api/autopilot/proposal').then(r => r.json()),
+  autopilotConfirm: () => fetch('/api/autopilot/confirm', { method: 'POST' }).then(r => r.json()),
+  autopilotDismiss: () => fetch('/api/autopilot/dismiss', { method: 'POST' }).then(r => r.json()),
 }
 
 // Format a number as Indian currency string: ₹X,XX,XXX.XX
@@ -75,4 +82,12 @@ export function formatPct(value) {
   if (value == null || isNaN(value)) return '—'
   const sign = value > 0 ? '+' : ''
   return `${sign}${value.toFixed(2)}%`
+}
+
+// Format a number as US currency string: $X,XXX.XX
+export function formatUSD(value) {
+  if (value == null || isNaN(value)) return '—'
+  const sign = value < 0 ? '-' : ''
+  const abs = Math.abs(value)
+  return `${sign}$${abs.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
 }

@@ -20,6 +20,8 @@ docs/StaticIP.local.md
 
 # Credentials containing API keys, API secrets, and access tokens
 config/config.json
+config/schwab.json
+config/schwab_token.json
 
 # Execution and logs exports
 Error/
@@ -37,4 +39,9 @@ report/
 # OS-specific files
 .DS_Store
 Thumbs.db
+
+# Python virtualenv (scripts/)
 .venv
+
+# Claude/Kiro agent worktrees
+.claude/

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/raghavkgarg/mycase/pkg/config"
@@ -14,13 +15,13 @@ import (
 
 // MatchedTheme holds resolved symbols for active and lifecycle views.
 type MatchedTheme struct {
+	SymbolWeights    map[string]float64
 	Name             string
 	Prefix           string
 	CSVPath          string
 	ActiveSymbols    []string // Symbols currently in Golden Copy CSV (after prior theme deduction)
 	LifecycleSymbols []string // Active symbols + historically exited proposal symbols
 	ExitedSymbols    []string // Symbols that were pruned during rebalancings
-	SymbolWeights    map[string]float64
 }
 
 // CleanTicker strips exchange prefixes like "NSE:" or "BSE:" and series suffixes like "-BE".
@@ -37,7 +38,7 @@ func resolveFilePath(p string) string {
 		return p
 	}
 	check := p
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		check = filepath.Join("..", check)
 		if _, err := os.Stat(check); err == nil {
 			return check
@@ -227,13 +228,7 @@ func ResolveTheme(themeArg, explicitCSV, themesConfigPath string) (*MatchedTheme
 	for sym := range allSymbolsMap {
 		lifecycleSymbols = append(lifecycleSymbols, sym)
 		// If not in active Golden Copy, it is an exited rebalancing symbol
-		isActive := false
-		for _, as := range activeSymbols {
-			if as == sym {
-				isActive = true
-				break
-			}
-		}
+		isActive := slices.Contains(activeSymbols, sym)
 		if !isActive {
 			exitedSymbols = append(exitedSymbols, sym)
 		}

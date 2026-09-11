@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"math"
 	"os"
 	"path/filepath"
@@ -14,20 +15,21 @@ import (
 
 	"github.com/raghavkgarg/mycase/pkg/broker"
 	"github.com/raghavkgarg/mycase/pkg/config"
+	"github.com/raghavkgarg/mycase/pkg/datafetcher"
 	"github.com/raghavkgarg/mycase/pkg/market"
 	"github.com/raghavkgarg/mycase/pkg/printer"
-	"github.com/raghavkgarg/mycase/pkg/yfinance"
+	"github.com/raghavkgarg/mycase/pkg/render"
 )
 
 type FailedOrderSpec struct {
 	TradingSymbol   string  `json:"trading_symbol"`
 	Exchange        string  `json:"exchange"`
 	TransactionType string  `json:"transaction_type"`
-	Quantity        int     `json:"quantity"`
-	Price           float64 `json:"price"`
 	Product         string  `json:"product"`
 	ErrorReason     string  `json:"error_reason"`
 	OrderVariety    string  `json:"order_variety"`
+	Quantity        int     `json:"quantity"`
+	Price           float64 `json:"price"`
 	IsGTT           bool    `json:"is_gtt"`
 }
 
@@ -92,9 +94,7 @@ func ExecuteBasketOrders(
 	if reader != nil {
 		if !b.IsMock() {
 			ipv4, ipv6 := config.FetchPublicIPs()
-			fmt.Println("\n====================================================================")
-			fmt.Println("               IP WHITELIST PRE-EXECUTION CHECK                     ")
-			fmt.Println("====================================================================")
+			render.Banner(os.Stdout, "IP WHITELIST PRE-EXECUTION CHECK")
 			if ipv6 != "" {
 				fmt.Printf("Current IPv6: %s\n", ipv6)
 			}
@@ -106,7 +106,6 @@ func ExecuteBasketOrders(
 			}
 			fmt.Println("👉 Please make sure your IP is whitelisted under App Settings on:")
 			fmt.Println("   https://developers.kite.trade/profile")
-			fmt.Println("====================================================================")
 		}
 		fmt.Print("Do you want to execute these orders? (y/n): ")
 		confirmInput, _ := reader.ReadString('\n')
@@ -154,10 +153,11 @@ func ExecuteBasketOrders(
 		return
 	}
 
-	fmt.Println("\nExecuting orders live...")
-	loc, err := time.LoadLocation("Asia/Kolkata")
+	slog.Info("executor.live_start", "orders", len(basketOrders))
+	mktCfg := broker.LoadMarketConfig()
+	loc, err := time.LoadLocation(mktCfg.Timezone)
 	if err != nil {
-		loc = time.FixedZone("IST", 5.5*60*60)
+		loc = time.UTC
 	}
 
 	// Ensure SELL orders are placed first to free up capital before placing BUY orders
@@ -176,7 +176,7 @@ func ExecuteBasketOrders(
 		if i > 0 {
 			time.Sleep(200 * time.Millisecond) // Rate limit throttle (max 10 req/s)
 		}
-		ltp := quoteData["NSE:"+order.TradingSymbol]
+		ltp := quoteData[order.Exchange+":"+order.TradingSymbol]
 		if ltp == 0 {
 			ltp = order.Ltp
 		}
@@ -206,8 +206,8 @@ func ExecuteBasketOrders(
 				})
 				fmt.Printf("Error placing GTT %s order for %s: %v\n", strings.ToUpper(order.TransactionType), order.TradingSymbol, errMsg)
 			} else {
-				line := fmt.Sprintf("Placed GTT %s order (Trigger ID: %d) for %d shares of %s (Trigger: ₹%.2f, Limit: ₹%.2f) at %s",
-					strings.ToUpper(order.TransactionType), result.TriggerID, order.Quantity, order.TradingSymbol, triggerPrice, limitPrice, orderNow)
+				line := fmt.Sprintf("Placed GTT %s order (Trigger ID: %d) for %d shares of %s (Trigger: %s%.2f, Limit: %s%.2f) at %s",
+					strings.ToUpper(order.TransactionType), result.TriggerID, order.Quantity, order.TradingSymbol, mktCfg.Currency, triggerPrice, mktCfg.Currency, limitPrice, orderNow)
 				successLines = append(successLines, line)
 				fmt.Println(line)
 			}
@@ -234,8 +234,8 @@ func ExecuteBasketOrders(
 				})
 				fmt.Printf("Error placing %s %s order for %s: %v\n", strings.ToUpper(orderVariety), strings.ToUpper(order.TransactionType), order.TradingSymbol, errMsg)
 			} else {
-				line := fmt.Sprintf("Placed %s %s order %s for %d shares of %s @ ₹%.2f at %s",
-					strings.ToUpper(orderVariety), strings.ToUpper(order.TransactionType), result.OrderID, order.Quantity, order.TradingSymbol, execPrice, orderNow)
+				line := fmt.Sprintf("Placed %s %s order %s for %d shares of %s @ %s%.2f at %s",
+					strings.ToUpper(orderVariety), strings.ToUpper(order.TransactionType), result.OrderID, order.Quantity, order.TradingSymbol, mktCfg.Currency, execPrice, orderNow)
 				successLines = append(successLines, line)
 				fmt.Println(line)
 			}
@@ -264,21 +264,21 @@ func ExecuteBasketOrders(
 
 func SaveSuccessLog(snapshotText, logContent, nowStr string) {
 	if err := os.MkdirAll("Order", 0755); err != nil {
-		fmt.Printf("Failed to create Order directory: %v\n", err)
+		slog.Error("executor.log_dir_failed", "dir", "Order", "err", err)
 		return
 	}
 	filename := filepath.Join("Order", "Order_"+nowStr+".txt")
 	content := snapshotText + "\n\nExecuting orders live...\n" + logContent + "\n"
 	if err := os.WriteFile(filename, []byte(content), 0644); err != nil {
-		fmt.Printf("Failed to save order log: %v\n", err)
+		slog.Error("executor.log_save_failed", "path", filename, "err", err)
 	} else {
-		fmt.Printf("\nSuccessful order details logged to %s\n", filename)
+		slog.Info("executor.success_log_saved", "path", filename)
 	}
 }
 
 func SaveErrorLog(snapshotText, logContent string, failedSpecs []FailedOrderSpec, nowStr string) string {
 	if err := os.MkdirAll("Error", 0755); err != nil {
-		fmt.Printf("Failed to create Error directory: %v\n", err)
+		slog.Error("executor.error_dir_failed", "dir", "Error", "err", err)
 		return ""
 	}
 
@@ -296,7 +296,7 @@ func SaveErrorLog(snapshotText, logContent string, failedSpecs []FailedOrderSpec
 		_ = os.WriteFile(jsonFilename, bytes, 0644)
 	}
 
-	fmt.Printf("\nFailed order details logged to %s and temporary payload %s\n", txtFilename, jsonFilename)
+	slog.Warn("executor.error_log_saved", "txt", txtFilename, "json", jsonFilename, "failed_orders", len(failedSpecs))
 	return jsonFilename
 }
 
@@ -325,20 +325,20 @@ func ExecuteRetryPayload(jsonPath string, b broker.Broker, reader *bufio.Reader)
 		var err error
 		jsonPath, err = FindLatestErrorPayload()
 		if err != nil {
-			fmt.Printf("Retry error: %v\n", err)
+			slog.Error("executor.retry_payload_missing", "err", err)
 			return
 		}
 	}
 
 	data, err := os.ReadFile(jsonPath)
 	if err != nil {
-		fmt.Printf("Failed to read retry file %s: %v\n", jsonPath, err)
+		slog.Error("executor.retry_file_read_failed", "path", jsonPath, "err", err)
 		return
 	}
 
 	var payload RetryPayload
 	if err := json.Unmarshal(data, &payload); err != nil {
-		fmt.Printf("Failed to parse JSON retry payload from %s: %v\n", jsonPath, err)
+		slog.Error("executor.retry_payload_parse_failed", "path", jsonPath, "err", err)
 		return
 	}
 
@@ -353,7 +353,11 @@ func ExecuteRetryPayload(jsonPath string, b broker.Broker, reader *bufio.Reader)
 	// Refresh real-time LTP quotes before retrying
 	var tickers []string
 	for _, fo := range payload.FailedOrders {
-		tickers = append(tickers, "NSE:"+fo.TradingSymbol)
+		exchange := fo.Exchange
+		if exchange == "" {
+			exchange = "NSE"
+		}
+		tickers = append(tickers, exchange+":"+fo.TradingSymbol)
 	}
 
 	quoteMap := make(map[string]float64)
@@ -364,14 +368,20 @@ func ExecuteRetryPayload(jsonPath string, b broker.Broker, reader *bufio.Reader)
 	}
 	if len(quoteMap) == 0 {
 		ctx := context.Background()
-		if yfQuotes, err := yfinance.FetchQuotes(ctx, tickers); err == nil {
-			quoteMap = yfQuotes
+		// Route the quote fallback through the datafetcher.Router so US tickers
+		// would go to Schwab; these retry tickers are typically NSE (India), so
+		// the Router forwards them to Yahoo. No Schwab client is wired here
+		// (executor owns no credentials), so US tickers fall back to Yahoo too.
+		router := datafetcher.NewRouter(nil)
+		if rQuotes, err := router.FetchQuotes(ctx, tickers); err == nil {
+			quoteMap = rQuotes
 		}
 	}
 
-	loc, err := time.LoadLocation("Asia/Kolkata")
+	mktCfg := broker.LoadMarketConfig()
+	loc, err := time.LoadLocation(mktCfg.Timezone)
 	if err != nil {
-		loc = time.FixedZone("IST", 5.5*60*60)
+		loc = time.UTC
 	}
 
 	sort.SliceStable(payload.FailedOrders, func(i, j int) bool {
@@ -389,7 +399,11 @@ func ExecuteRetryPayload(jsonPath string, b broker.Broker, reader *bufio.Reader)
 			time.Sleep(200 * time.Millisecond) // Rate limiting throttle
 		}
 
-		key := "NSE:" + order.TradingSymbol
+		exchange := order.Exchange
+		if exchange == "" {
+			exchange = "NSE"
+		}
+		key := exchange + ":" + order.TradingSymbol
 		ltp := quoteMap[key]
 		if ltp == 0 {
 			ltp = order.Price
@@ -417,8 +431,8 @@ func ExecuteRetryPayload(jsonPath string, b broker.Broker, reader *bufio.Reader)
 				remainingFailed = append(remainingFailed, order)
 				fmt.Printf("Retry Error placing GTT %s order for %s: %v\n", strings.ToUpper(order.TransactionType), order.TradingSymbol, perr)
 			} else {
-				line := fmt.Sprintf("Placed GTT %s order (Trigger ID: %d) for %d shares of %s (Trigger: ₹%.2f, Limit: ₹%.2f) at %s",
-					strings.ToUpper(order.TransactionType), res.TriggerID, order.Quantity, order.TradingSymbol, triggerPrice, limitPrice, orderNow)
+				line := fmt.Sprintf("Placed GTT %s order (Trigger ID: %d) for %d shares of %s (Trigger: %s%.2f, Limit: %s%.2f) at %s",
+					strings.ToUpper(order.TransactionType), res.TriggerID, order.Quantity, order.TradingSymbol, mktCfg.Currency, triggerPrice, mktCfg.Currency, limitPrice, orderNow)
 				successLines = append(successLines, line)
 				fmt.Println(line)
 			}
@@ -438,8 +452,8 @@ func ExecuteRetryPayload(jsonPath string, b broker.Broker, reader *bufio.Reader)
 				remainingFailed = append(remainingFailed, order)
 				fmt.Printf("Retry Error placing %s %s order for %s: %v\n", strings.ToUpper(variety), strings.ToUpper(order.TransactionType), order.TradingSymbol, perr)
 			} else {
-				line := fmt.Sprintf("Placed %s %s order %s for %d shares of %s @ ₹%.2f at %s",
-					strings.ToUpper(variety), strings.ToUpper(order.TransactionType), res.OrderID, order.Quantity, order.TradingSymbol, execPrice, orderNow)
+				line := fmt.Sprintf("Placed %s %s order %s for %d shares of %s @ %s%.2f at %s",
+					strings.ToUpper(variety), strings.ToUpper(order.TransactionType), res.OrderID, order.Quantity, order.TradingSymbol, mktCfg.Currency, execPrice, orderNow)
 				successLines = append(successLines, line)
 				fmt.Println(line)
 			}

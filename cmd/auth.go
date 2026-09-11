@@ -14,25 +14,62 @@ import (
 	"github.com/urfave/cli/v3"
 	kiteconnect "github.com/zerodha/gokiteconnect/v4"
 
+	"github.com/raghavkgarg/mycase/pkg/broker/schwab"
 	"github.com/raghavkgarg/mycase/pkg/config"
 	"github.com/raghavkgarg/mycase/pkg/kiteauth"
+	"github.com/raghavkgarg/mycase/pkg/render"
 )
 
 var AuthCommand = &cli.Command{
 	Name:  "auth",
-	Usage: "Set up Zerodha Kite Connect authentication",
+	Usage: "Set up broker authentication (Zerodha or Schwab)",
 	Flags: []cli.Flag{
+		&cli.StringFlag{
+			Name:    "broker",
+			Aliases: []string{"b"},
+			Usage:   "Broker to authenticate with: zerodha, schwab (default from config/defaults.json)",
+		},
+		&cli.StringFlag{
+			Name:  "config",
+			Value: "",
+			Usage: "Path to broker config file (default: config/config.json for zerodha, config/schwab.json for schwab)",
+		},
+		&cli.StringFlag{
+			Name:  "token-path",
+			Value: "config/schwab_token.json",
+			Usage: "Path to save Schwab OAuth tokens",
+		},
 		&cli.BoolFlag{
 			Name:  "manual",
-			Usage: "Force interactive browser login even if auto-login credentials exist",
+			Usage: "Force interactive browser login even if auto-login credentials exist (zerodha)",
 		},
 		&cli.BoolFlag{
 			Name:  "force",
-			Usage: "Force re-authentication even if current session/token is still valid",
+			Usage: "Force re-authentication even if current session/token is still valid (zerodha)",
 		},
 	},
 	Action: func(ctx context.Context, c *cli.Command) error {
-		return runAuthCmdWithFlags(ctx, c.Bool("manual"), c.Bool("force"))
+		broker := strings.ToLower(c.String("broker"))
+		if broker == "" {
+			defaults := config.LoadUserDefaults("config/defaults.json")
+			broker = defaults.Broker
+		}
+		if broker == "" {
+			broker = "schwab"
+		}
+		switch broker {
+		case "schwab":
+			configPath := c.String("config")
+			if configPath == "" {
+				configPath = "config/schwab.json"
+			}
+			tokenPath := c.String("token-path")
+			return runSchwabAuth(ctx, configPath, tokenPath)
+		case "zerodha":
+			return runAuthCmdWithFlags(ctx, c.Bool("manual"), c.Bool("force"))
+		default:
+			return fmt.Errorf("unsupported broker %q — supported: zerodha, schwab", broker)
+		}
 	},
 }
 
@@ -41,9 +78,7 @@ func runAuthCmd(ctx context.Context) error {
 }
 
 func runAuthCmdWithFlags(ctx context.Context, forceManual, forceRefresh bool) error {
-	fmt.Println("====================================================================")
-	fmt.Println("             Zerodha Kite Connect Auth Setup Utility               ")
-	fmt.Println("====================================================================")
+	render.Banner(os.Stdout, "Zerodha Kite Connect Auth Setup Utility")
 	if publicIP := config.FetchPublicIP(); publicIP != "" {
 		fmt.Printf("Current Public IP: %s\n", publicIP)
 		fmt.Println("  (Make sure this IP is whitelisted under App Settings on https://developers.kite.trade/profile)")
@@ -258,5 +293,36 @@ setTimeout(function() {
 
 	fmt.Println("\nSuccessfully updated 'config/config.json' with your credentials!")
 	fmt.Println("You can now run `mycase basket --live` to use live data.")
+	return nil
+}
+
+// runSchwabAuth performs the Schwab OAuth2 authorization_code flow.
+func runSchwabAuth(ctx context.Context, configPath, tokenPath string) error {
+	render.Banner(os.Stdout, "Charles Schwab OAuth2 Auth Setup Utility")
+
+	app, err := schwab.LoadAppConfig(configPath)
+	if err != nil {
+		return fmt.Errorf("failed to load Schwab config from %s: %w\n\n"+
+			"Create %s with your Schwab app credentials:\n"+
+			"  {\n"+
+			"    \"client_id\": \"your_app_key\",\n"+
+			"    \"client_secret\": \"your_app_secret\",\n"+
+			"    \"callback_url\": \"https://127.0.0.1:8443/callback\"\n"+
+			"  }\n\n"+
+			"Register your app at https://developer.schwab.com", configPath, err, configPath)
+	}
+
+	fmt.Printf("App Key: %s...%s\n", app.ClientID[:4], app.ClientID[len(app.ClientID)-4:])
+	fmt.Printf("Callback URL: %s\n", app.CallbackURL)
+	fmt.Printf("Token will be saved to: %s\n\n", tokenPath)
+
+	if err := schwab.RunAuthFlow(ctx, app, tokenPath); err != nil {
+		return err
+	}
+
+	fmt.Println("\n✅ Schwab authentication complete!")
+	fmt.Println("You can now use US market features:")
+	fmt.Println("  mycase pick --index sp500 --method us_quality_momentum")
+	fmt.Println("  mycase basket --broker schwab --live")
 	return nil
 }

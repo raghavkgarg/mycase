@@ -7,6 +7,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -14,8 +16,10 @@ import (
 	"github.com/urfave/cli/v3"
 	"gopkg.in/yaml.v3"
 
+	"github.com/raghavkgarg/mycase/pkg/cache"
 	"github.com/raghavkgarg/mycase/pkg/config"
 	"github.com/raghavkgarg/mycase/pkg/csvloader"
+	"github.com/raghavkgarg/mycase/pkg/render"
 	"github.com/raghavkgarg/mycase/pkg/stockpicker"
 )
 
@@ -37,6 +41,12 @@ var PipelineCommand = &cli.Command{
 		&cli.BoolFlag{Name: "yes", Aliases: []string{"y"}, Usage: "Non-interactive mode (auto-accept defaults, skip prompts)"},
 	},
 	Action: runPipeline,
+	Commands: []*cli.Command{
+		pipelineHistoryCmd,
+		pipelineShowCmd,
+		pipelineDiffCmd,
+		pipelineReconcileCmd,
+	},
 }
 
 func runPipeline(ctx context.Context, c *cli.Command) error {
@@ -44,9 +54,7 @@ func runPipeline(ctx context.Context, c *cli.Command) error {
 	autoYes := c.Bool("yes")
 	configPath := c.String("config")
 
-	fmt.Println("====================================================================")
-	fmt.Println("             Go Mycase Automated Pipeline Runner                 ")
-	fmt.Println("====================================================================")
+	render.Banner(os.Stdout, "Go Mycase Automated Pipeline Runner")
 
 	var cfg config.PipelineConfig
 	configFile, err := os.Open(configPath)
@@ -180,9 +188,37 @@ func runPipeline(ctx context.Context, c *cli.Command) error {
 	dateStr := runTimestamp[:8]
 	stepCounter := 1
 
+	// Pipeline run tracking variables (function scope for defer/completion).
+	var db *cache.Cache
+	var runID string
+
 	if !execOnly {
 		if sourcesCount == 0 {
 			return fmt.Errorf("no indices or files configured in pipeline.yaml")
+		}
+
+		// --- Pipeline run tracking (DuckDB) ---
+		goldenBase := csvloader.GetUniverseName(cfg.GoldenCopyPath)
+		runID = cache.NewRunID()
+		db = cache.GetDB()
+		if db != nil {
+			pipelineRun := cache.PipelineRun{
+				RunID:      runID,
+				StartedAt:  time.Now(),
+				Portfolio:  goldenBase,
+				Method:     cfg.Strategy,
+				ConfigJSON: cfg.Snapshot(),
+			}
+			if err := db.InsertRun(ctx, pipelineRun); err != nil {
+				fmt.Printf("[pipeline] Warning: failed to record pipeline run: %v\n", err)
+				db = nil
+			} else {
+				defer func() {
+					if db != nil {
+						_ = db.FailRun(ctx, runID)
+					}
+				}()
+			}
 		}
 
 		var outputCSVs []string
@@ -214,30 +250,63 @@ func runPipeline(ctx context.Context, c *cli.Command) error {
 				return fmt.Errorf("step %d (pick %s): %w", stepCounter, src.name, err)
 			}
 			outputCSVs = append(outputCSVs, outPath)
+
+			// Persist index picks to DuckDB
+			if db != nil {
+				if picks := csvWeightsToIndexPicks(outPath, src.name); len(picks) > 0 {
+					if err := db.InsertIndexPicks(ctx, runID, src.name, picks); err != nil {
+						fmt.Printf("[pipeline] Warning: failed to persist index picks for %s: %v\n", src.name, err)
+					}
+				}
+			}
+
 			stepCounter++
 		}
 
 		var sourceCSV string
 		goldenCSV := cfg.GoldenCopyPath
-		goldenBase := csvloader.GetUniverseName(goldenCSV)
-		combineCSV := filepath.Join("data", "candidates", "temp", fmt.Sprintf("combine_%s.csv", goldenBase))
 
 		if sourcesCount > 1 {
-			if err := os.MkdirAll(filepath.Dir(combineCSV), 0755); err != nil {
-				fmt.Printf("Warning: Failed to create temp directory: %v\n", err)
+			// Get combined tickers from DuckDB (eliminates temp combine CSV).
+			var combinedTickers []string
+			if db != nil {
+				allPicks, err := db.GetAllIndexPicks(ctx, runID)
+				if err == nil && len(allPicks) > 0 {
+					seen := make(map[string]bool, len(allPicks))
+					for _, p := range allPicks {
+						if !seen[p.Ticker] {
+							seen[p.Ticker] = true
+							combinedTickers = append(combinedTickers, p.Ticker)
+						}
+					}
+					fmt.Printf("\n[Step %d/%d] Combined %d unique tickers from DB index_picks.\n", stepCounter, totalSteps, len(combinedTickers))
+				}
 			}
-			fmt.Printf("\n[Step %d/%d] Combining stockpicker outputs into %s...\n", stepCounter, totalSteps, combineCSV)
-			if err := csvloader.CombineMultipleCSVs(outputCSVs, combineCSV); err != nil {
-				return fmt.Errorf("step %d (combine): %w", stepCounter, err)
+
+			// Fallback: combine via CSV if DB path didn't yield tickers.
+			if len(combinedTickers) == 0 {
+				combineCSV := filepath.Join("data", "candidates", "temp", fmt.Sprintf("combine_%s.csv", goldenBase))
+				if err := os.MkdirAll(filepath.Dir(combineCSV), 0755); err != nil {
+					fmt.Printf("Warning: Failed to create temp directory: %v\n", err)
+				}
+				fmt.Printf("\n[Step %d/%d] Combining stockpicker outputs into %s (fallback)...\n", stepCounter, totalSteps, combineCSV)
+				if err := csvloader.CombineMultipleCSVs(outputCSVs, combineCSV); err != nil {
+					return fmt.Errorf("step %d (combine): %w", stepCounter, err)
+				}
+				// Read tickers from the combined CSV.
+				weights, _ := csvloader.ReadCSVWeights(combineCSV)
+				for t := range weights {
+					combinedTickers = append(combinedTickers, t)
+				}
+				_ = os.Remove(combineCSV)
 			}
-			fmt.Printf("Combined file successfully generated at %s.\n", combineCSV)
 			stepCounter++
 
 			proposalTopN := cfg.TopN + 5
 			fmt.Printf("\n[Step %d/%d] Running stockpicker on combined candidates to select top %d candidates...\n", stepCounter, totalSteps, proposalTopN)
 			outPath := filepath.Join("data", "candidates", "proposals", fmt.Sprintf("%s_%s_%s.csv", dateStr, goldenBase, cfg.Strategy))
 			opts := &stockpicker.Options{
-				FilePath:           combineCSV,
+				Tickers:            combinedTickers,
 				Method:             cfg.Strategy,
 				TopN:               proposalTopN,
 				RangeStr:           "3mo",
@@ -252,7 +321,16 @@ func runPipeline(ctx context.Context, c *cli.Command) error {
 			if err := runPickWithOpts(ctx, opts); err != nil {
 				return fmt.Errorf("step %d (pick combined): %w", stepCounter, err)
 			}
-			_ = os.Remove(combineCSV)
+
+			// Persist draft proposals to DuckDB
+			if db != nil {
+				if proposals := csvWeightsToProposals(outPath); len(proposals) > 0 {
+					if err := db.InsertProposals(ctx, runID, "draft", proposals); err != nil {
+						fmt.Printf("[pipeline] Warning: failed to persist draft proposals: %v\n", err)
+					}
+				}
+			}
+
 			stepCounter++
 
 			fmt.Printf("\nWould you like to manually remove shares from the proposal before finalizing? (y/n, default: n): ")
@@ -265,6 +343,7 @@ func runPipeline(ctx context.Context, c *cli.Command) error {
 				_, _ = reader.ReadString('\n')
 			}
 
+			// Prune step must read from file (user may have edited the proposal CSV above).
 			fmt.Printf("\n[Step %d/%d] Running stockpicker to prune to top %d stocks...\n", stepCounter, totalSteps, cfg.TopN)
 			optimPath := filepath.Join("data", "candidates", "proposals", fmt.Sprintf("%s_%s_%s_optim.csv", dateStr, goldenBase, cfg.Strategy))
 			opts2 := &stockpicker.Options{
@@ -284,6 +363,16 @@ func runPipeline(ctx context.Context, c *cli.Command) error {
 				return fmt.Errorf("step %d (pick prune): %w", stepCounter, err)
 			}
 			sourceCSV = optimPath
+
+			// Persist optimized proposals to DuckDB
+			if db != nil {
+				if proposals := csvWeightsToProposals(optimPath); len(proposals) > 0 {
+					if err := db.InsertProposals(ctx, runID, "optimized", proposals); err != nil {
+						fmt.Printf("[pipeline] Warning: failed to persist optimized proposals: %v\n", err)
+					}
+				}
+			}
+
 			stepCounter++
 		} else {
 			sourceCSV = outputCSVs[0]
@@ -399,13 +488,7 @@ func runPipeline(ctx context.Context, c *cli.Command) error {
 	for _, idx := range cfg.Indices {
 		if stockpicker.IsUSIndex(idx) {
 			uName := idx
-			alreadyAdded := false
-			for _, s := range usDetectedSources {
-				if s == uName {
-					alreadyAdded = true
-					break
-				}
-			}
+			alreadyAdded := slices.Contains(usDetectedSources, uName)
 			if !alreadyAdded {
 				usDetectedSources = append(usDetectedSources, uName)
 			}
@@ -414,13 +497,7 @@ func runPipeline(ctx context.Context, c *cli.Command) error {
 	for _, f := range cfg.Files {
 		if stockpicker.IsUSIndex(f) {
 			uName := csvloader.GetUniverseName(f)
-			alreadyAdded := false
-			for _, s := range usDetectedSources {
-				if s == uName {
-					alreadyAdded = true
-					break
-				}
-			}
+			alreadyAdded := slices.Contains(usDetectedSources, uName)
 			if !alreadyAdded {
 				usDetectedSources = append(usDetectedSources, uName)
 			}
@@ -455,7 +532,7 @@ func runPipeline(ctx context.Context, c *cli.Command) error {
 		if execChoice == "" || execChoice == "y" || execChoice == "yes" {
 			goldenBase := csvloader.GetUniverseName(cfg.GoldenCopyPath)
 			basketFile := "data/" + goldenBase + ".csv"
-			if err := runBasketWithParams(ctx, true, basketFile); err != nil {
+			if err := runBasketWithParams(ctx, true, basketFile, false); err != nil {
 				return fmt.Errorf("step %d (basket): %w", stepCounter, err)
 			}
 		} else {
@@ -465,9 +542,8 @@ func runPipeline(ctx context.Context, c *cli.Command) error {
 
 	if !execOnly {
 		goldenBase := csvloader.GetUniverseName(cfg.GoldenCopyPath)
-		fmt.Println("\n====================================================================")
-		fmt.Println("               Generated Reports & Files Summary                    ")
-		fmt.Println("====================================================================")
+		fmt.Println()
+		render.Banner(os.Stdout, "Generated Reports & Files Summary")
 		for idx, indexName := range cfg.Indices {
 			fmt.Printf("%d. %s Candidates:\n", idx+1, indexName)
 			fmt.Printf("   - CSV Output:         data/candidates/index_picks/%s_%s.csv\n", indexName, cfg.Strategy)
@@ -491,12 +567,20 @@ func runPipeline(ctx context.Context, c *cli.Command) error {
 		fmt.Printf("%d. Golden Copy Portfolio:%s\n", summaryIdx, cfg.GoldenCopyPath)
 		summaryIdx++
 		fmt.Printf("%d. Explanation Report:  report/%s_%s/executions/%s_03_portfolio_report.txt\n", summaryIdx, goldenBase, cfg.Strategy, dateStr)
-		fmt.Println("====================================================================")
 	}
 
-	fmt.Println("\n====================================================================")
-	fmt.Println("               Pipeline Completed Successfully!                     ")
-	fmt.Println("====================================================================")
+	fmt.Println()
+	render.Banner(os.Stdout, "Pipeline Completed Successfully!")
+
+	// Mark pipeline run as completed in DuckDB.
+	if db != nil {
+		if err := db.CompleteRun(ctx, runID); err != nil {
+			fmt.Printf("[pipeline] Warning: failed to mark run as completed: %v\n", err)
+		} else {
+			db = nil // prevent deferred FailRun from firing
+		}
+	}
+
 	return nil
 }
 
@@ -518,4 +602,64 @@ func pipelineCopyFile(src, dst string) error {
 		return err
 	}
 	return os.WriteFile(dst, data, 0644)
+}
+
+// csvWeightsToIndexPicks reads a ticker/weight CSV and converts to cache.IndexPick slice.
+func csvWeightsToIndexPicks(csvPath, indexName string) []cache.IndexPick {
+	weights, err := csvloader.ReadCSVWeights(csvPath)
+	if err != nil {
+		return nil
+	}
+	// Sort by weight descending for rank assignment.
+	type tw struct {
+		ticker string
+		weight float64
+	}
+	sorted := make([]tw, 0, len(weights))
+	for t, w := range weights {
+		sorted = append(sorted, tw{t, w})
+	}
+	sort.Slice(sorted, func(i, j int) bool {
+		return sorted[i].weight > sorted[j].weight
+	})
+
+	picks := make([]cache.IndexPick, 0, len(sorted))
+	for i, s := range sorted {
+		picks = append(picks, cache.IndexPick{
+			IndexName: indexName,
+			Ticker:    s.ticker,
+			Rank:      i + 1,
+			Weight:    s.weight,
+		})
+	}
+	return picks
+}
+
+// csvWeightsToProposals reads a ticker/weight CSV and converts to cache.Proposal slice.
+func csvWeightsToProposals(csvPath string) []cache.Proposal {
+	weights, err := csvloader.ReadCSVWeights(csvPath)
+	if err != nil {
+		return nil
+	}
+	type tw struct {
+		ticker string
+		weight float64
+	}
+	sorted := make([]tw, 0, len(weights))
+	for t, w := range weights {
+		sorted = append(sorted, tw{t, w})
+	}
+	sort.Slice(sorted, func(i, j int) bool {
+		return sorted[i].weight > sorted[j].weight
+	})
+
+	proposals := make([]cache.Proposal, 0, len(sorted))
+	for i, s := range sorted {
+		proposals = append(proposals, cache.Proposal{
+			Ticker: s.ticker,
+			Weight: s.weight,
+			Rank:   i + 1,
+		})
+	}
+	return proposals
 }

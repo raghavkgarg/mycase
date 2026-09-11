@@ -211,10 +211,7 @@ func EvaluateThemeReturn(
 			Amount: curVal,
 		})
 
-		holdingDays := int(now.Sub(earliestSymDate).Hours() / 24.0)
-		if holdingDays < 1 {
-			holdingDays = 1
-		}
+		holdingDays := max(int(now.Sub(earliestSymDate).Hours()/24.0), 1)
 
 		hpr := ((curVal + divTotal - totCost) / totCost) * 100.0
 
@@ -252,10 +249,7 @@ func EvaluateThemeReturn(
 	}
 
 	report.EarliestPurchase = earliestActiveDate
-	report.HoldingDays = int(now.Sub(earliestActiveDate).Hours() / 24.0)
-	if report.HoldingDays < 1 {
-		report.HoldingDays = 1
-	}
+	report.HoldingDays = max(int(now.Sub(earliestActiveDate).Hours()/24.0), 1)
 
 	report.ActiveTotalWealth = report.ActiveUnrealizedPnL + report.ActiveDividends
 	if report.ActiveInvestedValue > 0 {

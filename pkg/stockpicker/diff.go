@@ -8,6 +8,7 @@ import (
 )
 
 type RunDiffReport struct {
+	ScoreDeltas           map[string]float64 // ticker -> delta
 	PreviousDate          string
 	CurrentDate           string
 	AddedStage1           []string
@@ -16,7 +17,6 @@ type RunDiffReport struct {
 	AddedSelections       []string
 	RemovedSelections     []string // genuine exits (gate failures or score drops)
 	DataDroppedSelections []string // previously selected holdings dropped due to DataFetchFailed
-	ScoreDeltas           map[string]float64 // ticker -> delta
 }
 
 func DiffSnapshots(prev, curr *PITRunSnapshot) *RunDiffReport {

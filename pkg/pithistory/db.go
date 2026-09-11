@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -233,8 +234,8 @@ LIMIT ?;
 
 	// Reverse to ascending chronological order [T-2, T-1, ...]
 	var datesAsc []string
-	for i := len(datesDesc) - 1; i >= 0; i-- {
-		datesAsc = append(datesAsc, datesDesc[i])
+	for _, d := range slices.Backward(datesDesc) {
+		datesAsc = append(datesAsc, d)
 	}
 
 	datePlaceholders := make([]string, len(datesAsc))
@@ -297,8 +298,8 @@ ORDER BY as_of_date ASC;
 
 		consec := 0
 		// Walk backwards from most recent past point
-		for i := len(points) - 1; i >= 0; i-- {
-			if points[i].PassedStage1 && !points[i].DataFailed && points[i].RawScore > 0 {
+		for _, point := range slices.Backward(points) {
+			if point.PassedStage1 && !point.DataFailed && point.RawScore > 0 {
 				consec++
 			} else {
 				break
@@ -325,4 +326,3 @@ ORDER BY as_of_date ASC;
 
 	return result, nil
 }
-

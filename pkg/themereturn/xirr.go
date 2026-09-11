@@ -63,7 +63,7 @@ func CalculateXIRR(cashFlows []DatedCashFlow) (float64, error) {
 	rate := 0.10
 
 	// Newton-Raphson iteration
-	for i := 0; i < maxIterations; i++ {
+	for range maxIterations {
 		f := npv(rate)
 		df := dnpv(rate)
 
@@ -93,7 +93,7 @@ func CalculateXIRR(cashFlows []DatedCashFlow) (float64, error) {
 		return rate, nil
 	}
 
-	for i := 0; i < 100; i++ {
+	for range 100 {
 		mid := (low + high) / 2.0
 		fMid := npv(mid)
 		if math.Abs(fMid) < tolerance || (high-low)/2.0 < tolerance {

@@ -13,6 +13,7 @@ Practical usage guide: common workflows, every command with realistic examples, 
 5. [Portfolio Health & Drift Monitoring](#5-portfolio-health--drift-monitoring)
 6. [Cache Management](#6-cache-management)
 7. [Pipeline (Full Automation)](#7-pipeline-full-automation)
+7b. [Tax-Loss Harvesting (US)](#7b-tax-loss-harvesting-us)
 8. [Web Dashboard Server](#8-web-dashboard-server)
 9. [Command Reference](#9-command-reference)
 
@@ -90,13 +91,20 @@ mycase pick --index smallcap250 --golden data/microsmall.csv \
 
 # Pick from NSE MidCap 150, aggressive strategy
 mycase pick --index midcap150 --method aggressive --top 10
+
+# Pick top 20 US quality-momentum stocks from S&P 500
+mycase pick --index sp500 --method us_quality_momentum --top 20
+
+# Pick US stocks with hysteresis (protect existing US holdings)
+mycase pick --index sp500 --method us_quality_momentum --top 20 \
+    --golden data/us_portfolio.csv --hysteresis-buffer 5
 ```
 
 Output goes to `data/candidates/index_picks/{index}_{method}_{date}.csv`.
 
-**Indices**: `nifty50`, `nifty100`, `nifty500`, `smallcap250`, `midcap150`, `microcap250`
+**Indices**: `nifty50`, `nifty100`, `nifty500`, `smallcap250`, `midcap150`, `microcap250`, `sp500`
 
-**Methods**: `balanced`, `aggressive`, `conservative`, `multibagger`
+**Methods**: `balanced`, `aggressive`, `conservative`, `multibagger`, `value`, `us_quality_momentum`
 
 ### Step 2: Optimize weights
 
@@ -126,12 +134,17 @@ mycase basket --live data/microsmall
 
 # Use specific CSV path
 mycase basket --file data/candidates/my_new_basket.csv
+
+# US portfolio: sequence orders to harvest losses first, flag wash sales
+mycase basket --live --tax-optimize data/us_quality
 ```
 
 The basket command automatically:
 - Filters micro-transactions where `cost/value > 0.5%` (DP charge dominates small sell orders)
-- Prints STCG/LTCG warnings for sell orders based on Finance Act 2024 rates
+- Prints STCG/LTCG warnings for sell orders based on Finance Act 2024 rates (India) or federal ST/LT rates (US)
 - Shows total transaction cost summary
+
+With `--tax-optimize` (US only), it reorders the batch so loss-harvesting sells execute before gain sells and buys, and warns if a buy would repurchase a security sold at a loss (wash sale). This uses the FIFO lots from `mycase tax import` (see §7b), so US sell warnings show real short/long-term status and cost basis instead of "Unknown".
 
 ---
 
@@ -369,6 +382,112 @@ The pipeline runs shared in-memory data fetching and one DuckDB connection acros
 
 ---
 
+## 7b. Autopilot (Scheduled Non-Interactive Pipeline)
+
+The autopilot runs the same pick → optimize → merge → compute-orders steps as the interactive pipeline, but without any user prompts. It generates a proposal, sends an alert, and waits for confirmation.
+
+### Run manually (one-shot)
+
+```bash
+# Dry-run with mock broker (for testing)
+mycase autopilot run --skip-trading-day-check
+
+# Live run (uses real holdings/quotes for order computation)
+mycase autopilot run --live
+```
+
+### Check status
+
+```bash
+mycase autopilot status
+```
+
+Shows: pending proposal details, expiry countdown, and next scheduled run date.
+
+### Confirm or dismiss proposals
+
+Proposals are confirmed via the web dashboard (`http://localhost:8080/#/rebalance`) or dismissed via CLI:
+
+```bash
+mycase autopilot dismiss
+```
+
+### Install as scheduled service
+
+```bash
+# macOS (launchd): fires quarterly on Jan 2, Apr 2, Jul 2, Oct 2 at 10:00 IST
+mycase autopilot install
+launchctl load ~/Library/LaunchAgents/com.mycase.autopilot.plist
+
+# Linux: prints systemd unit + timer
+mycase autopilot install
+```
+
+### Uninstall
+
+```bash
+mycase autopilot uninstall
+```
+
+### Configuration
+
+Add to `config/pipeline.yaml`:
+
+```yaml
+schedule:
+  frequency: quarterly          # quarterly, monthly, or drift-triggered
+  day: first_trading_day        # first_trading_day, last_trading_day, or day number
+  notify: [telegram]            # alert channels
+  auto_execute: false           # true = skip confirmation (dangerous)
+  drift_trigger_pct: 15         # mid-quarter drift % for early rebalance (0 = disabled)
+  proposal_ttl_days: 7          # days before proposal expires
+```
+
+### Workflow
+
+1. Autopilot fires (scheduled or manual)
+2. If not a trading day → skips, retries next day
+3. Runs stock selection → weight optimization → golden copy merge
+4. Computes rebalance orders against live holdings
+5. Saves proposal to `data/autopilot/pending_proposal.json`
+6. Sends Telegram/Discord alert with summary + dashboard link
+7. Investor reviews at `http://localhost:8080/#/rebalance`
+8. Clicks "Confirm & Execute" → orders placed via broker
+9. Confirmation alert sent
+
+---
+
+## 7b. Tax-Loss Harvesting (US)
+
+FIFO lot tracking and tax-loss harvesting for US portfolios. Requires Schwab auth (`mycase auth --broker schwab`).
+
+```bash
+# 1. Import transaction history and build FIFO lots (run after auth, then quarterly)
+mycase tax import --broker schwab --years 3
+
+# 2. Review open lots + realized gains (YTD and all-time, short/long-term split)
+mycase tax status
+
+# 3. Find harvestable losses with estimated tax saving + substitute suggestions
+mycase tax harvest --min-loss 50
+```
+
+Then, when rebalancing, add `--tax-optimize` to sequence loss sells first and flag wash sales:
+
+```bash
+mycase basket --live --tax-optimize data/us_quality
+```
+
+Notes:
+- **Lots are derived state.** `tax import` recomputes lots and realized gains from the full stored transaction history every run, so re-importing is safe and idempotent (keyed on Schwab `activityId`).
+- **Wash-sale rule.** A loss is disallowed if you buy the same (or substantially identical) security within 30 days before or after the loss sale. `tax harvest` flags at-risk positions; `basket --tax-optimize` warns if a buy in the batch would trigger one. The tool advises — it does not block.
+- **Substitutes.** Harvest suggestions propose a same-sector name from the universe that you don't already hold, to keep factor exposure without repurchasing the sold security.
+- **Coverage limits.** Schwab positions expose only a blended average price; accurate lots depend on the `/transactions` history. Positions older than the account's transaction window can't be reconstructed. Sells with no matching buy history are reported as warnings, not fabricated lots.
+
+The dashboard **Tax** tab (`#/tax`) shows the same data: realized gains (YTD + all-time), harvest candidates, a wash-sale calendar, and open lots with unrealized P&L.
+
+---
+
 ## 8. Web Dashboard Server
 
 Launch the web UI dashboard in your browser to visualize portfolio allocations, factor scores, backtest forms, drift timelines, and order previews:
@@ -391,6 +510,7 @@ Features included in the web dashboard:
 - Dynamic weight distribution donuts & comparison charts (powered by ECharts)
 - Real-time stock health & monitoring table
 - Basket order preview and tax impact breakdown
+- Tax tab (US): realized gains (YTD + all-time), harvest candidates, wash-sale calendar, open lots
 
 ---
 
@@ -408,7 +528,7 @@ Features included in the web dashboard:
 |------|---------|-------------|
 | `--index`, `-i` | `smallcap250` | Index to fetch constituents from |
 | `--file`, `-f` | — | Custom CSV with `ticker` column (overrides `--index`) |
-| `--method`, `-m` | `balanced` | Scoring strategy: `balanced`, `aggressive`, `conservative`, `multibagger` |
+| `--method`, `-m` | `balanced` | Scoring strategy: `balanced`, `aggressive`, `conservative`, `multibagger`, `value`, `us_quality_momentum` |
 | `--top` | `20` | Number of top-ranked stocks to select |
 | `--range` | `3mo` | Price history range for factor calculations |
 | `--golden` | — | Golden copy CSV; enables hysteresis and rebalancing bands |
@@ -444,7 +564,16 @@ Features included in the web dashboard:
 |------|---------|-------------|
 | `--live` | false | Use live Zerodha API (dry-run without this flag) |
 | `--file` | `data/basket.csv` | Portfolio CSV path |
+| `--tax-optimize` | false | US: sequence loss sells first, flag wash sales (needs `tax import`) |
 | positional arg | — | Portfolio name (shorthand for `data/{name}.csv`) |
+
+### `tax`
+
+| Command | Flags | Description |
+|---------|-------|-------------|
+| `mycase tax import` | `--broker` (`schwab`), `--years` (`3`) | Import broker transaction history and rebuild FIFO lots |
+| `mycase tax status` | — | Show open lots and YTD/all-time realized gains/losses |
+| `mycase tax harvest` | `--min-loss` (`50`), `--live` | Identify tax-loss harvesting candidates |
 
 ### `performance`
 
@@ -533,6 +662,16 @@ Features included in the web dashboard:
 |------|---------|-------------|
 | `--port` | `8080` | HTTP server port for local dashboard |
 | `--live` | `false` | Connect with live Zerodha API (default: mock broker) |
+
+### `autopilot`
+
+| Subcommand | Flags | Description |
+|-----------|-------|-------------|
+| `run` | `--live`, `--config`, `--skip-trading-day-check` | Run non-interactive pipeline, generate proposal, send alerts |
+| `status` | `--config` | Show pending proposal and next scheduled run |
+| `dismiss` | — | Dismiss pending proposal without executing |
+| `install` | `--config` | Install launchd plist (macOS) or print systemd unit (Linux) |
+| `uninstall` | — | Remove installed service |
 
 ---
 

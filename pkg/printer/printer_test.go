@@ -5,11 +5,11 @@ import (
 	"testing"
 
 	"github.com/raghavkgarg/mycase/pkg/broker"
-	"github.com/raghavkgarg/mycase/pkg/portfolio"
+	brokertypes "github.com/raghavkgarg/mycase/pkg/broker/types"
 )
 
 func TestRenderThemeAllocationSummary(t *testing.T) {
-	rawHoldings := []portfolio.Holding{
+	rawHoldings := []brokertypes.Holding{
 		{TradingSymbol: "STOCK1", Exchange: "NSE", Quantity: 10, AveragePrice: 100.0, LastPrice: 150.0, PnL: 500.0, PnLPct: 50.0},
 		{TradingSymbol: "STOCK2", Exchange: "NSE", Quantity: 5, AveragePrice: 200.0, LastPrice: 250.0, PnL: 250.0, PnLPct: 25.0},
 	}
@@ -19,13 +19,13 @@ func TestRenderThemeAllocationSummary(t *testing.T) {
 			Name:         "Theme KK Advise",
 			Prefix:       "My KK",
 			TargetWeight: 0.60,
-			Holdings:     []portfolio.Holding{rawHoldings[0]},
+			Holdings:     []brokertypes.Holding{rawHoldings[0]},
 		},
 		{
 			Name:         "Theme AI Advice",
 			Prefix:       "My AI",
 			TargetWeight: 0.40,
-			Holdings:     []portfolio.Holding{rawHoldings[1]},
+			Holdings:     []brokertypes.Holding{rawHoldings[1]},
 		},
 	}
 
@@ -75,12 +75,12 @@ func TestPrintPreviewTable_WithSellReturns(t *testing.T) {
 
 	output := PrintPreviewTable(basketKeys, basket, quoteData, currentHoldings, finalQuantities, holdingDetails)
 
-	if !strings.Contains(output, "PORTFOLIO SNAPSHOT:") {
-		t.Errorf("expected output to contain 'PORTFOLIO SNAPSHOT:', got:\n%s", output)
+	if !strings.Contains(output, "PORTFOLIO SNAPSHOT") {
+		t.Errorf("expected output to contain 'PORTFOLIO SNAPSHOT', got:\n%s", output)
 	}
 
-	if !strings.Contains(output, "EXITS & SELL ORDERS RETURN BREAKDOWN:") {
-		t.Errorf("expected output to contain 'EXITS & SELL ORDERS RETURN BREAKDOWN:', got:\n%s", output)
+	if !strings.Contains(output, "EXITS & SELL ORDERS RETURN BREAKDOWN") {
+		t.Errorf("expected output to contain 'EXITS & SELL ORDERS RETURN BREAKDOWN', got:\n%s", output)
 	}
 
 	if !strings.Contains(output, "MINDACORP") || !strings.Contains(output, "EXIT") {
@@ -106,7 +106,7 @@ func TestFindMissingTickers_SeriesSuffix(t *testing.T) {
 		"NSE:SCHNEIDER":  true,
 		"NSE:BAJAJ-AUTO": true,
 	}
-	holdings := []portfolio.Holding{
+	holdings := []brokertypes.Holding{
 		{TradingSymbol: "E2E-BE", Exchange: "NSE", Quantity: 10},
 		{TradingSymbol: "SCHNEIDER", Exchange: "NSE", Quantity: 5},
 		{TradingSymbol: "BAJAJ-AUTO", Exchange: "NSE", Quantity: 2},
@@ -119,7 +119,7 @@ func TestFindMissingTickers_SeriesSuffix(t *testing.T) {
 }
 
 func TestRenderHoldingsSnapshot_SeriesSuffixCategorization(t *testing.T) {
-	rawHoldings := []portfolio.Holding{
+	rawHoldings := []brokertypes.Holding{
 		{
 			TradingSymbol: "E2E-BE",
 			Exchange:      "NSE",

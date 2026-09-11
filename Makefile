@@ -1,5 +1,11 @@
 .PHONY: build build-linux-arm64 build-linux-amd64 build-darwin-arm64 build-darwin-amd64
-.PHONY: install run test test-verbose test-race test-integration test-coverage cleanup clean fetch-echarts help
+.PHONY: install run test test-verbose test-race test-integration test-coverage cleanup analyze clean fetch-echarts check-deps deps-graph arch-graph overview-graph help
+
+# Pinned advisory-analysis tool versions (run via `go run` — no global install needed).
+# Bump deliberately; keep reproducible per the project's determinism convention.
+DEADCODE_VER    ?= v0.49.0
+BETTERALIGN_VER ?= v0.15.0
+UNPARAM_VER     ?= v0.0.0-20260823230713-2fa3d841b0c8
 
 UNAME_S := $(shell uname -s)
 ifeq ($(UNAME_S),Darwin)
@@ -59,14 +65,14 @@ run:
 
 test:
 	@echo "Running tests..."
-	@go test -timeout 30s ./...
+	@go test -count=1 -timeout 30s ./...
 
 test-verbose:
-	@go test -v -timeout 30s ./...
+	@go test -count=1 -v -timeout 30s ./...
 
 test-race:
 	@echo "Running tests with race detector..."
-	@go test -race -timeout 60s ./...
+	@go test -count=1 -race -timeout 60s ./...
 
 test-integration:
 	@echo "Running integration tests (requires network)..."
@@ -90,10 +96,74 @@ cleanup:
 	@staticcheck ./...
 	@echo "=== Vulnerabilities ==="
 	@govulncheck ./...
+	@echo "=== Dependency layering ==="
+	@go run ./devtools/checkdeps
+	@echo "=== Advisory analysis (non-blocking) ==="
+	@$(MAKE) --no-print-directory analyze || true
 	@echo "=== All clean ==="
 
+# analyze runs advisory static-analysis tools that surface refactor opportunities
+# but are NOT hard gates: each has known false positives (reflection/interface
+# reachability for deadcode, exported-but-unused for unparam, intentional layout
+# for betteralign). Run it directly to review findings; `cleanup` invokes it
+# non-blocking so a finding never fails the build. All three run via `go run` at
+# pinned versions — no global install required, and always built against the
+# current toolchain (a stale global `unparam` binary errors on newer go/types).
+analyze:
+	@echo "--- deadcode (unreachable funcs from main; verify before deleting) ---"
+	@go run golang.org/x/tools/cmd/deadcode@$(DEADCODE_VER) ./... || true
+	@echo "--- unparam (unused params / always-same args) ---"
+	@go run mvdan.cc/unparam@$(UNPARAM_VER) ./... || true
+	@echo "--- betteralign (struct field ordering; run 'betteralign -apply ./...' to fix) ---"
+	@go run github.com/dkorunic/betteralign/cmd/betteralign@$(BETTERALIGN_VER) ./... || true
+
+check-deps:
+	@go run ./devtools/checkdeps
+
+deps-graph:
+	@mkdir -p dist
+	@go run ./devtools/depsgraph > dist/deps.dot
+	@if command -v dot >/dev/null 2>&1; then \
+		dot -Tsvg dist/deps.dot -o dist/deps.svg; \
+		echo "Dependency graph: dist/deps.svg (source: dist/deps.dot)"; \
+	else \
+		echo "Dependency graph: dist/deps.dot"; \
+		echo "Install Graphviz (brew install graphviz) to render SVG: dot -Tsvg dist/deps.dot -o dist/deps.svg"; \
+	fi
+
+# arch-graph renders the same layer-map graph as an architecture-style diagram
+# via D2's TALA engine (orthogonal, clustered by layer). Transitive reduction is
+# on by default (REDUCE=1) — it drops edges already implied by a longer path, so
+# a composition root doesn't draw an edge to every leaf it transitively reaches;
+# far fewer crossings, identical reachability. Set REDUCE=0 for the full graph.
+# Falls back to leaving the .d2 source if d2 is not installed.
+D2_LAYOUT ?= tala
+REDUCE    ?= 1
+arch-graph:
+	@mkdir -p dist
+	@go run ./devtools/depsgraph -format=d2 $(if $(filter-out 0,$(REDUCE)),-reduce) > dist/deps.d2
+	@if command -v d2 >/dev/null 2>&1; then \
+		d2 --layout=$(D2_LAYOUT) dist/deps.d2 dist/arch.svg >/dev/null; \
+		echo "Architecture graph: dist/arch.svg (layout=$(D2_LAYOUT), reduce=$(REDUCE), source: dist/deps.d2)"; \
+	else \
+		echo "Architecture graph source: dist/deps.d2"; \
+		echo "Install D2 (https://d2lang.com) to render SVG: d2 --layout=tala dist/deps.d2 dist/arch.svg"; \
+	fi
+
+# overview-graph re-renders the hand-authored high-level architecture diagram
+# (docs/architecture-overview.d2 → .svg). Unlike arch-graph (auto-generated
+# package dependency graph in dist/), this is a curated ~12-box conceptual view
+# and its SVG is committed under docs/ so it's viewable without D2 installed.
+overview-graph:
+	@if command -v d2 >/dev/null 2>&1; then \
+		d2 --layout=$(D2_LAYOUT) docs/architecture-overview.d2 docs/architecture-overview.svg >/dev/null; \
+		echo "Overview diagram: docs/architecture-overview.svg (layout=$(D2_LAYOUT))"; \
+	else \
+		echo "Install D2 (https://d2lang.com) to render docs/architecture-overview.d2"; \
+	fi
+
 clean:
-	@rm -f dist/mycase dist/mycase-arm64 dist/mycase-amd64 dist/mycase-darwin-arm64 dist/mycase-darwin-amd64
+	@rm -f dist/mycase dist/mycase-arm64 dist/mycase-amd64 dist/mycase-darwin-arm64 dist/mycase-darwin-amd64 dist/deps.dot dist/deps.svg dist/deps.d2 dist/arch.svg
 	@echo "Cleaned"
 
 fetch-echarts:
@@ -116,6 +186,11 @@ help:
 	@echo "  test-race          - Run tests with race detector"
 	@echo "  test-integration   - Run integration tests (requires network)"
 	@echo "  test-coverage      - Run tests and generate coverage.html"
-	@echo "  cleanup            - gofmt + go fix + go vet + staticcheck + govulncheck"
+	@echo "  cleanup            - gofmt + go fix + go vet + staticcheck + govulncheck + check-deps + analyze (advisory)"
+	@echo "  analyze            - Advisory static analysis: deadcode + unparam + betteralign (non-blocking)"
+	@echo "  check-deps         - Enforce R16 package layering (leaves + downward imports)"
+	@echo "  deps-graph         - Render pkg/ dependency graph to dist/deps.svg (Graphviz, layer-colored)"
+	@echo "  arch-graph         - Render pkg/ architecture diagram to dist/arch.svg (D2/TALA, transitive-reduced; REDUCE=0 for full)"
+	@echo "  overview-graph     - Re-render docs/architecture-overview.svg (hand-authored high-level view, D2/TALA)"
 	@echo "  clean              - Remove build artifacts"
 	@echo "  fetch-echarts      - Download ECharts 5.6.0 into pkg/server/static/vendor/"

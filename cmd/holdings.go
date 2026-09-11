@@ -9,19 +9,19 @@ import (
 
 	"github.com/urfave/cli/v3"
 
-	"github.com/raghavkgarg/mycase/pkg/broker/zerodha"
+	"github.com/raghavkgarg/mycase/pkg/broker"
 	"github.com/raghavkgarg/mycase/pkg/config"
 	"github.com/raghavkgarg/mycase/pkg/csvloader"
 	"github.com/raghavkgarg/mycase/pkg/portfolio"
 	"github.com/raghavkgarg/mycase/pkg/printer"
-	"github.com/raghavkgarg/mycase/pkg/themereturn"
+	"github.com/raghavkgarg/mycase/pkg/render"
 )
 
 var HoldingsCommand = &cli.Command{
 	Name:  "holdings",
-	Usage: "Snapshot of current Zerodha holdings",
+	Usage: "Snapshot of current broker holdings",
 	Flags: []cli.Flag{
-		&cli.BoolFlag{Name: "live", Usage: "Use live Zerodha API (default: dry-run mock mode)"},
+		&cli.BoolFlag{Name: "live", Usage: "Use live broker API (default: dry-run mock mode)"},
 	},
 	Action: runHoldings,
 }
@@ -29,16 +29,16 @@ var HoldingsCommand = &cli.Command{
 func runHoldings(ctx context.Context, c *cli.Command) error {
 	liveMode := c.Bool("live")
 
-	fmt.Println("====================================================================")
-	fmt.Println("                 Go Mycase Holdings Snapshot                     ")
+	mode := "DRY RUN / MOCK MODE"
 	if liveMode {
-		fmt.Println("                 [LIVE MODE]                                        ")
-	} else {
-		fmt.Println("                 [DRY RUN / MOCK MODE]                              ")
+		mode = "LIVE MODE"
 	}
-	fmt.Println("====================================================================")
+	render.Section(os.Stdout, fmt.Sprintf("Go Mycase Holdings Snapshot [%s]", mode))
 
-	b := zerodha.New(liveMode, "config/config.json")
+	b, err := newBroker(liveMode)
+	if err != nil {
+		return fmt.Errorf("creating broker: %w", err)
+	}
 
 	rawHoldings, err := b.GetHoldings()
 	if err != nil {
@@ -66,17 +66,22 @@ func runHoldings(ctx context.Context, c *cli.Command) error {
 		})
 	}
 
-	var uncategorizedHoldings []portfolio.Holding
+	var uncategorizedHoldings []broker.Holding
 	for _, h := range rawHoldings {
+		// Build ticker key using the holding's exchange prefix
+		tickerKey := h.Exchange + ":" + h.TradingSymbol
+		// India holdings may carry a series suffix (e.g. "-BE"); strip it for base-symbol matching.
 		baseSym := portfolio.StripSeriesSuffix(h.TradingSymbol)
-		keyNSE := "NSE:" + h.TradingSymbol
-		keyBSE := "BSE:" + h.TradingSymbol
 		baseKeyNSE := "NSE:" + baseSym
 		baseKeyBSE := "BSE:" + baseSym
 
 		matched := false
 		for i, g := range groups {
-			if g.Tickers[keyNSE] || g.Tickers[keyBSE] ||
+			// Match by primary exchange-prefixed key, common Indian exchange variants
+			// (incl. series-stripped base), US variant, or bare symbol.
+			if g.Tickers[tickerKey] ||
+				g.Tickers["NSE:"+h.TradingSymbol] || g.Tickers["BSE:"+h.TradingSymbol] ||
+				g.Tickers["US:"+h.TradingSymbol] ||
 				g.Tickers[baseKeyNSE] || g.Tickers[baseKeyBSE] ||
 				g.Tickers[h.TradingSymbol] || g.Tickers[baseSym] {
 				groups[i].Holdings = append(groups[i].Holdings, h)
@@ -89,32 +94,9 @@ func runHoldings(ctx context.Context, c *cli.Command) error {
 		}
 	}
 
-	// Enrich each theme with audited Triple Returns if portfolio.db is available
-	ltpMap := make(map[string]float64)
-	for _, h := range rawHoldings {
-		ltpMap[h.TradingSymbol] = h.LastPrice
-		ltpMap[portfolio.StripSeriesSuffix(h.TradingSymbol)] = h.LastPrice
-	}
-
-	if db, err := themereturn.OpenDB(""); err == nil {
-		defer db.Close()
-		for i, g := range groups {
-			if len(g.Holdings) == 0 {
-				continue
-			}
-			matched, mErr := themereturn.ResolveTheme(g.Name, g.CSVPath, "config/themes.json")
-			if mErr != nil {
-				continue
-			}
-			rep, rErr := themereturn.EvaluateThemeReturn(db, matched, ltpMap, themereturn.ThemeReturnOptions{
-				AccountID:        "CBR420",
-				IncludeLifecycle: true,
-			})
-			if rErr == nil && rep.ActiveInvestedValue > 0 {
-				groups[i].ReturnBanner = themereturn.RenderBanner(rep)
-			}
-		}
-	}
+	// Theme-return enrichment (India theme portfolios) is intentionally NOT wired
+	// into the live holdings view — it is dormant and reachable only via the
+	// `returns` command (cmd/returns.go). See docs/reconcile-main.md.
 
 	output := printer.RenderHoldingsSnapshot(rawHoldings, groups, uncategorizedHoldings)
 	fmt.Print(output)

@@ -133,7 +133,7 @@ func TestRunSimulation_NoNaNInResult(t *testing.T) {
 	portfolio, histData, benchData, fundamentals := makeSimData(300)
 	res, err := RunSimulation(portfolio, defaultParams(), histData, benchData, fundamentals, 100000.0)
 	if err != nil {
-		t.Skip("simulation returned error, skipping NaN check")
+		t.Fatalf("simulation returned unexpected error: %v", err)
 	}
 	checks := map[string]float64{
 		"InitialValue":    res.InitialValue,

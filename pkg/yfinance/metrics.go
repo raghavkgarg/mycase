@@ -2,6 +2,7 @@ package yfinance
 
 import (
 	"fmt"
+	"log/slog"
 	"math"
 	"sort"
 	"strings"
@@ -708,8 +709,11 @@ func CalculateCompositeRS(stockCloses, benchCloses []float64, tickerOpt ...strin
 		sanityNoticeMu.Unlock()
 
 		if !alreadyReported {
-			fmt.Printf("⚠️  [METRIC SANITY NOTICE%s] Extreme Composite RS detected: %+.1f%% (1M: %+.1f%%, 3M: %+.1f%%, 12M: %+.1f%%). Verify for unadjusted corporate actions / splits.\n",
-				tickerLabel, compositeRS*100.0, rs1m*100.0, rs3m*100.0, rs12m*100.0)
+			slog.Warn("metrics.composite_rs_extreme",
+				"ticker", strings.TrimSpace(tickerLabel),
+				"composite_rs_pct", compositeRS*100.0,
+				"rs_1m_pct", rs1m*100.0, "rs_3m_pct", rs3m*100.0, "rs_12m_pct", rs12m*100.0,
+				"note", "verify for unadjusted corporate actions / splits")
 		}
 	}
 
@@ -742,10 +746,7 @@ func CalculateVCPTightness(closes, opens []float64) (vcpRatio float64, isTight b
 	}
 
 	// 10-day short-term ATR
-	lookback10 := 10
-	if n < lookback10 {
-		lookback10 = n
-	}
+	lookback10 := min(n, 10)
 	sumTR10 := 0.0
 	for i := n - lookback10; i < n; i++ {
 		sumTR10 += calcNormalizedTR(i)
@@ -753,10 +754,7 @@ func CalculateVCPTightness(closes, opens []float64) (vcpRatio float64, isTight b
 	atr10 := sumTR10 / float64(lookback10)
 
 	// 60-day long-term ATR
-	lookback60 := 60
-	if n < lookback60 {
-		lookback60 = n
-	}
+	lookback60 := min(n, 60)
 	sumTR60 := 0.0
 	for i := n - lookback60; i < n; i++ {
 		sumTR60 += calcNormalizedTR(i)
@@ -827,10 +825,7 @@ func CalculateProximity52W(closes []float64) float64 {
 	if n == 0 {
 		return 0.0
 	}
-	lookback := 252
-	if n < lookback {
-		lookback = n
-	}
+	lookback := min(n, 252)
 
 	maxPrice := 0.0
 	for i := n - lookback; i < n; i++ {
@@ -931,10 +926,7 @@ func CalculateWinsorizedRVOLZScore(volumes []float64, shortWindow, longWindow in
 	}
 
 	// Calculate 20-day mean volume for winsorization cap
-	vol20Lookback := 20
-	if n < vol20Lookback {
-		vol20Lookback = n
-	}
+	vol20Lookback := min(n, 20)
 	sum20 := 0.0
 	for i := n - vol20Lookback; i < n; i++ {
 		sum20 += volumes[i]
@@ -943,7 +935,7 @@ func CalculateWinsorizedRVOLZScore(volumes []float64, shortWindow, longWindow in
 	volCap := winsorizeMult * mean20
 
 	cappedVols := make([]float64, n)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		if volCap > 0 && volumes[i] > volCap {
 			cappedVols[i] = volCap
 		} else {
@@ -988,10 +980,7 @@ func CalculateBaseDurationWeeks(closes []float64, zoneFloorPct float64) (weeks i
 		zoneFloorPct = 0.85
 	}
 
-	lookback := 252
-	if n < lookback {
-		lookback = n
-	}
+	lookback := min(n, 252)
 
 	maxPrice := 0.0
 	for i := n - lookback; i < n; i++ {
@@ -1048,10 +1037,7 @@ func CalculateSmoothedBenchmarkRegime(benchCloses []float64, period int, minFloo
 
 	// 2. Count sessions above 50-DMA over last 20 sessions
 	sessionsAbove := 0
-	evalWindow := 20
-	if n < evalWindow {
-		evalWindow = n
-	}
+	evalWindow := min(n, 20)
 	for i := n - evalWindow; i < n; i++ {
 		// Calculate rolling SMA at index i if possible, or compare to current SMA
 		if benchCloses[i] >= sma50 {
@@ -1147,5 +1133,3 @@ func IsEarningsBlackout(resultComingDate string, blackoutDays int) bool {
 
 	return false
 }
-
-

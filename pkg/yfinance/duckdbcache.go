@@ -10,12 +10,17 @@ import (
 
 var globalCache *cache.Cache
 
-// SetCache wires a DuckDB cache into the yfinance package.
-// Call once from main before running any commands.
-func SetCache(c *cache.Cache) { globalCache = c }
+// sourceYahoo is the provenance tag for data this package caches (Yahoo Finance).
+const sourceYahoo = "yahoo"
 
-// GetCache returns the active cache (nil if not set).
-func GetCache() *cache.Cache { return globalCache }
+// SetCache wires a DuckDB cache into the yfinance package for transparent
+// price/fundamentals caching. Also sets the global cache singleton.
+func SetCache(c *cache.Cache) {
+	globalCache = c
+	cache.SetGlobal(c)
+}
+
+// GetCache removed (Phase 10a): had zero callers. Non-yfinance code uses cache.GetDB().
 
 func checkPriceCache(ctx context.Context, ticker, rangeKey string) (*HistoricalData, bool) {
 	if globalCache == nil {
@@ -51,6 +56,7 @@ func storePriceCache(ctx context.Context, ticker, rangeKey string, hist *Histori
 			Close:     hist.Closes[i],
 			Open:      hist.Opens[i],
 			Volume:    hist.Volumes[i],
+			Source:    sourceYahoo,
 		}
 	}
 	_ = globalCache.StorePrices(ctx, ticker, rangeKey, records)
@@ -90,6 +96,7 @@ func storeDateRangeCache(ctx context.Context, ticker string, from, to time.Time,
 			Close:     hist.Closes[i],
 			Open:      hist.Opens[i],
 			Volume:    hist.Volumes[i],
+			Source:    sourceYahoo,
 		}
 	}
 	_ = globalCache.StorePricesByDateRange(ctx, ticker, from, to, records)
@@ -118,5 +125,5 @@ func storeFundamentalsCache(ctx context.Context, ticker string, f *Fundamentals)
 	if err != nil {
 		return
 	}
-	_ = globalCache.StoreFundamentalsJSON(ctx, ticker, data)
+	_ = globalCache.StoreFundamentalsJSON(ctx, ticker, data, sourceYahoo)
 }

@@ -1,36 +1,70 @@
 package config
 
-import "gopkg.in/yaml.v3"
+import (
+	"encoding/json"
+	"os"
+
+	"gopkg.in/yaml.v3"
+)
+
+// ScheduleConfig holds configuration for the autopilot scheduler.
+type ScheduleConfig struct {
+	Frequency       string   `yaml:"frequency"`         // "quarterly", "monthly", "drift-triggered"
+	Day             string   `yaml:"day"`               // "first_trading_day", "last_trading_day", or day number ("2", "15")
+	Notify          []string `yaml:"notify"`            // alert channels: ["telegram", "discord"]
+	AutoExecute     bool     `yaml:"auto_execute"`      // if true, skip confirmation (dangerous)
+	DriftTriggerPct float64  `yaml:"drift_trigger_pct"` // mid-cycle drift % that triggers early rebalance (0 = disabled)
+	ProposalTTLDays int      `yaml:"proposal_ttl_days"` // days before unconfirmed proposal expires (default 7)
+}
 
 // PipelineConfig holds the resolved pipeline configuration.
 type PipelineConfig struct {
-	Indices               []string `yaml:"indices"`
-	Files                 []string `yaml:"files"`
-	File                  string   `yaml:"file"`
-	Strategy              string   `yaml:"strategy"`
-	TopN                  int      `yaml:"top_n"`
-	GoldenCopyPath        string   `yaml:"golden_copy_path"`
-	Capital               int      `yaml:"capital"`
-	PurchaseDate          string   `yaml:"purchase_date"`
-	RebalanceTolerancePct float64  `yaml:"rebalance_tolerance_pct"`
-	HysteresisRankBuffer  int      `yaml:"hysteresis_rank_buffer"`
-	CooldownDays          int      `yaml:"cooldown_days"`
-	CooldownBypassRank    int      `yaml:"cooldown_bypass_rank"`
+	File                  string         `yaml:"file"`
+	Strategy              string         `yaml:"strategy"`
+	GoldenCopyPath        string         `yaml:"golden_copy_path"`
+	PurchaseDate          string         `yaml:"purchase_date"`
+	Broker                string         `yaml:"broker"`        // "zerodha" or "schwab"
+	SchwabConfig          string         `yaml:"schwab_config"` // path to schwab.json
+	SchwabToken           string         `yaml:"schwab_token"`  // path to schwab_token.json
+	Indices               []string       `yaml:"indices"`
+	Files                 []string       `yaml:"files"`
+	Schedule              ScheduleConfig `yaml:"schedule"`
+	TopN                  int            `yaml:"top_n"`
+	Capital               int            `yaml:"capital"`
+	RebalanceTolerancePct float64        `yaml:"rebalance_tolerance_pct"`
+	HysteresisRankBuffer  int            `yaml:"hysteresis_rank_buffer"`
+	CooldownDays          int            `yaml:"cooldown_days"`
+	CooldownBypassRank    int            `yaml:"cooldown_bypass_rank"`
+}
+
+// Snapshot returns a compact JSON snapshot of the resolved config, for recording
+// against a pipeline run (reproducibility / decomposition provenance). On the
+// unlikely marshal failure it returns "" so callers can treat it as best-effort.
+func (cfg PipelineConfig) Snapshot() string {
+	b, err := json.Marshal(cfg)
+	if err != nil {
+		return ""
+	}
+	return string(b)
 }
 
 type rawPipelineConfig struct {
-	Indices               []string `yaml:"indices"`
-	Files                 any      `yaml:"files"`
-	File                  any      `yaml:"file"`
-	Strategy              any      `yaml:"strategy"`
-	TopN                  any      `yaml:"top_n"`
-	GoldenCopyPath        any      `yaml:"golden_copy_path"`
-	Capital               any      `yaml:"capital"`
-	PurchaseDate          any      `yaml:"purchase_date"`
-	RebalanceTolerancePct any      `yaml:"rebalance_tolerance_pct"`
-	HysteresisRankBuffer  any      `yaml:"hysteresis_rank_buffer"`
-	CooldownDays          any      `yaml:"cooldown_days"`
-	CooldownBypassRank    any      `yaml:"cooldown_bypass_rank"`
+	Files                 any            `yaml:"files"`
+	File                  any            `yaml:"file"`
+	Strategy              any            `yaml:"strategy"`
+	TopN                  any            `yaml:"top_n"`
+	GoldenCopyPath        any            `yaml:"golden_copy_path"`
+	Capital               any            `yaml:"capital"`
+	PurchaseDate          any            `yaml:"purchase_date"`
+	RebalanceTolerancePct any            `yaml:"rebalance_tolerance_pct"`
+	HysteresisRankBuffer  any            `yaml:"hysteresis_rank_buffer"`
+	CooldownDays          any            `yaml:"cooldown_days"`
+	CooldownBypassRank    any            `yaml:"cooldown_bypass_rank"`
+	Broker                string         `yaml:"broker"`
+	SchwabConfig          string         `yaml:"schwab_config"`
+	SchwabToken           string         `yaml:"schwab_token"`
+	Indices               []string       `yaml:"indices"`
+	Schedule              ScheduleConfig `yaml:"schedule"`
 }
 
 // resolveFirst extracts T from val (which may be a scalar or a []any from multi-doc YAML).
@@ -126,6 +160,33 @@ func (cfg *PipelineConfig) UnmarshalYAML(value *yaml.Node) error {
 		buf = 5
 	}
 	cfg.HysteresisRankBuffer = buf
+	// Schedule config — struct fields are decoded directly by YAML, apply defaults.
+	cfg.Schedule = a.Schedule
+	if cfg.Schedule.Frequency == "" {
+		cfg.Schedule.Frequency = "quarterly"
+	}
+	if cfg.Schedule.Day == "" {
+		cfg.Schedule.Day = "first_trading_day"
+	}
+	if cfg.Schedule.ProposalTTLDays <= 0 {
+		cfg.Schedule.ProposalTTLDays = 7
+	}
+
+	// Broker config
+	cfg.Broker = a.Broker
+	if cfg.Broker == "" {
+		cfg.Broker = "zerodha"
+	}
+	cfg.SchwabConfig = a.SchwabConfig
+	if cfg.SchwabConfig == "" {
+		cfg.SchwabConfig = "config/schwab.json"
+	}
+	cfg.SchwabToken = a.SchwabToken
+	if cfg.SchwabToken == "" {
+		cfg.SchwabToken = "config/schwab_token.json"
+	}
+
+	// Anti-churn cooldown config (softer criterion for existing holdings).
 	cooldown := resolveFirst(a.CooldownDays, 30)
 	if cooldown < 0 {
 		cooldown = 30
@@ -137,4 +198,20 @@ func (cfg *PipelineConfig) UnmarshalYAML(value *yaml.Node) error {
 	}
 	cfg.CooldownBypassRank = bypass
 	return nil
+}
+
+// LoadPipelineConfig reads and parses a pipeline YAML config file.
+// Returns an error if the file cannot be opened or parsed.
+func LoadPipelineConfig(path string) (*PipelineConfig, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+
+	var cfg PipelineConfig
+	if err := yaml.NewDecoder(f).Decode(&cfg); err != nil {
+		return nil, err
+	}
+	return &cfg, nil
 }

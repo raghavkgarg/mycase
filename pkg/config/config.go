@@ -180,7 +180,7 @@ func updateCredentialsInFile(filePath string, cfg *Config) {
 		return
 	}
 
-	var raw map[string]interface{}
+	var raw map[string]any
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return
 	}
@@ -280,14 +280,12 @@ type MFSConfig struct {
 
 // HardFilters represents criteria constraints for stock picking pre-selection
 type HardFilters struct {
+	MinFCF                      *float64 `json:"min_fcf"`
 	MinMarketCap                float64  `json:"min_market_cap"`
 	MaxMarketCap                float64  `json:"max_market_cap"`
 	MinADV                      float64  `json:"min_adv"`
 	MinCFOPAT                   float64  `json:"min_cfo_pat"`
-	MinFCF                      *float64 `json:"min_fcf"`
 	MinPromoterPercent          float64  `json:"min_promoter_percent"`
-	CheckEarningsTrend          bool     `json:"check_earnings_trend"`
-	Check200DaySMA              bool     `json:"check_200day_sma"`
 	MaxPledgedPercent           float64  `json:"max_pledged_percent"`
 	MinROCE                     float64  `json:"min_roce"`
 	MaxDebtToEquity             float64  `json:"max_debt_to_equity"`
@@ -297,11 +295,9 @@ type HardFilters struct {
 	VolumeBreakoutLookbackDays  int      `json:"volume_breakout_lookback_days"`
 	VolumeBreakoutMultiplier    float64  `json:"volume_breakout_multiplier"`
 	MaxStocksPerSector          int      `json:"max_stocks_per_sector"`
-	MaxSectorWeightCap                 float64  `json:"max_sector_weight_cap"`
-	AllowCashOnSectorCapExhaustion     bool     `json:"allow_cash_on_sector_cap_exhaustion"`
+	MaxSectorWeightCap          float64  `json:"max_sector_weight_cap"`
 	PEGFloor                    float64  `json:"peg_floor"`
 	MaxPEG                      float64  `json:"max_peg"`
-	CheckGrossMargin            bool     `json:"check_gross_margin"`
 	MinRSPercentile             float64  `json:"min_rs_percentile"`
 	MinCROIC                    float64  `json:"min_croic"`
 	ScoreWeightRevAcc           float64  `json:"score_weight_rev_acc"`
@@ -325,25 +321,39 @@ type HardFilters struct {
 	ScoreWeightShareholderYield float64  `json:"score_weight_shareholder_yield"`
 	ScoreWeightSmartMoneyDelta  float64  `json:"score_weight_smart_money_delta"`
 	ScoreWeightMarginInflection float64  `json:"score_weight_margin_inflection"`
-	FundamentalsLagDays          int      `json:"fundamentals_lag_days"`
-	ShareholdingLagDays          int      `json:"shareholding_lag_days"`
-	DeliveryDataLagDays          int      `json:"delivery_data_lag_days"`
-	EarningsBlackoutDaysBefore   int      `json:"earnings_blackout_days_before"`
-	RegimeBenchmarkSMAPeriod     int      `json:"regime_benchmark_sma_period"`
-	RegimeMinConfidenceFloor     float64  `json:"regime_min_confidence_floor"`
-	MinEffectiveScoreThreshold   float64  `json:"min_effective_score_threshold"`
-	MinProximity52WHigh          float64  `json:"min_proximity_52w_high"`
-	MinBaseDurationWeeks         int      `json:"min_base_duration_weeks"`
-	RVOLWinsorizeMultiplier      float64  `json:"rvol_winsorize_multiplier"`
-	ScoreWeightIdiosyncraticRS   float64  `json:"score_weight_idiosyncratic_rs"`
-	ScoreWeightVCPTightness      float64  `json:"score_weight_vcp_tightness"`
-	ScoreWeightVolumeFootprint   float64  `json:"score_weight_volume_footprint"`
-	ScoreWeightDeliveryDelta     float64  `json:"score_weight_delivery_delta"`
-	ScoreWeightBaseVCP           float64  `json:"score_weight_base_vcp"`
-	ScoreWeightCompositeRS       float64  `json:"score_weight_composite_rs"`
-	ScoreWeightPocketPivot       float64  `json:"score_weight_pocket_pivot"`
-	ScoreWeightProximity52W      float64  `json:"score_weight_proximity_52w"`
-	ScoreWeightFundamentals      float64  `json:"score_weight_fundamentals"`
+
+	// US Quality-Momentum scoring weights
+	ScoreWeightROIC               float64 `json:"score_weight_roic"`
+	ScoreWeightFCFYieldUS         float64 `json:"score_weight_fcf_yield_us"`
+	ScoreWeightMomentum12M        float64 `json:"score_weight_momentum_12m"`
+	ScoreWeightEarningsQuality    float64 `json:"score_weight_earnings_quality"`
+	ScoreWeightShareholderYieldUS float64 `json:"score_weight_shareholder_yield_us"`
+	ScoreWeightLowVol             float64 `json:"score_weight_low_vol"`
+
+	// EBM / early-multibagger filters and scoring weights
+	FundamentalsLagDays            int     `json:"fundamentals_lag_days"`
+	ShareholdingLagDays            int     `json:"shareholding_lag_days"`
+	DeliveryDataLagDays            int     `json:"delivery_data_lag_days"`
+	EarningsBlackoutDaysBefore     int     `json:"earnings_blackout_days_before"`
+	RegimeBenchmarkSMAPeriod       int     `json:"regime_benchmark_sma_period"`
+	RegimeMinConfidenceFloor       float64 `json:"regime_min_confidence_floor"`
+	MinEffectiveScoreThreshold     float64 `json:"min_effective_score_threshold"`
+	MinProximity52WHigh            float64 `json:"min_proximity_52w_high"`
+	MinBaseDurationWeeks           int     `json:"min_base_duration_weeks"`
+	RVOLWinsorizeMultiplier        float64 `json:"rvol_winsorize_multiplier"`
+	ScoreWeightIdiosyncraticRS     float64 `json:"score_weight_idiosyncratic_rs"`
+	ScoreWeightVCPTightness        float64 `json:"score_weight_vcp_tightness"`
+	ScoreWeightVolumeFootprint     float64 `json:"score_weight_volume_footprint"`
+	ScoreWeightDeliveryDelta       float64 `json:"score_weight_delivery_delta"`
+	ScoreWeightBaseVCP             float64 `json:"score_weight_base_vcp"`
+	ScoreWeightCompositeRS         float64 `json:"score_weight_composite_rs"`
+	ScoreWeightPocketPivot         float64 `json:"score_weight_pocket_pivot"`
+	ScoreWeightProximity52W        float64 `json:"score_weight_proximity_52w"`
+	ScoreWeightFundamentals        float64 `json:"score_weight_fundamentals"`
+	CheckEarningsTrend             bool    `json:"check_earnings_trend"`
+	Check200DaySMA                 bool    `json:"check_200day_sma"`
+	AllowCashOnSectorCapExhaustion bool    `json:"allow_cash_on_sector_cap_exhaustion"`
+	CheckGrossMargin               bool    `json:"check_gross_margin"`
 }
 
 // MFSStrategies wrapper containing the mapping of strategies and filters
@@ -450,4 +460,39 @@ func LoadCSVLinks(filename string) (map[string]string, error) {
 		return nil, err
 	}
 	return links, nil
+}
+
+// UserDefaults holds user-level preference defaults loaded from config/defaults.json.
+// These provide convenience defaults for CLI flags; explicit flags always override.
+type UserDefaults struct {
+	Broker         string        `json:"broker"`
+	Market         string        `json:"market"`
+	Index          string        `json:"index"`
+	Method         string        `json:"method"`
+	Range          string        `json:"range"`
+	PipelineConfig string        `json:"pipeline_config"`
+	Logging        LoggingConfig `json:"logging"`
+	TopN           int           `json:"top_n"`
+}
+
+// LoggingConfig holds structured-logging defaults. CLI flags and env vars
+// (MYCASE_LOG_LEVEL, MYCASE_LOG_DIR) override these; see main.go wiring.
+type LoggingConfig struct {
+	File       *bool  `json:"file"`        // write JSON log file (default: true; pointer so absence != false)
+	Dir        string `json:"dir"`         // directory for JSON log files (default: data/logs)
+	Level      string `json:"level"`       // debug | info | warn | error (default: info)
+	RetainDays int    `json:"retain_days"` // days to keep log files (default: 14)
+}
+
+// LoadUserDefaults reads config/defaults.json and returns user preferences.
+// Returns zero-value defaults if the file doesn't exist or is malformed.
+func LoadUserDefaults(filename string) UserDefaults {
+	var defaults UserDefaults
+	file, err := os.Open(filename)
+	if err != nil {
+		return defaults
+	}
+	defer file.Close()
+	_ = json.NewDecoder(file).Decode(&defaults)
+	return defaults
 }

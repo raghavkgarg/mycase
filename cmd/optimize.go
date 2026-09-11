@@ -13,9 +13,11 @@ import (
 
 	"github.com/urfave/cli/v3"
 
+	"github.com/raghavkgarg/mycase/pkg/broker"
 	"github.com/raghavkgarg/mycase/pkg/config"
 	"github.com/raghavkgarg/mycase/pkg/csvloader"
 	"github.com/raghavkgarg/mycase/pkg/optimizer"
+	"github.com/raghavkgarg/mycase/pkg/render"
 	"github.com/raghavkgarg/mycase/pkg/yfinance"
 )
 
@@ -97,6 +99,7 @@ func runOptimizeWithParams(ctx context.Context, method, basketPath, removeTicker
 	}
 
 	fmt.Printf("\nFetching historical prices (%s) for %d tickers...\n", rangeStr, len(activeKeys))
+	router := newDataRouter()
 	priceHistory := make(map[string][]float64)
 	var mu sync.Mutex
 	var wg sync.WaitGroup
@@ -105,7 +108,7 @@ func runOptimizeWithParams(ctx context.Context, method, basketPath, removeTicker
 		wg.Add(1)
 		go func(t string) {
 			defer wg.Done()
-			prices, err := yfinance.FetchHistoricalPrices(ctx, t, rangeStr)
+			prices, err := router.FetchHistoricalPrices(ctx, t, rangeStr)
 			if err != nil {
 				fmt.Printf("Warning: Failed to fetch historical prices for %s: %v. Using fallback.\n", t, err)
 				return
@@ -119,10 +122,11 @@ func runOptimizeWithParams(ctx context.Context, method, basketPath, removeTicker
 
 	var benchmarkPrices []float64
 	if method != "volatility" {
-		fmt.Printf("Fetching historical benchmark prices for ^NSEI (%s)...\n", rangeStr)
-		benchmarkPrices, err = yfinance.FetchHistoricalPrices(ctx, "^NSEI", rangeStr)
+		benchmark := router.NormalizeBenchmarkSymbol(broker.LoadMarketConfig().Benchmark)
+		fmt.Printf("Fetching historical benchmark prices for %s (%s)...\n", benchmark, rangeStr)
+		benchmarkPrices, err = router.FetchHistoricalPrices(ctx, benchmark, rangeStr)
 		if err != nil {
-			fmt.Printf("Warning: Failed to fetch benchmark ^NSEI: %v. Falling back to volatility method.\n", err)
+			fmt.Printf("Warning: Failed to fetch benchmark %s: %v. Falling back to volatility method.\n", benchmark, err)
 			method = "volatility"
 		}
 	}
@@ -152,7 +156,8 @@ func runOptimizeWithParams(ctx context.Context, method, basketPath, removeTicker
 			MarketCap:        mfsCfg.MarketCap,
 			InsidersPercent:  mfsCfg.InsidersPercent,
 		}
-		fundamentals, err = yfinance.FetchFundamentals(ctx, activeKeys)
+		fmt.Printf("Fetching fundamentals...\n")
+		fundamentals, err = router.FetchFundamentals(ctx, activeKeys)
 		if err != nil {
 			fmt.Printf("Warning: Failed to fetch fundamentals: %v. Using fallbacks.\n", err)
 		}
@@ -203,27 +208,33 @@ func runOptimizeWithParams(ctx context.Context, method, basketPath, removeTicker
 		return newWeights[displayKeys[i]] > newWeights[displayKeys[j]]
 	})
 
-	fmt.Println("\n==========================================================")
+	title := "INVERSE-VOLATILITY WEIGHTS COMPARISON"
 	if method != "volatility" {
-		fmt.Printf("             MULTI-FACTOR WEIGHTS COMPARISON (%s)        \n", strings.ToUpper(method))
-	} else {
-		fmt.Println("             INVERSE-VOLATILITY WEIGHTS COMPARISON        ")
+		title = fmt.Sprintf("MULTI-FACTOR WEIGHTS COMPARISON (%s)", strings.ToUpper(method))
 	}
-	fmt.Println("==========================================================")
-	fmt.Printf("%-16s | %-12s | %-12s | %-10s\n", "Ticker", "Old Weight", "New Weight", "Change")
-	fmt.Println("----------------------------------------------------------")
+	render.Banner(os.Stdout, title)
 
 	var totalNewWeight float64
+	rows := make([][]string, 0, len(displayKeys))
 	for _, t := range displayKeys {
 		oldWt := basket[t]
 		newWt := newWeights[t]
 		diff := newWt - oldWt
 		totalNewWeight += newWt
-		fmt.Printf("%-16s | %-12.4f | %-12.4f | %-+10.4f\n", t, oldWt, newWt, diff)
+		rows = append(rows, []string{
+			t,
+			fmt.Sprintf("%.4f", oldWt),
+			fmt.Sprintf("%.4f", newWt),
+			fmt.Sprintf("%+.4f", diff),
+		})
 	}
-	fmt.Println("----------------------------------------------------------")
-	fmt.Printf("%-16s | %-12s | %-12.4f |\n", "Total Weight", "", totalNewWeight)
-	fmt.Println("==========================================================")
+	render.TableWithOpts(os.Stdout, render.TableOpts{
+		Headers: []string{"Ticker", "Old Weight", "New Weight", "Change"},
+		Rows:    rows,
+		Footer:  []string{"Total Weight", "", fmt.Sprintf("%.4f", totalNewWeight), ""},
+		Align:   []render.Alignment{render.AlignLeft, render.AlignRight, render.AlignRight, render.AlignRight},
+		Border:  render.BorderPipe,
+	})
 
 	outPath := basketPath
 	if !promote {

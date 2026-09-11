@@ -1,6 +1,6 @@
 package yfinance
 
-import "time"
+import "github.com/raghavkgarg/mycase/pkg/marketdata"
 
 // ChartResponse matches the Yahoo Finance chart endpoint response structure
 type ChartResponse struct {
@@ -156,70 +156,17 @@ type QuoteSummaryResponse struct {
 	} `json:"quoteSummary"`
 }
 
-// AnnualFinancial holds annual revenue and earnings
-type AnnualFinancial struct {
-	Year     int
-	Revenue  float64
-	Earnings float64
-}
-
-// Fundamentals represents key fundamental metrics retrieved from Yahoo Finance
-type Fundamentals struct {
-	PEGRatio                 float64
-	ROE                      float64
-	ForwardPE                float64
-	OperatingMargins         float64
-	PBRatio                  float64
-	NetDebtEBITDA            float64
-	MarketCap                float64
-	InsidersPercent          float64
-	HeldPercentInstitutions  float64
-	TTMRevenue               float64
-	OperatingCashflow        float64
-	FreeCashflow             float64
-	AverageVolume            float64
-	RegularPrice             float64
-	NetIncome                float64
-	Sector                   string
-	EarningsHistory          []AnnualFinancial
-	AnnualRevenue            []AnnualMetric
-	AnnualGrossProfit        []AnnualMetric
-	AnnualNetPPE             []AnnualMetric
-	AnnualAccountsReceivable []AnnualMetric
-	AnnualCapEx              []AnnualMetric
-	DebtToEquity             float64
-	TotalDebt                float64
-	PledgedPercent           float64
-	AnnualOperatingIncome    []AnnualMetric
-	AnnualTotalAssets        []AnnualMetric
-	AnnualCurrentLiabilities []AnnualMetric
-	AnnualInterestExpense    []AnnualMetric
-	ResultPrevComing         string
-	DeliveryPct              float64
-	DeliveryDate             string
-	DeliverableQty           float64
-}
-
-// AnnualMetric holds historical value with its date
-type AnnualMetric struct {
-	Date  string
-	Value float64
-}
-
-// IntradayData holds timestamp, open, and close prices for a stock
-type IntradayData struct {
-	Timestamps []int64
-	Opens      []float64
-	Closes     []float64
-}
-
-// HistoricalData holds daily timestamp, close, open, and volume data
-type HistoricalData struct {
-	Timestamps []int64
-	Closes     []float64
-	Opens      []float64
-	Volumes    []float64
-}
+// AnnualFinancial, AnnualMetric, Fundamentals, IntradayData, and HistoricalData
+// are the provider-agnostic market data types. They live in pkg/marketdata (a
+// zero-import leaf) so type-only consumers need not import yfinance (and thus the
+// cache) — see R16 P1. These aliases keep existing yfinance.* call sites working.
+type (
+	AnnualFinancial = marketdata.AnnualFinancial
+	AnnualMetric    = marketdata.AnnualMetric
+	Fundamentals    = marketdata.Fundamentals
+	IntradayData    = marketdata.IntradayData
+	HistoricalData  = marketdata.HistoricalData
+)
 
 // TimeseriesResponse matches Yahoo Finance ws/fundamentals-timeseries JSON structure
 type TimeseriesResponse struct {
@@ -287,61 +234,4 @@ type TimeseriesResponse struct {
 		} `json:"result"`
 		Error any `json:"error"`
 	} `json:"timeseries"`
-}
-
-// CleanIntradayNoiseAsOf discards in-progress or unconfirmed bars relative to asOf date and market close (15:45 IST).
-func (h *HistoricalData) CleanIntradayNoiseAsOf(asOf time.Time) {
-	if h == nil || len(h.Closes) == 0 || len(h.Timestamps) == 0 {
-		return
-	}
-	istLoc, err := time.LoadLocation("Asia/Kolkata")
-	if err != nil {
-		istLoc = time.FixedZone("IST", 5*3600+30*60)
-	}
-	asOfIST := asOf.In(istLoc)
-	if asOf.IsZero() {
-		asOfIST = time.Now().In(istLoc)
-	}
-
-	// 1. Truncate any bars that are strictly AFTER the asOf date
-	for len(h.Timestamps) > 0 {
-		lastTs := time.Unix(h.Timestamps[len(h.Timestamps)-1], 0).In(istLoc)
-		if lastTs.Truncate(24*time.Hour).After(asOfIST.Truncate(24*time.Hour)) {
-			h.truncateLast()
-			continue
-		}
-		break
-	}
-
-	// 2. If the last bar is on the SAME day as asOfIST:
-	if len(h.Timestamps) > 0 {
-		lastTs := time.Unix(h.Timestamps[len(h.Timestamps)-1], 0).In(istLoc)
-		if lastTs.Year() == asOfIST.Year() && lastTs.YearDay() == asOfIST.YearDay() {
-			// Market close is 15:30 IST + 15 min post-close settlement buffer = 15:45 IST
-			settlementCutoff := time.Date(asOfIST.Year(), asOfIST.Month(), asOfIST.Day(), 15, 45, 0, 0, istLoc)
-			if asOfIST.Before(settlementCutoff) {
-				h.truncateLast()
-			}
-		}
-	}
-}
-
-func (h *HistoricalData) truncateLast() {
-	if len(h.Closes) > 0 {
-		h.Closes = h.Closes[:len(h.Closes)-1]
-	}
-	if len(h.Opens) > 0 {
-		h.Opens = h.Opens[:len(h.Opens)-1]
-	}
-	if len(h.Volumes) > 0 {
-		h.Volumes = h.Volumes[:len(h.Volumes)-1]
-	}
-	if len(h.Timestamps) > 0 {
-		h.Timestamps = h.Timestamps[:len(h.Timestamps)-1]
-	}
-}
-
-// CleanIntradayNoise discards today's live bar if executed before 15:45 IST.
-func (h *HistoricalData) CleanIntradayNoise() {
-	h.CleanIntradayNoiseAsOf(time.Now())
 }

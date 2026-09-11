@@ -27,10 +27,7 @@ func RenderThemeReport(r *ThemeReturnReport, opts ThemeReturnOptions) string {
 	sb.WriteString("\n")
 	sb.WriteString("=======================================================================================================================\n")
 	title := fmt.Sprintf("AUDITED THEME PERFORMANCE & RETURN INTELLIGENCE: %s", strings.ToUpper(r.ThemeName))
-	pad := (119 - len(title)) / 2
-	if pad < 0 {
-		pad = 0
-	}
+	pad := max((119-len(title))/2, 0)
 	sb.WriteString(strings.Repeat(" ", pad))
 	sb.WriteString(title)
 	sb.WriteString("\n")

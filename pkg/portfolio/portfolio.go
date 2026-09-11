@@ -3,11 +3,14 @@ package portfolio
 import (
 	"strings"
 
-	"github.com/raghavkgarg/mycase/pkg/broker"
+	brokertypes "github.com/raghavkgarg/mycase/pkg/broker/types"
 )
 
 // Holding is a type alias kept for backward compatibility with printer and cmd packages.
-type Holding = broker.Holding
+// It aliases the leaf broker/types.Holding directly (not pkg/broker) so that portfolio
+// depends only on an L0 leaf, keeping it at L1 below its L2 consumers (optimizer,
+// broker/zerodha). See docs/reconcile-main.md + .kiro/steering/architecture.md.
+type Holding = brokertypes.Holding
 
 // KnownSeriesSuffixes lists standard Indian exchange series suffixes (NSE/BSE)
 // appended to tradingsymbols, such as Trade-to-Trade (-BE), Z-group (-BZ), SME (-SM, -ST), etc.

@@ -1,8 +1,10 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"math"
 	"net/http"
 	"os"
@@ -12,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/raghavkgarg/mycase/pkg/autopilot"
 	"github.com/raghavkgarg/mycase/pkg/backtest"
 	"github.com/raghavkgarg/mycase/pkg/broker"
 	"github.com/raghavkgarg/mycase/pkg/cache"
@@ -393,7 +396,7 @@ func (s *Server) handleMonitor(w http.ResponseWriter, r *http.Request) {
 		portfolio = append(portfolio, monitoring.StockInfo{Ticker: k, Weight: weights[k]})
 	}
 
-	params := monitorPresetParams(style)
+	params := monitoring.PresetParams(style, "")
 	params.MaxCapExYoYMultiplier = 2.0
 
 	ctx := r.Context()
@@ -406,7 +409,14 @@ func (s *Server) handleMonitor(w http.ResponseWriter, r *http.Request) {
 	)
 
 	wg.Go(func() {
-		b, ferr := yfinance.FetchHistoricalDataWithTimestamps(ctx, "^NSEI", "2y")
+		benchTicker := broker.LoadMarketConfig().Benchmark
+		var b *yfinance.HistoricalData
+		var ferr error
+		if s.router != nil {
+			b, ferr = s.router.FetchHistoricalDataWithTimestamps(ctx, s.router.NormalizeBenchmarkSymbol(benchTicker), "2y")
+		} else {
+			b, ferr = yfinance.FetchHistoricalDataWithTimestamps(ctx, benchTicker, "2y")
+		}
 		if ferr == nil && b != nil && len(b.Closes) >= 200 {
 			mu.Lock()
 			benchData = b
@@ -418,7 +428,13 @@ func (s *Server) handleMonitor(w http.ResponseWriter, r *http.Request) {
 		wg.Add(2)
 		go func(ticker string) {
 			defer wg.Done()
-			h, ferr := yfinance.FetchHistoricalDataWithTimestamps(ctx, ticker, "2y")
+			var h *yfinance.HistoricalData
+			var ferr error
+			if s.router != nil {
+				h, ferr = s.router.FetchHistoricalDataWithTimestamps(ctx, ticker, "2y")
+			} else {
+				h, ferr = yfinance.FetchHistoricalDataWithTimestamps(ctx, ticker, "2y")
+			}
 			if ferr == nil && h != nil && len(h.Closes) >= 200 {
 				mu.Lock()
 				liveHist[ticker] = h
@@ -427,7 +443,13 @@ func (s *Server) handleMonitor(w http.ResponseWriter, r *http.Request) {
 		}(t)
 		go func(ticker string) {
 			defer wg.Done()
-			funds, ferr := yfinance.FetchFundamentals(ctx, []string{ticker})
+			var funds map[string]yfinance.Fundamentals
+			var ferr error
+			if s.router != nil {
+				funds, ferr = s.router.FetchFundamentals(ctx, []string{ticker})
+			} else {
+				funds, ferr = yfinance.FetchFundamentals(ctx, []string{ticker})
+			}
 			if ferr == nil && len(funds) > 0 {
 				mu.Lock()
 				if val, ok := funds[ticker]; ok {
@@ -455,45 +477,15 @@ func (s *Server) handleMonitor(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, result)
 }
 
-// monitorPresetParams returns PolicyParams for the given style name.
-func monitorPresetParams(style string) monitoring.PolicyParams {
-	switch strings.ToLower(style) {
-	case "hyper-aggressive":
-		return monitoring.PolicyParams{
-			ConsecutiveQuartersExit:   1,
-			DSODeteriorationThreshold: 0.10,
-			SMADays:                   5,
-			RebalanceMonths:           3,
-			MaxWeightDrift:            0.12,
-		}
-	case "passive":
-		return monitoring.PolicyParams{
-			ConsecutiveQuartersExit:   3,
-			DSODeteriorationThreshold: 0.25,
-			SMADays:                   20,
-			RebalanceMonths:           12,
-			MaxWeightDrift:            0.20,
-		}
-	default:
-		return monitoring.PolicyParams{
-			ConsecutiveQuartersExit:   2,
-			DSODeteriorationThreshold: 0.15,
-			SMADays:                   10,
-			RebalanceMonths:           6,
-			MaxWeightDrift:            0.15,
-		}
-	}
-}
-
 // ── POST /api/portfolio/{name}/backtest ──────────────────────────────────────
 
 type backtestRequest struct {
 	From      string  `json:"from"`
 	To        string  `json:"to"`
 	Rebalance string  `json:"rebalance"`
+	Benchmark string  `json:"benchmark"`
 	Capital   float64 `json:"capital"`
 	Slippage  float64 `json:"slippage"` // percent, e.g. 0.1
-	Benchmark string  `json:"benchmark"`
 }
 
 func (s *Server) handleBacktest(w http.ResponseWriter, r *http.Request) {
@@ -539,7 +531,10 @@ func (s *Server) handleBacktest(w http.ResponseWriter, r *http.Request) {
 
 	benchmark := params.Benchmark
 	if benchmark == "" {
-		benchmark = "^NSEI"
+		benchmark = broker.LoadMarketConfig().Benchmark
+	}
+	if s.router != nil {
+		benchmark = s.router.NormalizeBenchmarkSymbol(benchmark)
 	}
 	capital := params.Capital
 	if capital <= 0 {
@@ -553,21 +548,33 @@ func (s *Server) handleBacktest(w http.ResponseWriter, r *http.Request) {
 
 	// Fetch price data concurrently.
 	type fetchResult struct {
-		ticker string
-		hist   *yfinance.HistoricalData
 		err    error
+		hist   *yfinance.HistoricalData
+		ticker string
 	}
 	ctx := r.Context()
 	resultCh := make(chan fetchResult, len(holdings)+1)
 
 	for _, h := range holdings {
 		go func(ticker string) {
-			hist, ferr := yfinance.FetchHistoricalByDateRange(ctx, ticker, fromTime, toTime)
+			var hist *yfinance.HistoricalData
+			var ferr error
+			if s.router != nil {
+				hist, ferr = s.router.FetchHistoricalByDateRange(ctx, ticker, fromTime, toTime)
+			} else {
+				hist, ferr = yfinance.FetchHistoricalByDateRange(ctx, ticker, fromTime, toTime)
+			}
 			resultCh <- fetchResult{ticker: ticker, hist: hist, err: ferr}
 		}(h.Ticker)
 	}
 	go func() {
-		hist, ferr := yfinance.FetchHistoricalByDateRange(ctx, benchmark, fromTime, toTime)
+		var hist *yfinance.HistoricalData
+		var ferr error
+		if s.router != nil {
+			hist, ferr = s.router.FetchHistoricalByDateRange(ctx, benchmark, fromTime, toTime)
+		} else {
+			hist, ferr = yfinance.FetchHistoricalByDateRange(ctx, benchmark, fromTime, toTime)
+		}
 		resultCh <- fetchResult{ticker: benchmark, hist: hist, err: ferr}
 	}()
 
@@ -731,11 +738,11 @@ func (s *Server) handleExecute(w http.ResponseWriter, r *http.Request) {
 	type placeResult struct {
 		Ticker    string  `json:"ticker"`
 		Action    string  `json:"action"`
+		OrderID   string  `json:"order_id,omitempty"`
+		Error     string  `json:"error,omitempty"`
 		Qty       int     `json:"qty"`
 		Price     float64 `json:"price"`
-		OrderID   string  `json:"order_id,omitempty"`
 		TriggerID int     `json:"trigger_id,omitempty"`
-		Error     string  `json:"error,omitempty"`
 	}
 
 	placed := make([]placeResult, 0, len(kept))
@@ -835,4 +842,170 @@ func (s *Server) handleDaemonHistory(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, state)
+}
+
+// ── /api/autopilot/* ──────────────────────────────────────────────────────────
+
+func (s *Server) handleAutopilotProposal(w http.ResponseWriter, r *http.Request) {
+	proposal, err := autopilot.LoadProposal()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load proposal: "+err.Error())
+		return
+	}
+	if proposal == nil {
+		writeJSON(w, map[string]any{"proposal": nil})
+		return
+	}
+	writeJSON(w, map[string]any{"proposal": proposal})
+}
+
+func (s *Server) handleAutopilotConfirm(w http.ResponseWriter, r *http.Request) {
+	proposal, err := autopilot.LoadProposal()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load proposal: "+err.Error())
+		return
+	}
+	if proposal == nil {
+		writeError(w, http.StatusNotFound, "no pending proposal")
+		return
+	}
+	if proposal.IsExpired() {
+		writeError(w, http.StatusGone, "proposal has expired")
+		return
+	}
+	if proposal.Status != autopilot.StatusPending {
+		writeError(w, http.StatusConflict, "proposal is not pending (status: "+proposal.Status+")")
+		return
+	}
+	if s.broker.IsMock() {
+		writeError(w, http.StatusForbidden, "cannot execute in mock mode — start server with --live")
+		return
+	}
+
+	// Execute orders from the proposal
+	var results []autopilot.OrderResult
+	for _, o := range proposal.Orders {
+		order := broker.Order{
+			TradingSymbol:   o.Ticker,
+			Exchange:        o.Exchange,
+			TransactionType: o.Action,
+			Quantity:        o.Quantity,
+			OrderType:       "LIMIT",
+			Product:         "CNC",
+			Price:           o.LimitPrice,
+		}
+		result, err := s.broker.PlaceOrder("regular", order)
+		if err != nil {
+			results = append(results, autopilot.OrderResult{
+				Ticker:  o.Ticker,
+				Action:  o.Action,
+				Success: false,
+				Error:   err.Error(),
+			})
+		} else {
+			results = append(results, autopilot.OrderResult{
+				Ticker:  o.Ticker,
+				Action:  o.Action,
+				OrderID: result.OrderID,
+				Success: true,
+			})
+		}
+		time.Sleep(200 * time.Millisecond) // throttle
+	}
+
+	// Update proposal with execution results
+	proposal.ExecutionLog = results
+	if err := autopilot.ConfirmProposal(proposal); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to confirm proposal: "+err.Error())
+		return
+	}
+
+	// Persist the executed basket as the "final" pipeline stage (roadmap Phase 9).
+	// Best-effort: a failure here must never fail an execution that already placed
+	// orders — the audit trail is secondary to the trade.
+	s.persistFinalStage(r.Context(), proposal)
+
+	// Archive
+	_ = autopilot.ArchiveProposal(proposal)
+
+	// Count results
+	successCount := 0
+	for _, r := range results {
+		if r.Success {
+			successCount++
+		}
+	}
+
+	writeJSON(w, map[string]any{
+		"status":  "confirmed",
+		"placed":  successCount,
+		"failed":  len(results) - successCount,
+		"results": results,
+	})
+}
+
+// persistFinalStage writes the executed basket back to the DuckDB proposals table
+// as stage="final" (roadmap Phase 9), closing the loop between what was proposed
+// (stage="optimized") and what was actually confirmed and submitted.
+//
+// The run is correlated by (portfolio, method) via cache.LatestRun — no run_id is
+// threaded through the confirm path, but the pipeline marks its run "completed" at
+// proposal-save time, so the just-generated run is the latest completed match.
+// proposal.Portfolio is a golden-copy path; pipeline_runs stores the basename
+// without the .csv extension, so it is normalized here to match.
+//
+// Entirely best-effort: any failure is logged and swallowed. It must never affect
+// an execution that has already placed live orders.
+func (s *Server) persistFinalStage(ctx context.Context, proposal *autopilot.Proposal) {
+	if s.cache == nil || proposal == nil {
+		return
+	}
+
+	finalProposals := autopilot.FinalStageProposals(proposal)
+	if len(finalProposals) == 0 {
+		return // no successfully-placed BUY orders — nothing to record
+	}
+
+	portfolio := strings.TrimSuffix(filepath.Base(proposal.Portfolio), ".csv")
+	run, err := s.cache.LatestRun(ctx, portfolio, proposal.Strategy)
+	if err != nil {
+		slog.WarnContext(ctx, "autopilot.final_stage_run_lookup_failed",
+			"portfolio", portfolio, "method", proposal.Strategy, "error", err.Error())
+		return
+	}
+
+	if err := s.cache.InsertProposals(ctx, run.RunID, "final", finalProposals); err != nil {
+		slog.WarnContext(ctx, "autopilot.final_stage_persist_failed",
+			"run_id", run.RunID, "error", err.Error())
+		return
+	}
+	slog.InfoContext(ctx, "autopilot.final_stage_persisted",
+		"run_id", run.RunID, "stocks", len(finalProposals))
+}
+
+func (s *Server) handleAutopilotDismiss(w http.ResponseWriter, r *http.Request) {
+	proposal, err := autopilot.LoadProposal()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load proposal: "+err.Error())
+		return
+	}
+	if proposal == nil {
+		writeError(w, http.StatusNotFound, "no pending proposal")
+		return
+	}
+	if proposal.Status != autopilot.StatusPending {
+		writeError(w, http.StatusConflict, "proposal is not pending (status: "+proposal.Status+")")
+		return
+	}
+
+	if err := autopilot.DismissProposal(proposal); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to dismiss: "+err.Error())
+		return
+	}
+	_ = autopilot.ArchiveProposal(proposal)
+
+	writeJSON(w, map[string]any{
+		"status": "dismissed",
+		"id":     proposal.ID,
+	})
 }

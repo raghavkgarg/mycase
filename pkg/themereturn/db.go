@@ -13,6 +13,8 @@ import (
 
 // DBTrade models a raw fill from portfolio.db.
 type DBTrade struct {
+	TradeDate          time.Time
+	OrderExecutionTime time.Time
 	TradeID            string
 	AccountID          string
 	Symbol             string
@@ -20,18 +22,16 @@ type DBTrade struct {
 	TradeType          string // "BUY", "SELL"
 	Quantity           int
 	Price              float64
-	TradeDate          time.Time
-	OrderExecutionTime time.Time
 	TotalCharges       float64
 }
 
 // DBClosedLot models a realized FIFO lot match.
 type DBClosedLot struct {
+	BuyDate      time.Time
+	SellDate     time.Time
 	MatchID      string
 	AccountID    string
 	Symbol       string
-	BuyDate      time.Time
-	SellDate     time.Time
 	Quantity     int
 	BuyPrice     float64
 	SellPrice    float64
@@ -40,18 +40,18 @@ type DBClosedLot struct {
 
 // DBDividend models a cash dividend credit.
 type DBDividend struct {
+	RecordDate     time.Time
 	DividendID     string
 	AccountID      string
 	Symbol         string
-	RecordDate     time.Time
 	AmountPerShare float64
 	TotalAmount    float64
 }
 
 // DBBenchmarkQuote models a dated closing price for index benchmarking.
 type DBBenchmarkQuote struct {
-	BenchmarkName string
 	TradeDate     time.Time
+	BenchmarkName string
 	ClosePrice    float64
 }
 
@@ -126,7 +126,7 @@ func (d *DB) QueryTrades(accountID string, symbols []string) ([]*DBTrade, error)
 	}
 
 	placeholders := make([]string, len(symbols))
-	args := make([]interface{}, 0, len(symbols)+1)
+	args := make([]any, 0, len(symbols)+1)
 	if accountID != "" {
 		args = append(args, accountID)
 	}
@@ -174,7 +174,7 @@ func (d *DB) QueryClosedLots(accountID string, symbols []string) ([]*DBClosedLot
 	}
 
 	placeholders := make([]string, len(symbols))
-	args := make([]interface{}, 0, len(symbols)+1)
+	args := make([]any, 0, len(symbols)+1)
 	if accountID != "" {
 		args = append(args, accountID)
 	}
@@ -222,7 +222,7 @@ func (d *DB) QueryDividends(accountID string, symbols []string) ([]*DBDividend, 
 	}
 
 	placeholders := make([]string, len(symbols))
-	args := make([]interface{}, 0, len(symbols)+1)
+	args := make([]any, 0, len(symbols)+1)
 	if accountID != "" {
 		args = append(args, accountID)
 	}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/csv"
 	"fmt"
+	"log/slog"
 	"maps"
 	"math"
 	"os"
@@ -26,7 +27,7 @@ func ScoreMultibagger(
 	fullHistory map[string]*yfinance.HistoricalData,
 	hardFilters *config.HardFilters,
 ) map[string]float64 {
-	fmt.Printf("Calculating 100-Point Multibagger Relative Scoring Matrix for %d candidates...\n", len(activeKeys))
+	slog.InfoContext(ctx, "score.multibagger_start", "candidates", len(activeKeys))
 
 	// Fetch 1-year benchmark prices for Relative Strength calculation
 	benchSym := GetBenchmarkSymbolForIndex("", activeKeys)
@@ -35,7 +36,7 @@ func ScoreMultibagger(
 	if bErr == nil && len(benchmark1y) >= 2 {
 		bench1yReturn = (benchmark1y[len(benchmark1y)-1] - benchmark1y[0]) / benchmark1y[0]
 	} else {
-		fmt.Printf("Warning: Failed to fetch 1y benchmark data: %v. Using 0%% benchmark return.\n", bErr)
+		slog.WarnContext(ctx, "score.benchmark_1y_failed", "err", bErr, "fallback_return", 0.0)
 	}
 
 	// Raw indicators for normalization
@@ -222,7 +223,7 @@ func ScoreValue(
 	fullHistory map[string]*yfinance.HistoricalData,
 	hardFilters *config.HardFilters,
 ) map[string]float64 {
-	fmt.Printf("Calculating 100-Point Large-Cap Value Relative Scoring Matrix for %d candidates...\n", len(activeKeys))
+	slog.InfoContext(ctx, "score.value_start", "candidates", len(activeKeys))
 
 	// Raw indicator maps
 	epvMOS := make(map[string]float64)
@@ -505,7 +506,7 @@ func SelectTopNValueWithCooldown(
 	if maxPerSector <= 0 {
 		maxPerSector = 3
 	}
-	fmt.Printf("Applying Value Strategy Sector Caps (max %d stocks per sector)...\n", maxPerSector)
+	slog.Info("select.value_sector_caps", "max_per_sector", maxPerSector)
 
 	var sectorCapCandidates []string
 	sectorCounts := make(map[string]int)
@@ -527,6 +528,17 @@ func SelectTopNValueWithCooldown(
 		}
 		driverStr := fmt.Sprintf("Forward PE: %.1f, FCF Yield: %.1f%%, Inst Stake: %.1f%%", f.ForwardPE, fcfY, f.HeldPercentInstitutions*100.0)
 		tracker.RecordAdditionDriver(t, driverStr)
+
+		dsoDelta := 0.0
+		if _, dsoPrev, dsoLatest := yfinance.CalculateDSO(&f); dsoPrev > 0 {
+			dsoDelta = (dsoLatest - dsoPrev) / dsoPrev
+		}
+		roceVal, _ := GetLatestROCE(&f)
+		tracker.RecordDriverMetrics(t, selectiontracker.DriverMetrics{
+			FCFYield: fcfY / 100.0,
+			DSODelta: dsoDelta,
+			ROIC:     roceVal,
+		})
 
 		if sectorCounts[sec] >= maxPerSector {
 			tracker.RecordSectorCapDrop(t, sec, sectorTopTickers[sec])
@@ -590,7 +602,7 @@ func NormalizeAndCapWeights(
 	}
 
 	// Iteratively enforce stockCap and sectorCap
-	for iter := 0; iter < 20; iter++ {
+	for range 20 {
 		// 1. Enforce Stock Cap
 		for _, k := range selectedKeys {
 			if weights[k] > stockCap {
@@ -637,7 +649,7 @@ func NormalizeValueWeights(
 	existingHoldings map[string]float64,
 	rebalanceTolerance float64,
 ) map[string]float64 {
-	fmt.Printf("Normalizing weights for selected top %d value stocks...\n", len(selectedKeys))
+	slog.Info("normalize.value_weights", "selected", len(selectedKeys))
 	finalWeights := make(map[string]float64)
 	var sumScore float64
 	for _, t := range selectedKeys {
@@ -700,7 +712,7 @@ func SelectTopNMultibaggerWithCooldown(
 	if maxPerSector <= 0 {
 		maxPerSector = 3
 	}
-	fmt.Printf("Applying Sector Caps (max %d stocks per sector)...\n", maxPerSector)
+	slog.Info("select.multibagger_sector_caps", "max_per_sector", maxPerSector)
 
 	// 1. Filter all activeKeys by sector caps to get valid candidates in ranked order
 	var sectorCapCandidates []string
@@ -725,6 +737,22 @@ func SelectTopNMultibaggerWithCooldown(
 		}
 		tracker.RecordAdditionDriver(t, driverStr)
 
+		fcfYield := 0.0
+		if f.MarketCap > 0 && f.FreeCashflow > 0 {
+			fcfYield = f.FreeCashflow / f.MarketCap
+		}
+		dsoDelta := 0.0
+		if _, dsoPrev, dsoLatest := yfinance.CalculateDSO(&f); dsoPrev > 0 {
+			dsoDelta = (dsoLatest - dsoPrev) / dsoPrev
+		}
+		tracker.RecordDriverMetrics(t, selectiontracker.DriverMetrics{
+			TTMGrowth:   ttmGrowth,
+			RevenueCAGR: cagr3y,
+			DSODelta:    dsoDelta,
+			FCFYield:    fcfYield,
+			ROIC:        roceVal,
+		})
+
 		if sectorCounts[sec] >= maxPerSector {
 			tracker.RecordSectorCapDrop(t, sec, sectorTopTickers[sec])
 			continue
@@ -736,7 +764,7 @@ func SelectTopNMultibaggerWithCooldown(
 
 	// 2. Apply hysteresis buffer selection with anti-churn cooldown
 	bufferLimit := topN + hysteresisBuffer
-	fmt.Printf("Applying Hysteresis Buffer Zone (Top %d target, existing kept up to rank %d)...\n", topN, bufferLimit)
+	slog.Info("select.multibagger_hysteresis", "top_n", topN, "buffer_limit", bufferLimit)
 	return ApplyHysteresisSelectionWithCooldown(sectorCapCandidates, existingHoldings, topN, bufferLimit, tracker, recentExits, cooldownDays, bypassRank)
 }
 
@@ -749,7 +777,7 @@ func NormalizeMultibaggerWeights(
 	existingHoldings map[string]float64,
 	rebalanceTolerance float64,
 ) map[string]float64 {
-	fmt.Printf("Normalizing weights for selected top %d stocks...\n", len(selectedKeys))
+	slog.Info("normalize.multibagger_weights", "selected", len(selectedKeys))
 	finalWeights := make(map[string]float64)
 	var sumScore float64
 	for _, t := range selectedKeys {
@@ -813,7 +841,7 @@ func SelectTopNStandardWithCooldown(
 	cooldownDays int,
 	bypassRank int,
 ) []string {
-	fmt.Printf("Scoring and ranking constituents...\n")
+	slog.Info("score.standard_start", "candidates", len(activeKeys))
 	allWeights := optimizer.OptimizeMultiFactor(activeKeys, slicedPriceHistory, benchmarkPrices, fundamentals, optWeights)
 
 	// Sort all tickers by raw score weights descending
@@ -829,7 +857,7 @@ func SelectTopNStandardWithCooldown(
 	}
 
 	bufferLimit := topN + hysteresisBuffer
-	fmt.Printf("Applying Hysteresis Buffer Zone (Top %d target, existing kept up to rank %d)...\n", topN, bufferLimit)
+	slog.Info("select.standard_hysteresis", "top_n", topN, "buffer_limit", bufferLimit)
 	return ApplyHysteresisSelectionWithCooldown(sortedKeys, existingHoldings, topN, bufferLimit, tracker, recentExits, cooldownDays, bypassRank)
 }
 
@@ -843,7 +871,7 @@ func NormalizeStandardWeights(
 	existingHoldings map[string]float64,
 	rebalanceTolerance float64,
 ) map[string]float64 {
-	fmt.Printf("Normalizing weights for selected top %d stocks...\n", len(selectedKeys))
+	slog.Info("normalize.standard_weights", "selected", len(selectedKeys))
 	finalWeights := optimizer.OptimizeMultiFactor(selectedKeys, slicedPriceHistory, benchmarkPrices, fundamentals, optWeights)
 
 	// Apply rebalancing band/tolerance
@@ -1122,7 +1150,7 @@ func ScoreEarlyMultibagger(
 	fullHistory map[string]*yfinance.HistoricalData,
 	hardFilters *config.HardFilters,
 ) map[string]float64 {
-	fmt.Printf("Calculating 100-Point Early-Multibagger Invariant Scoring Matrix for %d candidates...\n", len(activeKeys))
+	slog.InfoContext(ctx, "score.earlymb_start", "candidates", len(activeKeys))
 
 	// Fetch 1-year benchmark prices for Relative Strength calculation & Regime Sentry
 	benchSym := GetBenchmarkSymbolForIndex("", activeKeys)
@@ -1200,8 +1228,7 @@ func ScoreEarlyMultibagger(
 		p50 := scores[activeKeys[int(float64(nSurv)*0.50)]]
 		p40 := scores[activeKeys[int(float64(nSurv)*0.60)]]
 		p25 := scores[activeKeys[int(float64(nSurv)*0.75)]]
-		fmt.Printf("Stage-1 Survivors Score Distribution (%d stocks): P90=%.1f, P75=%.1f, P50=%.1f, P40=%.1f, P25=%.1f\n",
-			nSurv, p90, p75, p50, p40, p25)
+		slog.InfoContext(ctx, "score.earlymb_distribution", "survivors", nSurv, "p90", p90, "p75", p75, "p50", p50, "p40", p40, "p25", p25)
 	}
 
 	return scores
@@ -1260,13 +1287,13 @@ func SelectTopNEarlyMultibaggerWithCooldown(
 		benchCloses = benchHist.Closes
 	}
 	rRegime := yfinance.CalculateSmoothedBenchmarkRegime(benchCloses, regimePeriod, regimeFloor)
-	fmt.Printf("Market Regime Sentry: R_regime = %.4f (Min Effective Score Cutoff: %.1f)\n", rRegime, minEffectiveScore)
+	slog.Info("select.earlymb_regime_sentry", "r_regime", rRegime, "min_effective_score", minEffectiveScore)
 
 	maxPerSector := hardFilters.MaxStocksPerSector
 	if maxPerSector <= 0 {
 		maxPerSector = 5
 	}
-	fmt.Printf("Applying Sector Caps (max %d stocks per sector)...\n", maxPerSector)
+	slog.Info("select.earlymb_sector_caps", "max_per_sector", maxPerSector)
 
 	var sectorCapCandidates []string
 	sectorCounts := make(map[string]int)
@@ -1316,7 +1343,7 @@ func SelectTopNEarlyMultibaggerWithCooldown(
 	}
 
 	bufferLimit := topN + hysteresisBuffer
-	fmt.Printf("Applying Hysteresis Buffer Zone (Top %d target, existing kept up to rank %d)...\n", topN, bufferLimit)
+	slog.Info("select.earlymb_hysteresis", "top_n", topN, "buffer_limit", bufferLimit)
 	return ApplyHysteresisSelectionWithCooldown(sectorCapCandidates, existingHoldings, topN, bufferLimit, tracker, recentExits, cooldownDays, bypassRank)
 }
 
@@ -1331,4 +1358,3 @@ func NormalizeEarlyMultibaggerWeights(
 ) map[string]float64 {
 	return NormalizeMultibaggerWeights(selectedKeys, scores, fundamentals, hardFilters, existingHoldings, rebalanceTolerance)
 }
-

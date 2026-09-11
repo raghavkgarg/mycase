@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/exec"
@@ -17,8 +18,8 @@ import (
 // NSEResponse represents the JSON output from scripts/fetch_nse_data.py
 type NSEResponse struct {
 	Symbol    string   `json:"symbol"`
-	DatesOnly []string `json:"dates_only"`
 	Error     string   `json:"error,omitempty"`
+	DatesOnly []string `json:"dates_only"`
 }
 
 // FetchNselibEarningsDates fetches earnings & board meeting dates using the Python nselib CLI script.
@@ -184,9 +185,9 @@ type NSEDeliveryRecord struct {
 // NSEDeliverySymbolResult holds the delivery data payload for a single symbol
 type NSEDeliverySymbolResult struct {
 	Symbol       string              `json:"symbol"`
-	RecordsCount int                 `json:"records_count"`
-	Records      []NSEDeliveryRecord `json:"records"`
 	Error        string              `json:"error,omitempty"`
+	Records      []NSEDeliveryRecord `json:"records"`
+	RecordsCount int                 `json:"records_count"`
 }
 
 // FetchNselibDeliveryDataDetails fetches full delivery records (delivery %, deliverable qty, date) for tickers.
@@ -494,7 +495,7 @@ func FetchCustomerConcentrationData(ctx context.Context, tickers []string) (map[
 				if exitErr, ok := err.(*exec.ExitError); ok {
 					stderrStr = string(exitErr.Stderr)
 				}
-				fmt.Printf("[DEBUG] Command failed for %s: %v. Stderr: %s. Output: %s\n", cleanSym, err, stderrStr, string(out))
+				slog.DebugContext(subCtx, "screener.command_failed", "ticker", cleanSym, "err", err, "stderr", strings.TrimSpace(stderrStr))
 				resultMap[ticker] = "Metric Coverage Pending"
 				resultMap[cleanSym] = "Metric Coverage Pending"
 			}
@@ -504,4 +505,3 @@ func FetchCustomerConcentrationData(ctx context.Context, tickers []string) (map[
 
 	return resultMap, nil
 }
-

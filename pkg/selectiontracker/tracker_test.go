@@ -91,4 +91,3 @@ func TestTracker_RawAndEffectiveScoreConsistency(t *testing.T) {
 		t.Errorf("expected EffectiveScore %.4f, got %.4f", expectedEff, tracker.EffectiveScores["TEST2"])
 	}
 }
-

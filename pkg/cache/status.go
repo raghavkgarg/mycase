@@ -7,10 +7,10 @@ import (
 
 // StatusEntry summarises one cache entry for display.
 type StatusEntry struct {
+	FetchedAt time.Time
 	Kind      string // "prices" or "fundamentals"
 	Ticker    string
 	RangeKey  string
-	FetchedAt time.Time
 	Rows      int
 }
 

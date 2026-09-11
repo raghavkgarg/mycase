@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/csv"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -114,7 +115,6 @@ func checkFileContainsUSTickers(filePath string) bool {
 	return false
 }
 
-
 // GetBenchmarkSymbolForIndex determines the appropriate benchmark ticker for an index or active tickers.
 func GetBenchmarkSymbolForIndex(indexName string, tickers []string) string {
 	cleanIndex := strings.ToLower(indexName)
@@ -127,46 +127,42 @@ func GetBenchmarkSymbolForIndex(indexName string, tickers []string) string {
 	return yfinance.GetBenchmarkSymbol(tickers)
 }
 
-func loadLocalCSVConstituents(filePath string) ([]string, error) {
+func loadLocalCSVConstituents(filePath string) ([]string, map[string]string, error) {
 	if excel.IsXLSXFile(filePath) {
-		fmt.Printf("Detected Excel (.xlsx) file format in %s, auto-converting...\n", filePath)
+		slog.Info("constituents.xlsx_autoconvert", "path", filePath)
 		tmpCSV := filePath + ".converted.csv"
 		defer os.Remove(tmpCSV)
 		if _, err := excel.ConvertXLSXToCSV(filePath, tmpCSV); err != nil {
-			return nil, fmt.Errorf("auto-converting excel file: %w", err)
+			return nil, nil, fmt.Errorf("auto-converting excel file: %w", err)
 		}
 		filePath = tmpCSV
 	}
 
 	file, err := os.Open(filePath)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	defer file.Close()
 
 	reader := csv.NewReader(file)
 	records, err := reader.ReadAll()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	tickerIdx := -1
+	sectorIdx := -1
 	if len(records) > 0 {
-		for i, h := range records[0] {
-			hClean := strings.ToLower(strings.TrimSpace(h))
-			if hClean == "ticker" || hClean == "symbol" {
-				tickerIdx = i
-				break
-			}
-		}
+		tickerIdx, sectorIdx = findTickerAndSectorColumns(records[0])
 	}
 
 	if tickerIdx == -1 {
-		return nil, fmt.Errorf("could not find 'ticker' or 'symbol' column in the CSV")
+		return nil, nil, fmt.Errorf("could not find 'ticker' or 'symbol' column in the CSV")
 	}
 
 	isUSFile := IsUSIndex(filePath)
 	var tickers []string
+	sectors := make(map[string]string)
 	for _, record := range records[1:] {
 		if len(record) > tickerIdx {
 			ticker := strings.TrimSpace(record[tickerIdx])
@@ -182,54 +178,55 @@ func loadLocalCSVConstituents(filePath string) ([]string, error) {
 					}
 				}
 				tickers = append(tickers, ticker)
+				if sectorIdx != -1 && len(record) > sectorIdx {
+					if sec := strings.TrimSpace(record[sectorIdx]); sec != "" {
+						sectors[ticker] = sec
+					}
+				}
 			}
 		}
 	}
 
-	return tickers, nil
+	return tickers, sectors, nil
 }
 
-func downloadConstituents(indexName, url string) ([]string, error) {
+func downloadConstituents(indexName, url string) ([]string, map[string]string, error) {
 	client := &http.Client{Timeout: 15 * time.Second}
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("network error: %w", err)
+		return nil, nil, fmt.Errorf("network error: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("HTTP status: %d", resp.StatusCode)
+		return nil, nil, fmt.Errorf("HTTP status: %d", resp.StatusCode)
 	}
 
 	reader := csv.NewReader(resp.Body)
 	records, err := reader.ReadAll()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	symbolIdx := -1
+	sectorIdx := -1
 	if len(records) > 0 {
-		for i, h := range records[0] {
-			hClean := strings.ToLower(strings.TrimSpace(h))
-			if hClean == "symbol" || hClean == "ticker" {
-				symbolIdx = i
-				break
-			}
-		}
+		symbolIdx, sectorIdx = findTickerAndSectorColumns(records[0])
 	}
 
 	if symbolIdx == -1 {
-		return nil, fmt.Errorf("could not find 'Symbol' or 'Ticker' column in the CSV")
+		return nil, nil, fmt.Errorf("could not find 'Symbol' or 'Ticker' column in the CSV")
 	}
 
 	isUS := IsUSIndex(indexName) || IsUSIndex(url)
 	var tickers []string
+	sectors := make(map[string]string)
 	for _, record := range records[1:] {
 		if len(record) > symbolIdx {
 			sym := strings.TrimSpace(record[symbolIdx])
@@ -237,16 +234,44 @@ func downloadConstituents(indexName, url string) ([]string, error) {
 				if IsDummyTicker(sym) {
 					continue
 				}
+				var ticker string
 				if isUS {
-					tickers = append(tickers, "US:"+sym)
+					ticker = "US:" + sym
 				} else {
-					tickers = append(tickers, "NSE:"+sym)
+					ticker = "NSE:" + sym
+				}
+				tickers = append(tickers, ticker)
+				if sectorIdx != -1 && len(record) > sectorIdx {
+					if sec := strings.TrimSpace(record[sectorIdx]); sec != "" {
+						sectors[ticker] = sec
+					}
 				}
 			}
 		}
 	}
 
-	return tickers, nil
+	return tickers, sectors, nil
+}
+
+// findTickerAndSectorColumns locates the ticker/symbol column and an optional
+// sector column ("GICS Sector" or "Sector") in a CSV header row, case-insensitively.
+// Returns -1 for a column that is absent.
+func findTickerAndSectorColumns(header []string) (tickerIdx, sectorIdx int) {
+	tickerIdx, sectorIdx = -1, -1
+	for i, h := range header {
+		hClean := strings.ToLower(strings.TrimSpace(h))
+		switch hClean {
+		case "ticker", "symbol":
+			if tickerIdx == -1 {
+				tickerIdx = i
+			}
+		case "gics sector", "sector":
+			if sectorIdx == -1 {
+				sectorIdx = i
+			}
+		}
+	}
+	return tickerIdx, sectorIdx
 }
 
 // IsDummyTicker returns true if a ticker is an artificial corporate action or demerger placeholder.
@@ -258,15 +283,16 @@ func IsDummyTicker(ticker string) bool {
 // LoadConstituents loads constituent tickers from local file path or downloads them from web.
 func LoadConstituents(filePath, indexName string) (*TickersSource, error) {
 	if filePath != "" {
-		fmt.Printf("\nLoading constituents from custom file %s...\n", filePath)
-		tickers, err := loadLocalCSVConstituents(filePath)
+		slog.Info("constituents.load_file", "path", filePath)
+		tickers, sectors, err := loadLocalCSVConstituents(filePath)
 		if err != nil {
 			return nil, fmt.Errorf("failed to load custom file: %w", err)
 		}
-		fmt.Printf("Loaded %d constituents from file.\n", len(tickers))
+		slog.Info("constituents.loaded", "source", "file", "count", len(tickers))
 		return &TickersSource{
 			Name:    csvloader.GetUniverseName(filePath),
 			Tickers: tickers,
+			Sectors: sectors,
 		}, nil
 	}
 
@@ -283,6 +309,7 @@ func LoadConstituents(filePath, indexName string) (*TickersSource, error) {
 	}
 
 	var allTickers []string
+	allSectors := make(map[string]string)
 	seen := make(map[string]bool)
 
 	for _, rawIdx := range rawNames {
@@ -310,12 +337,12 @@ func LoadConstituents(filePath, indexName string) (*TickersSource, error) {
 				return nil, fmt.Errorf("unsupported index '%s'. Please check docs/stockpicker.md for the list of supported indices", subIdx)
 			}
 
-			fmt.Printf("\nDownloading index constituents for %s...\n", subIdx)
-			tickers, err := downloadConstituents(cleanIndex, url)
+			slog.Info("constituents.download", "index", subIdx)
+			tickers, sectors, err := downloadConstituents(cleanIndex, url)
 			if err != nil {
 				return nil, fmt.Errorf("failed to download index '%s': %w", subIdx, err)
 			}
-			fmt.Printf("Loaded %d constituents from %s.\n", len(tickers), subIdx)
+			slog.Info("constituents.loaded", "source", "download", "index", subIdx, "count", len(tickers))
 
 			for _, t := range tickers {
 				if !seen[t] {
@@ -323,10 +350,15 @@ func LoadConstituents(filePath, indexName string) (*TickersSource, error) {
 					allTickers = append(allTickers, t)
 				}
 			}
+			for t, sec := range sectors {
+				if _, ok := allSectors[t]; !ok {
+					allSectors[t] = sec
+				}
+			}
 		}
 	}
 
-	fmt.Printf("Total combined unique constituents: %d.\n", len(allTickers))
+	slog.Info("constituents.combined", "unique_count", len(allTickers))
 
 	displayName := indexName
 	if len(rawNames) > 1 {
@@ -336,6 +368,7 @@ func LoadConstituents(filePath, indexName string) (*TickersSource, error) {
 	return &TickersSource{
 		Name:    displayName,
 		Tickers: allTickers,
+		Sectors: allSectors,
 	}, nil
 }
 
@@ -343,14 +376,14 @@ func LoadConstituents(filePath, indexName string) (*TickersSource, error) {
 // with automatic retry passes and backoff for failed fetches.
 // Returns: (fullHistory, activeKeys, failedKeys)
 func FetchHistoricalPrices(ctx context.Context, rawTickers []string) (map[string]*yfinance.HistoricalData, []string, []string) {
-	fmt.Printf("\nFetching historical prices (1y) for constituents...\n")
+	slog.InfoContext(ctx, "prices.fetch_start", "range", "1y", "count", len(rawTickers))
 	type fetchJob struct {
 		ticker string
 	}
 	type fetchResult struct {
-		ticker string
-		hist   *yfinance.HistoricalData
 		err    error
+		hist   *yfinance.HistoricalData
+		ticker string
 	}
 
 	runBatch := func(tickers []string, workerCount int) ([]fetchResult, []string) {
@@ -403,8 +436,7 @@ func FetchHistoricalPrices(ctx context.Context, rawTickers []string) (map[string
 	backoffs := []time.Duration{1500 * time.Millisecond, 3000 * time.Millisecond}
 retryLoop:
 	for retry := 0; retry < maxRetries && len(pendingRetries) > 0; retry++ {
-		fmt.Printf("Retrying %d failed ticker fetches (attempt %d/%d after %v backoff)...\n",
-			len(pendingRetries), retry+1, maxRetries, backoffs[retry])
+		slog.WarnContext(ctx, "prices.retry", "pending", len(pendingRetries), "attempt", retry+1, "max", maxRetries, "backoff", backoffs[retry].String())
 		select {
 		case <-ctx.Done():
 			break retryLoop
@@ -423,34 +455,80 @@ retryLoop:
 	sort.Strings(activeKeys)
 	sort.Strings(failedKeys)
 
-	fmt.Printf("Successfully fetched historical data for %d / %d active tickers.\n", len(activeKeys), len(rawTickers))
+	slog.InfoContext(ctx, "prices.fetch_complete", "active", len(activeKeys), "total", len(rawTickers))
 
 	if len(failedKeys) > 0 {
 		failPct := float64(len(failedKeys)) * 100.0 / float64(len(rawTickers))
+		sampleCount := min(len(failedKeys), 10)
 		if failPct >= 5.0 {
-			fmt.Printf("\n========================================================================================\n")
-			fmt.Printf("🚨 [HARD WARNING: CRITICAL DATA FETCH FAILURE RATE: %.1f%% (%d / %d tickers)] 🚨\n",
-				failPct, len(failedKeys), len(rawTickers))
-			fmt.Printf("Over 5%% of index constituents failed historical price retrieval. Stage-1 candidate pool is incomplete!\n")
-			sampleCount := len(failedKeys)
-			if sampleCount > 10 {
-				sampleCount = 10
-			}
-			fmt.Printf("Failed sample (first 10): %s\n", strings.Join(failedKeys[:sampleCount], ", "))
-			fmt.Printf("========================================================================================\n\n")
+			slog.ErrorContext(ctx, "prices.fetch_failure_critical",
+				"fail_pct", failPct, "failed", len(failedKeys), "total", len(rawTickers),
+				"sample", strings.Join(failedKeys[:sampleCount], ","))
 		} else {
-			fmt.Printf("Notice: %d / %d tickers (%.1f%%) failed price fetch and will be tagged with DATA_FETCH_FAILED.\n",
-				len(failedKeys), len(rawTickers), failPct)
+			slog.WarnContext(ctx, "prices.fetch_failure",
+				"failed", len(failedKeys), "total", len(rawTickers), "fail_pct", failPct)
 		}
 	}
 
 	return fullHistory, activeKeys, failedKeys
 }
 
+// fetchHistoricalPricesWithFetcher is like FetchHistoricalPrices but routes through a DataFetcher.
+func fetchHistoricalPricesWithFetcher(ctx context.Context, fetcher DataFetcher, rawTickers []string) (map[string]*yfinance.HistoricalData, []string, []string) {
+	slog.InfoContext(ctx, "prices.fetch_start", "range", "1y", "count", len(rawTickers), "source", "router")
+	type fetchJob struct {
+		ticker string
+	}
+	type fetchResult struct {
+		err    error
+		hist   *yfinance.HistoricalData
+		ticker string
+	}
+
+	jobs := make(chan fetchJob, len(rawTickers))
+	results := make(chan fetchResult, len(rawTickers))
+	var wg sync.WaitGroup
+
+	workerCount := 15
+	for range workerCount {
+		wg.Go(func() {
+			for job := range jobs {
+				hist, err := fetcher.FetchHistoricalDataWithTimestamps(ctx, job.ticker, "1y")
+				results <- fetchResult{ticker: job.ticker, hist: hist, err: err}
+			}
+		})
+	}
+
+	for _, t := range rawTickers {
+		jobs <- fetchJob{ticker: t}
+	}
+	close(jobs)
+
+	go func() {
+		wg.Wait()
+		close(results)
+	}()
+
+	fullHistory := make(map[string]*yfinance.HistoricalData)
+	var activeKeys []string
+	var failedKeys []string
+	for res := range results {
+		if res.err == nil && res.hist != nil && len(res.hist.Closes) >= 2 {
+			fullHistory[res.ticker] = res.hist
+			activeKeys = append(activeKeys, res.ticker)
+		} else {
+			failedKeys = append(failedKeys, res.ticker)
+		}
+	}
+
+	slog.InfoContext(ctx, "prices.fetch_complete", "active", len(activeKeys), "total", len(rawTickers), "source", "router")
+	return fullHistory, activeKeys, failedKeys
+}
+
 // GetBenchmarkAndSlicedPrices fetches benchmark prices and aligns stock prices with benchmark range.
 func GetBenchmarkAndSlicedPrices(ctx context.Context, indexName string, activeKeys []string, fullHistory map[string]*yfinance.HistoricalData, rangeStr string) (map[string][]float64, []float64, error) {
 	benchSym := GetBenchmarkSymbolForIndex(indexName, activeKeys)
-	fmt.Printf("Fetching historical benchmark prices for %s (%s)...\n", benchSym, rangeStr)
+	slog.InfoContext(ctx, "pick.benchmark_fetch", "symbol", benchSym, "range", rangeStr)
 	benchmarkPrices, err := yfinance.FetchHistoricalPrices(ctx, benchSym, rangeStr)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to fetch benchmark %s: %w", benchSym, err)

@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"bufio"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -145,11 +146,8 @@ func TestPipelineCommand_Flags(t *testing.T) {
 	for _, ef := range expectedFlags {
 		found := false
 		for _, f := range flags {
-			for _, name := range f.Names() {
-				if name == ef {
-					found = true
-					break
-				}
+			if slices.Contains(f.Names(), ef) {
+				found = true
 			}
 		}
 		if !found {
@@ -170,13 +168,7 @@ func TestPipelineYesFlag_NoPromptsBlockExecution(t *testing.T) {
 	if yesFlag == nil {
 		t.Fatal("expected PipelineCommand to have 'yes' bool flag")
 	}
-	hasAliasY := false
-	for _, alias := range yesFlag.Aliases {
-		if alias == "y" {
-			hasAliasY = true
-			break
-		}
-	}
+	hasAliasY := slices.Contains(yesFlag.Aliases, "y")
 	if !hasAliasY {
 		t.Errorf("expected 'yes' flag to have alias 'y'")
 	}
@@ -187,3 +179,52 @@ func TestPipelineYesFlag_NoPromptsBlockExecution(t *testing.T) {
 	pipelineOfferToOpenReport(closedReader, "dummy_report.txt", true)
 }
 
+func TestFmtMetric(t *testing.T) {
+	cases := []struct {
+		v    float64
+		pct  bool
+		want string
+	}{
+		{v: 55.0, pct: false, want: "55.00"},   // RSI: plain number
+		{v: 0.22, pct: true, want: "22.00%"},   // momentum: fraction → percent
+		{v: 0.035, pct: true, want: "3.50%"},   // FCF yield
+		{v: -0.021, pct: true, want: "-2.10%"}, // negative fraction
+		{v: 0, pct: true, want: "0.00%"},
+	}
+	for _, tc := range cases {
+		if got := fmtMetric(tc.v, tc.pct); got != tc.want {
+			t.Errorf("fmtMetric(%v, %v) = %q; want %q", tc.v, tc.pct, got, tc.want)
+		}
+	}
+}
+
+func TestFmtMetricDelta(t *testing.T) {
+	cases := []struct {
+		d    float64
+		pct  bool
+		want string
+	}{
+		{d: 0.05, pct: true, want: "+5.00%"},   // positive momentum delta
+		{d: -0.03, pct: true, want: "-3.00%"},  // negative delta keeps sign
+		{d: 7.0, pct: false, want: "+7.00"},    // RSI delta, plain
+		{d: -12.5, pct: false, want: "-12.50"}, // negative RSI delta
+		{d: 0, pct: true, want: "+0.00%"},      // zero renders with + sign
+	}
+	for _, tc := range cases {
+		if got := fmtMetricDelta(tc.d, tc.pct); got != tc.want {
+			t.Errorf("fmtMetricDelta(%v, %v) = %q; want %q", tc.d, tc.pct, got, tc.want)
+		}
+	}
+}
+
+func TestPipelineDiffCmd_MetricsFlag(t *testing.T) {
+	var found bool
+	for _, f := range pipelineDiffCmd.Flags {
+		if slices.Contains(f.Names(), "metrics") {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("expected pipeline diff command to have --metrics flag")
+	}
+}

@@ -17,8 +17,8 @@ func TestStripSeriesSuffix(t *testing.T) {
 		{"E2E-BL", "E2E"},
 		{"E2E-BT", "E2E"},
 		{"E2E", "E2E"},
-		{"BAJAJ-AUTO", "BAJAJ-AUTO"},       // Preserves valid hyphenated symbol
-		{"BAJAJ-AUTO-BE", "BAJAJ-AUTO"},   // Hyphenated symbol with BE series
+		{"BAJAJ-AUTO", "BAJAJ-AUTO"},         // Preserves valid hyphenated symbol
+		{"BAJAJ-AUTO-BE", "BAJAJ-AUTO"},      // Hyphenated symbol with BE series
 		{"TATAMOTORS-DVR", "TATAMOTORS-DVR"}, // Preserves distinct DVR security
 		{"M&M", "M&M"},
 		{"", ""},

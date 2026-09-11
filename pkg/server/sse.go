@@ -14,8 +14,8 @@ import (
 // SSEBroadcaster manages Server-Sent Events subscriptions and broadcasts live quotes.
 type SSEBroadcaster struct {
 	clients map[chan string]struct{}
-	mu      sync.RWMutex
 	tickers []string
+	mu      sync.RWMutex
 	tickMu  sync.RWMutex
 }
 

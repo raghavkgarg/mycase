@@ -25,9 +25,9 @@ type AutoAuthParams struct {
 }
 
 type apiResponse struct {
-	Status  string                 `json:"status"`
-	Message string                 `json:"message"`
-	Data    map[string]interface{} `json:"data"`
+	Data    map[string]any `json:"data"`
+	Status  string         `json:"status"`
+	Message string         `json:"message"`
 }
 
 // PerformAutoLogin performs headless Zerodha login, generates TOTP dynamically,

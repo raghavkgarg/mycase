@@ -51,8 +51,8 @@ func LoadRecentExits(goldenBase string, existingHoldings map[string]float64, cut
 	bkMatches, err := filepath.Glob(filepath.Join(backupDir, "bk_*.csv"))
 	if err == nil && len(bkMatches) > 0 {
 		type bkFile struct {
-			path string
 			date time.Time
+			path string
 		}
 		var validBackups []bkFile
 		for _, bPath := range bkMatches {
@@ -148,10 +148,7 @@ func IsOnCooldown(ticker string, recentExits map[string]time.Time, rank int, byp
 		bypassRank = 5
 	}
 
-	daysSinceExit := int(asOf.Sub(exitDate).Hours() / 24)
-	if daysSinceExit < 0 {
-		daysSinceExit = 0
-	}
+	daysSinceExit := max(int(asOf.Sub(exitDate).Hours()/24), 0)
 
 	if daysSinceExit <= cooldownDays {
 		if rank <= bypassRank {

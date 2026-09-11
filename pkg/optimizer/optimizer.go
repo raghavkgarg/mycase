@@ -156,10 +156,7 @@ func CalculateMinimumRequiredOutflow(
 		}
 
 		currentQty := currentHoldings[symbol]
-		minQty := currentQty
-		if minQty < 1 {
-			minQty = 1
-		}
+		minQty := max(currentQty, 1)
 
 		tI := (float64(minQty) * ltp) / targetWeight
 		if tI > tMax {
@@ -182,10 +179,7 @@ func CalculateMinimumRequiredOutflow(
 		currentQty := currentHoldings[symbol]
 
 		targetQty := int((tMax*targetWeight)/ltp + 0.5)
-		minRequired := currentQty
-		if minRequired < 1 {
-			minRequired = 1
-		}
+		minRequired := max(currentQty, 1)
 		if targetQty < minRequired {
 			targetQty = minRequired
 		}

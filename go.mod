@@ -1,8 +1,10 @@
 module github.com/raghavkgarg/mycase
 
-go 1.26.5
+go 1.27.0
 
 require (
+	github.com/duckdb/duckdb-go/v2 v2.10503.0
+	github.com/google/uuid v1.6.0
 	github.com/urfave/cli/v3 v3.10.1
 	github.com/zerodha/gokiteconnect/v4 v4.4.2
 	gopkg.in/yaml.v3 v3.0.1
@@ -16,13 +18,11 @@ require (
 	github.com/duckdb/duckdb-go-bindings/lib/linux-amd64 v0.10503.0 // indirect
 	github.com/duckdb/duckdb-go-bindings/lib/linux-arm64 v0.10503.0 // indirect
 	github.com/duckdb/duckdb-go-bindings/lib/windows-amd64 v0.10503.0 // indirect
-	github.com/duckdb/duckdb-go/v2 v2.10503.0 // indirect
 	github.com/go-viper/mapstructure/v2 v2.5.0 // indirect
 	github.com/gocarina/gocsv v0.0.0-20260628180327-50907998929c // indirect
 	github.com/goccy/go-json v0.10.5 // indirect
 	github.com/google/flatbuffers v25.12.19+incompatible // indirect
 	github.com/google/go-querystring v1.0.0 // indirect
-	github.com/google/uuid v1.6.0 // indirect
 	github.com/klauspost/compress v1.18.3 // indirect
 	github.com/klauspost/cpuid/v2 v2.3.0 // indirect
 	github.com/pierrec/lz4/v4 v4.1.25 // indirect

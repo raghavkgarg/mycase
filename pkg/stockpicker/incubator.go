@@ -3,6 +3,7 @@ package stockpicker
 import (
 	"encoding/csv"
 	"fmt"
+	"log/slog"
 	"math"
 	"os"
 	"path/filepath"
@@ -122,7 +123,7 @@ func GenerateIncubatorWatchlist(
 				fmt.Sprintf("%.2f", c.BreakoutPivot),
 			})
 		}
-		fmt.Printf("Generated Pre-Breakout Incubator Watchlist (%d setups) -> %s\n", len(candidates), outPath)
+		slog.Info("incubator.watchlist_generated", "setups", len(candidates), "path", outPath)
 	}
 
 	return candidates, nil

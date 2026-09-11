@@ -15,9 +15,11 @@ import (
 	"github.com/urfave/cli/v3"
 	"gopkg.in/yaml.v3"
 
+	"github.com/raghavkgarg/mycase/pkg/broker"
 	"github.com/raghavkgarg/mycase/pkg/config"
 	"github.com/raghavkgarg/mycase/pkg/csvloader"
 	"github.com/raghavkgarg/mycase/pkg/monitoring"
+	"github.com/raghavkgarg/mycase/pkg/render"
 	"github.com/raghavkgarg/mycase/pkg/yfinance"
 )
 
@@ -100,7 +102,7 @@ func runMonitorWithParams(ctx context.Context, filePath string, interactive bool
 		activeStrategy = monitorGetPipelineStrategy()
 	}
 
-	params := monitorPresetParams(style, activeStrategy)
+	params := monitoring.PresetParams(style, activeStrategy)
 	params.StartDate = date
 
 	if interactive {
@@ -119,14 +121,17 @@ func runMonitorWithParams(ctx context.Context, filePath string, interactive bool
 	}
 	params.MaxCapExYoYMultiplier = maxCapEx
 
-	fmt.Printf("\nRunning simulation with parameters:\n")
-	fmt.Printf("- Strategy Policy: %s\n", strings.ToUpper(activeStrategy))
-	fmt.Printf("- Consecutive Quarters Exit: %d\n", params.ConsecutiveQuartersExit)
-	fmt.Printf("- DSO Deterioration Trigger: %.1f%%\n", params.DSODeteriorationThreshold*100.0)
-	fmt.Printf("- CapEx YoY Reinvestment Cap: %.2f\n", params.MaxCapExYoYMultiplier)
-	fmt.Printf("- SMA 200 Consecutive Days: %d\n", params.SMADays)
-	fmt.Printf("- Rebalance Frequency: Every %d months\n", params.RebalanceMonths)
-	fmt.Printf("- Max Weight Drift: %.1f%%\n\n", params.MaxWeightDrift*100.0)
+	render.Section(os.Stdout, "Running simulation with parameters")
+	render.KV(os.Stdout, []render.KVPair{
+		{Key: "Strategy Policy", Value: strings.ToUpper(activeStrategy)},
+		{Key: "Consecutive Quarters Exit", Value: fmt.Sprintf("%d", params.ConsecutiveQuartersExit)},
+		{Key: "DSO Deterioration Trigger", Value: fmt.Sprintf("%.1f%%", params.DSODeteriorationThreshold*100.0)},
+		{Key: "CapEx YoY Reinvestment Cap", Value: fmt.Sprintf("%.2f", params.MaxCapExYoYMultiplier)},
+		{Key: "SMA 200 Consecutive Days", Value: fmt.Sprintf("%d", params.SMADays)},
+		{Key: "Rebalance Frequency", Value: fmt.Sprintf("Every %d months", params.RebalanceMonths)},
+		{Key: "Max Weight Drift", Value: fmt.Sprintf("%.1f%%", params.MaxWeightDrift*100.0)},
+	})
+	fmt.Println()
 
 	fmt.Println("Fetching financial data and price histories...")
 	histData, benchData, fundamentals, mockedTickers, isMockUsed := monitorLoadAllData(ctx, tickers)
@@ -151,47 +156,8 @@ func runMonitorWithParams(ctx context.Context, filePath string, interactive bool
 	return nil
 }
 
-func monitorPresetParams(style, strategy string) monitoring.PolicyParams {
-	p := monitoring.PolicyParams{
-		Strategy: strategy,
-	}
-	isVal := strings.ToLower(strategy) == "value"
-	switch strings.ToLower(style) {
-	case "hyper-aggressive":
-		p.ConsecutiveQuartersExit = 1
-		p.DSODeteriorationThreshold = 0.10
-		p.SMADays = 5
-		p.RebalanceMonths = 3
-		p.MaxWeightDrift = 0.12
-		if isVal {
-			p.DSODeteriorationThreshold = 0.20
-		}
-	case "passive":
-		p.ConsecutiveQuartersExit = 3
-		p.DSODeteriorationThreshold = 0.25
-		p.SMADays = 20
-		p.RebalanceMonths = 12
-		p.MaxWeightDrift = 0.20
-		if isVal {
-			p.DSODeteriorationThreshold = 0.35
-		}
-	default:
-		p.ConsecutiveQuartersExit = 2
-		p.DSODeteriorationThreshold = 0.15
-		p.SMADays = 10
-		p.RebalanceMonths = 6
-		p.MaxWeightDrift = 0.15
-		if isVal {
-			p.DSODeteriorationThreshold = 0.30
-		}
-	}
-	return p
-}
-
 func monitorInteractiveMenu(defaults monitoring.PolicyParams) monitoring.PolicyParams {
-	fmt.Println("=====================================================")
-	fmt.Println("        PORTFOLIO MONITORING POLICY SIMULATOR        ")
-	fmt.Println("=====================================================")
+	render.Banner(os.Stdout, "PORTFOLIO MONITORING POLICY SIMULATOR")
 	fmt.Println("Choose a monitoring style:")
 	fmt.Println("1. Hyper-Aggressive (Strict triggers, frequent rebalancing)")
 	fmt.Println("2. Moderate / Balanced (Standard guidelines, 6m rebalance) [Default]")
@@ -205,9 +171,9 @@ func monitorInteractiveMenu(defaults monitoring.PolicyParams) monitoring.PolicyP
 
 	switch choice {
 	case 1:
-		return monitorPresetParams("hyper-aggressive", defaults.Strategy)
+		return monitoring.PresetParams("hyper-aggressive", defaults.Strategy)
 	case 3:
-		return monitorPresetParams("passive", defaults.Strategy)
+		return monitoring.PresetParams("passive", defaults.Strategy)
 	case 4:
 		var quarters, smaDays, rebalanceMonths int
 		var dsoDeterioration, maxDrift float64
@@ -246,7 +212,7 @@ func monitorInteractiveMenu(defaults monitoring.PolicyParams) monitoring.PolicyP
 			MaxWeightDrift:            maxDrift / 100.0,
 		}
 	default:
-		return monitorPresetParams("moderate", defaults.Strategy)
+		return monitoring.PresetParams("moderate", defaults.Strategy)
 	}
 }
 
@@ -257,12 +223,14 @@ func monitorLoadAllData(ctx context.Context, tickers []string) (
 	map[string]bool,
 	bool,
 ) {
+	router := newDataRouter()
 	var benchData *yfinance.HistoricalData
 	var mu sync.Mutex
 	var wg sync.WaitGroup
 
 	wg.Go(func() {
-		b, err := yfinance.FetchHistoricalDataWithTimestamps(ctx, "^NSEI", "2y")
+		benchTicker := router.NormalizeBenchmarkSymbol(broker.LoadMarketConfig().Benchmark)
+		b, err := router.FetchHistoricalDataWithTimestamps(ctx, benchTicker, "2y")
 		if err == nil && b != nil && len(b.Closes) > 200 {
 			mu.Lock()
 			benchData = b
@@ -277,7 +245,7 @@ func monitorLoadAllData(ctx context.Context, tickers []string) (
 		wg.Add(2)
 		go func(ticker string) {
 			defer wg.Done()
-			h, err := yfinance.FetchHistoricalDataWithTimestamps(ctx, ticker, "2y")
+			h, err := router.FetchHistoricalDataWithTimestamps(ctx, ticker, "2y")
 			if err == nil && h != nil && len(h.Closes) > 200 {
 				mu.Lock()
 				liveHist[ticker] = h
@@ -286,7 +254,7 @@ func monitorLoadAllData(ctx context.Context, tickers []string) (
 		}(t)
 		go func(ticker string) {
 			defer wg.Done()
-			funds, err := yfinance.FetchFundamentals(ctx, []string{ticker})
+			funds, err := router.FetchFundamentals(ctx, []string{ticker})
 			if err == nil && len(funds) > 0 {
 				mu.Lock()
 				if val, ok := funds[ticker]; ok {
@@ -325,44 +293,55 @@ func generateMonitorReport(res monitoring.SimulationResult, inputPath string, st
 	}
 
 	fmt.Fprintln(writer)
-	fmt.Fprintf(writer, "=========================================================================\n")
-	fmt.Fprintf(writer, "             Portfolio Monitoring Simulation Report                      \n")
-	fmt.Fprintf(writer, "=========================================================================\n")
-	fmt.Fprintf(writer, "File:             %s\n", inputPath)
-	fmt.Fprintf(writer, "Policy Preset:    %s\n", strings.ToUpper(style[:1])+style[1:])
+	render.Banner(writer, "Portfolio Monitoring Simulation Report")
+	scope := "1 Year Historical Backtest"
 	if params.StartDate != "" {
-		fmt.Fprintf(writer, "Simulated Scope:  From %s to Present\n", params.StartDate)
-	} else {
-		fmt.Fprintf(writer, "Simulated Scope:  1 Year Historical Backtest\n")
+		scope = fmt.Sprintf("From %s to Present", params.StartDate)
 	}
-	fmt.Fprintf(writer, "Output File:      %s\n", outReportPath)
+	dataMode := "✅ Live Yahoo Finance Data"
 	if isMockUsed {
-		fmt.Fprintf(writer, "Data Mode:        ⚠️ High-Fidelity Mock Fallback\n")
-	} else {
-		fmt.Fprintf(writer, "Data Mode:        ✅ Live Yahoo Finance Data\n")
+		dataMode = "⚠️ High-Fidelity Mock Fallback"
 	}
-	fmt.Fprintf(writer, "=========================================================================\n\n")
+	render.KV(writer, []render.KVPair{
+		{Key: "File", Value: inputPath},
+		{Key: "Policy Preset", Value: strings.ToUpper(style[:1]) + style[1:]},
+		{Key: "Simulated Scope", Value: scope},
+		{Key: "Output File", Value: outReportPath},
+		{Key: "Data Mode", Value: dataMode},
+	})
+	fmt.Fprintln(writer)
 
-	fmt.Fprintf(writer, "%-15s | %-13s | %-12s | %-14s | %-13s | %-18s | %-11s | %-14s\n",
-		"Ticker", "Sector", "3Y CAGR (%)", "TTM Growth (%)", "DSO Delta (%)", "Cap Stall Severity", "Data Source", "Policy Verdict")
-	fmt.Fprintf(writer, "-------------------------------------------------------------------------------------------------------------------------------------\n")
-
+	rows := make([][]string, 0, len(res.Verdicts))
 	for _, v := range res.Verdicts {
 		sect := v.Sector
 		if len(sect) > 13 {
 			sect = sect[:13]
 		}
-		fmt.Fprintf(writer, "%-15s | %-13s | %-12.1f | %-14.1f | %-13.1f | %-18s | %-11s | %-14s\n",
-			v.Ticker, sect, v.CAGR3Y, v.TTMGrowth, v.DSODelta, v.CapStallSeverity, v.DataSource, v.Verdict)
+		rows = append(rows, []string{
+			v.Ticker, sect,
+			fmt.Sprintf("%.1f", v.CAGR3Y),
+			fmt.Sprintf("%.1f", v.TTMGrowth),
+			fmt.Sprintf("%.1f", v.DSODelta),
+			v.CapStallSeverity, v.DataSource, v.Verdict,
+		})
 	}
-
-	fmt.Fprintf(writer, "-------------------------------------------------------------------------------------------------------------------------------------\n\n")
-	fmt.Fprintf(writer, "SIMULATED CHURN RATE\n%.1f%%\n\n", res.ChurnRate)
-	fmt.Fprintf(writer, "ALPHA EFFICIENCY\n%.2f\n\n", res.AlphaEfficiency)
-	fmt.Fprintf(writer, "PORTFOLIO RETURN:   %+.2f%%\n", res.PortfolioReturn)
-	fmt.Fprintf(writer, "BENCHMARK RETURN:   %+.2f%%\n", res.BenchmarkReturn)
-	fmt.Fprintf(writer, "EXCESS RETURN (α):  %+.2f%%\n", res.ExcessReturn)
-	fmt.Fprintf(writer, "=========================================================================\n")
+	render.TableWithOpts(writer, render.TableOpts{
+		Headers: []string{"Ticker", "Sector", "3Y CAGR (%)", "TTM Growth (%)", "DSO Delta (%)", "Cap Stall Severity", "Data Source", "Policy Verdict"},
+		Rows:    rows,
+		Align: []render.Alignment{
+			render.AlignLeft, render.AlignLeft, render.AlignRight, render.AlignRight,
+			render.AlignRight, render.AlignLeft, render.AlignLeft, render.AlignLeft,
+		},
+		Border: render.BorderPipe,
+	})
+	fmt.Fprintln(writer)
+	render.KV(writer, []render.KVPair{
+		{Key: "Simulated Churn Rate", Value: fmt.Sprintf("%.1f%%", res.ChurnRate)},
+		{Key: "Alpha Efficiency", Value: fmt.Sprintf("%.2f", res.AlphaEfficiency)},
+		{Key: "Portfolio Return", Value: render.PnLPct(res.PortfolioReturn)},
+		{Key: "Benchmark Return", Value: render.PnLPct(res.BenchmarkReturn)},
+		{Key: "Excess Return (α)", Value: render.PnLPct(res.ExcessReturn)},
+	})
 }
 
 func monitorPromptTimeframeChoice() string {
