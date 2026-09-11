@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"time"
 
 	"github.com/raghavkgarg/mycase/pkg/selectiontracker"
 	"github.com/raghavkgarg/mycase/pkg/yfinance"
@@ -63,7 +64,7 @@ func GenerateIncubatorWatchlist(
 				}
 			}
 		}
-		delivDelta := (f.DeliveryPct / 100.0) - 0.35
+		delivDelta, _, _, _ := yfinance.GetDeliveryDelta(f.DeliveryHistory, time.Now(), 1)
 
 		candidates = append(candidates, IncubatorCandidate{
 			Ticker:         t,

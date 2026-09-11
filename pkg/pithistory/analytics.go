@@ -20,6 +20,8 @@ type RunSummaryRow struct {
 
 type CandidateHistoryRow struct {
 	AsOfDate       string  `json:"as_of_date"`
+	IndexName      string  `json:"index_name"`
+	Method         string  `json:"method"`
 	RawScore       float64 `json:"raw_score"`
 	EffectiveScore float64 `json:"effective_score"`
 	CompositeRS    float64 `json:"composite_rs"`
@@ -127,6 +129,8 @@ func (p *DB) GetCandidateHistory(ctx context.Context, ticker string, limit int) 
 	query := `
 SELECT 
     strftime(as_of_date, '%Y-%m-%d'),
+    index_name,
+    method,
     passed_stage1,
     raw_score,
     effective_score,
@@ -139,7 +143,7 @@ SELECT
     final_weight
 FROM pit_candidate_scores
 WHERE ticker = ?
-ORDER BY as_of_date DESC
+ORDER BY as_of_date DESC, method ASC
 LIMIT ?;
 `
 	rows, err := p.db.QueryContext(ctx, query, ticker, limit)
@@ -153,6 +157,8 @@ LIMIT ?;
 		var r CandidateHistoryRow
 		if err := rows.Scan(
 			&r.AsOfDate,
+			&r.IndexName,
+			&r.Method,
 			&r.PassedStage1,
 			&r.RawScore,
 			&r.EffectiveScore,

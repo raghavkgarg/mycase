@@ -11,6 +11,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/raghavkgarg/mycase/pkg/marketdata"
 )
 
 // FetchCookieAndCrumb requests fc.yahoo.com for cookie and query2 getcrumb for crumb
@@ -356,20 +358,24 @@ func FetchFundamentals(ctx context.Context, tickers []string) (map[string]Fundam
 				dlyPct := 0.0
 				dlyDate := ""
 				dlyQty := 0.0
+				var dlyHistory []marketdata.DeliveryRecord
 				if strings.HasPrefix(job.ticker, "NSE:") || strings.HasPrefix(job.ticker, "BSE:") || strings.HasSuffix(job.ticker, ".NS") || strings.HasSuffix(job.ticker, ".BO") {
 					if sDates, err := FetchScreenerEarningsDates(ctx, job.ticker); err == nil && len(sDates) > 0 {
 						allDates = append(allDates, sDates...)
 					}
-					if delDetails, err := FetchNselibDeliveryDataDetails(ctx, []string{job.ticker}); err == nil {
+					if delSeries, err := FetchNselibDeliveryDataSeries(ctx, []string{job.ticker}); err == nil {
 						cleanSym := strings.TrimSuffix(strings.TrimPrefix(strings.TrimPrefix(job.ticker, "NSE:"), "BSE:"), ".NS")
-						if rec, ok := delDetails[job.ticker]; ok {
-							dlyPct = rec.DeliveryPct
-							dlyDate = rec.Date
-							dlyQty = rec.DeliverableQty
-						} else if rec, ok := delDetails[cleanSym]; ok {
-							dlyPct = rec.DeliveryPct
-							dlyDate = rec.Date
-							dlyQty = rec.DeliverableQty
+						var series []NSEDeliveryRecord
+						if s, ok := delSeries[job.ticker]; ok {
+							series = s
+						} else if s, ok := delSeries[cleanSym]; ok {
+							series = s
+						}
+						if len(series) > 0 {
+							dlyHistory = series
+							dlyPct = series[0].DeliveryPct
+							dlyDate = series[0].Date
+							dlyQty = series[0].DeliverableQty
 						}
 					}
 				}
@@ -409,6 +415,7 @@ func FetchFundamentals(ctx context.Context, tickers []string) (map[string]Fundam
 					DeliveryPct:              dlyPct,
 					DeliveryDate:             dlyDate,
 					DeliverableQty:           dlyQty,
+					DeliveryHistory:          dlyHistory,
 				}
 
 				results <- fetchResult{ticker: job.ticker, fund: fund}

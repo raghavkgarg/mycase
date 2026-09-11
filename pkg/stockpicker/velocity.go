@@ -4,6 +4,7 @@ import (
 	"log/slog"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/raghavkgarg/mycase/pkg/yfinance"
 )
@@ -89,7 +90,7 @@ func ApplyPITVelocityBoost(
 		if raw <= 0 {
 			continue
 		}
-		delivDelta := (fundamentals[t].DeliveryPct / 100.0) - 0.35
+		delivDelta, _, _, _ := yfinance.GetDeliveryDelta(fundamentals[t].DeliveryHistory, time.Now(), 1)
 		tv, exists := velocities[t]
 		if !exists {
 			continue

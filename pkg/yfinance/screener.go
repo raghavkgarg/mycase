@@ -12,6 +12,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/raghavkgarg/mycase/pkg/marketdata"
 )
 
 // NSEResponse represents the JSON output from scripts/fetch_nse_data.py
@@ -174,12 +176,7 @@ func FetchScreenerEarningsDates(ctx context.Context, ticker string) ([]time.Time
 }
 
 // NSEDeliveryRecord represents a single day's deliverable position record from nselib
-type NSEDeliveryRecord struct {
-	Date           string  `json:"date"`
-	ClosePrice     float64 `json:"close_price"`
-	DeliverableQty float64 `json:"deliverable_qty"`
-	DeliveryPct    float64 `json:"delivery_pct"`
-}
+type NSEDeliveryRecord = marketdata.DeliveryRecord
 
 // NSEDeliverySymbolResult holds the delivery data payload for a single symbol
 type NSEDeliverySymbolResult struct {
@@ -189,10 +186,10 @@ type NSEDeliverySymbolResult struct {
 	RecordsCount int                 `json:"records_count"`
 }
 
-// FetchNselibDeliveryDataDetails fetches full delivery records (delivery %, deliverable qty, date) for tickers.
-func FetchNselibDeliveryDataDetails(ctx context.Context, tickers []string) (map[string]NSEDeliveryRecord, error) {
+// FetchNselibDeliveryDataSeries fetches full historical delivery records for tickers.
+func FetchNselibDeliveryDataSeries(ctx context.Context, tickers []string) (map[string][]NSEDeliveryRecord, error) {
 	if len(tickers) == 0 {
-		return make(map[string]NSEDeliveryRecord), nil
+		return make(map[string][]NSEDeliveryRecord), nil
 	}
 
 	var cleanSyms []string
@@ -210,7 +207,7 @@ func FetchNselibDeliveryDataDetails(ctx context.Context, tickers []string) (map[
 	}
 
 	if len(cleanSyms) == 0 {
-		return make(map[string]NSEDeliveryRecord), nil
+		return make(map[string][]NSEDeliveryRecord), nil
 	}
 
 	pyCandidates := []string{
@@ -218,23 +215,11 @@ func FetchNselibDeliveryDataDetails(ctx context.Context, tickers []string) (map[
 		"./.venv/bin/python3",
 		"/Users/raghavgarg/Projects/myGo/mycase/.venv/bin/python3",
 		"python3",
+		"python",
 	}
-
-	scriptCandidates := []string{
-		"scripts/fetch_nse_data.py",
-		"./scripts/fetch_nse_data.py",
-		"/Users/raghavgarg/Projects/myGo/mycase/scripts/fetch_nse_data.py",
-	}
-
-	var chosenScript string
-	for _, sPath := range scriptCandidates {
-		if _, err := os.Stat(sPath); err == nil {
-			chosenScript = sPath
-			break
-		}
-	}
-	if chosenScript == "" {
-		return nil, fmt.Errorf("fetch_nse_data.py script not found")
+	chosenScript := "scripts/fetch_nse_data.py"
+	if _, err := os.Stat(chosenScript); os.IsNotExist(err) {
+		return nil, fmt.Errorf("script not found: %s", chosenScript)
 	}
 
 	var chosenPy string
@@ -255,43 +240,56 @@ func FetchNselibDeliveryDataDetails(ctx context.Context, tickers []string) (map[
 		return nil, fmt.Errorf("python interpreter not found")
 	}
 
-	subCtx, cancel := context.WithTimeout(ctx, 25*time.Second)
+	subCtx, cancel := context.WithTimeout(ctx, 35*time.Second)
 	defer cancel()
 
 	symArg := strings.Join(cleanSyms, ",")
-	cmd := exec.CommandContext(subCtx, chosenPy, chosenScript, "--symbol", symArg, "--mode", "delivery_data", "--period", "1W")
+	cmd := exec.CommandContext(subCtx, chosenPy, chosenScript, "--symbol", symArg, "--mode", "delivery_data", "--period", "3M")
 	out, err := cmd.Output()
 	if err != nil {
 		return nil, fmt.Errorf("nselib delivery execution failed: %w", err)
 	}
 
-	resultMap := make(map[string]NSEDeliveryRecord)
+	resultMap := make(map[string][]NSEDeliveryRecord)
 
 	if len(cleanSyms) == 1 {
 		var singleRes NSEDeliverySymbolResult
 		if err := json.Unmarshal(out, &singleRes); err == nil && len(singleRes.Records) > 0 {
-			rec := singleRes.Records[0]
 			orig := symToOriginal[cleanSyms[0]]
-			resultMap[orig] = rec
-			resultMap[cleanSyms[0]] = rec
+			resultMap[orig] = singleRes.Records
+			resultMap[cleanSyms[0]] = singleRes.Records
 		}
 	} else {
 		var multiRes map[string]NSEDeliverySymbolResult
 		if err := json.Unmarshal(out, &multiRes); err == nil {
 			for cSym, item := range multiRes {
 				if len(item.Records) > 0 {
-					rec := item.Records[0]
 					orig, ok := symToOriginal[cSym]
 					if !ok {
 						orig = cSym
 					}
-					resultMap[orig] = rec
-					resultMap[cSym] = rec
+					resultMap[orig] = item.Records
+					resultMap[cSym] = item.Records
 				}
 			}
 		}
 	}
 
+	return resultMap, nil
+}
+
+// FetchNselibDeliveryDataDetails fetches the latest delivery record for backwards compatibility.
+func FetchNselibDeliveryDataDetails(ctx context.Context, tickers []string) (map[string]NSEDeliveryRecord, error) {
+	seriesMap, err := FetchNselibDeliveryDataSeries(ctx, tickers)
+	if err != nil {
+		return nil, err
+	}
+	resultMap := make(map[string]NSEDeliveryRecord)
+	for k, records := range seriesMap {
+		if len(records) > 0 {
+			resultMap[k] = records[0]
+		}
+	}
 	return resultMap, nil
 }
 

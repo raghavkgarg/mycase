@@ -68,6 +68,7 @@ CREATE TABLE IF NOT EXISTS pit_runs (
     total_constituents INTEGER,
     stage1_survivors   INTEGER,
     selected_count     INTEGER,
+    pillar4_uncalibrated BOOLEAN DEFAULT false,
     created_at         TIMESTAMP,
     PRIMARY KEY (as_of_date, index_name, method)
 );
@@ -91,6 +92,8 @@ CREATE TABLE IF NOT EXISTS pit_candidate_scores (
     selected           BOOLEAN,
     final_weight       DOUBLE,
     forward_return_21d DOUBLE,
+    pillar4_uncalibrated BOOLEAN DEFAULT false,
+    pillar4_insufficient_history BOOLEAN DEFAULT false,
     PRIMARY KEY (as_of_date, index_name, method, ticker)
 );
 `
@@ -101,6 +104,11 @@ func (p *DB) initSchema(ctx context.Context) error {
 	}
 	// Migrate existing database tables gracefully
 	_, _ = p.db.ExecContext(ctx, "ALTER TABLE pit_candidate_scores ADD COLUMN IF NOT EXISTS data_fetch_failed BOOLEAN DEFAULT false;")
+	_, _ = p.db.ExecContext(ctx, "ALTER TABLE pit_candidate_scores ADD COLUMN IF NOT EXISTS pillar4_uncalibrated BOOLEAN DEFAULT false;")
+	_, _ = p.db.ExecContext(ctx, "ALTER TABLE pit_candidate_scores ADD COLUMN IF NOT EXISTS pillar4_insufficient_history BOOLEAN DEFAULT false;")
+	_, _ = p.db.ExecContext(ctx, "ALTER TABLE pit_runs ADD COLUMN IF NOT EXISTS pillar4_uncalibrated BOOLEAN DEFAULT false;")
+	_, _ = p.db.ExecContext(ctx, "UPDATE pit_candidate_scores SET pillar4_uncalibrated = TRUE WHERE as_of_date <= '2026-09-10';")
+	_, _ = p.db.ExecContext(ctx, "UPDATE pit_runs SET pillar4_uncalibrated = TRUE WHERE as_of_date <= '2026-09-10';")
 	// Clean out any artificial dummy index placeholder rows (e.g. DUMMYINXGN, DUMMYTRVN)
 	_, _ = p.db.ExecContext(ctx, "DELETE FROM pit_candidate_scores WHERE UPPER(ticker) LIKE '%DUMMY%';")
 	_, _ = p.db.ExecContext(ctx, "UPDATE pit_runs SET total_constituents = 750 WHERE index_name = 'niftytotalmarket' AND total_constituents > 750;")
@@ -146,8 +154,8 @@ INSERT OR REPLACE INTO pit_candidate_scores (
     as_of_date, index_name, method, ticker, sector,
     passed_stage1, data_fetch_failed, rejection_reason, raw_score, effective_score,
     composite_rs, vcp_ratio, rvol_z_score, decayed_pp, delivery_delta,
-    selected, final_weight, forward_return_21d
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+    selected, final_weight, forward_return_21d, pillar4_insufficient_history
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 `
 	stmt, err := tx.PrepareContext(ctx, candidateQuery)
 	if err != nil {
@@ -175,6 +183,7 @@ INSERT OR REPLACE INTO pit_candidate_scores (
 			c.Selected,
 			c.FinalWeight,
 			0.0, // forward return initialized to 0.0, backfilled after 21 days
+			c.Pillar4InsufficientHistory,
 		)
 		if err != nil {
 			return fmt.Errorf("insert candidate %s: %w", c.Ticker, err)

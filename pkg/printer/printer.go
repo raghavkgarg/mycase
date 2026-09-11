@@ -297,11 +297,14 @@ func RenderHoldingsSnapshot(
 
 	renderThemeAllocationSummary(r, groups, uncategorized, totalCurrent)
 	for _, g := range groups {
-		if g.ReturnBanner != "" {
-			fmt.Fprintln(&sb, g.ReturnBanner)
+		if len(g.Holdings) == 0 {
+			continue
 		}
 		title := fmt.Sprintf("%s HOLDINGS SNAPSHOT", strings.ToUpper(g.Name))
 		renderHoldingSection(r, title, g.Prefix, g.Holdings, totalCurrent)
+		if g.ReturnBanner != "" {
+			fmt.Fprintln(&sb, g.ReturnBanner)
+		}
 	}
 	renderHoldingSection(r, "UNCATEGORIZED HOLDINGS SNAPSHOT", "Uncategorized", uncategorized, totalCurrent)
 	renderHoldingSection(r, "OVERALL HOLDING SNAPSHOT", "Total", rawHoldings, 0)

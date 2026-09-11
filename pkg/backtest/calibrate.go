@@ -351,7 +351,7 @@ func RunEarlyMBCalibration(
 			vcpRatio, _ := yfinance.CalculateVCPTightness(closesSlice, opensSlice)
 			rvolZ := yfinance.CalculateWinsorizedRVOLZScore(volsSlice, 5, 50, 4.0)
 			decayedPP, _ := yfinance.CalculateDecayedPocketPivot(closesSlice, opensSlice, volsSlice, 10, 0.25)
-			delivDelta := (f.DeliveryPct / 100.0) - 0.35
+			delivDelta, _, _, _ := yfinance.GetDeliveryDelta(f.DeliveryHistory, time.Unix(evalTS, 0).In(ist), 1)
 
 			// Invariant scoring
 			clamp := func(val, minV, maxV float64) float64 {

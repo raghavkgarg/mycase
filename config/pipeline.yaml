@@ -1,6 +1,7 @@
 indices:
    - microcap250
    - small250
+  # - niftytotalmarket
   # - midcap150
   #  - nifty50
   # - nifty200
@@ -11,6 +12,7 @@ files:
 
 golden_copy_path:
    - data/microsmall.csv
+  # - data/niftytotalmarket.csv
   # - data/smallcap250.csv
   # - data/midcap150.csv
   # - data/midsmallmicro.csv
