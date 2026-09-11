@@ -126,9 +126,9 @@ func runPitStats(ctx context.Context, c *cli.Command) error {
 			fmt.Printf("No historical records found for %s in %s\n", ticker, pithistory.DefaultDBPath)
 			return nil
 		}
-		fmt.Printf("%-12s | %-8s | %-9s | %-9s | %-8s | %-8s | %-8s | %-8s\n",
-			"AsOf Date", "Stage-1", "Raw Score", "Eff Score", "VCP ATR", "RVOL Z", "Deliv Δ", "Selected")
-		fmt.Printf("----------------------------------------------------------------------------------------\n")
+		fmt.Printf("%-12s | %-16s | %-12s | %-8s | %-9s | %-9s | %-8s | %-8s | %-8s | %-8s\n",
+			"AsOf Date", "Index", "Method", "Stage-1", "Raw Score", "Eff Score", "VCP ATR", "RVOL Z", "Deliv Δ", "Selected")
+		fmt.Printf("----------------------------------------------------------------------------------------------------------------------------\n")
 		for _, r := range hist {
 			stage1Str := "PASS"
 			if !r.PassedStage1 {
@@ -138,10 +138,10 @@ func runPitStats(ctx context.Context, c *cli.Command) error {
 			if r.Selected {
 				selStr = fmt.Sprintf("YES (%.1f%%)", r.FinalWeight*100.0)
 			}
-			fmt.Printf("%-12s | %-8s | %9.1f | %9.1f | %8.2f | %+8.1f | %+7.1f%% | %-8s\n",
-				r.AsOfDate, stage1Str, r.RawScore, r.EffectiveScore, r.VCPRatio, r.RVOLZScore, r.DeliveryDelta*100.0, selStr)
+			fmt.Printf("%-12s | %-16s | %-12s | %-8s | %9.1f | %9.1f | %8.2f | %+8.1f | %+7.1f%% | %-8s\n",
+				r.AsOfDate, r.IndexName, r.Method, stage1Str, r.RawScore, r.EffectiveScore, r.VCPRatio, r.RVOLZScore, r.DeliveryDelta*100.0, selStr)
 		}
-		fmt.Printf("========================================================================================\n")
+		fmt.Printf("============================================================================================================================\n")
 		return nil
 	}
 

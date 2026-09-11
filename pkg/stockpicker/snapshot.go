@@ -12,20 +12,21 @@ import (
 const PITSnapshotDir = "data/pit_snapshots"
 
 type CandidateScoreDetail struct {
-	Ticker          string  `json:"ticker"`
-	RejectionReason string  `json:"rejection_reason,omitempty"`
-	Sector          string  `json:"sector"`
-	RawScore        float64 `json:"raw_score"`
-	EffectiveScore  float64 `json:"effective_score"`
-	CompositeRS     float64 `json:"composite_rs"`
-	VCPRatio        float64 `json:"vcp_ratio"`
-	RVOLZScore      float64 `json:"rvol_z_score"`
-	DecayedPP       float64 `json:"decayed_pp"`
-	DeliveryDelta   float64 `json:"delivery_delta"`
-	FinalWeight     float64 `json:"final_weight"`
-	PassedStage1    bool    `json:"passed_stage1"`
-	DataFetchFailed bool    `json:"data_fetch_failed"`
-	Selected        bool    `json:"selected"`
+	Ticker                     string  `json:"ticker"`
+	RejectionReason            string  `json:"rejection_reason,omitempty"`
+	Sector                     string  `json:"sector"`
+	RawScore                   float64 `json:"raw_score"`
+	EffectiveScore             float64 `json:"effective_score"`
+	CompositeRS                float64 `json:"composite_rs"`
+	VCPRatio                   float64 `json:"vcp_ratio"`
+	RVOLZScore                 float64 `json:"rvol_z_score"`
+	DecayedPP                  float64 `json:"decayed_pp"`
+	DeliveryDelta              float64 `json:"delivery_delta"`
+	FinalWeight                float64 `json:"final_weight"`
+	PassedStage1               bool    `json:"passed_stage1"`
+	DataFetchFailed            bool    `json:"data_fetch_failed"`
+	Pillar4InsufficientHistory bool    `json:"pillar4_insufficient_history"`
+	Selected                   bool    `json:"selected"`
 }
 
 type PITRunSnapshot struct {

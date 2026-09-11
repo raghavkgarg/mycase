@@ -208,19 +208,46 @@ def fetch_corporate_actions(symbols: list, period: str = "3M"):
     return results if len(symbols_clean) > 1 else results[symbols_clean[0]]
 
 
-def fetch_delivery_data(symbols: list, period: str = "1M"):
+DELIVERY_CACHE_DIR = os.path.join("data", "cache", "delivery")
+
+
+def load_cached_delivery(sym: str) -> list:
+    cache_path = os.path.join(DELIVERY_CACHE_DIR, f"{sym}.json")
+    if os.path.exists(cache_path):
+        try:
+            with open(cache_path, "r") as f:
+                data = json.load(f)
+                if isinstance(data, list):
+                    return data
+        except Exception:
+            pass
+    return []
+
+
+def save_cached_delivery(sym: str, records: list):
+    try:
+        os.makedirs(DELIVERY_CACHE_DIR, exist_ok=True)
+        cache_path = os.path.join(DELIVERY_CACHE_DIR, f"{sym}.json")
+        with open(cache_path, "w") as f:
+            json.dump(records, f)
+    except Exception:
+        pass
+
+
+def fetch_delivery_data(symbols: list, period: str = "3M"):
     symbols_clean = [clean_symbol(s) for s in symbols if clean_symbol(s)]
     results = {}
 
     for sym in symbols_clean:
-        records = []
+        cached_records = load_cached_delivery(sym)
+        fetched_records = []
         try:
             df_pv = capital_market.price_volume_and_deliverable_position_data(symbol=sym, period=period)
             if df_pv is not None and hasattr(df_pv, 'iterrows') and len(df_pv) > 0:
                 for _, row in df_pv.iterrows():
                     d_str = str(row.get('Date', '')).strip()
                     p_dt = parse_nse_date(d_str)
-                    records.append({
+                    fetched_records.append({
                         "date": p_dt.strftime("%Y-%m-%d") if p_dt else d_str,
                         "close_price": sanitize_val(row.get('ClosePrice')),
                         "prev_close": sanitize_val(row.get('PrevClose')),
@@ -233,13 +260,30 @@ def fetch_delivery_data(symbols: list, period: str = "1M"):
                         "turnover_rs": sanitize_val(row.get('TurnoverInRs')),
                     })
         except Exception as e:
-            results[sym] = {"error": f"Failed to fetch delivery data for {sym}: {e}"}
-            continue
+            if not cached_records:
+                results[sym] = {"error": f"Failed to fetch delivery data for {sym}: {e}"}
+                continue
+
+        # Merge fetched records with cached records, deduplicating by date
+        merged_by_date = {}
+        for r in cached_records:
+            if isinstance(r, dict) and r.get("date"):
+                merged_by_date[r["date"]] = r
+        for r in fetched_records:
+            if isinstance(r, dict) and r.get("date"):
+                merged_by_date[r["date"]] = r
+
+        all_records = list(merged_by_date.values())
+        # Sort descending by date (newest first)
+        all_records.sort(key=lambda x: str(x.get("date", "")), reverse=True)
+
+        if all_records:
+            save_cached_delivery(sym, all_records)
 
         results[sym] = {
             "symbol": sym,
-            "records_count": len(records),
-            "records": records
+            "records_count": len(all_records),
+            "records": all_records
         }
 
     return results if len(symbols_clean) > 1 else results[symbols_clean[0]]

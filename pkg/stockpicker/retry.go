@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/raghavkgarg/mycase/pkg/selectiontracker"
 	"github.com/raghavkgarg/mycase/pkg/yfinance"
@@ -128,7 +129,7 @@ func RetryFailedSnapshotCandidates(ctx context.Context, indexName, method, asOfD
 				vcpRatio, _ := yfinance.CalculateVCPTightness(hist.Closes, hist.Opens)
 				rvolZ := yfinance.CalculateWinsorizedRVOLZScore(hist.Volumes, 5, 50, 4.0)
 				ppScore, _ := yfinance.CalculateDecayedPocketPivot(hist.Closes, hist.Opens, hist.Volumes, 10, 0.25)
-				delivDelta := (f.DeliveryPct / 100.0) - 0.35
+				delivDelta, _, _, _ := yfinance.GetDeliveryDelta(f.DeliveryHistory, time.Now(), 1)
 
 				wIdioRS, wVCP, wVol, wDeliv := 25.0, 25.0, 25.0, 25.0
 				if cfg != nil && cfg.HardFilters != nil {

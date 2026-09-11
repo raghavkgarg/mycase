@@ -25,12 +25,12 @@ type Options struct {
 	Method             string
 	RangeStr           string
 	GoldenPath         string
+	RebalanceTolerance float64
+	HysteresisBuffer   int
 	DisplayName        string
 	OutputFile         string
 	Tickers            []string // pre-built ticker list (bypasses file/index loading)
 	TopN               int
-	RebalanceTolerance float64
-	HysteresisBuffer   int
 	SkipScuttlebutt    bool
 	CooldownDays       int
 	CooldownBypassRank int

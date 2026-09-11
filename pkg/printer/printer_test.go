@@ -159,3 +159,52 @@ func TestRenderHoldingsSnapshot_SeriesSuffixCategorization(t *testing.T) {
 		t.Errorf("expected E2E-BE row in output table, got:\n%s", output)
 	}
 }
+
+func TestRenderHoldingsSnapshot_ReturnBannerPlacement(t *testing.T) {
+	rawHoldings := []brokertypes.Holding{
+		{
+			TradingSymbol: "JAMNAAUTO",
+			Exchange:      "BSE",
+			Quantity:      10,
+			AveragePrice:  100.0,
+			LastPrice:     120.0,
+			PnL:           200.0,
+			PnLPct:        20.0,
+		},
+	}
+
+	bannerText := "🎯 AUDITED RETURN INTELLIGENCE (via portfolio.db | 49 Days Holding Span):"
+	groups := []ThemeGroup{
+		{
+			Name:         "Theme Microsmall",
+			Prefix:       "My MicroSmall",
+			TargetWeight: 1.0,
+			Holdings:     rawHoldings,
+			ReturnBanner: bannerText,
+		},
+	}
+
+	output := RenderHoldingsSnapshot(rawHoldings, groups, nil)
+
+	titleIdx := strings.Index(output, "THEME MICROSMALL HOLDINGS SNAPSHOT")
+	pnlIdx := strings.Index(output, "My MicroSmall Portfolio PnL")
+	bannerIdx := strings.Index(output, bannerText)
+
+	if titleIdx == -1 {
+		t.Fatalf("expected output to contain theme title")
+	}
+	if pnlIdx == -1 {
+		t.Fatalf("expected output to contain PnL summary")
+	}
+	if bannerIdx == -1 {
+		t.Fatalf("expected output to contain return banner")
+	}
+
+	if bannerIdx < titleIdx {
+		t.Errorf("return banner was rendered BEFORE theme title (bannerIdx: %d, titleIdx: %d)", bannerIdx, titleIdx)
+	}
+	if bannerIdx < pnlIdx {
+		t.Errorf("return banner was rendered BEFORE theme PnL summary (bannerIdx: %d, pnlIdx: %d)", bannerIdx, pnlIdx)
+	}
+}
+

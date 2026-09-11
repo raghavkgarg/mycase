@@ -55,7 +55,7 @@ var AuthCommand = &cli.Command{
 			broker = defaults.Broker
 		}
 		if broker == "" {
-			broker = "schwab"
+			broker = "zerodha"
 		}
 		switch broker {
 		case "schwab":

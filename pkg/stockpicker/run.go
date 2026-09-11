@@ -241,28 +241,32 @@ func RunWithResult(ctx context.Context, opts *Options) (*PickResult, error) {
 			effScore = rawScore * rRegime
 		}
 		var compRS, vcpRatio, rvolZ, ppScore, delivDelta float64
+		var delivInsufficient bool
 		if hist, ok := fullHistory[t]; ok && len(hist.Closes) >= 60 {
 			compRS, _, _, _ = yfinance.CalculateCompositeRS(hist.Closes, benchmarkPrices, t)
 			vcpRatio, _ = yfinance.CalculateVCPTightness(hist.Closes, hist.Opens)
 			rvolZ = yfinance.CalculateWinsorizedRVOLZScore(hist.Volumes, 5, 50, 4.0)
 			ppScore, _ = yfinance.CalculateDecayedPocketPivot(hist.Closes, hist.Opens, hist.Volumes, 10, 0.25)
-			delivDelta = (fundamentals[t].DeliveryPct / 100.0) - 0.35
+			var dErr error
+			delivDelta, _, _, dErr = yfinance.GetDeliveryDelta(fundamentals[t].DeliveryHistory, time.Now(), 1)
+			delivInsufficient = (dErr != nil)
 		}
 		candidateMap[t] = CandidateScoreDetail{
-			Ticker:          t,
-			PassedStage1:    !isFetchFailed && !isSafetyDrop && hasRaw,
-			DataFetchFailed: isFetchFailed,
-			RejectionReason: reason,
-			RawScore:        rawScore,
-			EffectiveScore:  effScore,
-			CompositeRS:     compRS,
-			VCPRatio:        vcpRatio,
-			RVOLZScore:      rvolZ,
-			DecayedPP:       ppScore,
-			DeliveryDelta:   delivDelta,
-			Selected:        selectedSet[t],
-			FinalWeight:     finalWeights[t],
-			Sector:          sectors[t],
+			Ticker:                     t,
+			PassedStage1:               !isFetchFailed && !isSafetyDrop && hasRaw,
+			DataFetchFailed:            isFetchFailed,
+			Pillar4InsufficientHistory: delivInsufficient,
+			RejectionReason:            reason,
+			RawScore:                   rawScore,
+			EffectiveScore:             effScore,
+			CompositeRS:                compRS,
+			VCPRatio:                   vcpRatio,
+			RVOLZScore:                 rvolZ,
+			DecayedPP:                  ppScore,
+			DeliveryDelta:              delivDelta,
+			Selected:                   selectedSet[t],
+			FinalWeight:                finalWeights[t],
+			Sector:                     sectors[t],
 		}
 	}
 	pitSnapshot := &PITRunSnapshot{

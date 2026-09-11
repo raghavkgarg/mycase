@@ -1,6 +1,7 @@
 indices:
    - microcap250
    - small250
+  # - niftytotalmarket
   # - midcap150
   #  - nifty50
   # - nifty200
@@ -11,6 +12,7 @@ files:
 
 golden_copy_path:
    - data/microsmall.csv
+  # - data/niftytotalmarket.csv
   # - data/smallcap250.csv
   # - data/midcap150.csv
   # - data/midsmallmicro.csv
@@ -40,7 +42,7 @@ rebalance_tolerance_pct:
   - 0.25
 
 hysteresis_rank_buffer:
-  - 2
+  - 5
 
 cooldown_days:
   - 30
@@ -48,9 +50,8 @@ cooldown_days:
 cooldown_bypass_rank:
   - 5
 
-
 # Broker configuration
-# broker: zerodha                     # "zerodha" (default) or "schwab"
+broker: zerodha                     # "zerodha" (default) or "schwab"
 # schwab_config: config/schwab.json   # Schwab app credentials
 # schwab_token: config/schwab_token.json  # Schwab OAuth tokens (auto-managed)
 

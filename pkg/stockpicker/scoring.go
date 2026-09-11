@@ -765,6 +765,7 @@ func SelectTopNMultibaggerWithCooldown(
 	// 2. Apply hysteresis buffer selection with anti-churn cooldown
 	bufferLimit := topN + hysteresisBuffer
 	slog.Info("select.multibagger_hysteresis", "top_n", topN, "buffer_limit", bufferLimit)
+	fmt.Printf("Applying Hysteresis Buffer Zone (Top %d target, existing kept up to rank %d)...\n", topN, bufferLimit)
 	return ApplyHysteresisSelectionWithCooldown(sectorCapCandidates, existingHoldings, topN, bufferLimit, tracker, recentExits, cooldownDays, bypassRank)
 }
 
@@ -842,6 +843,7 @@ func SelectTopNStandardWithCooldown(
 	bypassRank int,
 ) []string {
 	slog.Info("score.standard_start", "candidates", len(activeKeys))
+	fmt.Printf("Scoring and ranking constituents...\n")
 	allWeights := optimizer.OptimizeMultiFactor(activeKeys, slicedPriceHistory, benchmarkPrices, fundamentals, optWeights)
 
 	// Sort all tickers by raw score weights descending
@@ -858,6 +860,7 @@ func SelectTopNStandardWithCooldown(
 
 	bufferLimit := topN + hysteresisBuffer
 	slog.Info("select.standard_hysteresis", "top_n", topN, "buffer_limit", bufferLimit)
+	fmt.Printf("Applying Hysteresis Buffer Zone (Top %d target, existing kept up to rank %d)...\n", topN, bufferLimit)
 	return ApplyHysteresisSelectionWithCooldown(sortedKeys, existingHoldings, topN, bufferLimit, tracker, recentExits, cooldownDays, bypassRank)
 }
 
@@ -1205,8 +1208,8 @@ func ScoreEarlyMultibagger(
 		p3b := NormScore(decayedPPScore, PocketPivotBounds, wVol*0.5, false)
 		p3 := p3a + p3b
 
-		// Pillar 4: Institutional Accumulation Delta (Delivery Delta in [-10%, +30%])
-		delivDelta := (f.DeliveryPct / 100.0) - 0.35 // 35% typical mid-float baseline
+		// Pillar 4: Institutional Accumulation Delta (Recent 5D vs Disjoint 20D Baseline)
+		delivDelta, _, _, _ := yfinance.GetDeliveryDelta(f.DeliveryHistory, time.Now(), 1)
 		p4 := NormScore(delivDelta, DeliveryDeltaBounds, wDeliv, false)
 
 		scores[t] = p1 + p2 + p3 + p4
@@ -1328,9 +1331,15 @@ func SelectTopNEarlyMultibaggerWithCooldown(
 			weeksInBase, _ = yfinance.CalculateBaseDurationWeeks(hist.Closes, hardFilters.MinProximity52WHigh)
 			rvolZ = yfinance.CalculateWinsorizedRVOLZScore(hist.Volumes, 5, 50, 4.0)
 		}
-		delivDelta := (f.DeliveryPct / 100.0) - 0.35
-		driverStr := fmt.Sprintf("Pre-Breakout Setup: Base %dW (VCP %.2f), 52W Prox %.1f%%, RVOL Z %+.1f, Deliv Delta %+.1f%% (5D: %.1f%%)",
-			weeksInBase, vcpRatio, prox52*100.0, rvolZ, delivDelta*100.0, f.DeliveryPct)
+		delivDelta, delivAvg5D, delivBase20D, delivErr := yfinance.GetDeliveryDelta(f.DeliveryHistory, time.Now(), 1)
+		var driverStr string
+		if delivErr == nil {
+			driverStr = fmt.Sprintf("Pre-Breakout Setup: Base %dW (VCP %.2f), 52W Prox %.1f%%, RVOL Z %+.1f, Deliv Delta %+.1f%% (5D: %.1f%%, 20D Base: %.1f%%)",
+				weeksInBase, vcpRatio, prox52*100.0, rvolZ, delivDelta*100.0, delivAvg5D*100.0, delivBase20D*100.0)
+		} else {
+			driverStr = fmt.Sprintf("Pre-Breakout Setup: Base %dW (VCP %.2f), 52W Prox %.1f%%, RVOL Z %+.1f, Deliv Delta %+.1f%% (Neutral)",
+				weeksInBase, vcpRatio, prox52*100.0, rvolZ, delivDelta*100.0)
+		}
 		tracker.RecordAdditionDriver(t, driverStr)
 
 		if sectorCounts[sec] >= maxPerSector {
@@ -1344,6 +1353,7 @@ func SelectTopNEarlyMultibaggerWithCooldown(
 
 	bufferLimit := topN + hysteresisBuffer
 	slog.Info("select.earlymb_hysteresis", "top_n", topN, "buffer_limit", bufferLimit)
+	fmt.Printf("Applying Hysteresis Buffer Zone (Top %d target, existing kept up to rank %d)...\n", topN, bufferLimit)
 	return ApplyHysteresisSelectionWithCooldown(sectorCapCandidates, existingHoldings, topN, bufferLimit, tracker, recentExits, cooldownDays, bypassRank)
 }
 

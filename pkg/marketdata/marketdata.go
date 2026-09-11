@@ -27,6 +27,14 @@ type AnnualMetric struct {
 	Value float64
 }
 
+// DeliveryRecord represents a single day's deliverable position record from NSE.
+type DeliveryRecord struct {
+	Date           string  `json:"date"`
+	ClosePrice     float64 `json:"close_price"`
+	DeliverableQty float64 `json:"deliverable_qty"`
+	DeliveryPct    float64 `json:"delivery_pct"`
+}
+
 // Fundamentals represents key fundamental metrics for a security. Populated from
 // Yahoo Finance (India + US fallback) and Schwab (US-specific fields).
 type Fundamentals struct {
@@ -64,8 +72,9 @@ type Fundamentals struct {
 	PledgedPercent           float64
 
 	// NSE delivery data (EBM strategy — populated from Yahoo/NSE)
-	DeliveryPct    float64
-	DeliverableQty float64
+	DeliveryPct     float64
+	DeliverableQty  float64
+	DeliveryHistory []DeliveryRecord
 
 	// US-specific fields (populated from Schwab)
 	DividendYield   float64 // Annual dividend yield as decimal (e.g., 0.02 = 2%)

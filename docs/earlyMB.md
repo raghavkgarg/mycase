@@ -142,7 +142,11 @@ $$\text{Pillar 3 Score} = \text{Score}_{\text{RVOL}} + \text{Score}_{\text{PP}} 
 ---
 
 ### Pillar 4: Institutional Accumulation Delta (25 Points)
-* **Metric**: $\Delta\text{Delivery} = \text{Delivery}\%_{5\text{D}} - \text{Delivery}\%_{20\text{D Baseline}}$
+* **Metric**: $\Delta\text{Delivery} = \overline{\text{Delivery}}_{5\text{D}} - \overline{\text{Delivery}}_{20\text{D Baseline}}$
+  - **Recent Window ($\overline{\text{Delivery}}_{5\text{D}}$)**: Arithmetic mean of the last 5 settled trading sessions ($t-4 \dots t$).
+  - **Disjoint Baseline ($\overline{\text{Delivery}}_{20\text{D Baseline}}$)**: Arithmetic mean of the 20 trading sessions immediately prior to the recent window ($t-24 \dots t-5$).
+  - **Orthogonality / Zero Self-Contamination**: Disjoint windowing guarantees that an institutional buying burst in the last 5 days does not artificially pull up the baseline against which it is evaluated.
+  - **Data History Requirement**: Requires $\ge 25$ confirmed settled sessions (with T+1 PIT lag). If $< 25$ sessions exist, returns neutral delta ($0.0$).
 * **Reference Bounds**: $[-10\%, \, +30\%]$ delta vs baseline.
 * **Formula**:
   $$\text{Pillar 4 Score} = 25.0 \times \text{Clamp}\left(\frac{\Delta\text{Delivery} - (-0.10)}{0.30 - (-0.10)}, \, 0.0, \, 1.0\right)$$
@@ -538,7 +542,120 @@ The quantitative engine and data pipeline are fully hardened. Active development
   ```
 * **Thread-Safe Process Deduplication**: Uses an in-memory thread-safe cache (`sanityNoticeSet`) to ensure each extreme outlier is announced **exactly once per execution**, eliminating repetitive console spam across scoring, snapshotting, and incubator passes.
 
+### 14. Pillar 4 Structural Delivery Delta Refactor: Disjoint Windowing & Fetch-Failure Defense (Sep 10, 2026)
 
+Investigation into why `NSE:DATAPATTNS` was selected by the `multibagger` strategy but missed by `earlymb` despite a 6.5% gain in 5 days surfaced a structural implementation divergence in Pillar 4 (Institutional Accumulation Delta) that affected all scoring paths.
+
+#### Root Cause: Three Compounding Bugs in the Original Pillar 4 Implementation
+
+**Bug 1 — Flat constant baseline instead of per-stock rolling baseline:**
+The codebase was computing `(f.DeliveryPct / 100.0) - 0.35`, subtracting a hardcoded flat 35% constant instead of the spec's per-stock 20-day rolling baseline ($\overline{\text{Delivery}}_{20\text{D Baseline}}$). This erased the cross-sectional normalization the spec was designed to provide — a low-float stock that normally runs 15% delivery and a high-float stock that normally runs 55% delivery were judged against the identical yardstick, which the spec's own design history explicitly rejected.
+
+**Bug 2 — Single-day snapshot instead of 5-day rolling average:**
+The "5D" component was actually a single day's delivery percentage (`Records[0]`), not a 5-day rolling average. This caused massive single-session noise: any block trade, retail churn day, or exchange settlement anomaly produced violent Pillar 4 swings of $\pm 19$ pts day-to-day (on a 25-point scale).
+
+**Bug 3 — Fetch failures silently became worst-case scores (the RUBICON pattern):**
+When the delivery fetch returned 0% (due to HTTP failure, NSE rate limiting, or empty response), the flat-constant formula produced $0.0 - 0.35 = -0.35$, the worst possible Pillar 4 input. This silently persisted for consecutive days — `NSE:RUBICON` showed `delivery_delta = -0.3500` for 5 consecutive days (Aug 27 through Sep 2), functionally identical to the "fetch failure silently counted as rejection" bug fixed earlier in Section 12.2.
+
+#### Severity Evidence from Historical DuckDB Data
+
+| Ticker | Date Range | Delivery Delta Swing | Pattern |
+|---|---|---|---|
+| **VMART** | 09-09 → 09-10 | `+0.3379 → -0.0050` | 34.3pp single-day flip |
+| **APARINDS** | 09-08 → 09-10 | `+0.1806 → +0.0146` | 16.6pp two-day drop |
+| **RUBICON** | 08-27 → 09-02 | `+0.1948 → -0.3500` (5 consecutive days) | Fetch failure → worst-case score |
+
+#### Fix: Disjoint Rolling Delivery Delta with Fetch-Failure Exclusion
+
+**Data Ingestion (`scripts/fetch_nse_data.py`, `pkg/yfinance/screener.go`, `pkg/yfinance/yfinance.go`):**
+- Python scraper fetches 3 months of delivery history from NSE with disk-backed JSON caching (`data/cache/delivery/{SYMBOL}.json`) and automatic merge/deduplication across runs.
+- `FetchNselibDeliveryDataSeries` returns the complete chronological `[]DeliveryRecord` series (not just `Records[0]`).
+- `fund.DeliveryHistory` populated for every NSE constituent during `FetchFundamentals`.
+
+**Canonical Metric Calculation (`pkg/yfinance/metrics_delivery.go`):**
+$$\Delta\text{Delivery} = \overline{\text{Delivery}}_{5\text{D}}\ (t-4 \dots t) - \overline{\text{Delivery}}_{20\text{D Baseline}}\ (t-24 \dots t-5)$$
+
+- **Disjoint Windowing**: Recent 5 settled sessions vs. previous 20 sessions. Zero self-contamination — an institutional buying burst in the last 5 days cannot artificially inflate the baseline.
+- **Strict PIT Lag**: Records beyond $\text{AsOfDate} - \text{lagDays}$ (T+1) are excluded before windowing.
+- **Fetch-Failure Exclusion**: `DeliveryPct <= 0` records are stripped before any averaging. This catches both JSON `null` → Go `float64` zero-value deserialization and genuine 0% fetch failures. Eliminates the RUBICON pattern entirely.
+- **Insufficient History**: Returns `ErrInsufficientDeliveryHistory` if $< 25$ valid sessions exist after stripping. `GetDeliveryDelta` falls back to neutral $\Delta = 0.0$ ($6.25$ pts on the $[-10\%, +30\%]$ scale).
+
+> [!NOTE]
+> **Known accepted limitation**: The `<= 0` filter catches null/zero fetch failures but cannot detect a corrupt-but-plausible non-zero value (e.g., NSE returning 0.5% for a genuinely missing day). Under 5D averaging, the magnitude of such an error is small. Per-stock distributional anomaly detection would catch this but is disproportionate to the risk.
+
+**Refactored Call Sites (7 total):**
+All production paths that previously used `(f.DeliveryPct / 100.0) - 0.35` now call the canonical `yfinance.GetDeliveryDelta`:
+1. `ScoreEarlyMultibagger` (Pillar 4 scoring)
+2. `SelectTopNEarlyMultibagger` (driver explanation strings)
+3. PIT snapshot assembly (`run.go`)
+4. Incubator watchlist delta (`incubator.go`)
+5. Score velocity booster (`velocity.go`)
+6. Snapshot healer / retry engine (`retry.go`)
+7. Rolling IC/IR calibration engine (`calibrate.go`, anchored to historical `evalTS`)
+
+**DuckDB Schema Migration & Historical Tagging:**
+- Added `pillar4_uncalibrated BOOLEAN DEFAULT false` and `pillar4_insufficient_history BOOLEAN DEFAULT false` columns to `pit_runs` and `pit_candidate_scores`.
+- All historical rows through 2026-09-10 automatically tagged `pillar4_uncalibrated = TRUE` on schema migration, ensuring future IC/IR calibration excludes pre-fix data.
+- Past PIT snapshots are **immutable** — they are event logs of what the engine actually evaluated on those dates, not retroactively rewritten.
+
+**Insufficient History Transparency (`pkg/stockpicker/snapshot.go`):**
+- `CandidateScoreDetail` carries `Pillar4InsufficientHistory bool` through to DuckDB.
+- When flagged, PIT analysis surfaces the ticker with an explicit insufficient-history marker rather than silently blending a neutral score.
+
+#### Test Coverage
+
+| Test | What it Verifies |
+|---|---|
+| `TestCalculateDeliveryDelta_ExactWorkedExample` | $\overline{\text{Deliv}}_{5\text{D}} = 0.45$, $\overline{\text{Deliv}}_{20\text{D}} = 0.30$, $\Delta = +0.1500$ |
+| `TestCalculateDeliveryDelta_DisjointIsolation` | 80% spike in recent 5 days does not contaminate 25% baseline |
+| `TestCalculateDeliveryDelta_InsufficientHistory` | Error on $< 25$ days; neutral fallback $\Delta = 0.0$ |
+| `TestCalculateDeliveryDelta_PITLagEnforced` | Unsettled session at $T$ excluded when `lagDays=1` |
+| `TestDeliveryRecord_NullJSONUnmarshalsToZero` | Pins Go JSON `null` → `float64` 0.0 behavior the filter relies on |
+| `TestCalculateDeliveryDelta_ZeroDeliveryRecordsExcluded` | 5 fetch-failure days at 0% are stripped; window built from valid data only |
+| `TestDeliveryDelta_CrossCallSiteConsistency` | Identical inputs produce identical delta, score, and driver strings across all call sites |
+
+---
+
+### 15. Live Verification Checklist (Post Sep 11, 2026 Trading Day)
+
+The Pillar 4 disjoint delivery delta fix has been code-verified and unit-tested, but has not yet been validated on a live production run. The following checks should be performed on the **first trading day run after Sep 10, 2026** (i.e., the Sep 11 run or the next available trading day):
+
+#### Check 1: `pillar4_uncalibrated` flag correctness
+```bash
+mycase pit stats --ticker VMART
+```
+- **Expected**: The new row (Sep 11+) should show `pillar4_uncalibrated = false`.
+- **Expected**: All historical rows (Aug 28 through Sep 10) should remain `pillar4_uncalibrated = true`.
+
+#### Check 2: Swing magnitude reduction on known-volatile tickers
+Compare the `Deliv Δ` column for VMART, APARINDS, and RUBICON between consecutive days:
+- **Pre-fix**: VMART swung 34.3pp in one day (`+0.3379 → -0.0050`).
+- **Post-fix expected**: Day-to-day swings should be substantially dampened under the 5D rolling average vs. disjoint 20D baseline. Exact values depend on market conditions, but swings $> 15$pp between consecutive days would warrant investigation.
+
+#### Check 3: RUBICON fetch-failure defense
+```bash
+mycase pit stats --ticker RUBICON
+```
+- **Pre-fix**: 5 consecutive days of `delivery_delta = -0.3500` (the literal flat-constant when fetch returned 0%).
+- **Post-fix expected**: If RUBICON's delivery fetch fails again, the new row should show either:
+  - `pillar4_insufficient_history = true` with neutral $\Delta = 0.0$ (if $< 25$ valid sessions after stripping zeros), **OR**
+  - A delivery delta computed only from valid non-zero records, with the zero-value days excluded.
+- **Must NOT show**: `delivery_delta = -0.3500` or any value computed from 0% delivery records.
+
+#### Check 4: `pillar4_insufficient_history` flag on new/thin-history tickers
+Scan the analysis output for any tickers flagged with insufficient delivery history:
+```bash
+mycase --index niftytotalmarket --method earlymb --analysis
+```
+- **Expected**: Tickers with $< 25$ trading days of delivery data should appear with neutral scoring ($\Delta = 0.0$, $6.25$ pts) and the `pillar4_insufficient_history` flag set, rather than being silently scored against a partial or contaminated window.
+
+#### Check 5: Cross-sectional Avg DelivΔ stability in Section 3 quantiles
+Compare the `Avg DelivΔ` column across the last few runs in the `--analysis` output:
+- **Pre-fix observations**: Avg DelivΔ varied from `+2.9%` to `+20.2%` across runs, partially driven by single-day noise in individual tickers.
+- **Post-fix expected**: Day-to-day variation in the cross-sectional average should be smoother, reflecting genuine shifts in institutional accumulation rather than single-session fetch artifacts.
+
+> [!IMPORTANT]
+> If any of these checks fail, the issue should be investigated before treating the Pillar 4 fix as production-validated. The unit tests verify the calculation logic in isolation; this live checklist verifies the end-to-end data pipeline from NSE fetch → Python cache → Go deserialization → disjoint windowing → DuckDB persistence.
 
 
 
