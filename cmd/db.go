@@ -156,7 +156,6 @@ func RunDBUpdateDirect(ctx context.Context, all bool, indexName, method string, 
 		}
 	}
 
-
 	// 3. Stage 3: Theme Lifecycle, Exit Detection & Return Auditing
 	fmt.Printf("\n▶ STAGE 3/3: Synchronizing Theme Lifecycles & Return Intelligence...\n")
 	themes, tErr := config.LoadThemes("config/themes.json")

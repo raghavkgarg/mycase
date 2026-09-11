@@ -45,10 +45,10 @@ type DeliveryRecord struct {
 // numeric values, nulls, and dirty NSE strings (such as "-", " - ", or "N/A") safely.
 func (d *DeliveryRecord) UnmarshalJSON(data []byte) error {
 	var aux struct {
-		Date           string      `json:"date"`
-		ClosePrice     interface{} `json:"close_price"`
-		DeliverableQty interface{} `json:"deliverable_qty"`
-		DeliveryPct    interface{} `json:"delivery_pct"`
+		Date           string `json:"date"`
+		ClosePrice     any    `json:"close_price"`
+		DeliverableQty any    `json:"deliverable_qty"`
+		DeliveryPct    any    `json:"delivery_pct"`
 	}
 	if err := json.Unmarshal(data, &aux); err != nil {
 		return err
@@ -60,7 +60,7 @@ func (d *DeliveryRecord) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-func parseFlexibleFloat(v interface{}) float64 {
+func parseFlexibleFloat(v any) float64 {
 	if v == nil {
 		return 0.0
 	}
@@ -248,4 +248,3 @@ func FormatOrdinalDay(d int) string {
 		return fmt.Sprintf("%dth", d)
 	}
 }
-

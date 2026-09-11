@@ -47,12 +47,12 @@ var themeSyncCmd = &cli.Command{
 			Usage:   "Directory containing historical proposal CSV files",
 		},
 		&cli.StringFlag{
-			Name:    "db",
-			Usage:   "Path to mycase.db DuckDB database file",
+			Name:  "db",
+			Usage: "Path to mycase.db DuckDB database file",
 		},
 		&cli.BoolFlag{
-			Name:    "all",
-			Usage:   "Synchronize all configured themes from config/themes.json",
+			Name:  "all",
+			Usage: "Synchronize all configured themes from config/themes.json",
 		},
 	},
 	Action: runThemeSync,
@@ -157,8 +157,8 @@ func resolveThemeArg(themeArg string) string {
 }
 
 var themeHistoryCmd = &cli.Command{
-	Name:    "history",
-	Usage:   "Show rebalance versions and turnover events for a theme",
+	Name:  "history",
+	Usage: "Show rebalance versions and turnover events for a theme",
 	Flags: []cli.Flag{
 		&cli.StringFlag{
 			Name:    "theme",
@@ -204,8 +204,8 @@ var themeHistoryCmd = &cli.Command{
 }
 
 var themeShowCmd = &cli.Command{
-	Name:    "show",
-	Usage:   "Display active or exited constituents for a theme",
+	Name:  "show",
+	Usage: "Display active or exited constituents for a theme",
 	Flags: []cli.Flag{
 		&cli.StringFlag{
 			Name:    "theme",

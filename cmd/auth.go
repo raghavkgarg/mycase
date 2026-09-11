@@ -103,7 +103,7 @@ func runAuthCmdWithFlags(ctx context.Context, forceManual, forceRefresh, noBrows
 
 	if apiKey == "" {
 		if noBrowser {
-			return fmt.Errorf("Zerodha Kite API Key is missing and --no-browser is set")
+			return fmt.Errorf("zerodha Kite API Key is missing and --no-browser is set")
 		}
 		fmt.Print("Enter your Zerodha Kite API Key: ")
 		apiKey, _ = reader.ReadString('\n')
@@ -114,7 +114,7 @@ func runAuthCmdWithFlags(ctx context.Context, forceManual, forceRefresh, noBrows
 
 	if apiSecret == "" {
 		if noBrowser {
-			return fmt.Errorf("Zerodha Kite API Secret is missing and --no-browser is set")
+			return fmt.Errorf("zerodha Kite API Secret is missing and --no-browser is set")
 		}
 		fmt.Print("Enter your Zerodha Kite API Secret: ")
 		apiSecret, _ = reader.ReadString('\n')

@@ -132,4 +132,3 @@ func storeFundamentalsCache(ctx context.Context, ticker string, f *Fundamentals)
 func StoreFundamentalsCache(ctx context.Context, ticker string, f *Fundamentals) {
 	storeFundamentalsCache(ctx, ticker, f)
 }
-

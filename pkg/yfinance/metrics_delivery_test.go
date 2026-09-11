@@ -17,7 +17,7 @@ func TestCalculateDeliveryDelta_ExactWorkedExample(t *testing.T) {
 	// Days 21..25 (recent):  45.0% delivery
 	var records []marketdata.DeliveryRecord
 
-	for i := 0; i < 20; i++ {
+	for i := range 20 {
 		dStr := fmt.Sprintf("2026-08-%02d", i+1)
 		records = append(records, marketdata.DeliveryRecord{
 			Date:        dStr,
@@ -216,4 +216,3 @@ func TestCalculateDeliveryDelta_CachedCupid(t *testing.T) {
 	t.Logf("CUPID Delivery Delta: %+0.4f (5D Avg: %+0.2f%%, 20D Avg: %+0.2f%%, Settled Days: %d)",
 		res.Delta5D20D, res.Avg5D*100, res.Avg20D*100, res.SettledDays)
 }
-

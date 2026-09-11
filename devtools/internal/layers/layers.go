@@ -50,6 +50,7 @@ var Layers = map[string]int{
 	"kiteclient": 1, // config (Zerodha/Kite low-level client, India legacy)
 	"portfolio":  1, // broker/types (India legacy) — dormant; string utils + Holding alias, consumed by optimizer/zerodha/themereturn
 	"tax":        1, // broker/types
+	"themedb":    1, // cache — theme rebalance/history store; owns its DuckDB tables via cache.Conn()
 	"yfinance":   1, // cache, marketdata
 
 	// L2 — domains + data routing.
@@ -64,7 +65,7 @@ var Layers = map[string]int{
 	"datafetcher": 3, // broker, broker/schwab, yfinance
 	"printer":     3, // broker/types, market, optimizer, portfolio, render
 	"stockpicker": 3, // config, csvloader, excel, optimizer, selectiontracker, yfinance
-	"themereturn": 3, // config, csvloader, portfolio (India legacy) — dormant; wired only via cmd/returns
+	"themereturn": 3, // config, csvloader, portfolio, themedb (India legacy) — dormant; wired only via cmd/returns
 
 	// L4 — orchestration / IO.
 	"daemon":     4, // alert, broker, config, csvloader

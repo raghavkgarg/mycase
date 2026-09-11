@@ -498,4 +498,3 @@ func enrichDeliveryHistory(ctx context.Context, tickers []string, fundamentals m
 	}
 	fmt.Printf("✅ Delivery history enriched: %d / %d candidates have full delivery history\n", updatedCount, len(missing))
 }
-
