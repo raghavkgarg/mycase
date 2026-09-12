@@ -145,7 +145,15 @@ func runPitStats(ctx context.Context, c *cli.Command) error {
 		if !strings.HasPrefix(ticker, "NSE:") {
 			ticker = "NSE:" + ticker
 		}
-		hist, err := db.GetCandidateHistory(ctx, ticker, 20)
+		targetIndex := ""
+		if c.IsSet("index") {
+			targetIndex = indexVal
+		}
+		targetMethod := ""
+		if c.IsSet("method") {
+			targetMethod = methodVal
+		}
+		hist, err := db.GetCandidateHistoryFiltered(ctx, ticker, targetIndex, targetMethod, 20)
 		if err != nil {
 			return fmt.Errorf("failed to query ticker history: %w", err)
 		}

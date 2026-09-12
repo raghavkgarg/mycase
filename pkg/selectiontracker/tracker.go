@@ -8,6 +8,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/raghavkgarg/mycase/pkg/marketdata"
 )
 
 // DriverMetrics holds the structured numeric driver values recorded for a ticker
@@ -44,6 +46,7 @@ type Tracker struct {
 	ResultDates         map[string]string        // ticker -> "24-04-26 ->  25-06-26"
 	InitialCount        int
 	RegimeMultiplier    float64
+	BasedOn             string
 }
 
 // New initializes and returns a new Tracker instance.
@@ -362,6 +365,11 @@ func (t *Tracker) SaveReport(displayName, method string, existingHoldings map[st
 	writeLine("====================================================================\n")
 	writeLine("Index/File:       %s\n", displayName)
 	writeLine("Strategy Preset:  %s\n", method)
+	basedOnStr := t.BasedOn
+	if basedOnStr == "" {
+		basedOnStr = marketdata.LastSettledEODTime(time.Now()).Format("2006-01-02 15:04:05 MST")
+	}
+	writeLine("Based on:         %s\n", basedOnStr)
 	writeLine("Generated:        %s\n", time.Now().Format("2006-01-02 15:04:05 MST"))
 	writeLine("====================================================================\n\n")
 

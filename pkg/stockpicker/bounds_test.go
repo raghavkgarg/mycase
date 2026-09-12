@@ -50,11 +50,11 @@ func TestNormScore_WorkedExamples(t *testing.T) {
 		t.Errorf("PP 6.0: expected 6.25 pts, got %.2f", s)
 	}
 
-	// 5. Pillar 4: Delivery Delta ([-0.10, 0.30], 25 pts)
-	if s := NormScore(0.30, DeliveryDeltaBounds, 25.0, false); math.Abs(s-25.0) > 1e-4 {
-		t.Errorf("Deliv +0.30: expected 25.0 pts, got %.2f", s)
+	// 5. Pillar 4: Delivery Delta ([-0.10, 0.15], 25 pts)
+	if s := NormScore(0.15, DeliveryDeltaBounds, 25.0, false); math.Abs(s-25.0) > 1e-4 {
+		t.Errorf("Deliv +0.15: expected 25.0 pts, got %.2f", s)
 	}
-	if s := NormScore(0.10, DeliveryDeltaBounds, 25.0, false); math.Abs(s-12.5) > 1e-4 {
-		t.Errorf("Deliv +0.10: expected 12.5 pts, got %.2f", s)
+	if s := NormScore(0.025, DeliveryDeltaBounds, 25.0, false); math.Abs(s-12.5) > 1e-4 {
+		t.Errorf("Deliv +0.025: expected 12.5 pts, got %.2f", s)
 	}
 }

@@ -148,10 +148,23 @@ LIMIT ?;
 
 // GetCandidateHistory returns historical score trajectory for a single stock.
 func (p *DB) GetCandidateHistory(ctx context.Context, ticker string, limit int) ([]CandidateHistoryRow, error) {
+	return p.GetCandidateHistoryFiltered(ctx, ticker, "", "", limit)
+}
+
+// GetCandidateHistoryFiltered returns historical score trajectory for a single stock with optional index and method filtering.
+// When indexName is empty, it queries the canonical pit_candidate_scores table and deduplicates so that each
+// (as_of_date, method) appears as a single canonical trajectory row, avoiding synthetic sub-index projection duplication.
+func (p *DB) GetCandidateHistoryFiltered(ctx context.Context, ticker, indexName, method string, limit int) ([]CandidateHistoryRow, error) {
 	if limit <= 0 {
 		limit = 30
 	}
-	query := `
+
+	var query string
+	var args []interface{}
+
+	if indexName != "" {
+		indexName = NormalizeIndexName(indexName)
+		query = `
 SELECT 
     strftime(as_of_date, '%Y-%m-%d'),
     index_name,
@@ -167,11 +180,60 @@ SELECT
     selected,
     final_weight
 FROM v_pit_candidate_scores
-WHERE ticker = ?
+WHERE ticker = ? AND index_name = ?
+`
+		args = append(args, ticker, indexName)
+		if method != "" {
+			query += " AND method = ?\n"
+			args = append(args, method)
+		}
+		query += "ORDER BY as_of_date DESC, method ASC\nLIMIT ?;\n"
+		args = append(args, limit)
+	} else {
+		// When querying by ticker without a specific index filter, query the physical table
+		// and deduplicate by (as_of_date, method) so a stock belonging to multiple indices
+		// appears as a single canonical trajectory row per date and method.
+		query = `
+SELECT 
+    strftime(as_of_date, '%Y-%m-%d') as as_of_date,
+    index_name,
+    method,
+    passed_stage1,
+    raw_score,
+    effective_score,
+    composite_rs,
+    vcp_ratio,
+    rvol_z_score,
+    decayed_pp,
+    delivery_delta,
+    selected,
+    final_weight
+FROM (
+    SELECT *,
+           ROW_NUMBER() OVER (
+               PARTITION BY as_of_date, method 
+               ORDER BY 
+                   CASE WHEN selected THEN 1 ELSE 2 END,
+                   CASE WHEN index_name = 'niftytotalmarket' THEN 1 ELSE 2 END,
+                   raw_score DESC
+           ) as rn
+    FROM pit_candidate_scores
+    WHERE ticker = ?
+`
+		args = append(args, ticker)
+		if method != "" {
+			query += " AND method = ?\n"
+			args = append(args, method)
+		}
+		query += `)
+WHERE rn = 1
 ORDER BY as_of_date DESC, method ASC
 LIMIT ?;
 `
-	rows, err := p.db.QueryContext(ctx, query, ticker, limit)
+		args = append(args, limit)
+	}
+
+	rows, err := p.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -206,7 +268,7 @@ LIMIT ?;
 func (p *DB) GetPendingForwardDates(ctx context.Context, minDaysAgo int) ([]string, error) {
 	query := `
 SELECT DISTINCT strftime(as_of_date, '%Y-%m-%d')
-FROM v_pit_candidate_scores
+FROM pit_candidate_scores
 WHERE forward_return_21d = 0.0 
   AND passed_stage1 = true
   AND as_of_date <= CURRENT_DATE - INTERVAL ? DAY

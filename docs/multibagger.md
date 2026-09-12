@@ -467,3 +467,165 @@ To resolve this paradox without introducing churning on healthy compounders, `my
   - `report/<universe>_multibagger/executions/*_selection_reasons.txt`
   - `report/<universe>_multibagger/executions/*_comparison.txt`
 
+---
+
+## 8. Persistence Architecture & Point-in-Time Database Schemas (`data/mycase.db`)
+
+All analytical state, constituent snapshots, execution proposals, and point-in-time (PIT) scores are consolidated in an ACID-compliant master store: **`data/mycase.db`** (DuckDB). Whenever the `multibagger` strategy executes (via `mycase pick` or `mycase pipeline`), it synchronizes the complete decision funnel into the database.
+
+```text
+                               ┌──────────────────────────────────────────────┐
+                               │  mycase pipeline / mycase pick (multibagger) │
+                               └──────────────────────┬───────────────────────┘
+                                                      │
+                       ┌──────────────────────────────┴──────────────────────────────┐
+                       ▼                                                             ▼
+         Point-in-Time (PIT) Tables                                     Pipeline Audit Tables
+         - pit_runs (run-level funnel summary)                         - pipeline_runs (run ID, YAML config)
+         - pit_candidate_scores (per-ticker scorecard)                 - index_picks (pre-combination outputs)
+         - v_pit_runs / v_pit_candidate_scores (views)                 - proposals (draft & optimized)
+                                                                       - theme_rebalances & theme_history
+```
+
+### Table 1: `pit_runs` (Run Metadata & Stage-1 Funnel Summary)
+Records macro regime conditions, constituent counts, and sync timestamps for every `multibagger` run:
+
+```sql
+CREATE TABLE IF NOT EXISTS pit_runs (
+    as_of_date         DATE,             -- Effective market EOD settlement date (e.g. 2026-09-11)
+    index_name         VARCHAR,          -- Evaluated universe (e.g. microcap250, small250, microsmall)
+    method             VARCHAR,          -- Strategy preset ('multibagger')
+    regime_multiplier  DOUBLE,           -- Macro regime multiplier R_regime (0.0 to 1.0)
+    total_constituents INTEGER,          -- Total stocks evaluated in the universe (e.g. 250, 500)
+    stage1_survivors   INTEGER,          -- Candidates passing all 11 Safety / Hard Filters
+    selected_count     INTEGER,          -- Final stocks admitted into the portfolio
+    created_at         TIMESTAMP,        -- Sync timestamp when data was recorded
+    pillar4_uncalibrated BOOLEAN DEFAULT false,
+    PRIMARY KEY (as_of_date, index_name, method)
+);
+```
+
+### Table 2: `pit_candidate_scores` (Granular Candidate Scorecard & Audit Trail)
+Stores a complete, un-survivorship-biased record of **every candidate** evaluated, whether selected or rejected:
+
+```sql
+CREATE TABLE IF NOT EXISTS pit_candidate_scores (
+    as_of_date         DATE,             -- Market session date
+    index_name         VARCHAR,          -- Evaluated universe
+    method             VARCHAR,          -- 'multibagger'
+    ticker             VARCHAR,          -- Canonical ticker (e.g. NSE:AFFLE, NSE:KPIL)
+    sector             VARCHAR,          -- GICS / NSE Sector
+    passed_stage1      BOOLEAN,          -- Did the stock pass all 11 Hard Filters?
+    data_fetch_failed  BOOLEAN,          -- Upstream bar availability failure flag
+    rejection_reason   VARCHAR,          -- Precise drop explanation (filter code, regime cutoff, or sector cap)
+    raw_score          DOUBLE,           -- Uncalibrated multi-factor composite score (0-100)
+    effective_score    DOUBLE,           -- Regime-damped score = raw_score * R_regime
+    composite_rs       DOUBLE,           -- 1-Year Mansfield Relative Strength vs Benchmark
+    vcp_ratio          DOUBLE,           -- Volatility Contraction Pattern tightness (ATR compression)
+    rvol_z_score       DOUBLE,           -- Relative Volume Z-score
+    decayed_pp         DOUBLE,           -- Pocket Pivot institutional accumulation score
+    delivery_delta     DOUBLE,           -- NSE Delivery Volume % shift vs 20-day baseline
+    selected           BOOLEAN,          -- Was the stock chosen for the final portfolio?
+    final_weight       DOUBLE,           -- Target portfolio weight % (e.g. 0.05 for 5.0%)
+    forward_return_21d DOUBLE,           -- Future 21-day trading session return (for backtesting & decay analysis)
+    pillar4_uncalibrated BOOLEAN DEFAULT false,
+    pillar4_insufficient_history BOOLEAN DEFAULT false,
+    PRIMARY KEY (as_of_date, index_name, method, ticker)
+);
+```
+
+### Table 3: Multi-Index Pipeline Workflow Tables
+When running multi-index combination pipelines (`mycase pipeline --config config/pipeline.yaml`):
+
+| Table Name | Granularity | Key Columns Stored | Purpose & Lifecycle |
+| :--- | :--- | :--- | :--- |
+| **`pipeline_runs`** | Per Pipeline Run | `run_id`, `started_at`, `portfolio`, `method`, `config_json` | Records pipeline execution metadata and a complete snapshot of `pipeline.yaml` configuration. |
+| **`index_picks`** | Per Index Stage | `run_id`, `index_name`, `ticker`, `weight` | Stores intermediate screening outputs for each sub-index (e.g. `microcap250`, `small250`) before combination. |
+| **`proposals`** | Per Proposal State | `run_id`, `state` (`draft` vs `optimized`), `ticker`, `weight` | Captures $TopN+5$ draft candidate lists (allowing manual exclusion) and final post-optimization weights. |
+| **`theme_rebalances`** | Per Rebalance Event| `theme_name`, `source_csv`, `run_id`, `timestamp` | Audit log of all golden copy rebalances committed to live production. |
+| **`theme_history`** | Per Constituent Holding | `theme_name`, `ticker`, `target_weight`, `as_of_date` | Complete historical record of portfolio constituent weights over time. |
+
+### Relational Sub-Index Deduplication Views (`v_pit_runs` & `v_pit_candidate_scores`)
+Stocks in overlapping universes (e.g. a ticker appearing in `small250`, `microcap250_smallcap250`, and `niftytotalmarket`) are resolved through canonical relational views:
+* Queries like `mycase pit stats --ticker <SYMBOL>` automatically query canonical partition keys (`ROW_NUMBER() OVER (PARTITION BY as_of_date, method ...)`).
+* Guarantees strictly **one canonical row per trading date per method**, preventing duplicated rows while preserving index attribution.
+
+---
+
+## 9. Live Market Hours vs. EOD Settlement Mechanics
+
+The multibagger engine is designed to operate seamlessly both **during active trading hours** (for execution and basket generation) and **after market close** (for EOD screening and settlement).
+
+```text
+                                MARKET DATA TIMELINE (IST)
+    09:15              15:30      15:45               18:30               21:00
+      ├──────────────────┼──────────┼───────────────────┼───────────────────┤
+    Market            Market     Settlement           NSE MTO            Official
+     Opens            Closes       Buffer            Delivery            EOD Cutoff
+  (Live Quotes /    (Trading     (Intraday Noise    Bhavcopy Ready      (DuckDB Sync /
+    Kite LTP)         Ends)       Filter Drops)     Settled Series)      All Caches Fresh)
+```
+
+### 1. The 21:00 IST Authoritative EOD Cutoff
+* While the market closes at 15:30 IST, official exchange Bhavcopy files, deliverable volume reports (MTO), and final corporate action adjustments settle between 16:30 and 18:30 IST.
+* **The Cutoff Rule**: **21:00 IST (9:00 PM)** is the sole authoritative daily market settlement cutoff.
+  - Runs before 21:00 IST reflect the *previous* settled session.
+  - Runs at or after 21:00 IST reflect *today's* completed session.
+* **Weekend Awareness**: Any run on **Saturday, Sunday, or Monday before 21:00 IST** automatically maps to **Friday's settled session**. DuckDB strictly bars non-trading weekend timestamps (`2026-09-12`) from entering Point-in-Time tables.
+
+### 2. Intraday Noise Protection (`CleanIntradayNoise`)
+* During live market hours (09:15 to 15:45 IST), Yahoo Finance appends an incomplete, fluctuating "today" daily bar.
+* [`CleanIntradayNoise`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/marketdata/marketdata.go#L156-L195) detects active market hours and **strips the unconfirmed intraday bar**.
+* **Why**: Indicators like the 200-Day SMA slope, Volatility Contraction (ATR), and 1-Year Relative Strength must be computed exclusively on **settled closing prices** to prevent premature or false filter liquidations triggered by intra-day noise.
+
+### 3. Real-Time LTP Fetching During Basket Execution
+When `mycase pipeline` advances to Step 7 (Basket Execution & Order Placement):
+
+1. **Yahoo Live Streaming Quotes ([`yfinance.FetchQuotes`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/yfinance/prices.go#L84))**:
+   - Queries `https://query1.finance.yahoo.com/v8/finance/chart/<TICKER>.NS?range=1d&interval=1d`.
+   - Reads `chartRes.Chart.Result[0].Meta.RegularMarketPrice` (streaming live LTP).
+2. **Zerodha Kite Connect Fallback ([`z.client.GetQuote`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/broker/zerodha/zerodha.go#L74))**:
+   - If any symbol fails on Yahoo, the engine immediately calls Zerodha Kite Connect's quote API to fetch live exchange `LastPrice` directly from NSE.
+3. **Dynamic Order Sizing & Placement**:
+   - **Order Quantity**: $\text{Quantity} = \text{round}\big(\frac{\text{Capital} \times \text{Weight}}{\text{LTP}}\big)$.
+   - **Regular CNC Orders**: Placed at `math.Round(LTP * 10.0) / 10.0` (aligned with NSE tick size).
+   - **GTT Orders**: Formatted with dynamic trigger/limit offsets via [`market.CalculateGTTParams(ltp, txType)`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/market/market.go#L52):
+     - **BUY**: Trigger = $\text{LTP} \times 1.003$ ($+0.3\%$), Limit = $\text{LTP} + ₹2.00$.
+     - **SELL**: Trigger = $\text{LTP} \times 0.997$ ($-0.3\%$), Limit = $\text{LTP} - ₹2.00$.
+
+---
+
+## 10. CLI Inspection & Point-in-Time Analytics Commands
+
+The multibagger strategy exposes dedicated CLI commands for screening, execution, and historical deduction:
+
+### 1. Run Strategy Screening (with Smart Skip & Cache Replay)
+```bash
+# Runs screening on Smallcap 250. If today's EOD snapshot already exists,
+# replays the cached report instantly (0.04s) without redundant network fetch.
+mycase pick --index small250 --method multibagger --top 20
+
+# Force re-running calculation and re-fetching market data:
+mycase pick --index small250 --method multibagger --top 20 --force
+```
+
+### 2. End-to-End Automated Pipeline
+```bash
+# Executes complete multi-index screening, draft proposals, golden copy rebalancing,
+# performance simulation, and Zerodha Kite basket order execution:
+mycase pipeline --config config/pipeline.yaml
+```
+
+### 3. Historical Ticker Trajectory
+```bash
+# Displays the complete point-in-time score and gate trajectory for a single stock:
+mycase pit stats --ticker AFFLE
+```
+
+### 4. Cross-Sectional Quantitative Deduction
+```bash
+# Runs deep DuckDB deduction analysis across historical multibagger runs:
+mycase pit analysis --index small250 --method multibagger
+```
+
+

@@ -54,9 +54,9 @@ func TestDeliveryDelta_CrossCallSiteConsistency(t *testing.T) {
 
 	// 2. Pillar 4 NormScore check in scoring.go
 	p4 := NormScore(expectedDelta, DeliveryDeltaBounds, 25.0, false)
-	// Bounds [-0.10, +0.30]: (0.15 - (-0.10)) / (0.30 - (-0.10)) = 0.25 / 0.40 = 0.625 -> 25 * 0.625 = 15.625 pts
-	if math.Abs(p4-15.625) > 1e-4 {
-		t.Errorf("Pillar 4 score mismatch: expected 15.625 pts, got %f", p4)
+	// Bounds [-0.10, +0.15]: (0.15 - (-0.10)) / (0.15 - (-0.10)) = 0.25 / 0.25 = 1.0 -> 25 * 1.0 = 25.0 pts
+	if math.Abs(p4-25.0) > 1e-4 {
+		t.Errorf("Pillar 4 score mismatch: expected 25.0 pts, got %f", p4)
 	}
 
 	// 3. Driver String Formatting Consistency

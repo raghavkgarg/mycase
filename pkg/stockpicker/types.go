@@ -37,6 +37,8 @@ type Options struct {
 	CooldownDays                        int
 	CooldownBypassRank                  int
 	AsOfDate                            string // Target EOD market date (YYYY-MM-DD); if empty, defaults to EODSettlementDate(now)
+	BasedOn                             string // Formatted based-on string e.g. "2026-09-11 EOD (Synced: 2026-09-11 21:15:00 IST)"
+	Force                               bool   // Force execution even if snapshot exists
 }
 
 // TickersSource encapsulates tickers list source info.

@@ -12,22 +12,30 @@ import (
 	"time"
 
 	"github.com/raghavkgarg/mycase/pkg/config"
+	"github.com/raghavkgarg/mycase/pkg/marketdata"
 	"github.com/raghavkgarg/mycase/pkg/yfinance"
 )
 
 // PrintHeader displays the header banner of the application.
-func PrintHeader(displayName, method string, topN int, rangeStr, filePath string) {
+func PrintHeader(displayName, method string, topN int, rangeStr, filePath string, basedOn ...string) {
 	fmt.Printf("====================================================================\n")
 	fmt.Printf("                 Go Mycase Index Stock Picker                    \n")
 	fmt.Printf("====================================================================\n")
 	if filePath != "" {
-		fmt.Printf("Source File: %s\n", filePath)
+		fmt.Printf("Source File:      %s\n", filePath)
 	} else {
-		fmt.Printf("Index:    %s\n", displayName)
+		fmt.Printf("Index:            %s\n", displayName)
 	}
-	fmt.Printf("Strategy: %s\n", method)
-	fmt.Printf("Top N:    %d\n", topN)
-	fmt.Printf("Range:    %s\n", rangeStr)
+	fmt.Printf("Strategy Preset:  %s\n", method)
+	fmt.Printf("Top N:            %d\n", topN)
+	fmt.Printf("Range:            %s\n", rangeStr)
+	bOn := ""
+	if len(basedOn) > 0 && basedOn[0] != "" {
+		bOn = basedOn[0]
+	} else {
+		bOn = marketdata.LastSettledEODTime(time.Now()).Format("2006-01-02 15:04:05 MST")
+	}
+	fmt.Printf("Based on:         %s\n", bOn)
 	fmt.Printf("====================================================================\n")
 }
 

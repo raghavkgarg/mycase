@@ -247,6 +247,24 @@ func (p *DB) GetLatestRunDate(ctx context.Context, indexName, method string) (st
 	return dt, nil
 }
 
+// GetRunSyncTime returns the creation/sync timestamp for a run snapshot.
+func (p *DB) GetRunSyncTime(ctx context.Context, asOfDate, indexName, method string) (time.Time, error) {
+	var t time.Time
+	cleanIndex := strings.NewReplacer(",", "_", " ", "_", "^", "").Replace(indexName)
+	query := `SELECT created_at FROM v_pit_runs WHERE as_of_date = ? AND (index_name = ? OR index_name = ? OR index_name = 'niftytotalmarket') AND method = ? ORDER BY created_at DESC LIMIT 1;`
+	err := p.db.QueryRowContext(ctx, query, asOfDate, cleanIndex, indexName, method).Scan(&t)
+	if err != nil {
+		// Fallback to base pit_runs
+		query = `SELECT created_at FROM pit_runs WHERE as_of_date = ? AND (index_name = ? OR index_name = ? OR index_name = 'niftytotalmarket') AND method = ? ORDER BY created_at DESC LIMIT 1;`
+		err = p.db.QueryRowContext(ctx, query, asOfDate, cleanIndex, indexName, method).Scan(&t)
+		if err != nil {
+			return time.Time{}, err
+		}
+	}
+	ist := time.FixedZone("IST", 5*3600+30*60)
+	return t.In(ist), nil
+}
+
 // GetCandidateTemporalVelocities queries DuckDB for chronological score trajectories and survival streaks.
 func (p *DB) GetCandidateTemporalVelocities(
 	ctx context.Context,

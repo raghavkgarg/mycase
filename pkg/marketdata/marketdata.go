@@ -209,30 +209,81 @@ func (h *HistoricalData) truncateLast() {
 	}
 }
 
-// EODSettlementDate returns the effective settled EOD market date for a given time t in IST.
-// The sole daily cutoff is 21:00 IST (9:00 PM):
-// - Any time before 21:00 IST belongs to the previous day's completed EOD cycle.
-// - Any time at or after 21:00 IST belongs to today's completed EOD cycle.
-// Example: From 21:00 PM on Sept 21 until 20:59 PM on Sept 22, the effective EOD date is Sept 21.
-func EODSettlementDate(t time.Time) time.Time {
+// LastSettledEODTime returns the timestamp of the most recent completed market EOD settlement cutoff (21:00 IST).
+// - On Saturday, Sunday, or Monday before 21:00 IST: the last settled session is Friday at 21:00 IST.
+// - On Tuesday through Friday before 21:00 IST: the last settled session is yesterday at 21:00 IST.
+// - On Monday through Friday at or after 21:00 IST: the last settled session is today at 21:00 IST.
+func LastSettledEODTime(t time.Time) time.Time {
 	ist := time.FixedZone("IST", 5*3600+30*60)
 	tIST := t.In(ist)
-	if tIST.Hour() < 21 {
+	weekday := tIST.Weekday()
+
+	switch weekday {
+	case time.Saturday:
+		fri := tIST.AddDate(0, 0, -1)
+		return time.Date(fri.Year(), fri.Month(), fri.Day(), 21, 0, 0, 0, ist)
+	case time.Sunday:
+		fri := tIST.AddDate(0, 0, -2)
+		return time.Date(fri.Year(), fri.Month(), fri.Day(), 21, 0, 0, 0, ist)
+	case time.Monday:
+		if tIST.Hour() >= 21 {
+			return time.Date(tIST.Year(), tIST.Month(), tIST.Day(), 21, 0, 0, 0, ist)
+		}
+		fri := tIST.AddDate(0, 0, -3)
+		return time.Date(fri.Year(), fri.Month(), fri.Day(), 21, 0, 0, 0, ist)
+	default: // Tuesday through Friday
+		if tIST.Hour() >= 21 {
+			return time.Date(tIST.Year(), tIST.Month(), tIST.Day(), 21, 0, 0, 0, ist)
+		}
 		yesterday := tIST.AddDate(0, 0, -1)
-		return time.Date(yesterday.Year(), yesterday.Month(), yesterday.Day(), 0, 0, 0, 0, ist)
+		return time.Date(yesterday.Year(), yesterday.Month(), yesterday.Day(), 21, 0, 0, 0, ist)
 	}
-	return time.Date(tIST.Year(), tIST.Month(), tIST.Day(), 0, 0, 0, 0, ist)
+}
+
+// IsFreshEOD returns true if fetchedAt was recorded at or after the last settled EOD session cutoff.
+func IsFreshEOD(fetchedAt, now time.Time) bool {
+	cutoff := LastSettledEODTime(now)
+	return !fetchedAt.Before(cutoff)
+}
+
+// EODSettlementDate returns the effective settled EOD market date for a given time t in IST.
+// The sole daily cutoff is 21:00 IST (9:00 PM):
+// - Any time before 21:00 IST belongs to the previous completed trading day's EOD cycle.
+// - Any time at or after 21:00 IST belongs to today's completed EOD cycle.
+// - Weekend awareness: Saturday, Sunday, and Monday before 21:00 IST map to Friday's settled EOD date.
+func EODSettlementDate(t time.Time) time.Time {
+	cutoff := LastSettledEODTime(t)
+	ist := time.FixedZone("IST", 5*3600+30*60)
+	return time.Date(cutoff.Year(), cutoff.Month(), cutoff.Day(), 0, 0, 0, 0, ist)
 }
 
 // NextEODAvailableDate returns the date on which the next day's EOD file will be available (at 21:00 IST).
+// Handles weekends gracefully: Friday post-21:00, Saturday, and Sunday point to Monday at 21:00 IST.
 func NextEODAvailableDate(t time.Time) time.Time {
 	ist := time.FixedZone("IST", 5*3600+30*60)
 	tIST := t.In(ist)
-	if tIST.Hour() < 21 {
-		return time.Date(tIST.Year(), tIST.Month(), tIST.Day(), 21, 0, 0, 0, ist)
+	weekday := tIST.Weekday()
+
+	switch weekday {
+	case time.Friday:
+		if tIST.Hour() < 21 {
+			return time.Date(tIST.Year(), tIST.Month(), tIST.Day(), 21, 0, 0, 0, ist)
+		}
+		mon := tIST.AddDate(0, 0, 3)
+		return time.Date(mon.Year(), mon.Month(), mon.Day(), 21, 0, 0, 0, ist)
+	case time.Saturday:
+		mon := tIST.AddDate(0, 0, 2)
+		return time.Date(mon.Year(), mon.Month(), mon.Day(), 21, 0, 0, 0, ist)
+	case time.Sunday:
+		mon := tIST.AddDate(0, 0, 1)
+		return time.Date(mon.Year(), mon.Month(), mon.Day(), 21, 0, 0, 0, ist)
+	default:
+		if tIST.Hour() < 21 {
+			return time.Date(tIST.Year(), tIST.Month(), tIST.Day(), 21, 0, 0, 0, ist)
+		}
+		nextDay := tIST.AddDate(0, 0, 1)
+		return time.Date(nextDay.Year(), nextDay.Month(), nextDay.Day(), 21, 0, 0, 0, ist)
 	}
-	nextDay := tIST.AddDate(0, 0, 1)
-	return time.Date(nextDay.Year(), nextDay.Month(), nextDay.Day(), 21, 0, 0, 0, ist)
 }
 
 // FormatOrdinalDay returns e.g. "21st", "22nd", "23rd", "24th" for a day number.
