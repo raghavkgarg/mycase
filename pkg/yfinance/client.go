@@ -33,7 +33,12 @@ func newYFinanceHTTPClient(timeout time.Duration, jar http.CookieJar) *http.Clie
 
 // executeYFinanceRequest executes an HTTP request, automatically falling back
 // to a direct connection if the environment proxy fails with 403 Forbidden or a proxy error.
+// It first blocks on the process-wide Yahoo rate limiter (see ratelimit.go), so
+// every request routed through here is paced.
 func executeYFinanceRequest(client *http.Client, req *http.Request) (*http.Response, error) {
+	if err := waitRate(req.Context()); err != nil {
+		return nil, err
+	}
 	resp, err := client.Do(req)
 	if err != nil && isProxyFailure(err) {
 		directClient := &http.Client{
