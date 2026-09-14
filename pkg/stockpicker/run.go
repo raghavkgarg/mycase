@@ -75,7 +75,15 @@ func RunWithResult(ctx context.Context, opts *Options) (*PickResult, error) {
 	if opts.DisplayName != "" {
 		displayNameVal = opts.DisplayName
 	}
-	PrintHeader(displayNameVal, opts.Method, opts.TopN, rangeStr, opts.FilePath)
+	basedOnStr := opts.BasedOn
+	if basedOnStr == "" {
+		if opts.AsOfDate != "" {
+			basedOnStr = opts.AsOfDate + " 21:00:00 IST"
+		} else {
+			basedOnStr = marketdata.LastSettledEODTime(time.Now()).Format("2006-01-02 15:04:05 MST")
+		}
+	}
+	PrintHeader(displayNameVal, opts.Method, opts.TopN, rangeStr, opts.FilePath, basedOnStr)
 
 	goldenWeights := LoadGoldenWeights(opts.GoldenPath)
 
@@ -123,6 +131,7 @@ func RunWithResult(ctx context.Context, opts *Options) (*PickResult, error) {
 
 	InjectGovernance(fundamentals, cfg.Governance)
 	tracker := selectiontracker.New()
+	tracker.BasedOn = basedOnStr
 	// Record upstream data-fetch failures as a first-class funnel bucket (EBM
 	// DataFetchFailed thread) so failed tickers don't contaminate Stage-1
 	// survivor quantiles and are diffed separately from genuine gate exits.

@@ -58,6 +58,11 @@ echo "[$(date '+%Y-%m-%d %H:%M:%S')] Starting unified EOD database update for da
 cd "$PROJECT_DIR"
 ./mycase db update --all --index niftytotalmarket --method earlymb --top 10 >> "$LOG_FILE" 2>&1
 
+# 7. Synchronize Multibagger PIT factor scores on warmed Nifty Total Market cache
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] Synchronizing Multibagger PIT factor scores on warmed Nifty Total Market cache..." >> "$LOG_FILE"
+./mycase pit update --index niftytotalmarket --method multibagger --top 20 >> "$LOG_FILE" 2>&1
+
 echo "[$(date '+%Y-%m-%d %H:%M:%S')] Unified EOD database update completed successfully." >> "$LOG_FILE"
+
 
 

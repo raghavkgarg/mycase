@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"time"
+
+	"github.com/raghavkgarg/mycase/pkg/marketdata"
 )
 
 // GetFundamentalsJSON returns the cached JSON blob for ticker if it was
@@ -52,5 +54,8 @@ func (c *Cache) StoreFundamentalsJSON(ctx context.Context, ticker string, data [
 }
 
 func isFreshFundamentals(fetchedAt time.Time) bool {
+	if marketdata.IsFreshEOD(fetchedAt, time.Now()) {
+		return true
+	}
 	return time.Since(fetchedAt) < 24*time.Hour
 }

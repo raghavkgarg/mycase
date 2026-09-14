@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"fmt"
 	"time"
+
+	"github.com/raghavkgarg/mycase/pkg/marketdata"
 )
 
 // PriceRecord is a single daily price row as stored in the cache.
@@ -106,20 +108,7 @@ func (c *Cache) StorePrices(ctx context.Context, ticker, rangeKey string, record
 }
 
 func isFreshToday(fetchedAt time.Time) bool {
-	ist := time.FixedZone("IST", 5*3600+30*60)
-	nowIST := time.Now().In(ist)
-	f := fetchedAt.In(ist)
-	if f.Year() != nowIST.Year() || f.YearDay() != nowIST.YearDay() {
-		return false
-	}
-	// Post-market / EOD settlement boundary (21:00 IST):
-	// 21:00 IST is the sole cutoff for the daily market cycle.
-	// If current time is at or after official sync (>= 21:00 IST) on a trading day,
-	// but data was fetched prior to 21:00 IST, it is considered stale so the confirmed EOD snapshot is pulled.
-	if nowIST.Hour() >= 21 && f.Hour() < 21 {
-		return false
-	}
-	return true
+	return marketdata.IsFreshEOD(fetchedAt, time.Now())
 }
 
 // GetPricesByDateRange returns cached price records for [from, to] for a ticker.

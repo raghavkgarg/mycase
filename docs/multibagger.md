@@ -34,7 +34,7 @@ The following table summarizes the **current safety configuration** applied to t
 | **H** | **Capital Efficiency (ROCE)** | $\ge$ **12%** | $\ge$ **10.2%** (15% soft cushion) | Latest or 3y Avg ROCE must exceed cost of capital. |
 | **I** | **Debt-to-Equity (D/E)** | < **1.5** | < **1.725** (15% soft cushion) | Keeps leverage manageable during credit tightness. |
 | **J** | **Interest Coverage Ratio** | > 3.0 | > **2.7** (10% soft cushion) | Operating profits (EBIT) must comfortably service debt. |
-| **K** | **CROIC (FCF Return)** | $\ge$ **6%** | $\ge$ **4.8%** (20% soft cushion) | FCF / (Equity + Debt). Prevents cliff exits on working capital reinvestment cycles. |
+| **K** | **CROIC (Cash Return on Invested Capital)** | $\ge$ **6%** | $\ge$ **4.8%** (20% soft cushion) | Latest OR 3-Year Avg CROIC: $\text{FCF} / \text{Capital Employed}$. Decoupled from market-price distortions; aligned with ROCE Capital Employed ($\text{Total Assets} - \text{Current Liabilities}$). |
 | **L** | **DSO Deterioration Gate** | $\le$ **15%** | $\le$ **15%** | Limits YoY Days Sales Outstanding deterioration to prevent Day-1 monitoring exits. |
 
 ---
@@ -56,7 +56,7 @@ The following table summarizes the **current safety configuration** applied to t
 * **Rule:** 
   1. Operating Cash Flow (CFO) to Net Profit (PAT) ratio $\ge$ **0.25** (i.e. $\ge 25\%$ of reported net income is realized as cash).
   2. Operating Cash Flow (CFO) $>$ **0** (Free Cash Flow is not strictly capped to support companies undergoing high capital reinvestment/CapEx growth phases).
-  3. **Data Coverage Bypass:** If both Operating Cash Flow and Free Cash Flow are reported as exactly `0.0` (indicating a data coverage gap on Yahoo Finance), the filter is bypassed.
+  3. **Strict Timeseries Enforcement (Post-Audit)**: Previously, missing summary cash flows on Yahoo Finance triggered a silent bypass when fields defaulted to `0.0`. The ingestion pipeline now fetches multi-year timeseries statements (`annualOperatingCashFlow` and `annualFreeCashFlow`), providing 100% coverage across Indian equities and actively eliminating cash-burning businesses.
 * **Why:** Avoids severe "paper profits" value traps while ensuring cash backing of reported earnings.
 
 ### D. Consistent Earnings growth (PAT Trend)
@@ -113,12 +113,14 @@ The following table summarizes the **current safety configuration** applied to t
 * **Why:** Mandating a strong interest coverage buffer ensures operating profits are sufficient to service debt obligations comfortably even during downturns.
 
 ### K. The Ultimate Truth Serum (CROIC)
-* **Rule:** Cash Return on Invested Capital (CROIC) must be $\ge$ **6%**.
+* **Rule:** Cash Return on Invested Capital (CROIC) must be $\ge$ **6%** for the latest fiscal year, OR the **3-Year Average CROIC** must be $\ge$ **6%** (with a 20% soft-band cushion down to **4.8%** for existing portfolio holdings).
 * **Calculation:** 
-  $$\text{CROIC} = \frac{\text{Free Cash Flow}}{\text{Total Equity} + \text{Total Debt}}$$
-  Where $\text{Total Equity} = \frac{\text{Market Cap}}{\text{Price-to-Book Ratio}}$.
-* **Why & Fallbacks:** A highly strict profitability check. Operating earnings can be manipulated, but Free Cash Flow relative to Invested Capital (Equity + Debt) shows the raw cash generation power of the business.
-  * **Data Coverage Bypass:** Bypassed if FCF and CFO are exactly 0.0 (indicating a Yahoo Finance data gap).
+  $$\text{CROIC} = \frac{\text{Free Cash Flow}}{\text{Capital Employed}} = \frac{\text{Operating Cash Flow} - |\text{CapEx}|}{\text{Total Assets} - \text{Current Liabilities}}$$
+* **Architectural & Methodology Realignment (September 2026 Audit)**:
+  1. **Decoupled from Stock Price Surges (Formula Bug Fix)**: The legacy calculation used `(MarketCap / PBRatio) + TotalDebt` as an invested capital shortcut. When a high-performing multibagger stock rallied 5x–10x, market cap expansion inflated the synthetic book denominator, artificially suppressing CROIC and triggering false-positive evictions on peak operational performance (e.g. `CUPID`). The metric now computes Capital Employed directly from balance-sheet timeseries ($\text{Total Assets} - \text{Current Liabilities}$), falling back to book equity + debt only when balance-sheet data is absent.
+  2. **Methodological Parity with ROCE**: CROIC's capital denominator is now identical to ROCE's Capital Employed, creating a completely coherent capital efficiency framework (Operating Profit Return vs Cash Return on the exact same capital base).
+  3. **3-Year Average Fallback (Business-Cycle Protection)**: Mirroring the battle-tested ROCE pattern (`latest >= floor || avg3y >= floor`), CROIC incorporates a 3-year average fallback. Capital-intensive compounders reinvesting heavily in expansionary CapEx (such as `VARROC` building out EV lighting capacities) can experience single-year FCF compression while generating phenomenal multi-year cash returns. If either the latest year or the 3-year trailing average clears the floor, the company passes.
+  4. **Point-in-Time (PIT) Filing Lag**: Evaluated with a mandatory 45-day filing lag (`filterMetricsBeforeDate`) to prevent look-ahead bias during historical backtests.
 
 ---
 
@@ -466,4 +468,285 @@ To resolve this paradox without introducing churning on healthy compounders, `my
 * Generates audit reports with explicit rationale:
   - `report/<universe>_multibagger/executions/*_selection_reasons.txt`
   - `report/<universe>_multibagger/executions/*_comparison.txt`
+
+---
+
+## 8. Persistence Architecture & Point-in-Time Database Schemas (`data/mycase.db`)
+
+All analytical state, constituent snapshots, execution proposals, and point-in-time (PIT) scores are consolidated in an ACID-compliant master store: **`data/mycase.db`** (DuckDB). Whenever the `multibagger` strategy executes (via `mycase pick` or `mycase pipeline`), it synchronizes the complete decision funnel into the database.
+
+```text
+                               ┌──────────────────────────────────────────────┐
+                               │  mycase pipeline / mycase pick (multibagger) │
+                               └──────────────────────┬───────────────────────┘
+                                                      │
+                       ┌──────────────────────────────┴──────────────────────────────┐
+                       ▼                                                             ▼
+         Point-in-Time (PIT) Tables                                     Pipeline Audit Tables
+         - pit_runs (run-level funnel summary)                         - pipeline_runs (run ID, YAML config)
+         - pit_candidate_scores (per-ticker scorecard)                 - index_picks (pre-combination outputs)
+         - v_pit_runs / v_pit_candidate_scores (views)                 - proposals (draft & optimized)
+                                                                       - theme_rebalances & theme_history
+```
+
+### Table 1: `pit_runs` (Run Metadata & Stage-1 Funnel Summary)
+Records macro regime conditions, constituent counts, and sync timestamps for every `multibagger` run:
+
+```sql
+CREATE TABLE IF NOT EXISTS pit_runs (
+    as_of_date         DATE,             -- Effective market EOD settlement date (e.g. 2026-09-11)
+    index_name         VARCHAR,          -- Evaluated universe (e.g. microcap250, small250, microsmall)
+    method             VARCHAR,          -- Strategy preset ('multibagger')
+    regime_multiplier  DOUBLE,           -- Macro regime multiplier R_regime (0.0 to 1.0)
+    total_constituents INTEGER,          -- Total stocks evaluated in the universe (e.g. 250, 500)
+    stage1_survivors   INTEGER,          -- Candidates passing all 11 Safety / Hard Filters
+    selected_count     INTEGER,          -- Final stocks admitted into the portfolio
+    created_at         TIMESTAMP,        -- Sync timestamp when data was recorded
+    pillar4_uncalibrated BOOLEAN DEFAULT false,
+    PRIMARY KEY (as_of_date, index_name, method)
+);
+```
+
+### Table 2: `pit_candidate_scores` (Granular Candidate Scorecard & Audit Trail)
+Stores a complete, un-survivorship-biased record of **every candidate** evaluated, whether selected or rejected:
+
+```sql
+CREATE TABLE IF NOT EXISTS pit_candidate_scores (
+    as_of_date         DATE,             -- Market session date
+    index_name         VARCHAR,          -- Evaluated universe
+    method             VARCHAR,          -- 'multibagger'
+    ticker             VARCHAR,          -- Canonical ticker (e.g. NSE:AFFLE, NSE:KPIL)
+    sector             VARCHAR,          -- GICS / NSE Sector
+    passed_stage1      BOOLEAN,          -- Did the stock pass all 11 Hard Filters?
+    data_fetch_failed  BOOLEAN,          -- Upstream bar availability failure flag
+    rejection_reason   VARCHAR,          -- Precise drop explanation (filter code, regime cutoff, or sector cap)
+    raw_score          DOUBLE,           -- Uncalibrated multi-factor composite score (0-100)
+    effective_score    DOUBLE,           -- Regime-damped score = raw_score * R_regime
+    composite_rs       DOUBLE,           -- 1-Year Mansfield Relative Strength vs Benchmark
+    vcp_ratio          DOUBLE,           -- Volatility Contraction Pattern tightness (ATR compression)
+    rvol_z_score       DOUBLE,           -- Relative Volume Z-score
+    decayed_pp         DOUBLE,           -- Pocket Pivot institutional accumulation score
+    delivery_delta     DOUBLE,           -- NSE Delivery Volume % shift vs 20-day baseline
+    selected           BOOLEAN,          -- Was the stock chosen for the final portfolio?
+    final_weight       DOUBLE,           -- Target portfolio weight % (e.g. 0.05 for 5.0%)
+    forward_return_21d DOUBLE,           -- Future 21-day trading session return (for backtesting & decay analysis)
+    pillar4_uncalibrated BOOLEAN DEFAULT false,
+    pillar4_insufficient_history BOOLEAN DEFAULT false,
+    PRIMARY KEY (as_of_date, index_name, method, ticker)
+);
+```
+
+### Table 3: Multi-Index Pipeline Workflow Tables
+When running multi-index combination pipelines (`mycase pipeline --config config/pipeline.yaml`):
+
+| Table Name | Granularity | Key Columns Stored | Purpose & Lifecycle |
+| :--- | :--- | :--- | :--- |
+| **`pipeline_runs`** | Per Pipeline Run | `run_id`, `started_at`, `portfolio`, `method`, `config_json` | Records pipeline execution metadata and a complete snapshot of `pipeline.yaml` configuration. |
+| **`index_picks`** | Per Index Stage | `run_id`, `index_name`, `ticker`, `weight` | Stores intermediate screening outputs for each sub-index (e.g. `microcap250`, `small250`) before combination. |
+| **`proposals`** | Per Proposal State | `run_id`, `state` (`draft` vs `optimized`), `ticker`, `weight` | Captures $TopN+5$ draft candidate lists (allowing manual exclusion) and final post-optimization weights. |
+| **`theme_rebalances`** | Per Rebalance Event| `theme_name`, `source_csv`, `run_id`, `timestamp` | Audit log of all golden copy rebalances committed to live production. |
+| **`theme_history`** | Per Constituent Holding | `theme_name`, `ticker`, `target_weight`, `as_of_date` | Complete historical record of portfolio constituent weights over time. |
+
+### Relational Sub-Index Deduplication Views (`v_pit_runs` & `v_pit_candidate_scores`)
+Stocks in overlapping universes (e.g. a ticker appearing in `small250`, `microcap250_smallcap250`, and `niftytotalmarket`) are resolved through canonical relational views:
+* Queries like `mycase pit stats --ticker <SYMBOL>` automatically query canonical partition keys (`ROW_NUMBER() OVER (PARTITION BY as_of_date, method ...)`).
+* Guarantees strictly **one canonical row per trading date per method**, preventing duplicated rows while preserving index attribution.
+
+---
+
+## 9. Live Market Hours vs. EOD Settlement Mechanics
+
+The multibagger engine is designed to operate seamlessly both **during active trading hours** (for execution and basket generation) and **after market close** (for EOD screening and settlement).
+
+```text
+                                MARKET DATA TIMELINE (IST)
+    09:15              15:30      15:45               18:30               21:00
+      ├──────────────────┼──────────┼───────────────────┼───────────────────┤
+    Market            Market     Settlement           NSE MTO            Official
+     Opens            Closes       Buffer            Delivery            EOD Cutoff
+  (Live Quotes /    (Trading     (Intraday Noise    Bhavcopy Ready      (DuckDB Sync /
+    Kite LTP)         Ends)       Filter Drops)     Settled Series)      All Caches Fresh)
+```
+
+### 1. The 21:00 IST Authoritative EOD Cutoff
+* While the market closes at 15:30 IST, official exchange Bhavcopy files, deliverable volume reports (MTO), and final corporate action adjustments settle between 16:30 and 18:30 IST.
+* **The Cutoff Rule**: **21:00 IST (9:00 PM)** is the sole authoritative daily market settlement cutoff.
+  - Runs before 21:00 IST reflect the *previous* settled session.
+  - Runs at or after 21:00 IST reflect *today's* completed session.
+* **Weekend Awareness**: Any run on **Saturday, Sunday, or Monday before 21:00 IST** automatically maps to **Friday's settled session**. DuckDB strictly bars non-trading weekend timestamps (`2026-09-12`) from entering Point-in-Time tables.
+
+### 2. Intraday Noise Protection (`CleanIntradayNoise`)
+* During live market hours (09:15 to 15:45 IST), Yahoo Finance appends an incomplete, fluctuating "today" daily bar.
+* [`CleanIntradayNoise`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/marketdata/marketdata.go#L156-L195) detects active market hours and **strips the unconfirmed intraday bar**.
+* **Why**: Indicators like the 200-Day SMA slope, Volatility Contraction (ATR), and 1-Year Relative Strength must be computed exclusively on **settled closing prices** to prevent premature or false filter liquidations triggered by intra-day noise.
+
+### 3. Real-Time LTP Fetching During Basket Execution
+When `mycase pipeline` advances to Step 7 (Basket Execution & Order Placement):
+
+1. **Yahoo Live Streaming Quotes ([`yfinance.FetchQuotes`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/yfinance/prices.go#L84))**:
+   - Queries `https://query1.finance.yahoo.com/v8/finance/chart/<TICKER>.NS?range=1d&interval=1d`.
+   - Reads `chartRes.Chart.Result[0].Meta.RegularMarketPrice` (streaming live LTP).
+2. **Zerodha Kite Connect Fallback ([`z.client.GetQuote`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/broker/zerodha/zerodha.go#L74))**:
+   - If any symbol fails on Yahoo, the engine immediately calls Zerodha Kite Connect's quote API to fetch live exchange `LastPrice` directly from NSE.
+3. **Dynamic Order Sizing & Placement**:
+   - **Order Quantity**: $\text{Quantity} = \text{round}\big(\frac{\text{Capital} \times \text{Weight}}{\text{LTP}}\big)$.
+   - **Regular CNC Orders**: Placed at `math.Round(LTP * 10.0) / 10.0` (aligned with NSE tick size).
+   - **GTT Orders**: Formatted with dynamic trigger/limit offsets via [`market.CalculateGTTParams(ltp, txType)`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/market/market.go#L52):
+     - **BUY**: Trigger = $\text{LTP} \times 1.003$ ($+0.3\%$), Limit = $\text{LTP} + ₹2.00$.
+     - **SELL**: Trigger = $\text{LTP} \times 0.997$ ($-0.3\%$), Limit = $\text{LTP} - ₹2.00$.
+
+---
+
+## 10. CLI Inspection & Point-in-Time Analytics Commands
+
+The multibagger strategy exposes dedicated CLI commands for screening, execution, and historical deduction:
+
+### 1. Run Strategy Screening (with Smart Skip & Cache Replay)
+```bash
+# Runs screening on Smallcap 250. If today's EOD snapshot already exists,
+# replays the cached report instantly (0.04s) without redundant network fetch.
+mycase pick --index small250 --method multibagger --top 20
+
+# Force re-running calculation and re-fetching market data:
+mycase pick --index small250 --method multibagger --top 20 --force
+```
+
+### 2. End-to-End Automated Pipeline
+```bash
+# Executes complete multi-index screening, draft proposals, golden copy rebalancing,
+# performance simulation, and Zerodha Kite basket order execution:
+mycase pipeline --config config/pipeline.yaml
+```
+
+### 3. Historical Ticker Trajectory
+```bash
+# Displays the complete point-in-time score and gate trajectory for a single stock:
+mycase pit stats --ticker AFFLE
+```
+
+### 4. Cross-Sectional Quantitative Deduction
+```bash
+# Runs deep DuckDB deduction analysis across historical multibagger runs:
+mycase pit analysis --index small250 --method multibagger
+```
+
+---
+
+## 11. Data Integrity Audit Impact & Portfolio Hygiene (Sep 13, 2026)
+
+### 1. The Silent Cash Flow Bypass & The 196-Stock Elimination
+
+During the system-wide data integrity audit cataloged in [`docs/DataAudit.md`](file:///Users/raghavgarg/Projects/myGo/mycase/docs/DataAudit.md), a critical vulnerability was identified in how fundamental data was ingested for the multibagger strategy:
+
+* **The Core Vulnerability**: Yahoo Finance's `quoteSummary.financialData` card omitted operating and free cash flow for **96.6% of Indian stocks** (625 of 647 stocks). In Go, `OperatingCashflow` and `FreeCashflow` defaulted to `0.0`.
+* **The Dormant Safety Filters**: In [`pkg/stockpicker/filters.go`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/stockpicker/filters.go#L257), the Cash Flow Quality Gate was gated by:
+  ```go
+  if f.OperatingCashflow != 0 || f.FreeCashflow != 0 {
+      // Check CFO/PAT >= 25% and CROIC >= 6%
+  }
+  ```
+  Because both were `0.0`, **Filter C (Quality of Earnings: CFO/PAT $\ge 25\%$) and Filter K (CROIC $\ge 6\%$) were silently bypassed for ~96% of the candidate universe**. Companies with severe cash burn or low-quality paper profits passed through unchecked.
+* **The Resolution**: The ingestion layer now queries Yahoo Finance's `fundamentals-timeseries` endpoint for `annualOperatingCashFlow` and `annualFreeCashFlow`, providing **100% multi-year cash flow coverage**.
+* **Empirical Impact across MicroCap & SmallCap Universes**:
+  When the strategy was re-evaluated against the corrected dataset on September 13, 2026:
+  - **MicroCap 250**: **54 stocks failed Cash Flow Quality** and **34 stocks failed CROIC** (**88 stocks eliminated**).
+  - **SmallCap 250**: **74 stocks failed Cash Flow Quality** and **34 stocks failed CROIC** (**108 stocks eliminated**).
+  - **Total**: Nearly **200 cash-burning or low-quality companies** that previously entered the multibagger scoring matrix are now strictly and cleanly eliminated at Stage 1.
+
+---
+
+### 2. Portfolio Contamination Case Study: `NSE:MSTCLTD` in `data/microsmall.csv`
+
+The historical golden copy `data/microsmall.csv` was generated on **September 11, 2026**, prior to the data audit fixes. A forensic audit of the 20 active holdings revealed that one holding in particular breached the fundamental safety criteria:
+
+| Holding Metric | `NSE:MSTCLTD` Reported Reading | Multibagger Required Threshold | Evaluation Status |
+| :--- | :--- | :--- | :--- |
+| **Accounting Net Income (PAT)** | **₹234.3 Crore** | Positive | Looked attractive on paper |
+| **Operating Cash Flow (FY26 OCF)** | **`-₹27.8 Crore` (NEGATIVE)** | $\text{CFO} > 0$ | **FAILED** (Cash-burning operations) |
+| **Free Cash Flow (FY26 FCF)** | **`-₹50.0 Crore` (NEGATIVE)** | $\text{CROIC} \ge 6\%$ | **FAILED** (Negative cash return) |
+| **Cash Conversion (CFO/PAT)** | **`-0.12` (-12%)** | $\ge 25\%$ (New) / $\ge 20\%$ (Existing) | **VIOLATION** (Severe earnings-cash divergence) |
+| **Pre-Audit Selection Status** | Selected at **4.32% weight** | Passed due to `0.0` bypass | **Contaminated Golden Copy** |
+| **Post-Audit Selection Status** | **ELIMINATED at Stage 1** | Blocked by Cash Flow Quality Gate | **Queued for Immediate Eviction** |
+
+> [!CAUTION]
+> **Action Required**: Because `MSTCLTD` is actively held in `data/microsmall.csv`, running `mycase pipeline --config config/pipeline.yaml` will immediately recognize that `MSTCLTD` fails Stage-1 fundamental safety floors even with the 20% existing-holding cushion, evicting it from the portfolio and reallocating capital to authentic cash compounders.
+
+---
+
+### 3. Pillar III Scoring: Restoring True SEBI 100% Delivery for Trade-to-Trade (`BE`) Stocks
+
+In `ScoreMultibagger`, institutional accumulation is rewarded by scaling breakout volume intensity:
+$$\text{Volume Multiplier}_{\text{effective}} = \text{Volume Multiplier} \times \left(1.0 + \frac{\text{DeliveryPct}}{100} \times 0.5\right)$$
+
+* **The Bug**: In the legacy scraper, Trade-to-Trade (`BE/BZ/ST`) series returned `NaN`/`"-"` from NSE, which serialized to `null` and unmarshalled as `0.0%`. High-conviction compounders placed in the T2T category were penalized with a flat `1.0x` multiplier (0% delivery boost).
+* **The Fix**: `scripts/fetch_nse_data.py` now enforces SEBI's regulatory invariant: **100% of all traded shares in T2T must be delivered**. `BE` series stocks now correctly receive their full **1.5x institutional thrust boost**, eliminating the systematic bias against illiquid or surveillance compounders.
+
+---
+
+### 4. Financial Sector ROE Filter Alignment
+
+Previously, financial sector stocks with missing ROE defaulted to `0.0` and silently bypassed the financial safety gate (`if f.ROE > 0 && f.ROE < minROE`). The strategy now utilizes `getEffectiveFinancialROE` to synthesize balance sheet ROE from $\frac{\text{NetIncome}}{\text{MarketCap} / \text{PBRatio}}$, ensuring banking and NBFC constituents are held to the strict $\ge 12\%$ profitability standard.
+
+---
+
+### 5. CROIC Invested Capital Formula Fix & 3-Year Average Fallback (September 2026)
+
+During the portfolio rebalancing audit of September 12–13, 2026, running `mycase pipeline --config config/pipeline.yaml` proposed evicting active winning holdings (`VARROC`, `CUPID`, `DATAPATTNS`, `AVALON`). A forensic audit separated these names into formula distortion, multi-year capex reinvestment, and legitimate cash immaturity:
+
+#### A. The Invested Capital Shortcut Bug
+* **The Defect**: `CalculateCROIC` calculated Invested Capital as `(f.MarketCap / f.PBRatio) + f.TotalDebt`. For high-flying multibagger stocks where price moved faster than book value updates, this introduced market-price linkage into an operating balance-sheet metric.
+* **The Fix**: Decoupled CROIC from `MarketCap / PBRatio` by calculating Capital Employed directly from balance-sheet items: $\text{AnnualTotalAssets} - \text{AnnualCurrentLiabilities}$, exactly matching ROCE methodology.
+* **Impact on `NSE:CUPID`**: Recomputed Capital Employed dropped from ₹507.8 Cr to ₹470.6 Cr, elevating CUPID's latest CROIC from 4.22% to 4.55%.
+
+#### B. The Horizon Inconsistency Fix (3-Year Average Fallback)
+* **The Defect**: In `pkg/stockpicker/filters.go`, ROCE already allowed a 3-year average fallback (`checkROCE: latest >= floor || avg3y >= floor`), recognizing multi-year business cycles. However, CROIC was evaluated strictly on a single year.
+* **The Fix**: Added `checkCROIC` mirroring `checkROCE`: a stock passes if $\text{Latest CROIC} \ge \text{Floor}$ OR $\text{3-Year Average CROIC} \ge \text{Floor}$, with 45-day PIT filing lag.
+* **Impact on `NSE:VARROC`**: `VARROC` underwent massive FY26 capex (₹468.7 Cr) in auto/EV lighting, compressing FY26 single-year CROIC to 3.03% (< 4.8% limit). However, its 3-year timeseries (FY24: 15.16%, FY25: 21.23%, FY26: 3.03%) yields a **3-Year Average CROIC of 13.14%**. The 3-year fallback rescued `VARROC` cleanly, retaining it in the active portfolio.
+
+#### C. Legitimate Exclusion of Immature Cash Flow Businesses (`DATAPATTNS` & `AVALON`)
+* **Forensic Audit**:
+  - **`NSE:DATAPATTNS`**: Defence electronics milestone billing creates multi-year cash lumpiness (-₹56.7 Cr in FY23, +₹52.2 Cr in FY24, -₹196.3 Cr in FY25, +₹8.1 Cr in FY26). Latest CROIC is 0.45% and 3-year average CROIC is -2.74%.
+  - **`NSE:AVALON`**: Heavy EMS capex expansion (-₹40.7 Cr in FY23, -₹18.2 Cr in FY24, -₹21.1 Cr in FY25, +₹3.5 Cr in FY26). Latest CROIC is 0.46% and 3-year average CROIC is -1.83%.
+* **Architectural Invariant**: Both stocks legitimately fail the CROIC gate. The system correctly distinguishes between established cash compounders in temporary capex cycles (`VARROC`) and businesses whose cash generation has not yet matured (`DATAPATTNS`, `AVALON`).
+
+---
+
+### 6. Universe Migration to Nifty Total Market & Cross-Strategy Consensus (September 14, 2026)
+
+#### A. Master Universe Migration in `config/pipeline.yaml`
+On September 14, 2026, the candidate universe for Theme Microsmall (`data/microsmall.csv`) was transitioned from dual sub-indices (`microcap250` + `small250`) to the unified **`niftytotalmarket`** master universe (750 stocks):
+```yaml
+indices:
+  - niftytotalmarket
+golden_copy_path:
+  - data/microsmall.csv
+strategy:
+  - multibagger
+top_n:
+  - 20
+```
+
+#### B. Theme Lifecycle & Unbroken Version Audit
+* **Lifecycle Continuity**: In `data/mycase.db`, the rebalance was successfully committed as **`v26`** (56.47% turnover), preserving the complete 25-version historical audit trail from July 18, 2026 to September 14, 2026.
+* **Constituent Transition**:
+  - **7 Exits** (registered at `0.0000` weight for cooldown tracking): `AVALON`, `CCL`, `CUPID`, `GOKULAGRO`, `JAMNAAUTO`, `MSTCLTD`, `TENNIND`.
+  - **7 Entrants**: `MCX` (6.07%), `TMCV` (5.91%), `LAURUSLABS` (4.92%), `ICICIAMC` (4.77%), `LUMAXTECH` (4.56%), `OFSS` (4.51%), `ARVIND` (4.43%).
+  - **13 Retained Compounders**: `CHENNPETRO`, `NETWEB`, `HINDCOPPER`, `SARDAEN`, `MANORAMA`, `NAVINFLUOR`, `VARROC`, `LTFOODS`, `SMLMAH`, `THYROCARE`, `ENGINERSIN`, `SUMICHEM`, `CASTROLIND`.
+  - **Total Active Weight**: Exactly **1.0000 (100.00%)**.
+
+#### C. Strategy Stratification
+* **`multibagger` (Live Production Engine)**: Operates with full execution authority. Drives real capital, active portfolio weightings, and feeds executable broker orders (`mycase basket`).
+* **`earlymb` (Quant Research / Testing Radar)**: Operates as an empirical incubator and signal detector (VCP, Delivery Delta, institutional accumulation) without placing live orders.
+
+#### D. Database Cleanliness & Consensus Command
+* **Physical Database Pure Base**: Purged 2,446 redundant sub-index physical records (`small250`, `smallcap250`, `microcap250`, `microsmall`) from `data/mycase.db`. All Indian equity point-in-time scores are anchored solely on `niftytotalmarket`.
+* **Dynamic Slicing**: Views `v_pit_candidate_scores` and `v_pit_runs` project any sub-index on demand via `index_constituents`.
+* **Consensus Command**:
+  ```bash
+  # View top dual-conviction leaders combining Multibagger and EarlyMB
+  mycase pit consensus [--top 15] [--date YYYY-MM-DD]
+  ```
+  Surfaces institutional compounders supported by both fundamental cash generation and pre-breakout volume accumulation (e.g., `MCX`, `TMCV`, `NETWEB`, `MANORAMA`), while displaying active portfolio holding tags and Stage-1 dual pass statuses.
+
+
 

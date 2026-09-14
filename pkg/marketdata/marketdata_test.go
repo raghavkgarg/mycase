@@ -33,6 +33,31 @@ func TestEODSettlementDate(t *testing.T) {
 			input:    time.Date(2026, 9, 22, 21, 0, 0, 0, ist),
 			wantDate: "2026-09-22",
 		},
+		{
+			name:     "Saturday Sept 12 10:00 (Weekend) -> Friday Sept 11",
+			input:    time.Date(2026, 9, 12, 10, 0, 0, 0, ist),
+			wantDate: "2026-09-11",
+		},
+		{
+			name:     "Saturday Sept 12 22:00 (Weekend evening) -> Friday Sept 11",
+			input:    time.Date(2026, 9, 12, 22, 0, 0, 0, ist),
+			wantDate: "2026-09-11",
+		},
+		{
+			name:     "Sunday Sept 13 14:00 (Weekend) -> Friday Sept 11",
+			input:    time.Date(2026, 9, 13, 14, 0, 0, 0, ist),
+			wantDate: "2026-09-11",
+		},
+		{
+			name:     "Monday Sept 14 10:00 (Before 21:00 cutoff) -> Friday Sept 11",
+			input:    time.Date(2026, 9, 14, 10, 0, 0, 0, ist),
+			wantDate: "2026-09-11",
+		},
+		{
+			name:     "Monday Sept 14 21:05 (After Monday 21:00 cutoff) -> Monday Sept 14",
+			input:    time.Date(2026, 9, 14, 21, 5, 0, 0, ist),
+			wantDate: "2026-09-14",
+		},
 	}
 
 	for _, tc := range tests {
@@ -60,6 +85,56 @@ func TestNextEODAvailableDate(t *testing.T) {
 	got2 := NextEODAvailableDate(t2)
 	if got2.Format("2006-01-02 15:04") != "2026-09-23 21:00" {
 		t.Errorf("NextEODAvailableDate(Sept 22 21:15) = %s, want 2026-09-23 21:00", got2.Format("2006-01-02 15:04"))
+	}
+
+	// Weekend test: Friday post-21:00 -> Monday 21:00
+	tFriPost := time.Date(2026, 9, 11, 21, 15, 0, 0, ist)
+	gotFriPost := NextEODAvailableDate(tFriPost)
+	if gotFriPost.Format("2006-01-02 15:04") != "2026-09-14 21:00" {
+		t.Errorf("NextEODAvailableDate(Friday 21:15) = %s, want 2026-09-14 21:00", gotFriPost.Format("2006-01-02 15:04"))
+	}
+
+	// Weekend test: Saturday -> Monday 21:00
+	tSat := time.Date(2026, 9, 12, 10, 0, 0, 0, ist)
+	gotSat := NextEODAvailableDate(tSat)
+	if gotSat.Format("2006-01-02 15:04") != "2026-09-14 21:00" {
+		t.Errorf("NextEODAvailableDate(Saturday 10AM) = %s, want 2026-09-14 21:00", gotSat.Format("2006-01-02 15:04"))
+	}
+
+	// Weekend test: Sunday -> Monday 21:00
+	tSun := time.Date(2026, 9, 13, 14, 0, 0, 0, ist)
+	gotSun := NextEODAvailableDate(tSun)
+	if gotSun.Format("2006-01-02 15:04") != "2026-09-14 21:00" {
+		t.Errorf("NextEODAvailableDate(Sunday 2PM) = %s, want 2026-09-14 21:00", gotSun.Format("2006-01-02 15:04"))
+	}
+}
+
+func TestIsFreshEOD(t *testing.T) {
+	ist := time.FixedZone("IST", 5*3600+30*60)
+
+	nowSat := time.Date(2026, 9, 12, 10, 0, 0, 0, ist)
+	friSettled := time.Date(2026, 9, 11, 21, 15, 0, 0, ist)
+	friPreSettled := time.Date(2026, 9, 11, 15, 0, 0, 0, ist)
+
+	if !IsFreshEOD(friSettled, nowSat) {
+		t.Errorf("expected Friday 21:15 fetch to be fresh on Saturday morning")
+	}
+	if IsFreshEOD(friPreSettled, nowSat) {
+		t.Errorf("expected Friday 15:00 fetch to be stale on Saturday (prior to 21:00 EOD settlement)")
+	}
+
+	nowMonPre := time.Date(2026, 9, 14, 10, 0, 0, 0, ist)
+	if !IsFreshEOD(friSettled, nowMonPre) {
+		t.Errorf("expected Friday 21:15 fetch to remain fresh on Monday morning before 21:00")
+	}
+
+	nowMonPost := time.Date(2026, 9, 14, 21, 5, 0, 0, ist)
+	if IsFreshEOD(friSettled, nowMonPost) {
+		t.Errorf("expected Friday fetch to be stale on Monday after 21:00 settlement")
+	}
+	monSettled := time.Date(2026, 9, 14, 21, 2, 0, 0, ist)
+	if !IsFreshEOD(monSettled, nowMonPost) {
+		t.Errorf("expected Monday 21:02 fetch to be fresh on Monday after 21:00 settlement")
 	}
 }
 

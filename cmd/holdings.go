@@ -15,6 +15,7 @@ import (
 	"github.com/raghavkgarg/mycase/pkg/portfolio"
 	"github.com/raghavkgarg/mycase/pkg/printer"
 	"github.com/raghavkgarg/mycase/pkg/render"
+	"github.com/raghavkgarg/mycase/pkg/themereturn"
 )
 
 var HoldingsCommand = &cli.Command{
@@ -22,6 +23,9 @@ var HoldingsCommand = &cli.Command{
 	Usage: "Snapshot of current broker holdings",
 	Flags: []cli.Flag{
 		&cli.BoolFlag{Name: "live", Usage: "Use live broker API (default: dry-run mock mode)"},
+		&cli.BoolFlag{Name: "india", Usage: "Render audited return intelligence for Indian themes via portfolio.db"},
+		&cli.StringFlag{Name: "account", Aliases: []string{"a"}, Value: "CBR420", Usage: "Trading/Demat account ID in portfolio.db"},
+		&cli.StringFlag{Name: "db", Usage: "Path to portfolio.db DuckDB database file (auto-detected if omitted)"},
 	},
 	Action: runHoldings,
 }
@@ -94,9 +98,39 @@ func runHoldings(ctx context.Context, c *cli.Command) error {
 		}
 	}
 
-	// Theme-return enrichment (India theme portfolios) is intentionally NOT wired
-	// into the live holdings view — it is dormant and reachable only via the
-	// `returns` command (cmd/returns.go). See docs/reconcile-main.md.
+	// Enrich each theme with audited Triple Returns only when --india is explicitly requested
+	if c.Bool("india") {
+		ltpMap := make(map[string]float64)
+		for _, h := range rawHoldings {
+			ltpMap[h.TradingSymbol] = h.LastPrice
+			ltpMap[portfolio.StripSeriesSuffix(h.TradingSymbol)] = h.LastPrice
+		}
+
+		accountID := c.String("account")
+		if accountID == "" {
+			accountID = "CBR420"
+		}
+		dbPath := c.String("db")
+		if db, err := themereturn.OpenDB(dbPath); err == nil {
+			defer db.Close()
+			for i, g := range groups {
+				if len(g.Holdings) == 0 {
+					continue
+				}
+				matched, mErr := themereturn.ResolveTheme(g.Name, g.CSVPath, "config/themes.json")
+				if mErr != nil {
+					continue
+				}
+				rep, rErr := themereturn.EvaluateThemeReturn(db, matched, ltpMap, themereturn.ThemeReturnOptions{
+					AccountID:        accountID,
+					IncludeLifecycle: true,
+				})
+				if rErr == nil && rep.ActiveInvestedValue > 0 {
+					groups[i].ReturnBanner = themereturn.RenderBanner(rep)
+				}
+			}
+		}
+	}
 
 	output := printer.RenderHoldingsSnapshot(rawHoldings, groups, uncategorizedHoldings)
 	fmt.Print(output)

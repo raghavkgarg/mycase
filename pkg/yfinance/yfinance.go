@@ -217,7 +217,7 @@ func FetchFundamentals(ctx context.Context, tickers []string) (map[string]Fundam
 				}
 
 				// Fetch timeseries fundamentals
-				typesStr := "annualTotalRevenue,annualNetPPE,annualAccountsReceivable,annualCapitalExpenditure,annualOperatingIncome,annualTotalAssets,annualCurrentLiabilities,annualInterestExpense,annualGrossProfit"
+				typesStr := "annualTotalRevenue,annualNetPPE,annualAccountsReceivable,annualCapitalExpenditure,annualOperatingIncome,annualTotalAssets,annualCurrentLiabilities,annualInterestExpense,annualGrossProfit,annualOperatingCashFlow,annualFreeCashFlow"
 				tsURL := fmt.Sprintf("https://query2.finance.yahoo.com/ws/fundamentals-timeseries/v1/finance/timeseries/%s?symbol=%s&type=%s&period1=0&period2=%d&crumb=%s", ySym, ySym, typesStr, time.Now().Unix(), crumb)
 
 				var annualRevenue []AnnualMetric
@@ -229,6 +229,8 @@ func FetchFundamentals(ctx context.Context, tickers []string) (map[string]Fundam
 				var annualTotalAssets []AnnualMetric
 				var annualCurrentLiabilities []AnnualMetric
 				var annualInterestExpense []AnnualMetric
+				var annualOperatingCashFlow []AnnualMetric
+				var annualFreeCashFlow []AnnualMetric
 
 				tsReq, tsErr := http.NewRequestWithContext(ctx, "GET", tsURL, nil)
 				if tsErr == nil {
@@ -323,6 +325,24 @@ func FetchFundamentals(ctx context.Context, tickers []string) (map[string]Fundam
 													})
 												}
 											}
+										case "annualOperatingCashFlow":
+											for _, r := range item.AnnualOperatingCashFlow {
+												if r.AsOfDate != "" {
+													annualOperatingCashFlow = append(annualOperatingCashFlow, AnnualMetric{
+														Date:  r.AsOfDate,
+														Value: r.ReportedValue.Raw,
+													})
+												}
+											}
+										case "annualFreeCashFlow":
+											for _, r := range item.AnnualFreeCashFlow {
+												if r.AsOfDate != "" {
+													annualFreeCashFlow = append(annualFreeCashFlow, AnnualMetric{
+														Date:  r.AsOfDate,
+														Value: r.ReportedValue.Raw,
+													})
+												}
+											}
 										}
 									}
 								}
@@ -380,6 +400,15 @@ func FetchFundamentals(ctx context.Context, tickers []string) (map[string]Fundam
 
 				resPrevComing := FormatPrevComingResultDates(allDates)
 
+				ocf := fd.OperatingCashflow.Raw
+				if ocf == 0 && len(annualOperatingCashFlow) > 0 {
+					ocf = annualOperatingCashFlow[len(annualOperatingCashFlow)-1].Value
+				}
+				fcf := fd.FreeCashflow.Raw
+				if fcf == 0 && len(annualFreeCashFlow) > 0 {
+					fcf = annualFreeCashFlow[len(annualFreeCashFlow)-1].Value
+				}
+
 				fund := Fundamentals{
 					PEGRatio:                 pegRatio,
 					ROE:                      fd.ReturnOnEquity.Raw,
@@ -391,8 +420,8 @@ func FetchFundamentals(ctx context.Context, tickers []string) (map[string]Fundam
 					InsidersPercent:          ds.HeldPercentInsiders.Raw,
 					HeldPercentInstitutions:  ds.HeldPercentInstitutions.Raw,
 					TTMRevenue:               fd.TotalRevenue.Raw,
-					OperatingCashflow:        fd.OperatingCashflow.Raw,
-					FreeCashflow:             fd.FreeCashflow.Raw,
+					OperatingCashflow:        ocf,
+					FreeCashflow:             fcf,
 					AverageVolume:            sd.AverageVolume.Raw,
 					RegularPrice:             sd.RegularMarketPrice.Raw,
 					NetIncome:                ds.NetIncomeToCommon.Raw,
@@ -409,6 +438,8 @@ func FetchFundamentals(ctx context.Context, tickers []string) (map[string]Fundam
 					AnnualTotalAssets:        annualTotalAssets,
 					AnnualCurrentLiabilities: annualCurrentLiabilities,
 					AnnualInterestExpense:    annualInterestExpense,
+					AnnualOperatingCashFlow:  annualOperatingCashFlow,
+					AnnualFreeCashFlow:       annualFreeCashFlow,
 					ResultPrevComing:         resPrevComing,
 					DeliveryPct:              dlyPct,
 					DeliveryDate:             dlyDate,
@@ -480,11 +511,17 @@ func FormatPrevComingResultDates(allDates []time.Time) string {
 
 	prevStr := "N/A"
 	if foundPrev {
-		prevStr = prevDate.Format("02-01-06")
+		// Only display previous result date if within 180 days (~2 quarters). Older dates are ancient stale metadata.
+		if todayIST.Sub(prevDate.In(ist).Truncate(24*time.Hour)) <= 180*24*time.Hour {
+			prevStr = prevDate.Format("02-01-06")
+		}
 	}
 	comingStr := "N/A"
 	if foundComing {
-		comingStr = comingDate.Format("02-01-06")
+		// Only display upcoming result date if within 180 days
+		if comingDate.In(ist).Truncate(24*time.Hour).Sub(todayIST) <= 180*24*time.Hour {
+			comingStr = comingDate.Format("02-01-06")
+		}
 	}
 
 	return fmt.Sprintf("%s -> %s", prevStr, comingStr)

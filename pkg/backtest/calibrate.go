@@ -368,7 +368,7 @@ func RunEarlyMBCalibration(
 			p3a := 12.5 * clamp((rvolZ-0.0)/(3.0-0.0), 0.0, 1.0)
 			p3b := 12.5 * clamp((decayedPP-0.0)/(12.0-0.0), 0.0, 1.0)
 			p3 := p3a + p3b
-			p4 := 25.0 * clamp((delivDelta-(-0.10))/(0.30-(-0.10)), 0.0, 1.0)
+			p4 := 25.0 * clamp((delivDelta-(-0.10))/(0.15-(-0.10)), 0.0, 1.0)
 			raw := p1 + p2 + p3 + p4
 			eff := raw * rRegime
 

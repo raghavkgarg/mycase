@@ -10,7 +10,7 @@ var (
 	VCPRatioBounds      = ScoreBounds{Min: 0.25, Max: 0.75} // lower is better
 	RVOLZBounds         = ScoreBounds{Min: 0.0, Max: 3.0}
 	PocketPivotBounds   = ScoreBounds{Min: 0.0, Max: 12.0}
-	DeliveryDeltaBounds = ScoreBounds{Min: -0.10, Max: 0.30}
+	DeliveryDeltaBounds = ScoreBounds{Min: -0.10, Max: 0.15}
 )
 
 func clamp(val, minV, maxV float64) float64 {

@@ -11,10 +11,12 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/raghavkgarg/mycase/pkg/marketdata"
 )
 
 func getCachePath(prefix, key string) string {
-	today := time.Now().Format("2006-01-02")
+	today := marketdata.EODSettlementDate(time.Now()).Format("2006-01-02")
 	cleanKey := strings.NewReplacer("^", "_", ":", "_", "/", "_").Replace(key)
 	return filepath.Join("data", ".cache", fmt.Sprintf("%s_%s_%s.json", prefix, cleanKey, today))
 }
@@ -25,14 +27,7 @@ func loadFromCache(prefix, key string, target any) bool {
 	if err != nil {
 		return false
 	}
-	// Post-market / EOD settlement boundary (21:00 IST):
-	// 21:00 IST is the sole cutoff for the daily market cycle.
-	// If current time is at or after official sync (>= 21:00 IST),
-	// but cache file was created prior to 21:00 IST, it is considered stale so the confirmed EOD snapshot is pulled.
-	ist := time.FixedZone("IST", 5*3600+30*60)
-	nowIST := time.Now().In(ist)
-	modIST := info.ModTime().In(ist)
-	if nowIST.Hour() >= 21 && modIST.Hour() < 21 {
+	if !marketdata.IsFreshEOD(info.ModTime(), time.Now()) {
 		return false
 	}
 	data, err := os.ReadFile(path)

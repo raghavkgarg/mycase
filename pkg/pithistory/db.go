@@ -69,6 +69,11 @@ func (p *DB) Close() error {
 	return nil
 }
 
+// Conn returns the underlying *sql.DB connection.
+func (p *DB) Conn() *sql.DB {
+	return p.db
+}
+
 const schemaDDL = `
 CREATE TABLE IF NOT EXISTS pit_runs (
     as_of_date         DATE,
@@ -106,6 +111,25 @@ CREATE TABLE IF NOT EXISTS pit_candidate_scores (
     pillar4_insufficient_history BOOLEAN DEFAULT false,
     PRIMARY KEY (as_of_date, index_name, method, ticker)
 );
+
+CREATE TABLE IF NOT EXISTS stage1_shadow_results (
+    as_of_date             DATE,
+    index_name             VARCHAR,
+    method                 VARCHAR,
+    ticker                 VARCHAR,
+    sector                 VARCHAR,
+    legacy_stage1_pass     BOOLEAN,
+    legacy_rejection_cause VARCHAR,
+    shadow_stage1_pass     BOOLEAN,
+    shadow_relief_channel  VARCHAR,
+    shadow_base_mult       DOUBLE,
+    delivery_delta         DOUBLE,
+    composite_rs           DOUBLE,
+    vcp_ratio              DOUBLE,
+    divergence_type        VARCHAR,
+    created_at             TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (as_of_date, index_name, method, ticker)
+);
 `
 
 func (p *DB) initSchema(ctx context.Context) error {
@@ -117,10 +141,11 @@ func (p *DB) initSchema(ctx context.Context) error {
 	_, _ = p.db.ExecContext(ctx, "ALTER TABLE pit_candidate_scores ADD COLUMN IF NOT EXISTS pillar4_uncalibrated BOOLEAN DEFAULT false;")
 	_, _ = p.db.ExecContext(ctx, "ALTER TABLE pit_candidate_scores ADD COLUMN IF NOT EXISTS pillar4_insufficient_history BOOLEAN DEFAULT false;")
 	_, _ = p.db.ExecContext(ctx, "ALTER TABLE pit_runs ADD COLUMN IF NOT EXISTS pillar4_uncalibrated BOOLEAN DEFAULT false;")
-	_, _ = p.db.ExecContext(ctx, "UPDATE pit_candidate_scores SET pillar4_uncalibrated = TRUE WHERE as_of_date <= '2026-09-10';")
-	_, _ = p.db.ExecContext(ctx, "UPDATE pit_runs SET pillar4_uncalibrated = TRUE WHERE as_of_date <= '2026-09-10';")
 	// Clean out any artificial dummy index placeholder rows (e.g. DUMMYINXGN, DUMMYTRVN)
 	_, _ = p.db.ExecContext(ctx, "DELETE FROM pit_candidate_scores WHERE UPPER(ticker) LIKE '%DUMMY%';")
+	// Consolidate onto pure niftytotalmarket base: remove redundant sub-index physical rows
+	_, _ = p.db.ExecContext(ctx, "DELETE FROM pit_candidate_scores WHERE index_name IN ('small250', 'smallcap250', 'microcap250', 'microsmall', 'microcap250_smallcap250');")
+	_, _ = p.db.ExecContext(ctx, "DELETE FROM pit_runs WHERE index_name IN ('small250', 'smallcap250', 'microcap250', 'microsmall', 'microcap250_smallcap250');")
 	_ = p.initIndexConstituents(ctx)
 	_ = p.initViews(ctx)
 	return nil
@@ -131,6 +156,8 @@ func (p *DB) SaveRunSnapshot(ctx context.Context, snap *stockpicker.PITRunSnapsh
 	if snap == nil {
 		return fmt.Errorf("nil snapshot")
 	}
+
+	canonIndex := NormalizeIndexName(snap.IndexName)
 
 	tx, err := p.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -147,7 +174,7 @@ INSERT OR REPLACE INTO pit_runs (
 `
 	_, err = tx.ExecContext(ctx, runQuery,
 		snap.AsOfDate,
-		snap.IndexName,
+		canonIndex,
 		snap.Method,
 		snap.RegimeMultiplier,
 		snap.TotalConstituents,
@@ -179,7 +206,7 @@ INSERT OR REPLACE INTO pit_candidate_scores (
 	for _, c := range snap.Candidates {
 		_, err := stmt.ExecContext(ctx,
 			snap.AsOfDate,
-			snap.IndexName,
+			canonIndex,
 			snap.Method,
 			c.Ticker,
 			c.Sector,
@@ -204,7 +231,69 @@ INSERT OR REPLACE INTO pit_candidate_scores (
 		}
 	}
 
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+
+	// Synchronize shadow divergence results in background
+	_ = p.SyncShadowResults(ctx, snap.AsOfDate, canonIndex, snap.Method)
+	return nil
+}
+
+// SyncShadowResults computes and synchronizes Stage-1 shadow divergence for a given date, index, and method.
+func (p *DB) SyncShadowResults(ctx context.Context, asOfDate, indexName, method string) error {
+	indexName = NormalizeIndexName(indexName)
+	syncQuery := `
+INSERT OR REPLACE INTO stage1_shadow_results (
+    as_of_date, index_name, method, ticker, sector,
+    legacy_stage1_pass, legacy_rejection_cause,
+    shadow_stage1_pass, shadow_relief_channel, shadow_base_mult,
+    delivery_delta, composite_rs, vcp_ratio,
+    divergence_type, created_at
+)
+SELECT 
+    c.as_of_date,
+    c.index_name,
+    c.method,
+    c.ticker,
+    COALESCE(NULLIF(c.sector, ''), 'Unknown') AS sector,
+    c.passed_stage1 AS legacy_stage1_pass,
+    COALESCE(NULLIF(c.rejection_reason, ''), 'Stage-1 Qualified') AS legacy_rejection_cause,
+    CASE 
+        WHEN c.passed_stage1 THEN TRUE
+        WHEN (c.rejection_reason LIKE '%ROCE%' OR c.rejection_reason LIKE '%Capital Efficiency%')
+             AND c.delivery_delta >= 0.09 AND c.composite_rs >= 0.15 AND c.vcp_ratio <= 1.20 THEN TRUE
+        ELSE FALSE
+    END AS shadow_stage1_pass,
+    CASE 
+        WHEN c.passed_stage1 THEN 'legacy_pass'
+        WHEN (c.rejection_reason LIKE '%ROCE%' OR c.rejection_reason LIKE '%Capital Efficiency%')
+             AND c.delivery_delta >= 0.09 AND c.composite_rs >= 0.15 AND c.vcp_ratio <= 1.20 THEN 'delivery_override'
+        ELSE 'blocked'
+    END AS shadow_relief_channel,
+    CASE 
+        WHEN c.rejection_reason LIKE '%0 weeks%' OR c.rejection_reason LIKE '%1 weeks%' THEN 0.50
+        WHEN c.rejection_reason LIKE '%2 weeks%' OR c.rejection_reason LIKE '%3 weeks%' THEN 0.75
+        ELSE 1.00
+    END AS shadow_base_mult,
+    c.delivery_delta,
+    c.composite_rs,
+    c.vcp_ratio,
+    CASE 
+        WHEN c.passed_stage1 THEN 'ALIGNED_PASS'
+        WHEN (c.rejection_reason LIKE '%ROCE%' OR c.rejection_reason LIKE '%Capital Efficiency%')
+             AND c.delivery_delta >= 0.09 AND c.composite_rs >= 0.15 AND c.vcp_ratio <= 1.20
+        THEN 'RESCUED'
+        ELSE 'ALIGNED_FAIL'
+    END AS divergence_type,
+    CURRENT_TIMESTAMP
+FROM v_pit_candidate_scores c
+WHERE (? = '' OR c.as_of_date = ?)
+  AND c.index_name = ?
+  AND c.method = ?;
+`
+	_, err := p.db.ExecContext(ctx, syncQuery, asOfDate, asOfDate, indexName, method)
+	return err
 }
 
 // UpdateForwardReturns updates the realized forward return for a specific candidate at a historical date.
@@ -245,6 +334,24 @@ func (p *DB) GetLatestRunDate(ctx context.Context, indexName, method string) (st
 		return "", err
 	}
 	return dt, nil
+}
+
+// GetRunSyncTime returns the creation/sync timestamp for a run snapshot.
+func (p *DB) GetRunSyncTime(ctx context.Context, asOfDate, indexName, method string) (time.Time, error) {
+	var t time.Time
+	cleanIndex := strings.NewReplacer(",", "_", " ", "_", "^", "").Replace(indexName)
+	query := `SELECT created_at FROM v_pit_runs WHERE as_of_date = ? AND (index_name = ? OR index_name = ? OR index_name = 'niftytotalmarket') AND method = ? ORDER BY created_at DESC LIMIT 1;`
+	err := p.db.QueryRowContext(ctx, query, asOfDate, cleanIndex, indexName, method).Scan(&t)
+	if err != nil {
+		// Fallback to base pit_runs
+		query = `SELECT created_at FROM pit_runs WHERE as_of_date = ? AND (index_name = ? OR index_name = ? OR index_name = 'niftytotalmarket') AND method = ? ORDER BY created_at DESC LIMIT 1;`
+		err = p.db.QueryRowContext(ctx, query, asOfDate, cleanIndex, indexName, method).Scan(&t)
+		if err != nil {
+			return time.Time{}, err
+		}
+	}
+	ist := time.FixedZone("IST", 5*3600+30*60)
+	return t.In(ist), nil
 }
 
 // GetCandidateTemporalVelocities queries DuckDB for chronological score trajectories and survival streaks.
@@ -547,6 +654,47 @@ WHERE p.index_name = 'niftytotalmarket'
         AND existing.method = p.method
   )
 GROUP BY p.as_of_date, p.method, r.regime_multiplier, r.pillar4_uncalibrated, r.created_at;
+
+CREATE OR REPLACE MACRO base_duration_multiplier(weeks_in_zone) AS (
+    CASE
+        WHEN weeks_in_zone >= 4 THEN 1.0
+        WHEN weeks_in_zone >= 2 THEN 0.75
+        WHEN weeks_in_zone >= 0 THEN 0.5
+    END
+);
+
+CREATE OR REPLACE VIEW v_data_integrity_check AS
+SELECT 
+    as_of_date,
+    index_name,
+    method,
+    count(*)::INT AS total_candidates,
+    count(CASE WHEN data_fetch_failed THEN 1 END)::INT AS fetch_failed_count,
+    count(CASE WHEN rejection_reason LIKE '%Unverified%' OR rejection_reason LIKE '%fetch%' THEN 1 END)::INT AS unverified_count
+FROM pit_candidate_scores
+GROUP BY as_of_date, index_name, method;
+
+CREATE OR REPLACE VIEW v_strategy_consensus AS
+SELECT 
+    m.as_of_date,
+    m.ticker,
+    m.sector,
+    m.effective_score AS mb_score,
+    e.effective_score AS earlymb_score,
+    (COALESCE(m.effective_score, 0) + COALESCE(e.effective_score, 0)) AS consensus_score,
+    m.passed_stage1 AS mb_passed_stage1,
+    e.passed_stage1 AS earlymb_passed_stage1,
+    e.vcp_ratio,
+    e.delivery_delta,
+    e.rvol_z_score
+FROM pit_candidate_scores m
+JOIN pit_candidate_scores e 
+  ON m.as_of_date = e.as_of_date 
+ AND m.ticker = e.ticker
+ AND m.index_name = e.index_name
+WHERE m.method = 'multibagger' 
+  AND e.method = 'earlymb'
+  AND m.index_name = 'niftytotalmarket';
 `
 	_, err := p.db.ExecContext(ctx, viewDDL)
 	return err

@@ -231,6 +231,18 @@ type TimeseriesResponse struct {
 					Raw float64 `json:"raw"`
 				} `json:"reportedValue"`
 			} `json:"annualInterestExpense"`
+			AnnualOperatingCashFlow []struct {
+				AsOfDate      string `json:"asOfDate"`
+				ReportedValue struct {
+					Raw float64 `json:"raw"`
+				} `json:"reportedValue"`
+			} `json:"annualOperatingCashFlow"`
+			AnnualFreeCashFlow []struct {
+				AsOfDate      string `json:"asOfDate"`
+				ReportedValue struct {
+					Raw float64 `json:"raw"`
+				} `json:"reportedValue"`
+			} `json:"annualFreeCashFlow"`
 		} `json:"result"`
 		Error any `json:"error"`
 	} `json:"timeseries"`

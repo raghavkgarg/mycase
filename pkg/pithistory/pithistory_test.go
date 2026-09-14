@@ -396,3 +396,81 @@ func TestTemporalVelocityAndBoost(t *testing.T) {
 		t.Errorf("expected 0.0 boost for new stock, got %.1f", b)
 	}
 }
+
+func TestClassifyGate(t *testing.T) {
+	cases := []struct {
+		passedStage1 bool
+		reason       string
+		wantType     string
+	}{
+		{true, "", "[CLEARED]"},
+		{true, "Stage-1 Qualified", "[CLEARED]"},
+		{false, "Low Capital Efficiency (ROCE < 12.0%)", "[Fixable]"},
+		{false, "Low Capital Efficiency (Tech ROCE < 6.0%)", "[Fixable]"},
+		{false, "Base duration too short (1 weeks < 4 weeks required base)", "[Fixable]"},
+		{false, "Below 200-Day SMA ratio floor (0.86 < 0.95 limit)", "[Structural]"},
+		{false, "DSO Deterioration limit exceeded (+16.3% > 15.0% threshold)", "[Structural]"},
+		{false, "High Debt/Equity (2.10 >= 1.50 cap)", "[Structural]"},
+		{false, "Low promoter stake (16.3% < 25.0% limit)", "[Structural]"},
+	}
+
+	for _, c := range cases {
+		gotType, _ := classifyGate(c.passedStage1, c.reason)
+		if gotType != c.wantType {
+			t.Errorf("classifyGate(%v, %q) = %q; want %q", c.passedStage1, c.reason, gotType, c.wantType)
+		}
+	}
+}
+
+func TestFormatConciseSector(t *testing.T) {
+	cases := []struct {
+		input string
+		want  string
+	}{
+		{"Consumer Defensive", "Cons Defensive"},
+		{"Consumer Cyclical", "Cons Cyclical"},
+		{"Financial Services", "Financial Serv"},
+		{"Communication Services", "Communication"},
+		{"Industrials", "Industrials"},
+		{"Healthcare", "Healthcare"},
+		{"Technology", "Technology"},
+	}
+
+	for _, c := range cases {
+		got := formatConciseSector(c.input)
+		if got != c.want {
+			t.Errorf("formatConciseSector(%q) = %q; want %q", c.input, got, c.want)
+		}
+		if len(got) > 15 {
+			t.Errorf("formatConciseSector(%q) exceeded 15 chars: %d chars", c.input, len(got))
+		}
+	}
+}
+
+func TestFormatConciseBottleneck(t *testing.T) {
+	cases := []struct {
+		input string
+		want  string
+	}{
+		{"Stage-1 Qualified", "Stage-1 Qualified"},
+		{"Base duration too short (0 weeks < 4 weeks required base)", "Base: 0w < 4w"},
+		{"Base duration too short (1 weeks < 4 weeks required base)", "Base: 1w < 4w"},
+		{"Low Capital Efficiency (ROCE < 12.0%)", "Low ROCE (< 12.0%)"},
+		{"DSO Deterioration limit exceeded (+83.7% > 15.0% threshold)", "DSO Deterioration (+83.7%)"},
+		{"Low promoter stake (16.3% < 25.0% limit)", "Low Promoter (16.3% < 25%)"},
+		{"Far from 52-Week High (74.3% of 52W high < 85.0% floor)", "Far from 52W High (74.3%)"},
+		{"Below 200-Day SMA ratio floor (0.86 < 0.95 limit)", "Below 200-SMA (0.86 < 0.95)"},
+		{"Market Cap limit check failed (Market Cap: 989000Cr)", "Market Cap Out of Bounds"},
+	}
+
+	for _, c := range cases {
+		got := formatConciseBottleneck(c.input)
+		if got != c.want {
+			t.Errorf("formatConciseBottleneck(%q) = %q; want %q", c.input, got, c.want)
+		}
+		if len(got) > 28 {
+			t.Errorf("formatConciseBottleneck(%q) exceeded 28 chars: %d chars", c.input, len(got))
+		}
+	}
+}
+

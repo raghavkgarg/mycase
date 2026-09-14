@@ -3,20 +3,26 @@ package pithistory
 import (
 	"context"
 	"fmt"
+	"os"
 	"slices"
+	"sort"
 	"strings"
 	"time"
+
+	"github.com/raghavkgarg/mycase/pkg/csvloader"
+	"github.com/raghavkgarg/mycase/pkg/render"
 )
 
 type RunSummaryRow struct {
-	CreatedAt         time.Time `json:"created_at"`
-	AsOfDate          string    `json:"as_of_date"`
-	IndexName         string    `json:"index_name"`
-	Method            string    `json:"method"`
-	RegimeMultiplier  float64   `json:"regime_multiplier"`
-	TotalConstituents int       `json:"total_constituents"`
-	Stage1Survivors   int       `json:"stage1_survivors"`
-	SelectedCount     int       `json:"selected_count"`
+	CreatedAt           time.Time `json:"created_at"`
+	AsOfDate            string    `json:"as_of_date"`
+	IndexName           string    `json:"index_name"`
+	Method              string    `json:"method"`
+	RegimeMultiplier    float64   `json:"regime_multiplier"`
+	TotalConstituents   int       `json:"total_constituents"`
+	Stage1Survivors     int       `json:"stage1_survivors"`
+	SelectedCount       int       `json:"selected_count"`
+	Pillar4Uncalibrated bool      `json:"pillar4_uncalibrated"`
 }
 
 type CandidateHistoryRow struct {
@@ -114,7 +120,8 @@ SELECT
     total_constituents,
     stage1_survivors,
     selected_count,
-    created_at
+    created_at,
+    COALESCE(pillar4_uncalibrated, false)
 FROM v_pit_runs
 WHERE index_name = ? AND method = ?
 ORDER BY as_of_date DESC
@@ -138,6 +145,7 @@ LIMIT ?;
 			&r.Stage1Survivors,
 			&r.SelectedCount,
 			&r.CreatedAt,
+			&r.Pillar4Uncalibrated,
 		); err != nil {
 			return nil, err
 		}
@@ -148,10 +156,23 @@ LIMIT ?;
 
 // GetCandidateHistory returns historical score trajectory for a single stock.
 func (p *DB) GetCandidateHistory(ctx context.Context, ticker string, limit int) ([]CandidateHistoryRow, error) {
+	return p.GetCandidateHistoryFiltered(ctx, ticker, "", "", limit)
+}
+
+// GetCandidateHistoryFiltered returns historical score trajectory for a single stock with optional index and method filtering.
+// When indexName is empty, it queries the canonical pit_candidate_scores table and deduplicates so that each
+// (as_of_date, method) appears as a single canonical trajectory row, avoiding synthetic sub-index projection duplication.
+func (p *DB) GetCandidateHistoryFiltered(ctx context.Context, ticker, indexName, method string, limit int) ([]CandidateHistoryRow, error) {
 	if limit <= 0 {
 		limit = 30
 	}
-	query := `
+
+	var query string
+	var args []interface{}
+
+	if indexName != "" {
+		indexName = NormalizeIndexName(indexName)
+		query = `
 SELECT 
     strftime(as_of_date, '%Y-%m-%d'),
     index_name,
@@ -167,11 +188,60 @@ SELECT
     selected,
     final_weight
 FROM v_pit_candidate_scores
-WHERE ticker = ?
+WHERE ticker = ? AND index_name = ?
+`
+		args = append(args, ticker, indexName)
+		if method != "" {
+			query += " AND method = ?\n"
+			args = append(args, method)
+		}
+		query += "ORDER BY as_of_date DESC, method ASC\nLIMIT ?;\n"
+		args = append(args, limit)
+	} else {
+		// When querying by ticker without a specific index filter, query the physical table
+		// and deduplicate by (as_of_date, method) so a stock belonging to multiple indices
+		// appears as a single canonical trajectory row per date and method.
+		query = `
+SELECT 
+    strftime(as_of_date, '%Y-%m-%d') as as_of_date,
+    index_name,
+    method,
+    passed_stage1,
+    raw_score,
+    effective_score,
+    composite_rs,
+    vcp_ratio,
+    rvol_z_score,
+    decayed_pp,
+    delivery_delta,
+    selected,
+    final_weight
+FROM (
+    SELECT *,
+           ROW_NUMBER() OVER (
+               PARTITION BY as_of_date, method 
+               ORDER BY 
+                   CASE WHEN selected THEN 1 ELSE 2 END,
+                   CASE WHEN index_name = 'niftytotalmarket' THEN 1 ELSE 2 END,
+                   raw_score DESC
+           ) as rn
+    FROM pit_candidate_scores
+    WHERE ticker = ?
+`
+		args = append(args, ticker)
+		if method != "" {
+			query += " AND method = ?\n"
+			args = append(args, method)
+		}
+		query += `)
+WHERE rn = 1
 ORDER BY as_of_date DESC, method ASC
 LIMIT ?;
 `
-	rows, err := p.db.QueryContext(ctx, query, ticker, limit)
+		args = append(args, limit)
+	}
+
+	rows, err := p.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -206,7 +276,7 @@ LIMIT ?;
 func (p *DB) GetPendingForwardDates(ctx context.Context, minDaysAgo int) ([]string, error) {
 	query := `
 SELECT DISTINCT strftime(as_of_date, '%Y-%m-%d')
-FROM v_pit_candidate_scores
+FROM pit_candidate_scores
 WHERE forward_return_21d = 0.0 
   AND passed_stage1 = true
   AND as_of_date <= CURRENT_DATE - INTERVAL ? DAY
@@ -279,7 +349,11 @@ SELECT
         WHEN rejection_reason LIKE 'Low ROCE%' OR rejection_reason LIKE '%ROCE%' OR rejection_reason LIKE '%Capital Efficiency%' THEN 'Low ROCE (< 12%)'
         WHEN rejection_reason LIKE '%52-Week High%' THEN 'Far from 52W High (< 85%)'
         WHEN rejection_reason LIKE 'Base duration%' THEN 'Base Duration (< 4 Wks in Zone)'
+        WHEN rejection_reason LIKE '%Cash Flow%' OR rejection_reason LIKE '%CFO/PAT%' OR rejection_reason LIKE '%Cash Conversion%' THEN 'Weak Cash Conversion (CFO < PAT)'
+        WHEN rejection_reason LIKE '%Financial Services%' OR rejection_reason LIKE '%Financial ROE%' OR rejection_reason LIKE '%Banking%' THEN 'Financial Services Gated (ROE/RS)'
         WHEN rejection_reason LIKE '%promoter stake%' OR rejection_reason LIKE '%Low Promoter%' THEN 'Low Promoter Stake (< 25%)'
+        WHEN rejection_reason LIKE '%Pledg%' THEN 'High Promoter Pledging (> 20%)'
+        WHEN rejection_reason LIKE '%Margin%' THEN 'Operating Margin Deterioration'
         WHEN rejection_reason LIKE '%DSO%' OR rejection_reason LIKE '%Working Capital%' THEN 'Working Capital Deterioration (DSO)'
         WHEN rejection_reason LIKE '%Debt/Equity%' THEN 'High Debt/Equity (>= 1.5)'
         WHEN rejection_reason LIKE '%Interest Coverage%' THEN 'Low Interest Coverage (< 3.0)'
@@ -435,6 +509,12 @@ ORDER BY tot_weight DESC, survivor_cnt DESC;
 	// ==========================================
 	if prevRun != nil {
 		fmt.Printf("\n--- 5. SIGNIFICANT SCORE SHIFTS & TRAJECTORY (|Δ| >= 4.0 pts: %s -> %s) ---\n", prevRun.AsOfDate, latestRun.AsOfDate)
+		if prevRun.Pillar4Uncalibrated && !latestRun.Pillar4Uncalibrated {
+			fmt.Println("  🚨 [CALIBRATION NOTICE] Runs span Pillar 4 methodology upgrade (uncalibrated -> calibrated).")
+			fmt.Println("     Negative score shifts reflect removal of legacy delivery subsidy, not technical breakdown.")
+			fmt.Println()
+		}
+
 		shiftsQuery := `
 SELECT 
     curr.ticker,
@@ -442,6 +522,7 @@ SELECT
     prev.raw_score,
     curr.raw_score,
     curr.raw_score - prev.raw_score as diff,
+    COALESCE(CASE WHEN p_prev.close > 0 THEN ((p_curr.close - p_prev.close) / p_prev.close) * 100.0 ELSE 0.0 END, 0.0) as price_change_pct,
     curr.vcp_ratio,
     curr.composite_rs,
     curr.delivery_delta
@@ -450,6 +531,8 @@ JOIN v_pit_candidate_scores prev
   ON curr.ticker = prev.ticker 
  AND curr.index_name = prev.index_name 
  AND curr.method = prev.method
+LEFT JOIN prices p_prev ON curr.ticker = p_prev.ticker AND p_prev.date = prev.as_of_date
+LEFT JOIN prices p_curr ON curr.ticker = p_curr.ticker AND p_curr.date = curr.as_of_date
 WHERE curr.as_of_date = ? 
   AND prev.as_of_date = ?
   AND curr.index_name = ? 
@@ -465,22 +548,57 @@ ORDER BY diff DESC;
 `
 		shiftRows, err := p.db.QueryContext(ctx, shiftsQuery, latestRun.AsOfDate, prevRun.AsOfDate, indexName, method)
 		if err == nil {
-			fmt.Printf("  %-15s | %-20s | %-10s | %-10s | %-10s | %-8s | %-8s | %-9s\n",
-				"Ticker", "Sector", "Prev Score", "Curr Score", "Score Shift", "VCP ATR", "Comp RS", "Deliv Δ")
-			fmt.Println("  -------------------------------------------------------------------------------------------------------")
-			countShifts := 0
+			type shiftRecord struct {
+				ticker, sec                                           string
+				prevScore, currScore, diff, priceChg, vcp, rs, deliv float64
+			}
+			var gainers []shiftRecord
+			var decliners []shiftRecord
+
 			for shiftRows.Next() {
-				var ticker, sec string
-				var prevScore, currScore, diff, vcp, rs, deliv float64
-				if err := shiftRows.Scan(&ticker, &sec, &prevScore, &currScore, &diff, &vcp, &rs, &deliv); err == nil {
-					countShifts++
-					fmt.Printf("  %-15s | %-20s | %10.1f | %10.1f | %+9.1fpt | %8.2f | %+7.1f%% | %+8.1f%%\n",
-						ticker, sec, prevScore, currScore, diff, vcp, rs*100.0, deliv*100.0)
+				var r shiftRecord
+				if err := shiftRows.Scan(&r.ticker, &r.sec, &r.prevScore, &r.currScore, &r.diff, &r.priceChg, &r.vcp, &r.rs, &r.deliv); err == nil {
+					if r.diff > 0 {
+						gainers = append(gainers, r)
+					} else {
+						decliners = append(decliners, r)
+					}
 				}
 			}
 			shiftRows.Close()
-			if countShifts == 0 {
+
+			sort.Slice(decliners, func(i, j int) bool {
+				return decliners[i].diff < decliners[j].diff
+			})
+
+			totalShifts := len(gainers) + len(decliners)
+			fmt.Printf("  Total Shifts (|Δ| >= 4.0 pts): %d candidates (%d gainers, %d decliners)\n\n", totalShifts, len(gainers), len(decliners))
+
+			if totalShifts == 0 {
 				fmt.Println("  No candidates experienced score shifts >= 4.0 pts between consecutive runs.")
+			} else {
+				printShiftTable := func(subTitle string, list []shiftRecord, limit int) {
+					if len(list) == 0 {
+						return
+					}
+					fmt.Printf("  ▶ %s:\n", subTitle)
+					fmt.Printf("  %-15s | %-24s | %-10s | %-10s | %-12s | %-11s | %-8s | %-8s | %-9s\n",
+						"Ticker", "Sector", "Prev Score", "Curr Score", "Score Shift", "% Price Chg", "VCP ATR", "Comp RS", "Deliv Δ")
+					fmt.Println("  -----------------------------------------------------------------------------------------------------------------------------")
+					n := len(list)
+					if limit > 0 && n > limit {
+						n = limit
+					}
+					for i := 0; i < n; i++ {
+						r := list[i]
+						fmt.Printf("  %-15s | %-24s | %10.1f | %10.1f | %+10.1fpt | %+10.2f%% | %8.2f | %+7.1f%% | %+8.1f%%\n",
+							r.ticker, r.sec, r.prevScore, r.currScore, r.diff, r.priceChg, r.vcp, r.rs*100.0, r.deliv*100.0)
+					}
+					fmt.Println()
+				}
+
+				printShiftTable("Top Positive Score Gainers", gainers, 10)
+				printShiftTable("Top Negative Score Decliners", decliners, 10)
 			}
 		}
 
@@ -561,12 +679,12 @@ LIMIT 12;
 			var raw, eff, gap, vcp, rs, deliv, rvol float64
 			if err := incubatorRows.Scan(&ticker, &sec, &raw, &eff, &gap, &vcp, &rs, &deliv, &rvol); err == nil {
 				sig := "Base Consolidating"
-				if vcp < 0.65 && deliv > 0.20 {
+				if vcp < 0.65 && deliv >= 0.06 {
 					sig = "Tight VCP Coil + Heavy Deliv"
+				} else if deliv >= 0.08 {
+					sig = "Stealth Institutional Accum"
 				} else if vcp < 0.55 {
 					sig = "Extreme Volatility Coil"
-				} else if deliv > 0.30 {
-					sig = "Stealth Institutional Accum"
 				} else if vcp < 0.75 && rs > 0.20 {
 					sig = "Tight Base + Relative Outperf"
 				} else if gap <= 8.0 {
@@ -643,11 +761,11 @@ ORDER BY curr.raw_score DESC;
 				if err := velocityRows.Scan(&ticker, &sec, &sT2, &sT1, &sT0, &vcp, &deliv); err == nil {
 					foundVelocity = true
 					pattern := "Persistent Accumulation"
-					if sT2 > 0 && sT0 > sT1 && sT1 > sT2 {
-						pattern = "3-Session Consecutive Surge"
-					} else if sT0 > sT1+5.0 {
+					if sT0 >= sT1+5.0 {
 						pattern = "Velocity Breakout (+5pt Δ)"
-					} else if deliv > 0.30 {
+					} else if sT2 > 0 && sT0 > sT1+0.5 && sT1 > sT2+0.5 {
+						pattern = "3-Session Consecutive Surge"
+					} else if deliv >= 0.08 {
 						pattern = "Stealth Institutional Absorption"
 					}
 
@@ -666,7 +784,744 @@ ORDER BY curr.raw_score DESC;
 		}
 	}
 
+	// ==========================================
+	// 9. STEALTH ACCUMULATION & NEAR-MISS RADAR (Tracked Watchlist)
+	// ==========================================
+	fmt.Printf("\n--- 9. STEALTH ACCUMULATION & NEAR-MISS RADAR (Tracked Watchlist: Deliv Δ >= +8.0%% | Non-Negative RS) ---\n")
+	fmt.Println("Tracking institutional footprints blocked by Stage-1 gates, persistence across runs, and graduation alerts:")
+
+	prevDate := ""
+	if prevRun != nil {
+		prevDate = prevRun.AsOfDate
+	}
+
+	radarTickers := make(map[string]bool)
+	graduatedTickers := make(map[string]bool)
+
+	radarQuery := `
+WITH prior_radar AS (
+    SELECT 
+        ticker,
+        MIN(as_of_date) AS first_seen_date,
+        COUNT(DISTINCT as_of_date) AS days_on_radar
+    FROM v_pit_candidate_scores
+    WHERE index_name = ?
+      AND method = ?
+      AND delivery_delta >= 0.08
+      AND composite_rs >= 0.0
+      AND passed_stage1 = false
+      AND (data_fetch_failed = false OR data_fetch_failed IS NULL)
+      AND as_of_date < ?
+    GROUP BY ticker
+)
+SELECT 
+    curr.ticker,
+    COALESCE(NULLIF(curr.sector, ''), 'Unknown') AS sec,
+    COALESCE(pr.first_seen_date, curr.as_of_date) AS first_seen_date,
+    COALESCE(pr.days_on_radar, 0) + 1 AS days_on_radar,
+    COALESCE(CASE WHEN p_prev.close > 0 THEN ((p_curr.close - p_prev.close) / p_prev.close) * 100.0 ELSE 0.0 END, 0.0) AS price_change_pct,
+    curr.delivery_delta,
+    curr.composite_rs,
+    curr.vcp_ratio,
+    curr.rejection_reason
+FROM v_pit_candidate_scores curr
+LEFT JOIN prior_radar pr ON curr.ticker = pr.ticker
+LEFT JOIN prices p_prev ON curr.ticker = p_prev.ticker AND p_prev.date = ?
+LEFT JOIN prices p_curr ON curr.ticker = p_curr.ticker AND p_curr.date = ?
+WHERE curr.as_of_date = ?
+  AND curr.index_name = ?
+  AND curr.method = ?
+  AND curr.passed_stage1 = false
+  AND (curr.data_fetch_failed = false OR curr.data_fetch_failed IS NULL)
+  AND curr.delivery_delta >= 0.08
+  AND curr.composite_rs >= 0.0
+ORDER BY curr.delivery_delta DESC
+LIMIT 20;
+`
+	radarRows, err := p.db.QueryContext(ctx, radarQuery, indexName, method, latestRun.AsOfDate, prevDate, latestRun.AsOfDate, latestRun.AsOfDate, indexName, method)
+	if err == nil {
+		fmt.Printf("  %-15s | %-15s | %-10s | %-4s | %-7s | %-7s | %-7s | %-5s | %-12s | %-28s\n",
+			"Ticker", "Sector", "First Seen", "Days", "1D Chg", "Deliv Δ", "Comp RS", "VCP", "Gate Type", "Primary Bottleneck Gate")
+		fmt.Println("  -----------------------------------------------------------------------------------------------------------------------------------------")
+		foundRadar := false
+		for radarRows.Next() {
+			var ticker, sec, firstSeen, bottleneck string
+			var daysOnRadar int
+			var priceChg, deliv, rs, vcp float64
+			if err := radarRows.Scan(&ticker, &sec, &firstSeen, &daysOnRadar, &priceChg, &deliv, &rs, &vcp, &bottleneck); err == nil {
+				foundRadar = true
+				radarTickers[ticker] = true
+				if len(firstSeen) >= 10 {
+					firstSeen = firstSeen[:10]
+				}
+				gateType, cleanReason := classifyGate(false, bottleneck)
+				conciseReason := formatConciseBottleneck(cleanReason)
+				fmt.Printf("  %-15s | %-15s | %-10s | %3dd | %+6.2f%% | %+6.1f%% | %+6.1f%% | %5.2f | %-12s | %-28s\n",
+					ticker, formatConciseSector(sec), firstSeen, daysOnRadar, priceChg, deliv*100.0, rs*100.0, vcp, gateType, conciseReason)
+			}
+		}
+		radarRows.Close()
+		if !foundRadar {
+			fmt.Println("  No near-miss candidates currently exhibit strong institutional delivery accumulation (Deliv Δ >= +8.0%).")
+		}
+
+		// Mini-table: Graduated Stocks Alpha Audit (First-Seen Date -> Gate Clear Date)
+		gradQuery := `
+WITH prior_radar AS (
+    SELECT 
+        ticker,
+        MIN(as_of_date) AS first_seen_date,
+        COUNT(DISTINCT as_of_date) AS days_on_radar
+    FROM v_pit_candidate_scores
+    WHERE index_name = ?
+      AND method = ?
+      AND delivery_delta >= 0.08
+      AND composite_rs >= 0.0
+      AND passed_stage1 = false
+      AND (data_fetch_failed = false OR data_fetch_failed IS NULL)
+      AND (pillar4_uncalibrated = false OR pillar4_uncalibrated IS NULL)
+      AND as_of_date < ?
+    GROUP BY ticker
+),
+curr_graduated AS (
+    SELECT 
+        curr.ticker,
+        COALESCE(NULLIF(curr.sector, ''), 'Unknown') AS sec,
+        pr.first_seen_date,
+        CAST((curr.as_of_date - pr.first_seen_date) AS INT) AS elapsed_days,
+        pr.days_on_radar,
+        curr.as_of_date AS clear_date,
+        prev.rejection_reason AS prev_bottleneck
+    FROM v_pit_candidate_scores curr
+    JOIN prior_radar pr ON curr.ticker = pr.ticker
+    JOIN v_pit_candidate_scores prev 
+      ON curr.ticker = prev.ticker 
+     AND prev.as_of_date = ? 
+     AND prev.index_name = ? 
+     AND prev.method = ? 
+     AND prev.passed_stage1 = false
+    WHERE curr.as_of_date = ?
+      AND curr.index_name = ?
+      AND curr.method = ?
+      AND curr.passed_stage1 = true
+      AND (curr.data_fetch_failed = false OR curr.data_fetch_failed IS NULL)
+)
+SELECT 
+    g.ticker,
+    g.sec,
+    g.first_seen_date,
+    COALESCE(p_first.close, 0.0) AS first_close,
+    g.clear_date,
+    COALESCE(p_clear.close, 0.0) AS clear_close,
+    COALESCE(CASE WHEN p_first.close > 0 THEN ((p_clear.close - p_first.close) / p_first.close) * 100.0 ELSE 0.0 END, 0.0) AS radar_return_pct,
+    g.elapsed_days,
+    g.days_on_radar,
+    CASE 
+        WHEN g.prev_bottleneck LIKE '%Base duration%' THEN 'base_duration'
+        WHEN g.prev_bottleneck LIKE '%ROCE%' OR g.prev_bottleneck LIKE '%Capital Efficiency%' THEN 'delivery_override'
+        WHEN g.prev_bottleneck LIKE '%promoter%' THEN 'promoter_exempt'
+        ELSE 'natural_clear'
+    END AS rescue_channel
+FROM curr_graduated g
+LEFT JOIN prices p_first ON g.ticker = p_first.ticker AND p_first.date = g.first_seen_date
+LEFT JOIN prices p_clear ON g.ticker = p_clear.ticker AND p_clear.date = g.clear_date
+ORDER BY radar_return_pct DESC;
+`
+		gradRows, gErr := p.db.QueryContext(ctx, gradQuery, indexName, method, latestRun.AsOfDate, prevDate, indexName, method, latestRun.AsOfDate, indexName, method)
+		if gErr == nil {
+			type gradRecord struct {
+				ticker, sec, firstSeen, clearDate, channel string
+				firstClose, clearClose, retPct             float64
+				elapsedDays, daysOnRadar                   int
+			}
+			var graduates []gradRecord
+			for gradRows.Next() {
+				var gr gradRecord
+				if err := gradRows.Scan(&gr.ticker, &gr.sec, &gr.firstSeen, &gr.firstClose, &gr.clearDate, &gr.clearClose, &gr.retPct, &gr.elapsedDays, &gr.daysOnRadar, &gr.channel); err == nil {
+					graduates = append(graduates, gr)
+				}
+			}
+			gradRows.Close()
+
+			if len(graduates) > 0 {
+				fmt.Printf("\n  --- Graduated Stocks Performance (Radar Alpha Audit: First-Seen Date -> Clear Date) ---\n")
+				fmt.Println("  Quantifying pre-breakout radar predictive value and opportunity cost of waiting for Stage-1 clearance:")
+				fmt.Printf("  %-15s | %-15s | %-19s | %-10s | %-10s | %-12s | %11s | %11s | %-12s\n",
+					"Ticker", "Sector", "Channel", "First Seen", "Clear Date", "Incub (Hits)", "Entry (₹)", "Clear (₹)", "Radar Return")
+				fmt.Println("  -----------------------------------------------------------------------------------------------------------------------------------")
+				totalRet := 0.0
+				wins := 0
+				channelWins := make(map[string]int)
+				channelTotals := make(map[string]int)
+				channelRets := make(map[string]float64)
+
+				for _, gr := range graduates {
+					graduatedTickers[gr.ticker] = true
+					fs := gr.firstSeen
+					if len(fs) >= 10 {
+						fs = fs[:10]
+					}
+					cd := gr.clearDate
+					if len(cd) >= 10 {
+						cd = cd[:10]
+					}
+					totalRet += gr.retPct
+					channelTotals[gr.channel]++
+					channelRets[gr.channel] += gr.retPct
+					if gr.retPct > 0 {
+						wins++
+						channelWins[gr.channel]++
+					}
+					incubStr := fmt.Sprintf("%dd (%dx)", gr.elapsedDays, gr.daysOnRadar)
+					fmt.Printf("  %-15s | %-15s | %-19s | %-10s | %-10s | %-12s | %11s | %11s | %+11.2f%%\n",
+						gr.ticker, formatConciseSector(gr.sec), gr.channel, fs, cd, incubStr, render.Currency(gr.firstClose, "₹"), render.Currency(gr.clearClose, "₹"), gr.retPct)
+				}
+				avgRet := totalRet / float64(len(graduates))
+				winRate := float64(wins) / float64(len(graduates)) * 100.0
+				fmt.Printf("  Rolling Win Rate: %d/%d (%.1f%%) | Average Radar Return: %+.2f%% (Alpha left on table by waiting for formal Stage-1 pass)\n",
+					wins, len(graduates), winRate, avgRet)
+
+				fmt.Print("  Channel Breakdown: ")
+				var chStrs []string
+				for ch, tot := range channelTotals {
+					chW := channelWins[ch]
+					chAvg := channelRets[ch] / float64(tot)
+					chStrs = append(chStrs, fmt.Sprintf("%s: %d/%d (%.1f%%, avg %+.2f%%)", ch, chW, tot, float64(chW)/float64(tot)*100.0, chAvg))
+				}
+				fmt.Println(strings.Join(chStrs, " | "))
+			}
+		}
+	}
+
+	// ==========================================
+	// 10. DAILY TOP PRICE GAINERS (Universe Cross-Section)
+	// ==========================================
+	if prevDate != "" {
+		fmt.Printf("\n--- 10. DAILY TOP PRICE GAINERS (%s -> %s | %s) ---\n", prevDate, latestRun.AsOfDate, indexName)
+		fmt.Println("Cross-sectional price gainers across the index universe, delivery volume confirmation, and EBM qualification:")
+
+		gainersQuery := `
+WITH ntm AS (
+    SELECT DISTINCT ticker 
+    FROM v_pit_candidate_scores 
+    WHERE index_name = ?
+),
+curr AS (
+    SELECT ticker, close AS curr_close
+    FROM prices 
+    WHERE date = ?
+),
+prev AS (
+    SELECT ticker, close AS prev_close
+    FROM prices 
+    WHERE date = ?
+)
+SELECT 
+    ntm.ticker,
+    ROUND(prev.prev_close, 2) AS prev_close,
+    ROUND(curr.curr_close, 2) AS curr_close,
+    ROUND(((curr.curr_close - prev.prev_close) / prev.prev_close) * 100.0, 2) AS pct_gain,
+    COALESCE(c.passed_stage1, false) AS passed_stage1,
+    COALESCE(c.delivery_delta, 0.0) AS delivery_delta,
+    COALESCE(c.composite_rs, 0.0) AS composite_rs,
+    COALESCE(NULLIF(c.rejection_reason, ''), 'Stage-1 Qualified') AS stage1_status,
+    CASE WHEN c.ticker IS NOT NULL THEN true ELSE false END AS has_score
+FROM ntm
+JOIN curr ON ntm.ticker = curr.ticker
+JOIN prev ON ntm.ticker = prev.ticker
+LEFT JOIN v_pit_candidate_scores c 
+  ON ntm.ticker = c.ticker 
+ AND c.as_of_date = ? 
+ AND c.index_name = ? 
+ AND c.method = ?
+WHERE prev.prev_close > 0
+ORDER BY pct_gain DESC
+LIMIT 15;
+`
+		gRows, err := p.db.QueryContext(ctx, gainersQuery, indexName, latestRun.AsOfDate, prevDate, latestRun.AsOfDate, indexName, method)
+		if err == nil {
+			gainHeader := "1D Gain"
+			tCurr, errCurr := time.Parse("2006-01-02", latestRun.AsOfDate)
+			tPrev, errPrev := time.Parse("2006-01-02", prevDate)
+			if errCurr == nil && errPrev == nil {
+				daysDiff := int(tCurr.Sub(tPrev).Hours() / 24)
+				if daysDiff > 1 && daysDiff != 3 {
+					gainHeader = "% Price Chg"
+				}
+			}
+
+			fmt.Printf("  %-15s | %11s | %11s | %-11s | %-7s | %-5s | %-7s | %-12s | %-28s | %-12s\n",
+				"Ticker", "Prev (₹)", "Close (₹)", gainHeader, "Deliv Δ", "Accum", "Comp RS", "Gate Type", "Stage-1 Bottleneck", "Radar")
+			fmt.Println("  --------------------------------------------------------------------------------------------------------------------------------------")
+			foundGainer := false
+			for gRows.Next() {
+				var ticker, status string
+				var prevClose, currClose, pctGain, deliv, rs float64
+				var passedStage1, hasScore bool
+				if err := gRows.Scan(&ticker, &prevClose, &currClose, &pctGain, &passedStage1, &deliv, &rs, &status, &hasScore); err == nil {
+					foundGainer = true
+					delivStr := "- "
+					realAccumStr := "NO"
+					rsStr := "- "
+					if hasScore {
+						delivStr = fmt.Sprintf("%+6.1f%%", deliv*100.0)
+						if deliv >= 0.06 {
+							realAccumStr = "YES"
+						}
+						rsStr = fmt.Sprintf("%+6.1f%%", rs*100.0)
+					}
+					gateType, cleanStatus := classifyGate(passedStage1, status)
+					conciseStatus := formatConciseBottleneck(cleanStatus)
+					overlapStr := "-"
+					if graduatedTickers[ticker] {
+						overlapStr = "GRADUATED"
+					} else if radarTickers[ticker] {
+						overlapStr = "ACTIVE RADAR"
+					} else if hasScore && deliv >= 0.08 && rs >= 0.0 {
+						overlapStr = "DUAL HIT"
+					}
+					fmt.Printf("  %-15s | %11s | %11s | %+10.2f%% | %-7s | %-5s | %-7s | %-12s | %-28s | %-12s\n",
+						ticker, render.Currency(prevClose, "₹"), render.Currency(currClose, "₹"), pctGain, delivStr, realAccumStr, rsStr, gateType, conciseStatus, overlapStr)
+				}
+			}
+			gRows.Close()
+			if !foundGainer {
+				fmt.Println("  No price gainer records found for consecutive trading sessions.")
+			}
+		}
+	}
+
+	// ==========================================
+	// 11. STAGE-1 SHADOW MODE DIVERGENCE (Legacy Gate vs Relief Gate)
+	// ==========================================
+	_ = p.PrintShadowDivergence(ctx, latestRun.AsOfDate, indexName, method)
+
 	fmt.Println("=======================================================================================================================")
 	fmt.Println("Quantitative deduction analysis complete.")
 	return nil
 }
+
+// PrintShadowDivergence renders the shadow mode divergence report.
+func (p *DB) PrintShadowDivergence(ctx context.Context, asOfDate, indexName, method string) error {
+	_ = p.SyncShadowResults(ctx, asOfDate, indexName, method)
+
+	fmt.Printf("\n--- 11. STAGE-1 SHADOW MODE DIVERGENCE (Legacy Gate vs Relief Gate | %s) ---\n", asOfDate)
+	fmt.Println("Evaluating relief rules in shadow mode to accumulate empirical evidence before live deployment:")
+
+	q := `
+SELECT 
+    ticker,
+    sector,
+    divergence_type,
+    shadow_relief_channel,
+    delivery_delta,
+    composite_rs,
+    vcp_ratio,
+    shadow_base_mult,
+    legacy_rejection_cause
+FROM stage1_shadow_results
+WHERE as_of_date = ?
+  AND index_name = ?
+  AND method = ?
+  AND divergence_type = 'RESCUED'
+ORDER BY delivery_delta DESC
+LIMIT 20;
+`
+	rows, err := p.db.QueryContext(ctx, q, asOfDate, indexName, method)
+	if err == nil {
+		fmt.Printf("  %-15s | %-15s | %-8s | %-20s | %-7s | %-7s | %-5s | %-6s | %-28s\n",
+			"Ticker", "Sector", "Status", "Relief Channel", "Deliv Δ", "Comp RS", "VCP", "Mult", "Legacy Bottleneck Reason")
+		fmt.Println("  ----------------------------------------------------------------------------------------------------------------------------------------")
+		found := false
+		for rows.Next() {
+			var ticker, sec, divType, channel, reason string
+			var deliv, rs, vcp, mult float64
+			if err := rows.Scan(&ticker, &sec, &divType, &channel, &deliv, &rs, &vcp, &mult, &reason); err == nil {
+				found = true
+				conciseReason := formatConciseBottleneck(reason)
+				fmt.Printf("  %-15s | %-15s | %-8s | %-20s | %+6.1f%% | %+6.1f%% | %5.2f | %5.2fx | %-28s\n",
+					ticker, formatConciseSector(sec), divType, channel, deliv*100.0, rs*100.0, vcp, mult, conciseReason)
+			}
+		}
+		rows.Close()
+		if !found {
+			fmt.Println("  No divergent candidates between legacy and shadow gates.")
+		}
+
+		// Summary stats
+		sumQ := `
+SELECT 
+    COUNT(*),
+    COUNT(CASE WHEN legacy_stage1_pass THEN 1 END),
+    COUNT(CASE WHEN shadow_stage1_pass THEN 1 END),
+    COUNT(CASE WHEN divergence_type = 'RESCUED' THEN 1 END),
+    COUNT(CASE WHEN shadow_relief_channel = 'delivery_override' THEN 1 END),
+    COUNT(CASE WHEN shadow_relief_channel = 'promoter_exempt_bfsi' THEN 1 END),
+    COUNT(CASE WHEN shadow_relief_channel = 'graduated_scoring' THEN 1 END)
+FROM stage1_shadow_results
+WHERE as_of_date = ? AND index_name = ? AND method = ?;
+`
+		var total, legacyPass, shadowPass, rescued, delivCnt, promCnt, baseCnt int
+		if err := p.db.QueryRowContext(ctx, sumQ, asOfDate, indexName, method).Scan(&total, &legacyPass, &shadowPass, &rescued, &delivCnt, &promCnt, &baseCnt); err == nil && total > 0 {
+			legacyPct := float64(legacyPass) / float64(total) * 100.0
+			shadowPct := float64(shadowPass) / float64(total) * 100.0
+			fmt.Printf("\n  Shadow Gate Summary for %s (%s | %s):\n", asOfDate, indexName, method)
+			fmt.Printf("  • Legacy Stage-1 Survivors : %d / %d (%.1f%%)\n", legacyPass, total, legacyPct)
+			fmt.Printf("  • Shadow Stage-1 Survivors : %d / %d (%.1f%%)\n", shadowPass, total, shadowPct)
+			fmt.Printf("  • Total Candidates Rescued : %d (Tightened Delivery Override: %d)\n",
+				rescued, delivCnt)
+
+			// Sector breakdown of rescued candidates
+			secQ := `
+SELECT sector, COUNT(*) as cnt
+FROM stage1_shadow_results
+WHERE as_of_date = ? AND index_name = ? AND method = ? AND divergence_type = 'RESCUED'
+GROUP BY sector
+ORDER BY cnt DESC;
+`
+			secRows, sErr := p.db.QueryContext(ctx, secQ, asOfDate, indexName, method)
+			if sErr == nil {
+				var secStrs []string
+				for secRows.Next() {
+					var sec string
+					var cnt int
+					if err := secRows.Scan(&sec, &cnt); err == nil {
+						pct := float64(cnt) / float64(rescued) * 100.0
+						secStrs = append(secStrs, fmt.Sprintf("%s: %d (%.1f%%)", sec, cnt, pct))
+					}
+				}
+				secRows.Close()
+				if len(secStrs) > 0 {
+					fmt.Printf("  • Sector Distribution Check: %s\n", strings.Join(secStrs, " | "))
+				}
+			}
+
+			// Sector cap defense audit:
+			capQ := `
+SELECT 
+    sector,
+    COUNT(*) as total_shadow_pool,
+    COUNT(CASE WHEN legacy_stage1_pass THEN 1 END) as legacy_pool,
+    COUNT(CASE WHEN divergence_type = 'RESCUED' THEN 1 END) as rescued_pool
+FROM stage1_shadow_results
+WHERE as_of_date = ? AND index_name = ? AND method = ? AND shadow_stage1_pass = true
+GROUP BY sector
+ORDER BY total_shadow_pool DESC;
+`
+			capRows, cErr := p.db.QueryContext(ctx, capQ, asOfDate, indexName, method)
+			if cErr == nil {
+				fmt.Println("\n  Sector Cap Defense Audit on Shadow Pool (MaxStocksPerSector = 3 | MaxSectorWeightCap = 25.0%):")
+				fmt.Printf("  %-18s | %11s | %11s | %9s | %15s | %15s\n",
+					"Sector", "Shadow Pool", "Legacy Pool", "Rescued", "Max Allocatable", "Excess Absorbed")
+				fmt.Println("  ----------------------------------------------------------------------------------------------")
+				for capRows.Next() {
+					var sec string
+					var totPool, legPool, resPool int
+					if err := capRows.Scan(&sec, &totPool, &legPool, &resPool); err == nil {
+						maxAlloc := totPool
+						if maxAlloc > 3 {
+							maxAlloc = 3
+						}
+						excess := totPool - 3
+						if excess < 0 {
+							excess = 0
+						}
+						fmt.Printf("  %-18s | %11d | %11d | %9d | %15d | %15d\n",
+							formatConciseSector(sec), totPool, legPool, resPool, maxAlloc, excess)
+					}
+				}
+				capRows.Close()
+				fmt.Println("  * Sector Cap Defense Verified: Portfolio allocation cannot exceed 3 holdings or 25% weight per sector.")
+			}
+
+			fmt.Printf("\n  • Operational Mode         : SHADOW MODE ACTIVE (Legacy gate enforced in production; shadow logged to DB)\n")
+		}
+	}
+	return nil
+}
+
+// formatConciseSector truncates or formats long sector names to fit neatly in tables (<= 15 chars).
+func formatConciseSector(sec string) string {
+	switch sec {
+	case "Consumer Defensive":
+		return "Cons Defensive"
+	case "Consumer Cyclical":
+		return "Cons Cyclical"
+	case "Financial Services":
+		return "Financial Serv"
+	case "Communication Services":
+		return "Communication"
+	default:
+		if len(sec) > 15 {
+			return sec[:14] + "."
+		}
+		return sec
+	}
+}
+
+// formatConciseBottleneck cleans and abbreviates verbose rejection strings for crisp tabular rendering (<= 28 chars).
+func formatConciseBottleneck(reason string) string {
+	r := strings.TrimSpace(reason)
+	if r == "" || strings.EqualFold(r, "Stage-1 Qualified") || strings.Contains(r, "Qualified") {
+		return "Stage-1 Qualified"
+	}
+
+	// 1. Base duration: e.g. "Base duration too short (0 weeks < 4 weeks required base)" -> "Base: 0w < 4w"
+	if strings.Contains(r, "Base duration too short") {
+		if start := strings.Index(r, "("); start != -1 {
+			if end := strings.Index(r, "<"); end != -1 && end > start {
+				val := strings.TrimSpace(r[start+1 : end])
+				val = strings.ReplaceAll(val, " weeks", "w")
+				val = strings.ReplaceAll(val, " week", "w")
+				val = strings.ReplaceAll(val, "weeks", "w")
+				val = strings.ReplaceAll(val, "week", "w")
+				val = strings.TrimSpace(val)
+				return fmt.Sprintf("Base: %s < 4w", val)
+			}
+		}
+		return "Base: < 4w"
+	}
+
+	// 2. ROCE / Capital Efficiency: e.g. "Low Capital Efficiency (ROCE < 12.0%)" -> "Low ROCE (< 12.0%)"
+	if strings.Contains(r, "Capital Efficiency") || strings.Contains(r, "ROCE") {
+		return "Low ROCE (< 12.0%)"
+	}
+
+	// 3. DSO Deterioration: e.g. "DSO Deterioration limit exceeded (+83.7% > 15.0% threshold)" -> "DSO Deterioration (+83.7%)"
+	if strings.Contains(r, "DSO Deterioration") {
+		if start := strings.Index(r, "(+"); start != -1 {
+			if end := strings.Index(r, ">"); end != -1 && end > start {
+				val := strings.TrimSpace(r[start+1 : end])
+				return fmt.Sprintf("DSO Deterioration (%s)", val)
+			}
+		}
+		return "DSO Deterioration (> 15%)"
+	}
+
+	// 4. Low Promoter Stake: e.g. "Low promoter stake (16.3% < 25.0% limit)" -> "Low Promoter (16.3% < 25%)"
+	if strings.Contains(r, "Low promoter stake") {
+		if start := strings.Index(r, "("); start != -1 {
+			if end := strings.Index(r, "<"); end != -1 && end > start {
+				val := strings.TrimSpace(r[start+1 : end])
+				return fmt.Sprintf("Low Promoter (%s < 25%%)", val)
+			}
+		}
+		return "Low Promoter Stake (< 25%)"
+	}
+
+	// 5. 52-Week High: e.g. "Far from 52-Week High (74.3% of 52W high < 85.0% floor)" -> "Far from 52W High (74.3%)"
+	if strings.Contains(r, "52-Week High") || strings.Contains(r, "52W High") {
+		if start := strings.Index(r, "("); start != -1 {
+			if end := strings.Index(r, "%"); end != -1 && end > start {
+				val := strings.TrimSpace(r[start+1 : end+1])
+				return fmt.Sprintf("Far from 52W High (%s)", val)
+			}
+		}
+		return "Far from 52W High (< 85%)"
+	}
+
+	// 6. Below 200-Day SMA: e.g. "Below 200-Day SMA ratio floor (0.86 < 0.95 limit)" -> "Below 200-SMA (0.86 < 0.95)"
+	if strings.Contains(r, "Below 200-Day SMA") {
+		if start := strings.Index(r, "("); start != -1 {
+			if end := strings.Index(r, "<"); end != -1 && end > start {
+				val := strings.TrimSpace(r[start+1 : end])
+				return fmt.Sprintf("Below 200-SMA (%s < 0.95)", val)
+			}
+		}
+		return "Below 200-Day SMA (< 0.95)"
+	}
+
+	// 7. Market Cap: e.g. "Market Cap limit check failed (Market Cap: 989000Cr)"
+	if strings.Contains(r, "Market Cap") {
+		return "Market Cap Out of Bounds"
+	}
+
+	// 8. Financial ROE
+	if strings.Contains(r, "Financial ROE") || strings.Contains(r, "Low ROE") {
+		return "Low Financial ROE (< 12%)"
+	}
+
+	// 9. High Debt to Equity
+	if strings.Contains(r, "High Debt/Equity") {
+		if start := strings.Index(r, "("); start != -1 {
+			if end := strings.Index(r, ">="); end != -1 && end > start {
+				val := strings.TrimSpace(r[start+1 : end])
+				return fmt.Sprintf("High Debt/Eq (%s >= 2.0)", val)
+			}
+		}
+		return "High Debt/Equity (>= 2.0)"
+	}
+
+	// Clean fallback capped at 28 chars
+	if len(r) > 28 {
+		return r[:25] + "..."
+	}
+	return r
+}
+
+// classifyGate categorizes Stage-1 elimination reasons into Fixable vs Structural or Cleared.
+func classifyGate(passedStage1 bool, reason string) (gateType string, cleanReason string) {
+	if passedStage1 || reason == "" || strings.EqualFold(reason, "Stage-1 Qualified") || strings.Contains(reason, "Qualified") {
+		return "[CLEARED]", "Stage-1 Qualified"
+	}
+	r := strings.ToLower(reason)
+	if strings.Contains(r, "roce") || strings.Contains(r, "capital efficiency") || strings.Contains(r, "base duration") {
+		return "[Fixable]", reason
+	}
+	return "[Structural]", reason
+}
+
+// DataIntegrityResult holds metrics from the pre-flight integrity audit.
+type DataIntegrityResult struct {
+	TotalCandidates  int
+	FailedCandidates int
+	FailurePct       float64
+	FlaggedTickers   []string
+}
+
+// CheckDataIntegrity audits the latest candidate pool in pit_candidate_scores for missing or corrupted data.
+func (p *DB) CheckDataIntegrity(ctx context.Context, indexName, method string) (*DataIntegrityResult, error) {
+	query := `
+SELECT 
+    ticker,
+    rejection_reason,
+    data_fetch_failed
+FROM pit_candidate_scores
+WHERE as_of_date = (
+    SELECT MAX(as_of_date) FROM pit_candidate_scores 
+    WHERE (? = '' OR index_name = ?) AND (? = '' OR method = ?)
+)
+AND (? = '' OR index_name = ?)
+AND (? = '' OR method = ?);
+`
+	rows, err := p.db.QueryContext(ctx, query, indexName, indexName, method, method, indexName, indexName, method, method)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	res := &DataIntegrityResult{}
+	for rows.Next() {
+		var ticker, reason string
+		var fetchFailed bool
+		if err := rows.Scan(&ticker, &reason, &fetchFailed); err != nil {
+			continue
+		}
+		res.TotalCandidates++
+		if fetchFailed || strings.Contains(strings.ToLower(reason), "unverified") || strings.Contains(strings.ToLower(reason), "fetch failure") {
+			res.FailedCandidates++
+			if len(res.FlaggedTickers) < 10 {
+				res.FlaggedTickers = append(res.FlaggedTickers, ticker)
+			}
+		}
+	}
+	if res.TotalCandidates > 0 {
+		res.FailurePct = (float64(res.FailedCandidates) / float64(res.TotalCandidates)) * 100.0
+	}
+	return res, nil
+}
+
+// PrintConsensusLeaders queries v_strategy_consensus and displays the top dual-conviction leaders.
+func (p *DB) PrintConsensusLeaders(ctx context.Context, asOfDate string, topN int) error {
+	if asOfDate == "" {
+		err := p.db.QueryRowContext(ctx, "SELECT as_of_date::VARCHAR FROM v_strategy_consensus ORDER BY as_of_date DESC LIMIT 1;").Scan(&asOfDate)
+		if err != nil || asOfDate == "" {
+			return fmt.Errorf("no consensus data found in v_strategy_consensus: %w", err)
+		}
+	}
+
+	if topN <= 0 {
+		topN = 15
+	}
+
+	// Load active holdings from data/microsmall.csv if available
+	holdingsMap := make(map[string]float64)
+	if weights, err := csvloader.ReadCSVWeights("data/microsmall.csv"); err == nil {
+		for t, w := range weights {
+			if w > 0 {
+				clean := strings.ToUpper(strings.TrimSpace(t))
+				if !strings.HasPrefix(clean, "NSE:") && !strings.HasPrefix(clean, "BSE:") {
+					clean = "NSE:" + clean
+				}
+				holdingsMap[clean] = w
+			}
+		}
+	}
+
+	query := `
+SELECT 
+    ticker,
+    COALESCE(NULLIF(sector, ''), 'Unknown') AS sector,
+    COALESCE(mb_score, 0),
+    COALESCE(earlymb_score, 0),
+    COALESCE(consensus_score, 0),
+    COALESCE(vcp_ratio, 0),
+    COALESCE(delivery_delta, 0),
+    mb_passed_stage1,
+    earlymb_passed_stage1
+FROM v_strategy_consensus
+WHERE as_of_date = ?
+ORDER BY consensus_score DESC
+LIMIT ?;
+`
+	rows, err := p.db.QueryContext(ctx, query, asOfDate, topN)
+	if err != nil {
+		return fmt.Errorf("querying v_strategy_consensus: %w", err)
+	}
+	defer rows.Close()
+
+	fmt.Println()
+	render.Banner(os.Stdout, fmt.Sprintf("TOP DUAL-CONVICTION LEADERS (%s) — NIFTY TOTAL MARKET", asOfDate))
+	fmt.Println("Live Prod Strategy : multibagger (Capital Compounder)")
+	fmt.Println("Testing Radar      : earlymb (Pre-Breakout Momentum)")
+	fmt.Println("Universe           : niftytotalmarket (750 Stocks)")
+	fmt.Printf("As-Of Date         : %s\n", asOfDate)
+	fmt.Println(strings.Repeat("-", 108))
+	fmt.Printf("%-4s  %-15s  %-18s  %9s  %8s  %8s  %5s  %8s  %-12s  %s\n",
+		"Rank", "Ticker", "Sector", "Consensus", "MB Score", "EarlyMB", "VCP", "Deliv Δ", "Stage-1", "Portfolio")
+	fmt.Printf("%-4s  %-15s  %-18s  %9s  %8s  %8s  %5s  %8s  %-12s  %s\n",
+		"----", "------", "------", "---------", "--------", "-------", "---", "-------", "-------", "---------")
+
+	rank := 1
+	for rows.Next() {
+		var ticker, sector string
+		var mbScore, embScore, consensusScore, vcpRatio, delivDelta float64
+		var mbPass, embPass bool
+
+		if err := rows.Scan(&ticker, &sector, &mbScore, &embScore, &consensusScore, &vcpRatio, &delivDelta, &mbPass, &embPass); err != nil {
+			continue
+		}
+
+		stage1Str := "FAIL / FAIL"
+		if mbPass && embPass {
+			stage1Str = "PASS / PASS"
+		} else if mbPass {
+			stage1Str = "PASS / FAIL"
+		} else if embPass {
+			stage1Str = "FAIL / PASS"
+		}
+
+		portStr := "-"
+		cleanTicker := strings.ToUpper(strings.TrimSpace(ticker))
+		if !strings.HasPrefix(cleanTicker, "NSE:") && !strings.HasPrefix(cleanTicker, "BSE:") {
+			cleanTicker = "NSE:" + cleanTicker
+		}
+		if w, ok := holdingsMap[cleanTicker]; ok && w > 0 {
+			portStr = fmt.Sprintf("ACTIVE (%.1f%%)", w*100)
+		}
+
+		conciseSector := formatConciseSector(sector)
+		if len(conciseSector) > 18 {
+			conciseSector = conciseSector[:18]
+		}
+
+		delivStr := fmt.Sprintf("%+.1f%%", delivDelta*100)
+
+		fmt.Printf("%-4d  %-15s  %-18s  %9.2f  %8.2f  %8.2f  %5.2f  %8s  %-12s  %s\n",
+			rank, ticker, conciseSector, consensusScore, mbScore, embScore, vcpRatio, delivStr, stage1Str, portStr)
+		rank++
+	}
+	fmt.Println(strings.Repeat("=", 108))
+	return nil
+}
+

@@ -2,6 +2,7 @@ package yfinance
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"os"
@@ -215,4 +216,25 @@ func TestCalculateDeliveryDelta_CachedCupid(t *testing.T) {
 	}
 	t.Logf("CUPID Delivery Delta: %+0.4f (5D Avg: %+0.2f%%, 20D Avg: %+0.2f%%, Settled Days: %d)",
 		res.Delta5D20D, res.Avg5D*100, res.Avg20D*100, res.SettledDays)
+}
+
+func TestCalculateDeliveryDelta_StaleHistoryRejected(t *testing.T) {
+	// Construct 25 records from 40 days ago (July 2026)
+	var records []marketdata.DeliveryRecord
+	for i := 1; i <= 25; i++ {
+		records = append(records, marketdata.DeliveryRecord{
+			Date:        fmt.Sprintf("2026-07-%02d", i),
+			DeliveryPct: 40.0,
+		})
+	}
+
+	// Reference date is September 12, 2026 (48 days later)
+	asOf := time.Date(2026, 9, 12, 0, 0, 0, 0, time.UTC)
+	_, err := CalculateDeliveryDelta(records, asOf, 1)
+	if err == nil {
+		t.Fatal("expected ErrStaleDeliveryHistory, got nil")
+	}
+	if !errors.Is(err, ErrStaleDeliveryHistory) {
+		t.Fatalf("expected ErrStaleDeliveryHistory, got %v", err)
+	}
 }
