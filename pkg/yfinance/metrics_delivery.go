@@ -8,7 +8,10 @@ import (
 	"github.com/raghavkgarg/mycase/pkg/marketdata"
 )
 
-var ErrInsufficientDeliveryHistory = errors.New("insufficient delivery history (< 25 settled sessions)")
+var (
+	ErrInsufficientDeliveryHistory = errors.New("insufficient delivery history (< 25 settled sessions)")
+	ErrStaleDeliveryHistory        = errors.New("delivery history is stale (latest record > 10 calendar days old)")
+)
 
 // DeliveryDeltaResult holds the calculated metrics for Pillar 4 institutional accumulation.
 type DeliveryDeltaResult struct {
@@ -67,6 +70,14 @@ func CalculateDeliveryDelta(records []marketdata.DeliveryRecord, asOf time.Time,
 	})
 
 	n := len(confirmed)
+
+	// Recency invariant: the most recent confirmed delivery record must be within 10 calendar days of asOf.
+	// This prevents computing phantom accumulation on suspended, inactive, or stale-cache instruments,
+	// while cleanly accommodating holiday clusters (e.g. Diwali / long weekend + T+1 settlement).
+	staleThreshold := asOf.AddDate(0, 0, -10).Format("2006-01-02")
+	if confirmed[n-1].Date < staleThreshold {
+		return DeliveryDeltaResult{}, ErrStaleDeliveryHistory
+	}
 	// Disjoint Window Architecture:
 	// Recent 5 days: indices [n-5 : n] (days t-4 to t)
 	// Baseline 20 days: indices [n-25 : n-5] (days t-24 to t-5)

@@ -573,21 +573,48 @@ func CalculateOperatingMarginTrajectory(f *Fundamentals) (bool, float64, float64
 }
 
 // CalculateCROIC computes Cash Return on Invested Capital.
+// It prioritizes balance-sheet Capital Employed (TotalAssets - CurrentLiabilities)
+// consistent with ROCE methodology, falling back to book equity (MarketCap / PBRatio) + TotalDebt
+// if balance-sheet timeseries are unavailable.
 func CalculateCROIC(f *Fundamentals) (float64, bool) {
-	// If both FCF and CFO are exactly 0.0, treat it as a data coverage gap
-	if f.FreeCashflow == 0.0 && f.OperatingCashflow == 0.0 {
+	// If both FCF and CFO are exactly 0.0, and no annual timeseries exist, treat as data coverage gap
+	if f.FreeCashflow == 0.0 && f.OperatingCashflow == 0.0 && len(f.AnnualOperatingCashFlow) == 0 && len(f.AnnualFreeCashFlow) == 0 {
 		return 0.0, false
 	}
 
-	totalEquity := 0.0
-	if f.PBRatio > 0 {
-		totalEquity = f.MarketCap / f.PBRatio
-	} else {
-		// Fallback if PBRatio is missing or <= 0
-		return 0.0, false
+	// 1. Primary: Use Balance Sheet Capital Employed (Total Assets - Current Liabilities)
+	// matching ROCE methodology.
+	var investedCapital float64
+	if len(f.AnnualTotalAssets) > 0 && len(f.AnnualCurrentLiabilities) > 0 {
+		sortedAssets := make([]AnnualMetric, len(f.AnnualTotalAssets))
+		copy(sortedAssets, f.AnnualTotalAssets)
+		sort.Slice(sortedAssets, func(i, j int) bool {
+			return sortedAssets[i].Date < sortedAssets[j].Date
+		})
+
+		sortedLiabs := make([]AnnualMetric, len(f.AnnualCurrentLiabilities))
+		copy(sortedLiabs, f.AnnualCurrentLiabilities)
+		sort.Slice(sortedLiabs, func(i, j int) bool {
+			return sortedLiabs[i].Date < sortedLiabs[j].Date
+		})
+
+		latestAssets := sortedAssets[len(sortedAssets)-1].Value
+		latestLiab := sortedLiabs[len(sortedLiabs)-1].Value
+		ce := latestAssets - latestLiab
+		if ce > 0 {
+			investedCapital = ce
+		}
 	}
 
-	investedCapital := totalEquity + f.TotalDebt
+	// 2. Fallback: If balance-sheet assets/liabilities are missing or non-positive,
+	// estimate invested capital from book equity (MarketCap / PBRatio) + TotalDebt.
+	if investedCapital <= 0 {
+		if f.PBRatio > 0 && f.MarketCap > 0 {
+			totalEquity := f.MarketCap / f.PBRatio
+			investedCapital = totalEquity + f.TotalDebt
+		}
+	}
+
 	if investedCapital <= 0 {
 		return 0.0, false
 	}
@@ -595,12 +622,16 @@ func CalculateCROIC(f *Fundamentals) (float64, bool) {
 	// Yahoo Finance FreeCashflow can be extremely buggy/laggy or missing for international tickers.
 	// If annual CapEx data is available, compute FCF as OperatingCashflow - CapEx.
 	fcf := f.FreeCashflow
-	if len(f.AnnualCapEx) > 0 {
-		sort.Slice(f.AnnualCapEx, func(i, j int) bool {
-			return f.AnnualCapEx[i].Date < f.AnnualCapEx[j].Date
+	if len(f.AnnualCapEx) > 0 && f.OperatingCashflow != 0 {
+		sortedCapEx := make([]AnnualMetric, len(f.AnnualCapEx))
+		copy(sortedCapEx, f.AnnualCapEx)
+		sort.Slice(sortedCapEx, func(i, j int) bool {
+			return sortedCapEx[i].Date < sortedCapEx[j].Date
 		})
-		latestCapEx := math.Abs(f.AnnualCapEx[len(f.AnnualCapEx)-1].Value)
+		latestCapEx := math.Abs(sortedCapEx[len(sortedCapEx)-1].Value)
 		fcf = f.OperatingCashflow - latestCapEx
+	} else if fcf == 0.0 && f.OperatingCashflow != 0.0 {
+		fcf = f.OperatingCashflow
 	}
 
 	croic := fcf / investedCapital

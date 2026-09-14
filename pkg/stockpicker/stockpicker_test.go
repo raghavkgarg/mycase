@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/raghavkgarg/mycase/pkg/config"
+	"github.com/raghavkgarg/mycase/pkg/marketdata"
 	"github.com/raghavkgarg/mycase/pkg/selectiontracker"
 	"github.com/raghavkgarg/mycase/pkg/yfinance"
 )
@@ -930,6 +931,96 @@ func TestCheckROCE_PITLagFiltering(t *testing.T) {
 	}
 }
 
+func TestCheckCROIC_PITLagAndFallback(t *testing.T) {
+	// Case 1: Lumpy capex stock (similar to VARROC)
+	// FY24: FCF 15 on CE 100 -> CROIC 15%
+	// FY25: FCF 21 on CE 100 -> CROIC 21%
+	// FY26: FCF 3 on CE 100 -> CROIC 3% (trips 6% single-year floor)
+	// 3-Year Avg CROIC = (15 + 21 + 3) / 3 = 13% -> passes via 3-year fallback!
+	fVarroc := &yfinance.Fundamentals{
+		AnnualOperatingCashFlow: []yfinance.AnnualMetric{
+			{Date: "2024-03-31", Value: 25.0},
+			{Date: "2025-03-31", Value: 31.0},
+			{Date: "2026-03-31", Value: 13.0},
+		},
+		AnnualCapEx: []yfinance.AnnualMetric{
+			{Date: "2024-03-31", Value: -10.0},
+			{Date: "2025-03-31", Value: -10.0},
+			{Date: "2026-03-31", Value: -10.0},
+		},
+		AnnualTotalAssets: []yfinance.AnnualMetric{
+			{Date: "2024-03-31", Value: 200.0},
+			{Date: "2025-03-31", Value: 200.0},
+			{Date: "2026-03-31", Value: 200.0},
+		},
+		AnnualCurrentLiabilities: []yfinance.AnnualMetric{
+			{Date: "2024-03-31", Value: 100.0},
+			{Date: "2025-03-31", Value: 100.0},
+			{Date: "2026-03-31", Value: 100.0},
+		},
+	}
+
+	asOf := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
+	passed, croicVal, ok := checkCROIC(fVarroc, 0.06, asOf, 45)
+	if !ok {
+		t.Fatalf("expected CROIC check to find valid data, got ok=false")
+	}
+	if !passed {
+		t.Errorf("expected VARROC-like stock to pass via 3-year average fallback, but failed with croicVal=%.2f%%", croicVal*100)
+	}
+	if math.Abs(croicVal-0.13) > 1e-4 {
+		t.Errorf("expected 3-year avg CROIC ~13%%, got %.2f%%", croicVal*100)
+	}
+
+	// Case 2: Immature cashflow stock (similar to DATAPATTNS / AVALON)
+	// FY24: FCF -5 on CE 100
+	// FY25: FCF -2 on CE 100
+	// FY26: FCF +0.5 on CE 100 -> CROIC 0.5%
+	// 3-Year Avg is negative -> must fail both latest and 3-year avg!
+	fImmature := &yfinance.Fundamentals{
+		AnnualOperatingCashFlow: []yfinance.AnnualMetric{
+			{Date: "2024-03-31", Value: 5.0},
+			{Date: "2025-03-31", Value: 8.0},
+			{Date: "2026-03-31", Value: 10.5},
+		},
+		AnnualCapEx: []yfinance.AnnualMetric{
+			{Date: "2024-03-31", Value: -10.0},
+			{Date: "2025-03-31", Value: -10.0},
+			{Date: "2026-03-31", Value: -10.0},
+		},
+		AnnualTotalAssets: []yfinance.AnnualMetric{
+			{Date: "2024-03-31", Value: 200.0},
+			{Date: "2025-03-31", Value: 200.0},
+			{Date: "2026-03-31", Value: 200.0},
+		},
+		AnnualCurrentLiabilities: []yfinance.AnnualMetric{
+			{Date: "2024-03-31", Value: 100.0},
+			{Date: "2025-03-31", Value: 100.0},
+			{Date: "2026-03-31", Value: 100.0},
+		},
+	}
+
+	passedImmature, croicValImmature, okImmature := checkCROIC(fImmature, 0.048, asOf, 45)
+	if !okImmature {
+		t.Fatalf("expected ok=true for immature stock")
+	}
+	if passedImmature {
+		t.Errorf("expected immature stock to fail 4.8%% CROIC floor, but passed with %.2f%%", croicValImmature*100)
+	}
+
+	// Case 3: PIT filing lag enforcement
+	// As of 2026-04-15 with 45-day lag: 2026-03-31 filing is NOT yet available!
+	asOfBeforeLag := time.Date(2026, 4, 15, 0, 0, 0, 0, time.UTC)
+	passedBeforeLag, croicBeforeLag, _ := checkCROIC(fVarroc, 0.06, asOfBeforeLag, 45)
+	// As of before lag, only FY24 (15%) and FY25 (21%) are visible -> latest is 21%, which passes >= 6%
+	if !passedBeforeLag {
+		t.Errorf("expected FY25 (21%% CROIC) to be evaluated before FY26 lag expiration")
+	}
+	if math.Abs(croicBeforeLag-0.21) > 1e-4 {
+		t.Errorf("expected latest visible CROIC to be FY25 (21%%), got %.2f%%", croicBeforeLag*100)
+	}
+}
+
 func TestPickDeterminism(t *testing.T) {
 	// TODO(ebm-integration): re-enable. This test was committed red in 8d4d43e
 	// (the "make pkg/ compile" EBM merge commit). The determinism assertions
@@ -1101,3 +1192,156 @@ func TestPickDeterminism(t *testing.T) {
 	}
 	_ = todayDate
 }
+
+func TestEarlyMultibaggerStrategyFilters(t *testing.T) {
+	// 1. Test Financial Sector ROCE exemption and ROE gate
+	fFinPass := yfinance.Fundamentals{
+		Sector:          "Financial Services",
+		ROE:             0.15, // 15% ROE >= 12%
+		InsidersPercent: 0.16, // 16% promoter stake < 25% limit, but exempt for BFSI
+	}
+	filters := config.HardFilters{
+		MinROCE:            0.12,
+		MinROE:             0.12,
+		MinPromoterPercent: 0.25,
+	}
+	passedFin, reasonFin := isEligible("NSE:HDFC", fFinPass, "earlymb", &filters, nil, nil, nil, nil, &FilterStats{}, false)
+	if !passedFin {
+		t.Errorf("expected Financial Services stock with 15%% ROE and 16%% promoter stake to pass Stage-1, failed: %s", reasonFin)
+	}
+
+	fFinFail := yfinance.Fundamentals{
+		Sector:          "Financial Services",
+		ROE:             0.08, // 8% ROE < 12% threshold
+		InsidersPercent: 0.16,
+	}
+	passedFinFail, reasonFinFail := isEligible("NSE:WEAKBANK", fFinFail, "earlymb", &filters, nil, nil, nil, nil, &FilterStats{}, false)
+	if passedFinFail {
+		t.Errorf("expected Financial Services stock with 8%% ROE to fail Stage-1 ROE gate")
+	}
+	if !strings.Contains(reasonFinFail, "Low Financial ROE") {
+		t.Errorf("expected 'Low Financial ROE' rejection reason, got: %s", reasonFinFail)
+	}
+
+	// BFSI stock with low promoter stake but NEGATIVE relative strength must fail
+	testClosesFalling := make([]float64, 30)
+	for i := range testClosesFalling {
+		testClosesFalling[i] = 200.0 - float64(i)*2.0 // falling price, negative RS
+	}
+	passedWeakRS, reasonWeakRS := isEligible("NSE:WEAKRSBANK", fFinPass, "earlymb", &filters, testClosesFalling, nil, nil, nil, &FilterStats{}, false)
+	if passedWeakRS {
+		t.Errorf("expected Financial Services stock with negative relative strength to fail promoter exemption")
+	}
+	if !strings.Contains(reasonWeakRS, "weak relative strength") {
+		t.Errorf("expected 'weak relative strength' rejection, got: %s", reasonWeakRS)
+	}
+
+	// 2. Test Non-Financial Sector promoter stake enforcement
+	fNonFin := yfinance.Fundamentals{
+		Sector:          "Industrials",
+		ROE:             0.20,
+		InsidersPercent: 0.18, // < 25% floor
+	}
+	passedNonFin, reasonNonFin := isEligible("NSE:MANUF", fNonFin, "earlymb", &filters, nil, nil, nil, nil, &FilterStats{}, false)
+	if passedNonFin {
+		t.Errorf("expected Non-Financial stock with 18%% promoter stake to fail 25%% promoter floor")
+	}
+	if !strings.Contains(reasonNonFin, "Low promoter stake") {
+		t.Errorf("expected 'Low promoter stake' rejection, got: %s", reasonNonFin)
+	}
+
+	// 3. Test Technology Sector ROCE relaxation (Requires institutional delivery confirmation)
+	var confirmedDelivery []marketdata.DeliveryRecord
+	for i := 0; i < 35; i++ {
+		// baseline 20D: 40.0%
+		pct := 40.0
+		if i >= 30 {
+			// recent 5D: 55.0% (delivDelta = +15% >= +6%)
+			pct = 55.0
+		}
+		confirmedDelivery = append(confirmedDelivery, marketdata.DeliveryRecord{
+			Date:        time.Now().AddDate(0, 0, -40+i).Format("2006-01-02"),
+			DeliveryPct: pct,
+		})
+	}
+
+	testClosesRising := make([]float64, 30)
+	for i := range testClosesRising {
+		testClosesRising[i] = 100.0 + float64(i)*1.0
+	}
+
+	// Tech stock with 5.0% ROCE (< 7.0% floor), but confirmed by institutional delivery, Comp RS >= 0, VCP <= 1.20
+	fTechConfirmed := yfinance.Fundamentals{
+		Sector:          "Technology",
+		DeliveryHistory: confirmedDelivery,
+		AnnualOperatingIncome: []yfinance.AnnualMetric{
+			{Date: "2025-03-31", Value: 50}, // EBIT 50
+		},
+		AnnualTotalAssets: []yfinance.AnnualMetric{
+			{Date: "2025-03-31", Value: 1200},
+		},
+		AnnualCurrentLiabilities: []yfinance.AnnualMetric{
+			{Date: "2025-03-31", Value: 200}, // Cap Employed = 1000 => ROCE = 5.0% (< 7.0% floor)
+		},
+		InsidersPercent: 0.40,
+	}
+	// In production, delivery override stays in shadow mode; the legacy ROCE floor is strictly enforced.
+	// A 5.0% ROCE (< 7.0% floor) must be rejected in production.
+	passedTech, reasonTech := isEligible("NSE:TECHCO", fTechConfirmed, "earlymb", &filters, testClosesRising, nil, nil, nil, &FilterStats{}, false)
+	if passedTech {
+		t.Errorf("expected Tech stock with 5%% ROCE to be rejected under production legacy ROCE floor")
+	}
+	if !strings.Contains(reasonTech, "Low Capital Efficiency") {
+		t.Errorf("expected Low Capital Efficiency rejection, got: %s", reasonTech)
+	}
+
+	// Non-financial stock with 10.0% ROCE (< 12.0% floor) and NO delivery confirmation must fail
+	fIndNoDeliv := yfinance.Fundamentals{
+		Sector:          "Industrials",
+		InsidersPercent: 0.50,
+		AnnualOperatingIncome: []yfinance.AnnualMetric{
+			{Date: "2025-03-31", Value: 100},
+		},
+		AnnualTotalAssets: []yfinance.AnnualMetric{
+			{Date: "2025-03-31", Value: 1200},
+		},
+		AnnualCurrentLiabilities: []yfinance.AnnualMetric{
+			{Date: "2025-03-31", Value: 200}, // Cap Employed = 1000 => ROCE = 10.0% (< 12.0%)
+		},
+	}
+	passedInd, reasonInd := isEligible("NSE:INDCO", fIndNoDeliv, "earlymb", &filters, testClosesRising, nil, nil, nil, &FilterStats{}, false)
+	if passedInd {
+		t.Errorf("expected Industrials stock with 10%% ROCE and no delivery to fail 12%% ROCE floor")
+	}
+	if !strings.Contains(reasonInd, "Low Capital Efficiency") {
+		t.Errorf("expected Low Capital Efficiency failure, got: %s", reasonInd)
+	}
+
+	// 4. Test Base Duration: Fresh base (0-1 week) passes Stage-1 in earlymb
+	closesFreshBase := make([]float64, 30)
+	for i := range closesFreshBase {
+		closesFreshBase[i] = 100.0 + float64(i)*2.0 // Rapid upward run, short base duration
+	}
+	earlyFilters := config.HardFilters{
+		MinBaseDurationWeeks: 4,
+		MinProximity52WHigh:  0.85,
+	}
+	fFresh := yfinance.Fundamentals{
+		Sector:          "Technology",
+		InsidersPercent: 0.50,
+		AnnualOperatingIncome: []yfinance.AnnualMetric{
+			{Date: "2025-03-31", Value: 100},
+		},
+		AnnualTotalAssets: []yfinance.AnnualMetric{
+			{Date: "2025-03-31", Value: 1000},
+		},
+		AnnualCurrentLiabilities: []yfinance.AnnualMetric{
+			{Date: "2025-03-31", Value: 200},
+		},
+	}
+	passedBase, reasonBase := isEligible("NSE:FRESH", fFresh, "earlymb", &earlyFilters, closesFreshBase, nil, nil, nil, &FilterStats{}, false)
+	if !passedBase {
+		t.Errorf("expected fresh breakout with short base duration to pass Stage-1 under graduated scoring rule, failed: %s", reasonBase)
+	}
+}
+

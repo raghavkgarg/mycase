@@ -34,7 +34,7 @@ The following table summarizes the **current safety configuration** applied to t
 | **H** | **Capital Efficiency (ROCE)** | $\ge$ **12%** | $\ge$ **10.2%** (15% soft cushion) | Latest or 3y Avg ROCE must exceed cost of capital. |
 | **I** | **Debt-to-Equity (D/E)** | < **1.5** | < **1.725** (15% soft cushion) | Keeps leverage manageable during credit tightness. |
 | **J** | **Interest Coverage Ratio** | > 3.0 | > **2.7** (10% soft cushion) | Operating profits (EBIT) must comfortably service debt. |
-| **K** | **CROIC (FCF Return)** | $\ge$ **6%** | $\ge$ **4.8%** (20% soft cushion) | FCF / (Equity + Debt). Prevents cliff exits on working capital reinvestment cycles. |
+| **K** | **CROIC (Cash Return on Invested Capital)** | $\ge$ **6%** | $\ge$ **4.8%** (20% soft cushion) | Latest OR 3-Year Avg CROIC: $\text{FCF} / \text{Capital Employed}$. Decoupled from market-price distortions; aligned with ROCE Capital Employed ($\text{Total Assets} - \text{Current Liabilities}$). |
 | **L** | **DSO Deterioration Gate** | $\le$ **15%** | $\le$ **15%** | Limits YoY Days Sales Outstanding deterioration to prevent Day-1 monitoring exits. |
 
 ---
@@ -56,7 +56,7 @@ The following table summarizes the **current safety configuration** applied to t
 * **Rule:** 
   1. Operating Cash Flow (CFO) to Net Profit (PAT) ratio $\ge$ **0.25** (i.e. $\ge 25\%$ of reported net income is realized as cash).
   2. Operating Cash Flow (CFO) $>$ **0** (Free Cash Flow is not strictly capped to support companies undergoing high capital reinvestment/CapEx growth phases).
-  3. **Data Coverage Bypass:** If both Operating Cash Flow and Free Cash Flow are reported as exactly `0.0` (indicating a data coverage gap on Yahoo Finance), the filter is bypassed.
+  3. **Strict Timeseries Enforcement (Post-Audit)**: Previously, missing summary cash flows on Yahoo Finance triggered a silent bypass when fields defaulted to `0.0`. The ingestion pipeline now fetches multi-year timeseries statements (`annualOperatingCashFlow` and `annualFreeCashFlow`), providing 100% coverage across Indian equities and actively eliminating cash-burning businesses.
 * **Why:** Avoids severe "paper profits" value traps while ensuring cash backing of reported earnings.
 
 ### D. Consistent Earnings growth (PAT Trend)
@@ -113,12 +113,14 @@ The following table summarizes the **current safety configuration** applied to t
 * **Why:** Mandating a strong interest coverage buffer ensures operating profits are sufficient to service debt obligations comfortably even during downturns.
 
 ### K. The Ultimate Truth Serum (CROIC)
-* **Rule:** Cash Return on Invested Capital (CROIC) must be $\ge$ **6%**.
+* **Rule:** Cash Return on Invested Capital (CROIC) must be $\ge$ **6%** for the latest fiscal year, OR the **3-Year Average CROIC** must be $\ge$ **6%** (with a 20% soft-band cushion down to **4.8%** for existing portfolio holdings).
 * **Calculation:** 
-  $$\text{CROIC} = \frac{\text{Free Cash Flow}}{\text{Total Equity} + \text{Total Debt}}$$
-  Where $\text{Total Equity} = \frac{\text{Market Cap}}{\text{Price-to-Book Ratio}}$.
-* **Why & Fallbacks:** A highly strict profitability check. Operating earnings can be manipulated, but Free Cash Flow relative to Invested Capital (Equity + Debt) shows the raw cash generation power of the business.
-  * **Data Coverage Bypass:** Bypassed if FCF and CFO are exactly 0.0 (indicating a Yahoo Finance data gap).
+  $$\text{CROIC} = \frac{\text{Free Cash Flow}}{\text{Capital Employed}} = \frac{\text{Operating Cash Flow} - |\text{CapEx}|}{\text{Total Assets} - \text{Current Liabilities}}$$
+* **Architectural & Methodology Realignment (September 2026 Audit)**:
+  1. **Decoupled from Stock Price Surges (Formula Bug Fix)**: The legacy calculation used `(MarketCap / PBRatio) + TotalDebt` as an invested capital shortcut. When a high-performing multibagger stock rallied 5x–10x, market cap expansion inflated the synthetic book denominator, artificially suppressing CROIC and triggering false-positive evictions on peak operational performance (e.g. `CUPID`). The metric now computes Capital Employed directly from balance-sheet timeseries ($\text{Total Assets} - \text{Current Liabilities}$), falling back to book equity + debt only when balance-sheet data is absent.
+  2. **Methodological Parity with ROCE**: CROIC's capital denominator is now identical to ROCE's Capital Employed, creating a completely coherent capital efficiency framework (Operating Profit Return vs Cash Return on the exact same capital base).
+  3. **3-Year Average Fallback (Business-Cycle Protection)**: Mirroring the battle-tested ROCE pattern (`latest >= floor || avg3y >= floor`), CROIC incorporates a 3-year average fallback. Capital-intensive compounders reinvesting heavily in expansionary CapEx (such as `VARROC` building out EV lighting capacities) can experience single-year FCF compression while generating phenomenal multi-year cash returns. If either the latest year or the 3-year trailing average clears the floor, the company passes.
+  4. **Point-in-Time (PIT) Filing Lag**: Evaluated with a mandatory 45-day filing lag (`filterMetricsBeforeDate`) to prevent look-ahead bias during historical backtests.
 
 ---
 
@@ -627,5 +629,84 @@ mycase pit stats --ticker AFFLE
 # Runs deep DuckDB deduction analysis across historical multibagger runs:
 mycase pit analysis --index small250 --method multibagger
 ```
+
+---
+
+## 11. Data Integrity Audit Impact & Portfolio Hygiene (Sep 13, 2026)
+
+### 1. The Silent Cash Flow Bypass & The 196-Stock Elimination
+
+During the system-wide data integrity audit cataloged in [`docs/DataAudit.md`](file:///Users/raghavgarg/Projects/myGo/mycase/docs/DataAudit.md), a critical vulnerability was identified in how fundamental data was ingested for the multibagger strategy:
+
+* **The Core Vulnerability**: Yahoo Finance's `quoteSummary.financialData` card omitted operating and free cash flow for **96.6% of Indian stocks** (625 of 647 stocks). In Go, `OperatingCashflow` and `FreeCashflow` defaulted to `0.0`.
+* **The Dormant Safety Filters**: In [`pkg/stockpicker/filters.go`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/stockpicker/filters.go#L257), the Cash Flow Quality Gate was gated by:
+  ```go
+  if f.OperatingCashflow != 0 || f.FreeCashflow != 0 {
+      // Check CFO/PAT >= 25% and CROIC >= 6%
+  }
+  ```
+  Because both were `0.0`, **Filter C (Quality of Earnings: CFO/PAT $\ge 25\%$) and Filter K (CROIC $\ge 6\%$) were silently bypassed for ~96% of the candidate universe**. Companies with severe cash burn or low-quality paper profits passed through unchecked.
+* **The Resolution**: The ingestion layer now queries Yahoo Finance's `fundamentals-timeseries` endpoint for `annualOperatingCashFlow` and `annualFreeCashFlow`, providing **100% multi-year cash flow coverage**.
+* **Empirical Impact across MicroCap & SmallCap Universes**:
+  When the strategy was re-evaluated against the corrected dataset on September 13, 2026:
+  - **MicroCap 250**: **54 stocks failed Cash Flow Quality** and **34 stocks failed CROIC** (**88 stocks eliminated**).
+  - **SmallCap 250**: **74 stocks failed Cash Flow Quality** and **34 stocks failed CROIC** (**108 stocks eliminated**).
+  - **Total**: Nearly **200 cash-burning or low-quality companies** that previously entered the multibagger scoring matrix are now strictly and cleanly eliminated at Stage 1.
+
+---
+
+### 2. Portfolio Contamination Case Study: `NSE:MSTCLTD` in `data/microsmall.csv`
+
+The historical golden copy `data/microsmall.csv` was generated on **September 11, 2026**, prior to the data audit fixes. A forensic audit of the 20 active holdings revealed that one holding in particular breached the fundamental safety criteria:
+
+| Holding Metric | `NSE:MSTCLTD` Reported Reading | Multibagger Required Threshold | Evaluation Status |
+| :--- | :--- | :--- | :--- |
+| **Accounting Net Income (PAT)** | **₹234.3 Crore** | Positive | Looked attractive on paper |
+| **Operating Cash Flow (FY26 OCF)** | **`-₹27.8 Crore` (NEGATIVE)** | $\text{CFO} > 0$ | **FAILED** (Cash-burning operations) |
+| **Free Cash Flow (FY26 FCF)** | **`-₹50.0 Crore` (NEGATIVE)** | $\text{CROIC} \ge 6\%$ | **FAILED** (Negative cash return) |
+| **Cash Conversion (CFO/PAT)** | **`-0.12` (-12%)** | $\ge 25\%$ (New) / $\ge 20\%$ (Existing) | **VIOLATION** (Severe earnings-cash divergence) |
+| **Pre-Audit Selection Status** | Selected at **4.32% weight** | Passed due to `0.0` bypass | **Contaminated Golden Copy** |
+| **Post-Audit Selection Status** | **ELIMINATED at Stage 1** | Blocked by Cash Flow Quality Gate | **Queued for Immediate Eviction** |
+
+> [!CAUTION]
+> **Action Required**: Because `MSTCLTD` is actively held in `data/microsmall.csv`, running `mycase pipeline --config config/pipeline.yaml` will immediately recognize that `MSTCLTD` fails Stage-1 fundamental safety floors even with the 20% existing-holding cushion, evicting it from the portfolio and reallocating capital to authentic cash compounders.
+
+---
+
+### 3. Pillar III Scoring: Restoring True SEBI 100% Delivery for Trade-to-Trade (`BE`) Stocks
+
+In `ScoreMultibagger`, institutional accumulation is rewarded by scaling breakout volume intensity:
+$$\text{Volume Multiplier}_{\text{effective}} = \text{Volume Multiplier} \times \left(1.0 + \frac{\text{DeliveryPct}}{100} \times 0.5\right)$$
+
+* **The Bug**: In the legacy scraper, Trade-to-Trade (`BE/BZ/ST`) series returned `NaN`/`"-"` from NSE, which serialized to `null` and unmarshalled as `0.0%`. High-conviction compounders placed in the T2T category were penalized with a flat `1.0x` multiplier (0% delivery boost).
+* **The Fix**: `scripts/fetch_nse_data.py` now enforces SEBI's regulatory invariant: **100% of all traded shares in T2T must be delivered**. `BE` series stocks now correctly receive their full **1.5x institutional thrust boost**, eliminating the systematic bias against illiquid or surveillance compounders.
+
+---
+
+### 4. Financial Sector ROE Filter Alignment
+
+Previously, financial sector stocks with missing ROE defaulted to `0.0` and silently bypassed the financial safety gate (`if f.ROE > 0 && f.ROE < minROE`). The strategy now utilizes `getEffectiveFinancialROE` to synthesize balance sheet ROE from $\frac{\text{NetIncome}}{\text{MarketCap} / \text{PBRatio}}$, ensuring banking and NBFC constituents are held to the strict $\ge 12\%$ profitability standard.
+
+---
+
+### 5. CROIC Invested Capital Formula Fix & 3-Year Average Fallback (September 2026)
+
+During the portfolio rebalancing audit of September 12–13, 2026, running `mycase pipeline --config config/pipeline.yaml` proposed evicting active winning holdings (`VARROC`, `CUPID`, `DATAPATTNS`, `AVALON`). A forensic audit separated these names into formula distortion, multi-year capex reinvestment, and legitimate cash immaturity:
+
+#### A. The Invested Capital Shortcut Bug
+* **The Defect**: `CalculateCROIC` calculated Invested Capital as `(f.MarketCap / f.PBRatio) + f.TotalDebt`. For high-flying multibagger stocks where price moved faster than book value updates, this introduced market-price linkage into an operating balance-sheet metric.
+* **The Fix**: Decoupled CROIC from `MarketCap / PBRatio` by calculating Capital Employed directly from balance-sheet items: $\text{AnnualTotalAssets} - \text{AnnualCurrentLiabilities}$, exactly matching ROCE methodology.
+* **Impact on `NSE:CUPID`**: Recomputed Capital Employed dropped from ₹507.8 Cr to ₹470.6 Cr, elevating CUPID's latest CROIC from 4.22% to 4.55%.
+
+#### B. The Horizon Inconsistency Fix (3-Year Average Fallback)
+* **The Defect**: In `pkg/stockpicker/filters.go`, ROCE already allowed a 3-year average fallback (`checkROCE: latest >= floor || avg3y >= floor`), recognizing multi-year business cycles. However, CROIC was evaluated strictly on a single year.
+* **The Fix**: Added `checkCROIC` mirroring `checkROCE`: a stock passes if $\text{Latest CROIC} \ge \text{Floor}$ OR $\text{3-Year Average CROIC} \ge \text{Floor}$, with 45-day PIT filing lag.
+* **Impact on `NSE:VARROC`**: `VARROC` underwent massive FY26 capex (₹468.7 Cr) in auto/EV lighting, compressing FY26 single-year CROIC to 3.03% (< 4.8% limit). However, its 3-year timeseries (FY24: 15.16%, FY25: 21.23%, FY26: 3.03%) yields a **3-Year Average CROIC of 13.14%**. The 3-year fallback rescued `VARROC` cleanly, retaining it in the active portfolio.
+
+#### C. Legitimate Exclusion of Immature Cash Flow Businesses (`DATAPATTNS` & `AVALON`)
+* **Forensic Audit**:
+  - **`NSE:DATAPATTNS`**: Defence electronics milestone billing creates multi-year cash lumpiness (-₹56.7 Cr in FY23, +₹52.2 Cr in FY24, -₹196.3 Cr in FY25, +₹8.1 Cr in FY26). Latest CROIC is 0.45% and 3-year average CROIC is -2.74%.
+  - **`NSE:AVALON`**: Heavy EMS capex expansion (-₹40.7 Cr in FY23, -₹18.2 Cr in FY24, -₹21.1 Cr in FY25, +₹3.5 Cr in FY26). Latest CROIC is 0.46% and 3-year average CROIC is -1.83%.
+* **Architectural Invariant**: Both stocks legitimately fail the CROIC gate. The system correctly distinguishes between established cash compounders in temporary capex cycles (`VARROC`) and businesses whose cash generation has not yet matured (`DATAPATTNS`, `AVALON`).
 
 

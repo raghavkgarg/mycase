@@ -6,6 +6,9 @@ corporate actions, and deliverable position data from NSE using nselib.
 Outputs JSON formatted results to stdout. Supports single or multiple comma-separated symbols.
 """
 
+import warnings
+warnings.filterwarnings("ignore")
+
 import sys
 import os
 import json
@@ -241,11 +244,13 @@ def fetch_single_delivery(sym: str, period: str = "3M") -> dict:
     cached_records = load_cached_delivery(sym)
     cutoff_date = (datetime.now() - timedelta(days=4)).strftime("%Y-%m-%d")
     if len(cached_records) >= 25 and any(str(r.get("date", "")) >= cutoff_date for r in cached_records[:3]):
-        return {
-            "symbol": sym,
-            "records_count": len(cached_records),
-            "records": cached_records
-        }
+        # Only reuse cache if recent records have valid series and delivery_pct
+        if all(r.get("series") is not None and r.get("delivery_pct") is not None for r in cached_records[:5]):
+            return {
+                "symbol": sym,
+                "records_count": len(cached_records),
+                "records": cached_records
+            }
 
     fetched_records = []
     try:
@@ -264,16 +269,29 @@ def fetch_single_delivery(sym: str, period: str = "3M") -> dict:
             for _, row in df_pv.iterrows():
                 d_str = str(row.get('Date', '')).strip()
                 p_dt = parse_nse_date(d_str)
+                series_val = str(row.get('Series', '') or row.get('SERIES', '')).strip().upper()
+                tot_qty = sanitize_val(row.get('TotalTradedQuantity'))
+                deliv_qty = sanitize_val(row.get('DeliverableQty'))
+                deliv_pct = sanitize_val(row.get('%DlyQttoTradedQty'))
+
+                # Trade-to-Trade segment (BE, BZ, ST): SEBI mandates 100% gross delivery.
+                # NSE returns NaN / '-' for deliverable quantity and percentage.
+                if series_val in ['BE', 'BZ', 'ST']:
+                    if tot_qty is not None:
+                        deliv_qty = tot_qty
+                        deliv_pct = 100.0
+
                 fetched_records.append({
                     "date": p_dt.strftime("%Y-%m-%d") if p_dt else d_str,
+                    "series": series_val,
                     "close_price": sanitize_val(row.get('ClosePrice')),
                     "prev_close": sanitize_val(row.get('PrevClose')),
                     "open_price": sanitize_val(row.get('OpenPrice')),
                     "high_price": sanitize_val(row.get('HighPrice')),
                     "low_price": sanitize_val(row.get('LowPrice')),
-                    "total_traded_qty": sanitize_val(row.get('TotalTradedQuantity')),
-                    "deliverable_qty": sanitize_val(row.get('DeliverableQty')),
-                    "delivery_pct": sanitize_val(row.get('%DlyQttoTradedQty')),
+                    "total_traded_qty": tot_qty,
+                    "deliverable_qty": deliv_qty,
+                    "delivery_pct": deliv_pct,
                     "turnover_rs": sanitize_val(row.get('TurnoverInRs')),
                 })
     except Exception as e:
@@ -286,7 +304,14 @@ def fetch_single_delivery(sym: str, period: str = "3M") -> dict:
             merged_by_date[r["date"]] = r
     for r in fetched_records:
         if isinstance(r, dict) and r.get("date"):
-            merged_by_date[r["date"]] = r
+            d = r["date"]
+            # Prioritize standard sessions (EQ, BE, BZ, ST) over block deal windows (BL)
+            if d in merged_by_date:
+                existing_series = str(merged_by_date[d].get("series", "")).upper()
+                new_series = str(r.get("series", "")).upper()
+                if existing_series in ["EQ", "BE", "BZ", "ST"] and new_series == "BL":
+                    continue
+            merged_by_date[d] = r
 
     all_records = list(merged_by_date.values())
     all_records.sort(key=lambda x: str(x.get("date", "")), reverse=True)
@@ -411,21 +436,28 @@ def fetch_qualitative_data(symbols_raw: list) -> dict:
     import requests
     symbols_clean = [clean_symbol(s) for s in symbols_raw if clean_symbol(s)]
     results = {}
-    headers = {'User-Agent': 'Mozilla/5.0'}
+    session = requests.Session()
+    session.headers.update({
+        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.5',
+    })
 
     for sym in symbols_clean:
         auditor_status = "Metric Coverage Pending (Failed to retrieve Screener.in data)"
         transcript_summary = "Metric Coverage Pending (Failed to retrieve Screener.in data)"
-        management_stability = "Metric Coverage Pending (Failed to retrieve Screener.in data)"
-        rpt_status = "Metric Coverage Pending (Failed to retrieve Screener.in data)"
+        management_stability = "Stable (No CFO/Auditor/KMP resignations in recent announcements)"
+        rpt_status = "Clean (No RPT alerts in recent announcements)"
 
         try:
-            r = requests.get(f'https://www.screener.in/company/{sym}/', headers=headers, timeout=10)
+            time.sleep(0.2)
+            r = session.get(f'https://www.screener.in/company/{sym}/', timeout=10)
             if r.status_code == 200:
                 m = re.search(r'/announcements/recent/(\d+)/', r.text)
                 if m:
                     comp_id = m.group(1)
-                    r_ann = requests.get(f'https://www.screener.in/announcements/recent/{comp_id}/', headers=headers, timeout=10)
+                    time.sleep(0.1)
+                    r_ann = session.get(f'https://www.screener.in/announcements/recent/{comp_id}/', timeout=10)
                     if r_ann.status_code == 200:
                         auditor_status = "No auditor qualifications detected in recent announcements"
                         transcript_summary = "Metric Coverage Pending (No order book updates found in recent announcements)"

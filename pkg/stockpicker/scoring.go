@@ -1344,7 +1344,23 @@ func ScoreEarlyMultibagger(
 		delivDelta, _, _, _ := yfinance.GetDeliveryDelta(f.DeliveryHistory, time.Now(), 1)
 		p4 := NormScore(delivDelta, DeliveryDeltaBounds, wDeliv, false)
 
-		scores[t] = p1 + p2 + p3 + p4
+		raw := p1 + p2 + p3 + p4
+
+		// Base duration graduated multiplier:
+		// 0-1 week base: multiplier x0.50
+		// 2-3 weeks base: multiplier x0.75
+		// 4+ weeks base: multiplier x1.00
+		baseMult := 1.0
+		if hist != nil && len(hist.Closes) >= 20 {
+			minProx := 0.85
+			if hardFilters != nil && hardFilters.MinProximity52WHigh > 0 {
+				minProx = hardFilters.MinProximity52WHigh
+			}
+			weeks, _ := yfinance.CalculateBaseDurationWeeks(hist.Closes, minProx)
+			baseMult = BaseDurationMultiplier(weeks)
+		}
+
+		scores[t] = raw * baseMult
 	}
 
 	sort.Slice(activeKeys, func(i, j int) bool {
@@ -1467,13 +1483,19 @@ func SelectTopNEarlyMultibaggerWithCooldown(
 			rvolZ = yfinance.CalculateWinsorizedRVOLZScore(hist.Volumes, 5, 50, 4.0)
 		}
 		delivDelta, delivAvg5D, delivBase20D, delivErr := yfinance.GetDeliveryDelta(f.DeliveryHistory, time.Now(), 1)
+		var baseTag string
+		if weeksInBase <= 1 {
+			baseTag = " (0.50x Base Mult)"
+		} else if weeksInBase <= 3 {
+			baseTag = " (0.75x Base Mult)"
+		}
 		var driverStr string
 		if delivErr == nil {
-			driverStr = fmt.Sprintf("Pre-Breakout Setup: Base %dW (VCP %.2f), 52W Prox %.1f%%, RVOL Z %+.1f, Deliv Delta %+.1f%% (5D: %.1f%%, 20D Base: %.1f%%)",
-				weeksInBase, vcpRatio, prox52*100.0, rvolZ, delivDelta*100.0, delivAvg5D*100.0, delivBase20D*100.0)
+			driverStr = fmt.Sprintf("Pre-Breakout Setup: Base %dW%s (VCP %.2f), 52W Prox %.1f%%, RVOL Z %+.1f, Deliv Delta %+.1f%% (5D: %.1f%%, 20D Base: %.1f%%)",
+				weeksInBase, baseTag, vcpRatio, prox52*100.0, rvolZ, delivDelta*100.0, delivAvg5D*100.0, delivBase20D*100.0)
 		} else {
-			driverStr = fmt.Sprintf("Pre-Breakout Setup: Base %dW (VCP %.2f), 52W Prox %.1f%%, RVOL Z %+.1f, Deliv Delta %+.1f%% (Neutral)",
-				weeksInBase, vcpRatio, prox52*100.0, rvolZ, delivDelta*100.0)
+			driverStr = fmt.Sprintf("Pre-Breakout Setup: Base %dW%s (VCP %.2f), 52W Prox %.1f%%, RVOL Z %+.1f, Deliv Delta %+.1f%% (Neutral)",
+				weeksInBase, baseTag, vcpRatio, prox52*100.0, rvolZ, delivDelta*100.0)
 		}
 		tracker.RecordAdditionDriver(t, driverStr)
 
@@ -1503,4 +1525,17 @@ func NormalizeEarlyMultibaggerWeights(
 	rebalanceTolerance float64,
 ) map[string]float64 {
 	return NormalizeMultibaggerWeights(selectedKeys, scores, fundamentals, hardFilters, existingHoldings, rebalanceTolerance)
+}
+
+// BaseDurationMultiplier returns the graduated production scoring multiplier
+// based on the consecutive weeks a stock spent in the upper base zone.
+func BaseDurationMultiplier(weeksInZone int) float64 {
+	switch {
+	case weeksInZone >= 4:
+		return 1.0
+	case weeksInZone >= 2:
+		return 0.75
+	default:
+		return 0.50
+	}
 }

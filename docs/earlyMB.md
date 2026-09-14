@@ -23,7 +23,7 @@ graph TD
     G -->|Yes| I["Top N Watchlist & Capital Allocation"]
 
     subgraph "Stage 1: Binary Hard Gates (No Metric Overlap with Stage 2)"
-    B1["1. Base Floor: >= 4 weeks >= 85% of 52W High"]
+    B1["1. Base Zone Definition: Price >= 85% of 52W High"]
     B2["2. Trend Health: Price >= 95% of 200-Day SMA"]
     B3["3. Earnings Blackout: Outside +/- 5 days of quarterly results"]
     B4["4. Quality Floors: ROCE >= 12%, D/E <= 1.5, Promoter >= 25%, Pledge <= 5%"]
@@ -53,15 +53,15 @@ graph TD
 
 ## 2. Stage 1: Binary Hard Safety & Event Gates
 
-Constituents failing any of these gates are immediately disqualified without score dilution. **Note**: Stage 1 contains no VCP threshold so that Stage 2 scores VCP across its complete un-truncated distribution.
+Constituents failing any of these gates are immediately disqualified without score dilution. **Note**: Stage 1 contains no VCP threshold so that Stage 2 scores VCP across its complete un-truncated distribution. Furthermore, Base Duration has graduated from a binary elimination gate to a production continuous scoring multiplier in Stage 2 (`BaseDurationMultiplier`: $\ge 4\text{w} \to 1.0$, $2\text{-}3\text{w} \to 0.75$, $0\text{-}1\text{w} \to 0.50$).
 
 | Gate | Exact Requirement | Quantitative Purpose |
 | :--- | :--- | :--- |
-| **1. Base Duration Floor** | $\ge 4\text{ Consecutive Weeks}$ in Base Zone | Filters single-day gap-up noise; ensures institutional base formation. |
+| **1. Base Duration (Scoring)** | Graduated Multiplier ($\ge 4\text{w}: 1.0\times, 2\text{-}3\text{w}: 0.75\times, 0\text{-}1\text{w}: 0.50\times$) | Eliminates binary cliff risk; discounts fresh breakouts while preserving setup capture. |
 | **2. Base Zone Definition** | $\text{Price} \ge 85\%\text{ of 52W High}$ | Multibaggers break out near annual highs, not from deep drawdowns. |
 | **3. Trend Health Floor** | $\text{Price} \ge 0.95 \times \text{200-Day SMA}$ | Avoids structural Stage-4 downtrending stocks. |
 | **4. Earnings Event Blackout** | Outside $\pm 5\text{ Trading Days}$ of results | Eliminates binary event coin-toss risk and options pinning noise. |
-| **5. Capital Efficiency Floor**| $\text{ROCE} \ge 12\%$ (with 45-day PIT lag) | Ensures underlying business compounder quality. |
+| **5. Capital Efficiency Floor**| $\text{ROCE} \ge 12\%$ (with 45-day PIT lag; sector-relative) | Ensures underlying business compounder quality. |
 | **6. Balance Sheet Solvency** | $\text{Debt-to-Equity} \le 1.5$, $\text{Int. Coverage} \ge 3.0$ | Protects against microcap leverage and insolvency traps. |
 | **7. Governance Floor** | Promoter $\ge 25\%$, Pledged $\le 5\%$ (15-day lag) | Avoids promoter debt and margin-call liquidation traps. |
 | **8. Liquidity & Impact Cost** | $\text{ADV} \ge ₹1\text{ Cr}$ | Ensures trades can be executed at scale with minimal slippage. |
@@ -1057,10 +1057,309 @@ The change was applied consistently across all call-sites and verified:
 4. `pkg/stockpicker/delivery_invariant_test.go`: Verified invariant scoring consistency for canonical delivery delta output.
 5. All tests in repository pass with `go test ./...`.
 
+---
 
+### 21. Quantitative Sentry & Shadow Mode Philosophy (Plain-English Overview)
 
+To understand what each section is actually doing, in plain terms, and why we built it that way:
 
+#### Section 9: "Near-Miss Radar" — The Watchlist of Stocks Your Strategy Almost Bought
+Your strategy has hard rules (called "Stage-1 gates") that a stock must pass to even be considered for buying — things like "must have decent profitability," "must be in an uptrend long enough," "must have real promoter ownership." Section 9 answers: **which stocks are showing strong buying signals (big delivery volume, strong relative strength) but are getting blocked by just one of these rules?**
 
+Each row shows: how long the stock's been on this watchlist, whether it eventually "graduated" (passed the rules and became eligible), and exactly which rule is blocking it.
 
+**The sub-table under it — "Graduated Stocks Performance"** — is the report card for this whole idea. It asks: *when a stock finally does graduate and become eligible, did waiting actually cost us money?* It tracks the price from the day the stock first showed up on the watchlist to the day it graduated. Right now, of 5 stocks that graduated, only 2 made money in that waiting period — so the jury's still out on whether this watchlist idea has real value, but it's early days (only 5 data points).
+
+#### Section 10: "Top Gainers" — A Sanity Check on What's Actually Moving in the Market
+This just lists the biggest price gainers each day, regardless of whether your strategy likes them, and tells you why your strategy is (or isn't) buying them. The key addition we made here is the **delivery volume check** — because a stock can jump 15% in price purely on speculation/trading, with no real buyers taking delivery of shares. So we added a flag: `Real Accum? YES/NO` — meaning, is this price move backed by real institutional-style buying, or is it just noise? Turned out almost all the big gainers were noise (no real delivery), except one — `DIACABS` — which had both a big price move *and* real delivery volume, meaning it's a genuine signal, not a fluke.
+
+#### Why Sections 9 and 10 Connect: The "DUAL RADAR HIT"
+When a stock shows up in *both* lists — it's a top gainer with real volume backing, AND it's already been flagged on your near-miss watchlist — that's your highest-confidence signal. `DIACABS` initially appeared as the only stock doing this.
+
+> [!WARNING]
+> **Post-Audit Retraction & Data Integrity Notice (Sep 13, 2026)**:
+> The initial September 11 observation regarding `NSE:DIACABS` was subsequently revealed by a full system data audit to be a **data artifact**, not a true market signal. Due to missing Trade-to-Trade (`BE` series) delivery data, the system reached back 40 days to calculate a stale `+13.4%` delivery delta. Furthermore, unpopulated cash flow fields masked deeply negative FY26 Operating Cash Flow (-₹80.43 Cr). Post-correction, DIACABS failed the Cash Flow Quality Gate and was legitimately eliminated. The "golden compounder" narrative has been formally retired. See Section 26 for the complete forensic audit and resulting production rule changes.
+
+#### What We Found from 9 & 10 Together: Rules Too Strict in Specific Spots
+Looking at *why* good stocks were getting blocked, one reason showed up over and over: a rule that says "profitability (ROCE) must be above 12%." But that rule doesn't make sense for every kind of business — banks and fast-growing tech/platform companies often run lower on this metric by design, not because they're bad businesses. So we decided: instead of scrapping the rule, let's make an **exception** — if a stock is being blocked *only* by this rule, but it's showing strong buying volume and strength, let it through anyway. Same idea for a rule about "how many weeks a stock has been trading sideways before breaking out" — instead of a hard yes/no, we made it a sliding scale, so a stock that just started breaking out gets counted, just with a smaller score, rather than being ignored completely.
+
+#### Section 11: "Shadow Mode" — Testing New Rules Without Risking Real Money Yet
+This is the safety net for the above changes. Instead of switching your actual rules immediately, we run the **new, relaxed rules in parallel** — silently, just for observation — while your live strategy keeps using the old, strict rules. Section 11 shows the difference: with the old rules, only 99 stocks passed. With the new, relaxed rules, 172 stocks would have passed. That's a big jump, so before trusting it, we checked two things:
+1. **Which exact rule rescued each stock** (labeled `delivery_override`, `promoter_exempt_bfsi`, `graduated_scoring`) — so we can track performance by *type* of exception, not just lump them all together.
+2. **Did this create a hidden risk — like ending up with too many bank stocks?** (the "Sector Cap Defense Audit" sub-table) — because relaxing the rule for banks let in 25 more bank candidates. We checked: does your portfolio's existing "max 3 stocks per sector" limit still protect you? Answer: **yes** — even with 28 eligible bank stocks now on the table, your portfolio can still only ever buy 3 of them. So the extra eligible stocks don't create extra risk, they just give the strategy a bigger, better pool to *choose* the best 3 from.
+
+#### The Bottom Line, in One Sentence
+> **We built a system to catch good stocks your strict rules were unfairly blocking, tested loosening those rules safely in the background without touching real trades, and confirmed the loosening doesn't blow up your risk controls — but we're still waiting for enough real-world results before switching the new rules on for good.**
+
+---
+
+### 22. Section 9: Stealth Accumulation & Near-Miss Radar (Expanded Tolerance Sentry)
+
+#### 1. Empirical Forensic Origin
+An audit of single-session percentage gainers across the Nifty Total Market on September 11, 2026 revealed that high-conviction compounders exhibited massive institutional accumulation footprints ($\Delta \text{Deliv} \ge +10\%$ to $+24\%$) **24 to 48 hours prior** to explosive volume and price markups (`TDPOWERSYS` $+12.2\%$ Deliv Δ, `BLACKBUCK` $+24.3\%$, `BBOX` $+10.4\%$). However, all were eliminated by binary Stage-1 gates (`DSO Deterioration`, `Far from 52W High`, `ROCE < 12%`).
+
+#### 2. Quantitative Specification
+- **Target Population**: $\text{passed\_stage1} = \text{false} \land \neg\text{data\_fetch\_failed}$.
+- **Accumulation Sentry**: $\text{Delivery Delta} \ge +0.08$ ($+8.0\%$ self-relative delivery expansion above 20-day baseline).
+- **Trend Guard**: $\text{Composite RS} \ge 0.0\%$ (strictly non-negative 1-year relative strength vs index).
+- **Taxonomy**: Classifies bottleneck gates into `[Fixable]` (ROCE, base duration) vs `[Structural]` (DSO deterioration, leverage, promoter floor, SMA trend).
+
+#### 3. Output Snapshot (`mycase pit stats --analysis`)
+
+```text
+--- 9. STEALTH ACCUMULATION & NEAR-MISS RADAR (Tracked Watchlist: Deliv Δ >= +8.0% | Non-Negative RS) ---
+Tracking institutional footprints blocked by Stage-1 gates, persistence across runs, and graduation alerts:
+  Ticker          | Sector          | First Seen | Days | 1D Chg  | Deliv Δ | Comp RS | VCP   | Gate Type    | Primary Bottleneck Gate     
+  -----------------------------------------------------------------------------------------------------------------------------------------
+  NSE:DIACABS     | Industrials     | 2026-09-11 |   1d |  +4.99% |  +13.4% |  +69.8% |  0.87 | [Fixable]    | Low ROCE (< 12.0%)          
+  NSE:ABDL        | Cons Defensive  | 2026-08-28 |   7d |  +3.44% |  +11.5% |   +7.7% |  0.89 | [Fixable]    | Base: 0w < 4w               
+  NSE:DEVYANI     | Cons Cyclical   | 2026-08-31 |   5d |  +1.51% |  +10.2% |   +0.7% |  0.51 | [Fixable]    | Low ROCE (< 12.0%)          
+  NSE:TI          | Cons Defensive  | 2026-08-28 |  11d |  -2.64% |   +9.5% |   +9.7% |  1.12 | [Structural] | DSO Deterioration (+83.7%)  
+  NSE:CONCORDBIO  | Healthcare      | 2026-08-28 |   8d |  +3.64% |   +9.4% |   +4.3% |  1.09 | [Fixable]    | Base: 1w < 4w               
+  ... [13 candidates tracked; full list via CLI]
+
+  --- Graduated Stocks Performance (Radar Alpha Audit: First-Seen Date -> Clear Date) ---
+  Quantifying pre-breakout radar predictive value and opportunity cost of waiting for Stage-1 clearance:
+  Ticker          | Sector          | Channel          | First Seen | Clear Date | Days |   Entry (₹) |   Clear (₹) | Radar Return
+  --------------------------------------------------------------------------------------------------------------------------------
+  NSE:MANORAMA    | Cons Defensive  | base_duration    | 2026-08-28 | 2026-09-11 |   6d |   ₹1,889.40 |   ₹2,055.70 |       +8.80%
+  NSE:ASAHIINDIA  | Cons Cyclical   | base_duration    | 2026-08-28 | 2026-09-11 |  10d |     ₹952.70 |     ₹985.80 |       +3.47%
+  NSE:KRBL        | Cons Defensive  | base_duration    | 2026-08-31 | 2026-09-11 |   4d |     ₹422.25 |     ₹421.05 |       -0.28%
+  NSE:QPOWER      | Industrials     | base_duration    | 2026-08-31 | 2026-09-11 |   9d |   ₹1,435.80 |   ₹1,426.50 |       -0.65%
+  NSE:AVALON      | Technology      | base_duration    | 2026-09-08 | 2026-09-11 |   2d |   ₹2,290.30 |   ₹2,264.50 |       -1.13%
+  Rolling Win Rate: 2/5 (40.0%) | Average Radar Return: +2.04% (Alpha left on table by waiting for formal Stage-1 pass)
+  Channel Breakdown: base_duration: 2/5 (40.0%, avg +2.04%)
+```
+
+---
+
+### 23. Section 10: Daily Top Price Gainers (Universe Cross-Section)
+
+#### 1. Quantitative Purpose
+Surfaces actual single-session percentage gainers across the index universe ($T-1 \to T$), cross-referencing price momentum against institutional delivery confirmation and Stage-1 qualification.
+- **Real Accumulation Flag (`Real Accum? YES / NO`)**: Separates authentic accumulation ($\Delta\text{Deliv} \ge +6.0\%$) from speculative retail gap-ups with negative delivery.
+- **Dual Radar Tagging (`DUAL HIT`)**: Automatically flags high-conviction candidates present in both Section 9 (accumulating near-miss) and Section 10 (top daily price gainer).
+
+#### 2. Output Snapshot (`mycase pit stats --analysis`)
+
+```text
+--- 10. DAILY TOP PRICE GAINERS (2026-09-10 -> 2026-09-11 | niftytotalmarket) ---
+Cross-sectional price gainers across the index universe, delivery volume confirmation, and EBM qualification:
+  Ticker          |    Prev (₹) |   Close (₹) | 1D Gain  | Deliv Δ | Accum | Comp RS | Gate Type    | Stage-1 Bottleneck           | Radar    
+  -----------------------------------------------------------------------------------------------------------------------------------
+  NSE:AWFIS       |     ₹249.60 |     ₹293.20 |  +17.47% |   -7.8% | NO    |   -9.9% | [Structural] | Below 200-SMA (0.86 < 0.95)  | -        
+  NSE:PINELABS    |     ₹173.17 |     ₹202.17 |  +16.75% |   -5.9% | NO    |  +15.6% | [Fixable]    | Low ROCE (< 12.0%)           | -        
+  NSE:BBOX        |     ₹744.85 |     ₹800.80 |   +7.51% |   -8.8% | NO    |  +18.1% | [Structural] | Far from 52W High (74.3%)    | -        
+  NSE:PWL         |     ₹126.73 |     ₹136.10 |   +7.39% |   +0.0% | NO    |  +12.2% | [Fixable]    | Low ROCE (< 12.0%)           | -        
+  NSE:BLACKBUCK   |     ₹585.90 |     ₹628.15 |   +7.21% |   +5.8% | NO    |  +10.3% | [Fixable]    | Low ROCE (< 12.0%)           | -        
+  NSE:DIACABS     |     ₹351.50 |     ₹369.05 |   +4.99% |  +13.4% | YES   |  +69.8% | [Fixable]    | Low ROCE (< 12.0%)           | DUAL HIT 
+  ... [15 daily gainers tracked; full list via CLI]
+```
+
+---
+
+### 24. Early Multibagger Strategy Filter Hardening
+
+Following empirical deduction from Sections 9 and 10, three targeted enhancements refine the Stage-1 Hard Gates:
+
+#### 1. Combined ROCE-Relief Gate (Strict Legacy in Production | Tightened Delivery Override in Shadow)
+- **Production Implementation**: Legacy ROCE floor ($\text{ROCE} \ge 12.0\%$) remains strictly enforced in production.
+- **Financial Services**: ROCE calculation dropped due to banking balance sheet distortion; replaced with an **ROE Quality Gate** ($\text{ROE} \ge 12.0\%$).
+- **Technology & Consumer Cyclical Recent Listings**: For asset-light or reinvesting recent listings ($< 4$ years of annual filings or $< 500$ daily bars), fundamental floor lowered to **$7.0\%$**.
+- **Shadow Mode Institutional Footprint Override (Tightened Bar)**:
+  $$\text{Shadow\_ROCE\_Pass} = (\text{ROCE} \ge \text{Floor}) \lor (\text{Deliv } \Delta \ge +9.0\% \land \text{Comp RS} \ge +15.0\% \land \text{VCP ATR} \le 1.20)$$
+  - **Status**: Kept in **Shadow Mode only**; NOT enforced in live production. Early out-of-sample data showed -0.86% average return across 6 samples, requiring further validation under corrected data.
+  - **Blocked in Production**: Even high-volume gainers must satisfy fundamental quality floors before capital is deployed.
+
+#### 2. Graduated Base Duration Scoring Multiplier (PROMOTED TO LIVE PRODUCTION)
+Replaces binary 4-week rejection with an orthogonal graduated score multiplier in production scoring (`BaseDurationMultiplier`):
+$$\text{Score} = (P_1 + P_2 + P_3 + P_4) \times M_{\text{base}}$$
+- **$0$ to $1$ Week Base**: Eligible for selection with $M_{\text{base}} = 0.50$ (fresh breakout discount).
+- **$2$ to $3$ Weeks Base**: Eligible for selection with $M_{\text{base}} = 0.75$.
+- **$\ge 4$ Weeks Base**: Full score ($M_{\text{base}} = 1.00$).
+- **Status**: **LIVE in Production**. Empirically validated across 24 historical samples (79.2% win rate, +3.22% average excess return).
+
+#### 3. Regulated Sector Promoter Stake Exemption (SUSPENDED)
+- **Status**: **SUSPENDED**. Following the systemic data audit and ROE calculation fix, the Financial Services survivor pool expanded from 3 to 12 stocks naturally without requiring an exemption. Retained as a manual diagnostic query only.
+
+---
+
+### 25. Stage-1 Shadow Mode Architecture & Sector Cap Defense Audit (Section 11)
+
+To safeguard live capital while accumulating 20–30 empirical samples for the Radar Alpha Audit, relief rules run in **Shadow Mode**:
+- **Production Gate**: Legacy Stage-1 hard gates remain strictly enforced for real portfolio allocation.
+- **Shadow Gate**: Evaluates relief rules in parallel and persists decisions to `stage1_shadow_results` in `data/mycase.db`.
+
+#### Output Snapshot (`mycase pit stats --analysis` or `--shadow`)
+
+```text
+--- 11. STAGE-1 SHADOW MODE DIVERGENCE (Legacy Gate vs Relief Gate | 2026-09-11) ---
+Evaluating relief rules in shadow mode to accumulate empirical evidence before live deployment:
+  Ticker          | Sector          | Status   | Relief Channel       | Deliv Δ | Comp RS | VCP   | Mult   | Legacy Bottleneck Reason    
+  ----------------------------------------------------------------------------------------------------------------------------------------
+  NSE:DIACABS     | Industrials     | RESCUED  | delivery_override    |  +13.4% |  +69.8% |  0.87 |  1.00x | Low ROCE (< 12.0%)          
+  NSE:ABDL        | Cons Defensive  | RESCUED  | graduated_scoring    |  +11.5% |   +7.7% |  0.89 |  0.50x | Base: 0w < 4w               
+  NSE:DEVYANI     | Cons Cyclical   | RESCUED  | delivery_override    |  +10.2% |   +0.7% |  0.51 |  1.00x | Low ROCE (< 12.0%)          
+  NSE:CONCORDBIO  | Healthcare      | RESCUED  | graduated_scoring    |   +9.4% |   +4.3% |  1.09 |  0.50x | Base: 1w < 4w               
+  NSE:INDUSINDBK  | Financial Serv  | RESCUED  | promoter_exempt_bfsi |   +8.5% |  +12.0% |  1.12 |  1.00x | Low Promoter (16.3% < 25%)  
+  ... [73 candidates rescued across channels; full list via CLI]
+
+  Shadow Gate Summary for 2026-09-11 (niftytotalmarket | earlymb):
+  • Legacy Stage-1 Survivors : 99 / 750 (13.2%)
+  • Shadow Stage-1 Survivors : 172 / 750 (22.9%)
+  • Total Candidates Rescued : 73 (Delivery Override: 12 | BFSI Promoter: 21 | Base Duration -> Scoring: 40)
+  • Sector Distribution Check: Financial Services: 25 (34.2%) | Industrials: 14 (19.2%) | Healthcare: 10 (13.7%) | Basic Materials: 8 (11.0%) | Consumer Cyclical: 7 (9.6%) | Consumer Defensive: 4 (5.5%) | Energy: 3 (4.1%) | Technology: 1 (1.4%) | Communication Services: 1 (1.4%)
+
+  Sector Cap Defense Audit on Shadow Pool (MaxStocksPerSector = 3 | MaxSectorWeightCap = 25.0%):
+  Sector             | Shadow Pool | Legacy Pool |   Rescued | Max Allocatable | Excess Absorbed
+  ----------------------------------------------------------------------------------------------
+  Industrials        |          32 |          18 |        14 |               3 |              29
+  Cons Cyclical      |          31 |          24 |         7 |               3 |              28
+  Healthcare         |          31 |          21 |        10 |               3 |              28
+  Financial Serv     |          28 |           3 |        25 |               3 |              25
+  Basic Materials    |          17 |           9 |         8 |               3 |              14
+  Technology         |          13 |          12 |         1 |               3 |              10
+  Cons Defensive     |          13 |           9 |         4 |               3 |              10
+  Energy             |           5 |           2 |         3 |               3 |               2
+  Communication      |           2 |           1 |         1 |               2 |               0
+  * Sector Cap Defense Verified: Portfolio allocation cannot exceed 3 holdings or 25% weight per sector.
+```
+
+---
+
+## 26. System-Wide Data Integrity Audit, DIACABS Forensic Resolution & Production Rule Deployment (Sep 13, 2026)
+
+### 1. The Comprehensive Data Integrity Audit & Root Causes
+
+A deep-dive investigation into anomalous signals—triggered by `NSE:DIACABS` displaying a `+13.4%` delivery delta despite having zero confirmed trading bars in September and failing ROCE while carrying negative operating cash flow—led to a full-system audit of all data sources, transformations, and filters across Go and Python components (formally cataloged in [`docs/DataAudit.md`](file:///Users/raghavgarg/Projects/myGo/mycase/docs/DataAudit.md)).
+
+The audit uncovered four major systemic data vulnerabilities:
+
+```
+                            DATA PIPELINE VULNERABILITY & RESOLUTION
+                            
+  [NSE Bhavcopy / MTO] -------------> [Go Memory / Disk Cache] -------------> [Strategy Gates & Scoring]
+          |                                     |                                     |
+  1A. Trade-to-Trade (BE)               2A. Timeseries OCF/FCF                2B. Financial ROE Bypass:
+      NaN/'-' -> null -> 0.0                omitted in typesStr;                  ROE == 0.0 bypassed filter;
+      caused 40-day stale deltas.           96.6% of stocks skipped               closed via synthetic
+      FIX: SEBI 100% invariant.             Cash Flow Quality Gate.               balance-sheet ROE derivation.
+                                            FIX: Timeseries fallback.
+```
+
+#### 1A. Trade-to-Trade (`BE/BZ/ST`) Series Ingestion Bug & 40-Day Delivery Staleness
+- **Vulnerability**: In the NSE Bhavcopy / security-wise delivery API, Trade-to-Trade (T2T) segment stocks have `DeliverableQty = NaN` and `%DlyQttoTradedQty = '-'` because intraday squaring-off is prohibited by SEBI—**100% of all traded shares must be settled via delivery**. The Python scraper converted `"-"` and `NaN` into `null`, which Go deserialized into `0.0`. `CalculateDeliveryDelta` skipped `0.0` records, causing the window to reach back weeks or months into the past.
+- **Live Impact**: 61 stocks in cache had null delivery records. `NSE:DIACABS` showed a `+13.4%` delivery delta on Sep 11 using data from **July 28 – Aug 3 (40 days stale)**.
+- **Resolution**:
+  - In [`scripts/fetch_nse_data.py`](file:///Users/raghavgarg/Projects/myGo/mycase/scripts/fetch_nse_data.py), if the series is `BE`, `BZ`, or `ST`, the script enforces the SEBI invariant: `DeliverableQty = TotalTradedQuantity` and `DeliveryPct = 100.0%`.
+  - Added explicit `Series` field in `DeliveryRecord` struct in [`pkg/marketdata/marketdata.go`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/marketdata/marketdata.go).
+  - Prioritized standard market sessions (`EQ`, `BE`) over block-deal (`BL`) window records for the same calendar date.
+
+#### 1B. Delivery Staleness — 10-Calendar-Day Recency Invariant
+- **Vulnerability**: `CalculateDeliveryDelta` validated that $\ge 25$ records existed, but never checked the timestamp of the latest record.
+- **Resolution**: Enforced a strict **10-calendar-day recency invariant** in [`pkg/yfinance/metrics_delivery.go`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/yfinance/metrics_delivery.go). If the latest delivery record is older than 10 calendar days (accounting for extended market holiday clusters and T+1 lag), `CalculateDeliveryDelta` returns `ErrStaleDeliveryHistory` and logs a staleness warning rather than calculating phantom accumulation from obsolete history.
+
+#### 2A. Cash Flow Quality Ingestion Breakthrough (Restoring 96.6% Dormant Gate)
+- **Vulnerability**: Yahoo Finance's `quoteSummary.financialData` card omits operating and free cash flow for 96.6% of Indian equities (625 out of 647 stocks in cache had `OperatingCashflow = 0.0 AND FreeCashflow = 0.0`). The Stage-1 cash flow gate (`if f.OperatingCashflow != 0 || f.FreeCashflow != 0`) was bypassed for almost the entire universe.
+- **Breakthrough**: Investigation revealed that Yahoo Finance's `fundamentals-timeseries` endpoint has **100% multi-year coverage** for Indian equities when querying `annualOperatingCashFlow` and `annualFreeCashFlow`.
+- **Resolution**:
+  - Added `annualOperatingCashFlow` and `annualFreeCashFlow` to `typesStr` in [`pkg/yfinance/yfinance.go`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/yfinance/yfinance.go).
+  - Populated `AnnualOperatingCashFlow` and `AnnualFreeCashFlow` slices on `Fundamentals`.
+  - Implemented automatic fallback to latest timeseries entries when summary card values are 0.0, restoring full operational integrity to the Cash Flow Quality Gate.
+
+#### 2B. Financial Sector ROE Quality Gate Bypass
+- **Vulnerability**: In [`pkg/stockpicker/filters.go`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/stockpicker/filters.go), `if f.ROE > 0 && f.ROE < minROE` allowed 79 Financial Services stocks with missing `ROE == 0.0` (including `BAJFINANCE`, `KOTAKBANK`, `LICI`) to bypass the filter entirely.
+- **Resolution**: Implemented `getEffectiveFinancialROE` helper that derives synthetic ROE via $\frac{\text{NetIncome}}{\text{MarketCap} / \text{PBRatio}}$ when reported ROE is missing or zero. Sub-threshold or unverified financials are strictly rejected (`effROE < minROE`).
+
+#### 3. Permanent Pre-Flight Data Integrity Guard
+- Created DuckDB view `v_data_integrity_check` in `data/mycase.db`.
+- Implemented `CheckDataIntegrity` in [`pkg/pithistory/analytics.go`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/pithistory/analytics.go) and wired it into `cmd/pit.go` and `cmd/db.go`. If $\ge 5\%$ of the universe has unverified/missing data, the pipeline prints a prominent warning banner before reports run.
+
+---
+
+### 2. Forensic Autopsy: Deconstructing & Retiring the "DIACABS Golden Setup" Narrative
+
+`NSE:DIACABS` was previously flagged in Section 21 and Section 23 as a high-conviction "DUAL RADAR HIT" and the prime candidate justifying the Stage-1 Delivery Override rule. A forensic audit of the post-correction data proved that this signal was a complete data artifact:
+
+| Diagnostic Dimension | Pre-Audit Reading (False Signal) | Post-Audit Reading (Corrected Data) | Forensic Reality |
+| :--- | :--- | :--- | :--- |
+| **Delivery Delta ($\Delta\text{Deliv}$)** | **`+13.4%`** | **`+6.62%`** | Pre-audit delta used 40-day stale July data due to `BE` series nulls. Fresh September data shows normal +6.6%. |
+| **Operating Cash Flow (FY26)** | Unpopulated (`0.0`) | **`-₹80.43 Cr`** | Timeseries data revealed company burned ₹80.4 Cr cash despite reporting ₹101 Cr accounting net profit. |
+| **Cash Flow Quality Gate** | **SILENT PASS** (skipped) | **FAILED (BLOCKED)** | Gate was skipped due to 0.0 default. Correctly eliminated post-fix. |
+| **ROCE (Capital Efficiency)** | `10.28%` (Yahoo Gross Assets) | `10.28%` | Asset approach uses gross un-restructured pre-CIRP balance sheet. |
+| **Stage-1 Status** | **RESCUED** (delivery override) | **BLOCKED** (`Cash Flow Quality check failed`) | Eliminated legitimately by fundamental safety floors. |
+
+> [!IMPORTANT]
+> **Definitive Conclusion**: `NSE:DIACABS` was not a golden institutional accumulation compounder. It was an earnings-cash divergence setup (-₹80.43 Cr OCF) that was falsely rescued by a stale delivery calculation and a dormant cash flow filter. The narrative of DIACABS as a proof-of-concept for delivery override has been **retired**.
+
+---
+
+### 3. Strategy Rule Status & Production Governance Matrix
+
+Following data correction and empirical analysis, the governance status of the four candidate strategy rules has been locked in:
+
+| Strategy Rule | Previous Status | Current Status | Deployment Location | Quantitative Rationale |
+| :--- | :--- | :--- | :--- | :--- |
+| **Base Duration Graduated Scoring** | Shadow Mode | **LIVE IN PRODUCTION** | [`pkg/stockpicker/scoring.go`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/stockpicker/scoring.go), DuckDB macro `base_duration_multiplier` | Validated across 24 empirical samples with a **79.2% win rate** and **+3.22% average excess return**. Replaces brittle binary 4-week cliff with calibrated multipliers ($\ge 4\text{w}: 1.0\times, 2\text{-}3\text{w}: 0.75\times, 0\text{-}1\text{w}: 0.50\times$). |
+| **ROCE Delivery Override** | Proposed Live | **RETAINED IN SHADOW (Tightened Bar)** | `stage1_shadow_results` table in `data/mycase.db` only | Empirical evidence (6 samples, 50% win rate, **-0.86% avg return**) is thin and negative. Production enforces strict legacy ROCE floor ($\ge 12.0\%$). Shadow threshold tightened: $\Delta\text{Deliv} \ge 9.0\%$ (was 6.0%), $\text{Comp RS} \ge 15.0\%$ (was 0.0%), $\text{VCP} \le 1.20$. |
+| **BFSI Promoter Exemption** | Shadow Mode | **SUSPENDED** | Diagnostic SQL query only | Correcting the ROE data expanded the legacy Financial Services pool naturally from **3 to 12 stocks** without needing an exemption. Urgent necessity is gone; rule suspended from active pipeline. |
+| **Data Integrity Pre-Flight Check** | Proposed | **LIVE IN PRODUCTION** | [`pkg/pithistory/analytics.go`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/pithistory/analytics.go), `mycase pit stats` | Permanent sentry preventing bad data feeds from silently producing phantom trading signals. |
+
+#### 1. Base Duration Production Scoring Implementation
+```go
+// BaseDurationMultiplier returns the graduated production scoring multiplier
+// based on continuous weeks consolidated in the base zone (Price >= 85% 52W High):
+func BaseDurationMultiplier(weeksInZone int) float64 {
+    switch {
+    case weeksInZone >= 4:
+        return 1.00 // Full score for mature institutional bases
+    case weeksInZone >= 2:
+        return 0.75 // 25% discount for 2-3 week bases
+    default:
+        return 0.50 // 50% discount for fresh 0-1 week breakouts
+    }
+}
+```
+
+```sql
+-- DuckDB Analytical Macro in data/mycase.db
+CREATE OR REPLACE MACRO base_duration_multiplier(weeks_in_zone) AS (
+    CASE 
+        WHEN weeks_in_zone >= 4 THEN 1.0
+        WHEN weeks_in_zone >= 2 THEN 0.75
+        ELSE 0.50
+    END
+);
+```
+
+#### 2. Tightened Shadow Delivery Override Specification
+```sql
+-- Synchronized in SyncShadowResults (pkg/pithistory/db.go)
+CASE 
+    WHEN c.passed_stage1 THEN TRUE
+    WHEN (c.rejection_reason LIKE '%ROCE%' OR c.rejection_reason LIKE '%Capital Efficiency%')
+         AND c.delivery_delta >= 0.09 
+         AND c.composite_rs >= 0.15 
+         AND c.vcp_ratio <= 1.20 
+    THEN TRUE
+    ELSE FALSE
+END AS shadow_stage1_pass
+```
+
+---
+
+### 4. Clean Production Screening Results (September 11 Re-Run)
+
+Following the complete database purge of stale fundamentals, caches, and delivery series, a fresh end-to-end execution of `./mycase db update --index niftytotalmarket --method earlymb --top 10 --force` was executed on September 13, 2026.
+
+#### Verification Findings:
+1. **Zero Data Ingestion Failures**: All 750 constituents parsed cleanly with complete multi-year cash flow series and fresh September delivery records.
+2. **Authentic Cash Flow Elimination**: Low-quality earnings and cash-burning turnarounds were successfully eliminated across the universe.
+3. **DIACABS Status Transformation**:
+   ```text
+   • Pre-Audit:  pass=true  | channel=delivery_override | deliv_delta=0.1335 | cause=Low ROCE
+   • Post-Audit: pass=false | channel=blocked           | deliv_delta=0.0662 | cause=Cash Flow Quality check failed
+   ```
+4. **Clean Survivor Pool**: The Stage-1 survivor pool reflects 100% verified fundamental and technical criteria, with Base Duration graduated scoring properly discounting fresh setups while allowing mature compounders to lead the portfolio allocation.
 
 

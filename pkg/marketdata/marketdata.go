@@ -39,6 +39,7 @@ type DeliveryRecord struct {
 	ClosePrice     float64 `json:"close_price"`
 	DeliverableQty float64 `json:"deliverable_qty"`
 	DeliveryPct    float64 `json:"delivery_pct"`
+	Series         string  `json:"series,omitempty"`
 }
 
 // UnmarshalJSON provides resilient unmarshaling for DeliveryRecord, handling
@@ -49,6 +50,7 @@ func (d *DeliveryRecord) UnmarshalJSON(data []byte) error {
 		ClosePrice     interface{} `json:"close_price"`
 		DeliverableQty interface{} `json:"deliverable_qty"`
 		DeliveryPct    interface{} `json:"delivery_pct"`
+		Series         string      `json:"series"`
 	}
 	if err := json.Unmarshal(data, &aux); err != nil {
 		return err
@@ -57,6 +59,7 @@ func (d *DeliveryRecord) UnmarshalJSON(data []byte) error {
 	d.ClosePrice = parseFlexibleFloat(aux.ClosePrice)
 	d.DeliverableQty = parseFlexibleFloat(aux.DeliverableQty)
 	d.DeliveryPct = parseFlexibleFloat(aux.DeliveryPct)
+	d.Series = aux.Series
 	return nil
 }
 
@@ -104,6 +107,8 @@ type Fundamentals struct {
 	AnnualTotalAssets        []AnnualMetric
 	AnnualCurrentLiabilities []AnnualMetric
 	AnnualInterestExpense    []AnnualMetric
+	AnnualOperatingCashFlow  []AnnualMetric
+	AnnualFreeCashFlow       []AnnualMetric
 	PEGRatio                 float64
 	ROE                      float64
 	ForwardPE                float64

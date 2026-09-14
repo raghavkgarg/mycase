@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"math"
 	"sort"
 	"strings"
 	"time"
@@ -89,6 +90,21 @@ func InjectSectors(fundamentals map[string]yfinance.Fundamentals, sectorByTicker
 	}
 }
 
+// getEffectiveFinancialROE returns the reported ROE, or derives it via NetIncome / (MarketCap / PBRatio)
+// when reported ROE is missing or zero.
+func getEffectiveFinancialROE(f *yfinance.Fundamentals) float64 {
+	if f.ROE > 0 {
+		return f.ROE
+	}
+	if f.NetIncome > 0 && f.PBRatio > 0 && f.PBRatio < 50.0 && f.MarketCap > 0 {
+		equity := f.MarketCap / f.PBRatio
+		if equity > 0 {
+			return f.NetIncome / equity
+		}
+	}
+	return f.ROE
+}
+
 // getLatestROCE calculates the latest Return on Capital Employed (ROCE).
 // GetLatestROCE calculates the latest Return on Capital Employed (ROCE) using default 45-day filing lag.
 func GetLatestROCE(f *yfinance.Fundamentals) (float64, bool) {
@@ -135,11 +151,8 @@ func getLatestROCE(f *yfinance.Fundamentals, asOf time.Time, lagDays int) (float
 	return latestEBIT / capEmployed, true
 }
 
-// checkROCE checks if latest or 3-year average ROCE is at or above a minimum threshold.
-func checkROCE(f *yfinance.Fundamentals, minROCE float64, asOf time.Time, lagDays int) bool {
-	if latestROCE, ok := getLatestROCE(f, asOf, lagDays); ok && latestROCE >= minROCE {
-		return true
-	}
+// Get3YearAvgROCE calculates the average Return on Capital Employed across the last 3 fiscal years.
+func Get3YearAvgROCE(f *yfinance.Fundamentals, asOf time.Time, lagDays int) (float64, bool) {
 	incomes := filterMetricsBeforeDate(f.AnnualOperatingIncome, asOf, lagDays)
 	assets := filterMetricsBeforeDate(f.AnnualTotalAssets, asOf, lagDays)
 	liabs := filterMetricsBeforeDate(f.AnnualCurrentLiabilities, asOf, lagDays)
@@ -165,10 +178,211 @@ func checkROCE(f *yfinance.Fundamentals, minROCE float64, asOf time.Time, lagDay
 			}
 		}
 	}
-	if countROCE > 0 && (sumROCE/float64(countROCE)) >= minROCE {
+	if countROCE > 0 {
+		return sumROCE / float64(countROCE), true
+	}
+	return 0.0, false
+}
+
+// checkROCE checks if latest or 3-year average ROCE is at or above a minimum threshold.
+func checkROCE(f *yfinance.Fundamentals, minROCE float64, asOf time.Time, lagDays int) bool {
+	if latestROCE, ok := getLatestROCE(f, asOf, lagDays); ok && latestROCE >= minROCE {
+		return true
+	}
+	if avgROCE, ok := Get3YearAvgROCE(f, asOf, lagDays); ok && avgROCE >= minROCE {
 		return true
 	}
 	return false
+}
+
+// getLatestCROIC calculates the latest Cash Return on Invested Capital (CROIC)
+// respecting point-in-time filing lag.
+func getLatestCROIC(f *yfinance.Fundamentals, asOf time.Time, lagDays int) (float64, bool) {
+	assets := filterMetricsBeforeDate(f.AnnualTotalAssets, asOf, lagDays)
+	liabs := filterMetricsBeforeDate(f.AnnualCurrentLiabilities, asOf, lagDays)
+	cfos := filterMetricsBeforeDate(f.AnnualOperatingCashFlow, asOf, lagDays)
+	capexs := filterMetricsBeforeDate(f.AnnualCapEx, asOf, lagDays)
+	fcfs := filterMetricsBeforeDate(f.AnnualFreeCashFlow, asOf, lagDays)
+
+	if len(assets) > 0 && len(liabs) > 0 {
+		type annualCF struct {
+			asset    float64
+			liab     float64
+			cfo      float64
+			capex    float64
+			fcf      float64
+			hasCFO   bool
+			hasCapEx bool
+			hasFCF   bool
+		}
+		byDate := make(map[string]*annualCF)
+		for _, a := range assets {
+			if byDate[a.Date] == nil {
+				byDate[a.Date] = &annualCF{}
+			}
+			byDate[a.Date].asset = a.Value
+		}
+		for _, l := range liabs {
+			if byDate[l.Date] == nil {
+				byDate[l.Date] = &annualCF{}
+			}
+			byDate[l.Date].liab = l.Value
+		}
+		for _, c := range cfos {
+			if byDate[c.Date] == nil {
+				byDate[c.Date] = &annualCF{}
+			}
+			byDate[c.Date].cfo = c.Value
+			byDate[c.Date].hasCFO = true
+		}
+		for _, cx := range capexs {
+			if byDate[cx.Date] == nil {
+				byDate[cx.Date] = &annualCF{}
+			}
+			byDate[cx.Date].capex = math.Abs(cx.Value)
+			byDate[cx.Date].hasCapEx = true
+		}
+		for _, fc := range fcfs {
+			if byDate[fc.Date] == nil {
+				byDate[fc.Date] = &annualCF{}
+			}
+			byDate[fc.Date].fcf = fc.Value
+			byDate[fc.Date].hasFCF = true
+		}
+
+		var validDates []string
+		for dt, item := range byDate {
+			ce := item.asset - item.liab
+			if ce > 0 && (item.hasCFO || item.hasFCF) {
+				validDates = append(validDates, dt)
+			}
+		}
+		sort.Strings(validDates)
+
+		if len(validDates) > 0 {
+			latestDate := validDates[len(validDates)-1]
+			item := byDate[latestDate]
+			ce := item.asset - item.liab
+			fcfVal := item.fcf
+			if item.hasCFO && item.hasCapEx {
+				fcfVal = item.cfo - item.capex
+			} else if !item.hasFCF && item.hasCFO {
+				fcfVal = item.cfo
+			}
+			return fcfVal / ce, true
+		}
+	}
+
+	// Fallback to point-in-time single-point CalculateCROIC
+	return yfinance.CalculateCROIC(f)
+}
+
+// Get3YearAvgCROIC calculates the average CROIC across the last 3 fiscal years.
+func Get3YearAvgCROIC(f *yfinance.Fundamentals, asOf time.Time, lagDays int) (float64, bool) {
+	assets := filterMetricsBeforeDate(f.AnnualTotalAssets, asOf, lagDays)
+	liabs := filterMetricsBeforeDate(f.AnnualCurrentLiabilities, asOf, lagDays)
+	cfos := filterMetricsBeforeDate(f.AnnualOperatingCashFlow, asOf, lagDays)
+	capexs := filterMetricsBeforeDate(f.AnnualCapEx, asOf, lagDays)
+	fcfs := filterMetricsBeforeDate(f.AnnualFreeCashFlow, asOf, lagDays)
+
+	type annualCF struct {
+		asset    float64
+		liab     float64
+		cfo      float64
+		capex    float64
+		fcf      float64
+		hasCFO   bool
+		hasCapEx bool
+		hasFCF   bool
+	}
+	byDate := make(map[string]*annualCF)
+	for _, a := range assets {
+		if byDate[a.Date] == nil {
+			byDate[a.Date] = &annualCF{}
+		}
+		byDate[a.Date].asset = a.Value
+	}
+	for _, l := range liabs {
+		if byDate[l.Date] == nil {
+			byDate[l.Date] = &annualCF{}
+		}
+		byDate[l.Date].liab = l.Value
+	}
+	for _, c := range cfos {
+		if byDate[c.Date] == nil {
+			byDate[c.Date] = &annualCF{}
+		}
+		byDate[c.Date].cfo = c.Value
+		byDate[c.Date].hasCFO = true
+	}
+	for _, cx := range capexs {
+		if byDate[cx.Date] == nil {
+			byDate[cx.Date] = &annualCF{}
+		}
+		byDate[cx.Date].capex = math.Abs(cx.Value)
+		byDate[cx.Date].hasCapEx = true
+	}
+	for _, fc := range fcfs {
+		if byDate[fc.Date] == nil {
+			byDate[fc.Date] = &annualCF{}
+		}
+		byDate[fc.Date].fcf = fc.Value
+		byDate[fc.Date].hasFCF = true
+	}
+
+	var validDates []string
+	for dt, item := range byDate {
+		ce := item.asset - item.liab
+		if ce > 0 && (item.hasCFO || item.hasFCF) {
+			validDates = append(validDates, dt)
+		}
+	}
+	sort.Strings(validDates)
+
+	n := len(validDates)
+	var sumCROIC float64
+	var countCROIC int
+	for i := 1; i <= 3; i++ {
+		idx := n - i
+		if idx >= 0 {
+			dt := validDates[idx]
+			item := byDate[dt]
+			ce := item.asset - item.liab
+			if ce > 0 {
+				fcfVal := item.fcf
+				if item.hasCFO && item.hasCapEx {
+					fcfVal = item.cfo - item.capex
+				} else if !item.hasFCF && item.hasCFO {
+					fcfVal = item.cfo
+				}
+				sumCROIC += fcfVal / ce
+				countCROIC++
+			}
+		}
+	}
+
+	if countCROIC > 0 {
+		return sumCROIC / float64(countCROIC), true
+	}
+	return 0.0, false
+}
+
+// checkCROIC checks if latest or 3-year average CROIC is at or above a minimum threshold.
+// Returns (passed, croicVal, ok) where ok indicates whether cash flow data is present.
+func checkCROIC(f *yfinance.Fundamentals, minCROIC float64, asOf time.Time, lagDays int) (bool, float64, bool) {
+	latestCROIC, ok := getLatestCROIC(f, asOf, lagDays)
+	if !ok {
+		return true, 0.0, false
+	}
+	if latestCROIC >= minCROIC {
+		return true, latestCROIC, true
+	}
+
+	if avgCROIC, okAvg := Get3YearAvgCROIC(f, asOf, lagDays); okAvg && avgCROIC >= minCROIC {
+		return true, avgCROIC, true
+	}
+
+	return false, latestCROIC, true
 }
 
 // isEligible checks if a ticker constituent passes all safety and fundamental filters.
@@ -269,7 +483,15 @@ func isEligible(
 
 	// 5. Promoter Stake check (Skip for US stocks as US equities are institutionally held)
 	if !strings.HasPrefix(t, "US:") && !strings.HasPrefix(t, "NASDAQ:") && !strings.HasPrefix(t, "NYSE:") {
-		if minPromoter > 0 && f.InsidersPercent < minPromoter {
+		if yfinance.IsFinancialSector(f.Sector) {
+			// Financial Services: Statutorily capped promoter holdings (RBI limits) are exempted from 25% floor,
+			// but MUST demonstrate market leadership / non-negative relative strength (Comp RS >= 0.0).
+			compRS, _, _, _ := yfinance.CalculateCompositeRS(closes, nil, t)
+			if compRS < 0.0 {
+				stats.EliminatedPromoter++
+				return false, fmt.Sprintf("Financial Services weak relative strength (Comp RS < 0.0%%: %.1f%%)", compRS*100.0)
+			}
+		} else if minPromoter > 0 && f.InsidersPercent < minPromoter {
 			stats.EliminatedPromoter++
 			return false, fmt.Sprintf("Low promoter stake (%.1f%% < %.1f%% limit)", f.InsidersPercent*100.0, minPromoter*100.0)
 		}
@@ -289,15 +511,48 @@ func isEligible(
 		return false, fmt.Sprintf("High promoter pledging (%.1f%% >= %.1f%% cap)", f.PledgedPercent*100.0, hardFilters.MaxPledgedPercent*100.0)
 	}
 
-	// 8. ROCE Capital Efficiency Check
+	// 8. ROCE / Capital Efficiency Check (Sector-Relative & Accumulation-Gated Quality Gate)
 	if minROCE > 0 {
-		lagDays := 45
-		if hardFilters.FundamentalsLagDays > 0 {
-			lagDays = hardFilters.FundamentalsLagDays
-		}
-		if !checkROCE(&f, minROCE, time.Now(), lagDays) {
-			stats.EliminatedROCE++
-			return false, fmt.Sprintf("Low Capital Efficiency (ROCE < %.1f%%)", minROCE*100.0)
+		if yfinance.IsFinancialSector(f.Sector) {
+			// Financial Services / Banks / NBFCs: ROCE is structurally distorted by customer deposits as debt.
+			// Drop ROCE gate entirely; enforce an ROE quality check (e.g., >= 12.0% floor or hardFilters.MinROE).
+			minROE := 0.12
+			if hardFilters.MinROE > 0 {
+				minROE = hardFilters.MinROE
+			}
+			if isExisting {
+				minROE *= 0.85
+			}
+			effROE := getEffectiveFinancialROE(&f)
+			if effROE < minROE {
+				stats.EliminatedROCE++
+				if effROE <= 0 {
+					return false, fmt.Sprintf("Unverified / Sub-zero Financial ROE (%.1f%% < %.1f%% threshold)", effROE*100.0, minROE*100.0)
+				}
+				return false, fmt.Sprintf("Low Financial ROE (%.1f%% < %.1f%% threshold)", effROE*100.0, minROE*100.0)
+			}
+		} else {
+			// Non-Financial Sectors:
+			// Sector floor: 7.0% for Technology & Consumer Cyclical recent listings (asset-light / reinvesting), 12.0% standard.
+			// Delivery/RS/VCP override: Deliv_Δ >= 6% AND Comp_RS >= 0 AND VCP_ATR <= 1.20 rescues high-conviction compounders (e.g. DIACABS).
+			roceFloor := minROCE
+			isRecentListing := (len(f.AnnualOperatingIncome) <= 3 || len(f.EarningsHistory) < 8 || len(closes) < 500)
+			if (strings.EqualFold(f.Sector, "Technology") || strings.EqualFold(f.Sector, "Consumer Cyclical")) && isRecentListing {
+				roceFloor = 0.07
+			}
+			if isExisting {
+				roceFloor *= 0.85
+			}
+
+			lagDays := 45
+			if hardFilters.FundamentalsLagDays > 0 {
+				lagDays = hardFilters.FundamentalsLagDays
+			}
+
+			if !checkROCE(&f, roceFloor, time.Now(), lagDays) {
+				stats.EliminatedROCE++
+				return false, fmt.Sprintf("Low Capital Efficiency (ROCE < %.1f%%)", roceFloor*100.0)
+			}
 		}
 	}
 
@@ -384,14 +639,16 @@ func isEligible(
 		}
 	}
 
-	// N. CROIC Check
+	// N. CROIC Check (Quality of Earnings & Cash Returns)
 	if minCROIC > 0 {
-		croic, ok := yfinance.CalculateCROIC(&f)
-		if ok {
-			if croic < minCROIC {
-				stats.EliminatedCROIC++
-				return false, fmt.Sprintf("Low CROIC (%.1f%% < %.1f%% limit)", croic*100.0, minCROIC*100.0)
-			}
+		lagDays := 45
+		if hardFilters.FundamentalsLagDays > 0 {
+			lagDays = hardFilters.FundamentalsLagDays
+		}
+		passed, croicVal, ok := checkCROIC(&f, minCROIC, time.Now(), lagDays)
+		if ok && !passed {
+			stats.EliminatedCROIC++
+			return false, fmt.Sprintf("Low CROIC (%.1f%% < %.1f%% limit)", croicVal*100.0, minCROIC*100.0)
 		}
 	}
 
@@ -423,9 +680,13 @@ func isEligible(
 			if hardFilters.MinROE > 0 {
 				minROE = hardFilters.MinROE
 			}
-			if f.ROE > 0 && f.ROE < minROE {
+			effROE := getEffectiveFinancialROE(&f)
+			if effROE < minROE {
 				stats.EliminatedROCE++
-				return false, fmt.Sprintf("Low Financial ROE (%.1f%% < %.1f%% threshold)", f.ROE*100.0, minROE*100.0)
+				if effROE <= 0 {
+					return false, fmt.Sprintf("Unverified / Sub-zero Financial ROE (%.1f%% < %.1f%% threshold)", effROE*100.0, minROE*100.0)
+				}
+				return false, fmt.Sprintf("Low Financial ROE (%.1f%% < %.1f%% threshold)", effROE*100.0, minROE*100.0)
 			}
 		} else {
 			// Industrial / Non-Financial Path
@@ -459,14 +720,8 @@ func isEligible(
 			}
 		}
 
-		// 3. Base Duration Floor
-		if hardFilters.MinBaseDurationWeeks > 0 && len(closes) >= 20 {
-			weeks, _ := yfinance.CalculateBaseDurationWeeks(closes, hardFilters.MinProximity52WHigh)
-			if weeks < hardFilters.MinBaseDurationWeeks {
-				stats.EliminatedBaseDuration++
-				return false, fmt.Sprintf("Base duration too short (%d weeks < %d weeks required base)", weeks, hardFilters.MinBaseDurationWeeks)
-			}
-		}
+		// 3. Base Duration Floor: Graduated scoring penalty replaces binary elimination.
+		// (Fresh breakouts with 0-3 weeks base enter the ranked pool at graduated discount multipliers in scoring.go).
 
 		// 4. Working Capital Deterioration Sentry (DSO)
 		_, dsoPrev, dsoLatest := yfinance.CalculateDSO(&f)

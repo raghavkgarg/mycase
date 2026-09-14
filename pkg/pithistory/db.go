@@ -106,6 +106,25 @@ CREATE TABLE IF NOT EXISTS pit_candidate_scores (
     pillar4_insufficient_history BOOLEAN DEFAULT false,
     PRIMARY KEY (as_of_date, index_name, method, ticker)
 );
+
+CREATE TABLE IF NOT EXISTS stage1_shadow_results (
+    as_of_date             DATE,
+    index_name             VARCHAR,
+    method                 VARCHAR,
+    ticker                 VARCHAR,
+    sector                 VARCHAR,
+    legacy_stage1_pass     BOOLEAN,
+    legacy_rejection_cause VARCHAR,
+    shadow_stage1_pass     BOOLEAN,
+    shadow_relief_channel  VARCHAR,
+    shadow_base_mult       DOUBLE,
+    delivery_delta         DOUBLE,
+    composite_rs           DOUBLE,
+    vcp_ratio              DOUBLE,
+    divergence_type        VARCHAR,
+    created_at             TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (as_of_date, index_name, method, ticker)
+);
 `
 
 func (p *DB) initSchema(ctx context.Context) error {
@@ -204,7 +223,68 @@ INSERT OR REPLACE INTO pit_candidate_scores (
 		}
 	}
 
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+
+	// Synchronize shadow divergence results in background
+	_ = p.SyncShadowResults(ctx, snap.AsOfDate, snap.IndexName, snap.Method)
+	return nil
+}
+
+// SyncShadowResults computes and synchronizes Stage-1 shadow divergence for a given date, index, and method.
+func (p *DB) SyncShadowResults(ctx context.Context, asOfDate, indexName, method string) error {
+	syncQuery := `
+INSERT OR REPLACE INTO stage1_shadow_results (
+    as_of_date, index_name, method, ticker, sector,
+    legacy_stage1_pass, legacy_rejection_cause,
+    shadow_stage1_pass, shadow_relief_channel, shadow_base_mult,
+    delivery_delta, composite_rs, vcp_ratio,
+    divergence_type, created_at
+)
+SELECT 
+    c.as_of_date,
+    c.index_name,
+    c.method,
+    c.ticker,
+    COALESCE(NULLIF(c.sector, ''), 'Unknown') AS sector,
+    c.passed_stage1 AS legacy_stage1_pass,
+    COALESCE(NULLIF(c.rejection_reason, ''), 'Stage-1 Qualified') AS legacy_rejection_cause,
+    CASE 
+        WHEN c.passed_stage1 THEN TRUE
+        WHEN (c.rejection_reason LIKE '%ROCE%' OR c.rejection_reason LIKE '%Capital Efficiency%')
+             AND c.delivery_delta >= 0.09 AND c.composite_rs >= 0.15 AND c.vcp_ratio <= 1.20 THEN TRUE
+        ELSE FALSE
+    END AS shadow_stage1_pass,
+    CASE 
+        WHEN c.passed_stage1 THEN 'legacy_pass'
+        WHEN (c.rejection_reason LIKE '%ROCE%' OR c.rejection_reason LIKE '%Capital Efficiency%')
+             AND c.delivery_delta >= 0.09 AND c.composite_rs >= 0.15 AND c.vcp_ratio <= 1.20 THEN 'delivery_override'
+        ELSE 'blocked'
+    END AS shadow_relief_channel,
+    CASE 
+        WHEN c.rejection_reason LIKE '%0 weeks%' OR c.rejection_reason LIKE '%1 weeks%' THEN 0.50
+        WHEN c.rejection_reason LIKE '%2 weeks%' OR c.rejection_reason LIKE '%3 weeks%' THEN 0.75
+        ELSE 1.00
+    END AS shadow_base_mult,
+    c.delivery_delta,
+    c.composite_rs,
+    c.vcp_ratio,
+    CASE 
+        WHEN c.passed_stage1 THEN 'ALIGNED_PASS'
+        WHEN (c.rejection_reason LIKE '%ROCE%' OR c.rejection_reason LIKE '%Capital Efficiency%')
+             AND c.delivery_delta >= 0.09 AND c.composite_rs >= 0.15 AND c.vcp_ratio <= 1.20
+        THEN 'RESCUED'
+        ELSE 'ALIGNED_FAIL'
+    END AS divergence_type,
+    CURRENT_TIMESTAMP
+FROM v_pit_candidate_scores c
+WHERE (? = '' OR c.as_of_date = ?)
+  AND c.index_name = ?
+  AND c.method = ?;
+`
+	_, err := p.db.ExecContext(ctx, syncQuery, asOfDate, asOfDate, indexName, method)
+	return err
 }
 
 // UpdateForwardReturns updates the realized forward return for a specific candidate at a historical date.
@@ -565,6 +645,25 @@ WHERE p.index_name = 'niftytotalmarket'
         AND existing.method = p.method
   )
 GROUP BY p.as_of_date, p.method, r.regime_multiplier, r.pillar4_uncalibrated, r.created_at;
+
+CREATE OR REPLACE MACRO base_duration_multiplier(weeks_in_zone) AS (
+    CASE
+        WHEN weeks_in_zone >= 4 THEN 1.0
+        WHEN weeks_in_zone >= 2 THEN 0.75
+        WHEN weeks_in_zone >= 0 THEN 0.5
+    END
+);
+
+CREATE OR REPLACE VIEW v_data_integrity_check AS
+SELECT 
+    as_of_date,
+    index_name,
+    method,
+    count(*)::INT AS total_candidates,
+    count(CASE WHEN data_fetch_failed THEN 1 END)::INT AS fetch_failed_count,
+    count(CASE WHEN rejection_reason LIKE '%Unverified%' OR rejection_reason LIKE '%fetch%' THEN 1 END)::INT AS unverified_count
+FROM pit_candidate_scores
+GROUP BY as_of_date, index_name, method;
 `
 	_, err := p.db.ExecContext(ctx, viewDDL)
 	return err

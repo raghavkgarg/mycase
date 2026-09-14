@@ -1,6 +1,7 @@
 package yfinance
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -414,6 +415,12 @@ func FetchQualitativeNSEData(ctx context.Context, tickers []string) (map[string]
 	out, err := cmd.Output()
 	if err != nil {
 		return nil, fmt.Errorf("nselib qualitative execution failed: %w", err)
+	}
+
+	firstBrace := bytes.IndexByte(out, '{')
+	lastBrace := bytes.LastIndexByte(out, '}')
+	if firstBrace != -1 && lastBrace > firstBrace {
+		out = out[firstBrace : lastBrace+1]
 	}
 
 	resultMap := make(map[string]QualitativeNSEData)

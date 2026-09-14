@@ -48,8 +48,12 @@ var PitCommand = &cli.Command{
 				&cli.IntFlag{Name: "days", Value: 60, Usage: "Rolling history lookback window in calendar days (0 for all)"},
 				&cli.StringFlag{Name: "ticker", Usage: "Optional specific ticker to view score trajectory for"},
 				&cli.BoolFlag{Name: "analysis", Aliases: []string{"a"}, Usage: "Run deep quantitative deduction analysis using DuckDB"},
+				&cli.BoolFlag{Name: "shadow", Aliases: []string{"s"}, Usage: "Display Stage-1 Shadow Mode divergence (Legacy vs Relief Gate)"},
 			},
 			Action: func(ctx context.Context, c *cli.Command) error {
+				if c.Bool("shadow") {
+					return runPitShadow(ctx, c)
+				}
 				if c.Bool("analysis") {
 					return runPitAnalysis(ctx, c)
 				}
@@ -140,6 +144,18 @@ func runPitStats(ctx context.Context, c *cli.Command) error {
 		return fmt.Errorf("failed to open pit database: %w", err)
 	}
 	defer db.Close()
+
+	// Pre-flight Data Integrity Check
+	if integrity, iErr := db.CheckDataIntegrity(ctx, indexVal, methodVal); iErr == nil && integrity.TotalCandidates > 0 {
+		if integrity.FailurePct >= 5.0 {
+			fmt.Printf("⚠️  [DATA INTEGRITY WARNING]: %d / %d candidates (%.1f%%) in latest run have unverified or missing fundamentals!\n",
+				integrity.FailedCandidates, integrity.TotalCandidates, integrity.FailurePct)
+			if len(integrity.FlaggedTickers) > 0 {
+				fmt.Printf("   Flagged candidates sample: %s\n", strings.Join(integrity.FlaggedTickers, ", "))
+			}
+			fmt.Printf("   Verify data feeds before interpreting marginal scores or executing trades.\n\n")
+		}
+	}
 
 	if ticker != "" {
 		if !strings.HasPrefix(ticker, "NSE:") {
@@ -248,6 +264,30 @@ func RunPitAnalysisDirect(ctx context.Context, indexName, method string) error {
 	defer db.Close()
 
 	return db.RunDeepAnalysis(ctx, indexVal, method)
+}
+
+func runPitShadow(ctx context.Context, c *cli.Command) error {
+	indexVal := c.String("index")
+	method := c.String("method")
+	if method == "" {
+		method = "earlymb"
+	}
+
+	db, err := pithistory.Open("")
+	if err != nil {
+		return fmt.Errorf("failed to open pit database: %w", err)
+	}
+	defer db.Close()
+
+	latestDate, err := db.GetLatestRunDate(ctx, indexVal, method)
+	if err != nil || latestDate == "" {
+		latestDate, _ = db.GetLatestRunDate(ctx, "niftytotalmarket", method)
+		if latestDate == "" {
+			return fmt.Errorf("no historical runs found for %s (%s)", indexVal, method)
+		}
+	}
+
+	return db.PrintShadowDivergence(ctx, latestDate, indexVal, method)
 }
 
 func runPitRetry(ctx context.Context, c *cli.Command) error {

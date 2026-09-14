@@ -5,9 +5,11 @@ import (
 	"encoding/csv"
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -298,6 +300,18 @@ func PrintScuttlebutt(selectedKeys []string, fundamentals map[string]yfinance.Fu
 		resDates := f.ResultPrevComing
 		if resDates == "" {
 			resDates = "N/A -> N/A"
+		} else {
+			// Sanitize stale result dates (older than 180 days from previous results)
+			parts := strings.Split(resDates, " -> ")
+			if len(parts) == 2 {
+				if d, err := time.Parse("02-01-06", parts[0]); err == nil {
+					ist := time.FixedZone("IST", 5*3600+30*60)
+					if time.Now().In(ist).Sub(d) > 180*24*time.Hour {
+						parts[0] = "N/A"
+					}
+				}
+				resDates = fmt.Sprintf("%s -> %s", parts[0], parts[1])
+			}
 		}
 
 		delPct := f.DeliveryPct
@@ -327,16 +341,89 @@ func PrintScuttlebutt(selectedKeys []string, fundamentals map[string]yfinance.Fu
 		} else {
 			fmt.Fprintln(outFile, "   [Live NSE Delivery Vol %]   : N/A")
 		}
-		fmt.Fprintf(outFile, "   [Shareholding Snapshot]     : Institutional: %.1f%% | Promoter/Insiders: %.1f%% | Pledged: %.1f%%\n", f.HeldPercentInstitutions*100.0, f.InsidersPercent*100.0, f.PledgedPercent*100.0)
+
+		pledgeStr := fmt.Sprintf("%.1f%%", f.PledgedPercent*100.0)
+		if f.PledgedPercent == 0 {
+			pledgeStr = "0.0% (Unverified default)"
+		}
+		fmt.Fprintf(outFile, "   [Shareholding Snapshot]     : Institutional: %.1f%% | Promoter/Insiders: %.1f%% | Pledged: %s\n", f.HeldPercentInstitutions*100.0, f.InsidersPercent*100.0, pledgeStr)
 
 		_, ttmGrowth, cagr3y := yfinance.CalculateSalesGrowth(&f)
-		roceVal, _ := GetLatestROCE(&f)
-		_, latestDSO, prevDSO := yfinance.CalculateDSO(&f)
+		roceVal, _ := getLatestROCE(&f, time.Now(), 45)
+		roceStr := fmt.Sprintf("ROCE: %.1f%%", roceVal*100.0)
+		if avgROCE, okAvg := Get3YearAvgROCE(&f, time.Now(), 45); okAvg {
+			if roceVal < 0.12 && avgROCE >= 0.12 {
+				roceStr = fmt.Sprintf("ROCE: %.1f%% (Passed via 3Y Avg: %.1f%%)", roceVal*100.0, avgROCE*100.0)
+			} else if math.Abs(roceVal-avgROCE) >= 0.02 {
+				roceStr = fmt.Sprintf("ROCE: %.1f%% (3Y Avg: %.1f%%)", roceVal*100.0, avgROCE*100.0)
+			}
+		}
 
+		_, latestDSO, prevDSO := yfinance.CalculateDSO(&f)
 		if latestDSO > 0 {
-			fmt.Fprintf(outFile, "   [Fundamental Traction]      : TTM Growth: %+.1f%% | 3Y CAGR: %+.1f%% | ROCE: %.1f%% | DSO: %.0fd (Prev: %.0fd)\n", ttmGrowth*100.0, cagr3y*100.0, roceVal*100.0, latestDSO, prevDSO)
+			fmt.Fprintf(outFile, "   [Fundamental Traction]      : TTM Growth: %+.1f%% | 3Y CAGR: %+.1f%% | %s | DSO: %.0fd (Prev: %.0fd)\n", ttmGrowth*100.0, cagr3y*100.0, roceStr, latestDSO, prevDSO)
 		} else {
-			fmt.Fprintf(outFile, "   [Fundamental Traction]      : TTM Growth: %+.1f%% | 3Y CAGR: %+.1f%% | ROCE: %.1f%%\n", ttmGrowth*100.0, cagr3y*100.0, roceVal*100.0)
+			fmt.Fprintf(outFile, "   [Fundamental Traction]      : TTM Growth: %+.1f%% | 3Y CAGR: %+.1f%% | %s\n", ttmGrowth*100.0, cagr3y*100.0, roceStr)
+		}
+
+		// Cash Flow & Capital Quality
+		latestCROIC, croicOk := getLatestCROIC(&f, time.Now(), 45)
+		avgCROIC, okAvg := Get3YearAvgCROIC(&f, time.Now(), 45)
+		cfoCr := f.OperatingCashflow / 1e7
+		fcfCr := f.FreeCashflow / 1e7
+		if len(f.AnnualCapEx) > 0 && f.OperatingCashflow != 0 {
+			sortedCapEx := make([]yfinance.AnnualMetric, len(f.AnnualCapEx))
+			copy(sortedCapEx, f.AnnualCapEx)
+			sort.Slice(sortedCapEx, func(i, j int) bool { return sortedCapEx[i].Date < sortedCapEx[j].Date })
+			latestCapEx := math.Abs(sortedCapEx[len(sortedCapEx)-1].Value)
+			fcfCr = (f.OperatingCashflow - latestCapEx) / 1e7
+		}
+		cfoPatRatio := 0.0
+		if f.NetIncome > 0 {
+			cfoPatRatio = f.OperatingCashflow / f.NetIncome
+		}
+
+		if croicOk || cfoCr != 0 {
+			croicStr := fmt.Sprintf("CROIC: %.1f%%", latestCROIC*100.0)
+			if okAvg {
+				if latestCROIC < 0.06 && avgCROIC >= 0.06 {
+					croicStr = fmt.Sprintf("CROIC: %.1f%% (Passed via 3Y Avg: %.1f%%)", latestCROIC*100.0, avgCROIC*100.0)
+				} else if math.Abs(latestCROIC-avgCROIC) >= 0.01 {
+					croicStr = fmt.Sprintf("CROIC: %.1f%% (3Y Avg: %.1f%%)", latestCROIC*100.0, avgCROIC*100.0)
+				}
+			}
+
+			if cfoPatRatio > 0 {
+				fmt.Fprintf(outFile, "   [Cash Generation & Quality] : CFO: %.1fCr | FCF: %.1fCr | CFO/PAT: %.2fx | %s\n", cfoCr, fcfCr, cfoPatRatio, croicStr)
+			} else {
+				fmt.Fprintf(outFile, "   [Cash Generation & Quality] : CFO: %.1fCr | FCF: %.1fCr | %s\n", cfoCr, fcfCr, croicStr)
+			}
+		}
+
+		// Valuation Multiples
+		peVal := 0.0
+		if f.NetIncome > 0 && f.MarketCap > 0 {
+			peVal = f.MarketCap / f.NetIncome
+		}
+		var valParts []string
+		if peVal > 0 {
+			if peVal > 250 && f.ForwardPE > 0 && f.ForwardPE < 50 {
+				valParts = append(valParts, fmt.Sprintf("P/E: %.1fx (Distorted by one-off acquisition/amortization charges)", peVal))
+			} else {
+				valParts = append(valParts, fmt.Sprintf("P/E: %.1fx", peVal))
+			}
+		}
+		if f.ForwardPE > 0 && f.ForwardPE != 999.0 {
+			valParts = append(valParts, fmt.Sprintf("Fwd P/E: %.1fx", f.ForwardPE))
+		}
+		if f.PEGRatio > 0 && f.PEGRatio != 99.0 {
+			valParts = append(valParts, fmt.Sprintf("PEG: %.2f", f.PEGRatio))
+		}
+		if f.PBRatio > 0 {
+			valParts = append(valParts, fmt.Sprintf("P/B: %.1fx", f.PBRatio))
+		}
+		if len(valParts) > 0 {
+			fmt.Fprintf(outFile, "   [Valuation & Growth Pricing]: %s\n", strings.Join(valParts, " | "))
 		}
 
 		// Operating Margin Trajectory
@@ -355,10 +442,16 @@ func PrintScuttlebutt(selectedKeys []string, fundamentals map[string]yfinance.Fu
 			deRatio = deRatio / 100.0
 		}
 
+		reinvestRateStr := ""
+		if f.OperatingCashflow > 0 && latestCapExCr > 0 {
+			reinvestPct := (latestCapExCr * 1e7 / f.OperatingCashflow) * 100.0
+			reinvestRateStr = fmt.Sprintf(" | Reinvestment Rate: %.1f%%", reinvestPct)
+		}
+
 		if capexOk && prevCapExCr > 0 {
-			fmt.Fprintf(outFile, "   [Balance Sheet & Reinvestment]: Debt/Equity: %.2f | CapEx: %.1fCr -> %.1fCr (%+.1f%% YoY Expansion)\n", deRatio, prevCapExCr, latestCapExCr, capexGrowth)
+			fmt.Fprintf(outFile, "   [Balance Sheet & Reinvestment]: Debt/Equity: %.2f | CapEx: %.1fCr -> %.1fCr (%+.1f%% YoY Expansion)%s\n", deRatio, prevCapExCr, latestCapExCr, capexGrowth, reinvestRateStr)
 		} else {
-			fmt.Fprintf(outFile, "   [Balance Sheet & Reinvestment]: Debt/Equity: %.2f | Annual CapEx: %.1fCr\n", deRatio, latestCapExCr)
+			fmt.Fprintf(outFile, "   [Balance Sheet & Reinvestment]: Debt/Equity: %.2f | Annual CapEx: %.1fCr%s\n", deRatio, latestCapExCr, reinvestRateStr)
 		}
 
 		// Earnings Growth Consistency
