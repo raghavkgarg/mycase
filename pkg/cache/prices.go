@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/raghavkgarg/mycase/pkg/marketdata"
+	"github.com/raghavkgarg/mycase/pkg/marketcal"
 )
 
 // PriceRecord is a single daily price row as stored in the cache.
@@ -35,7 +35,7 @@ func (c *Cache) GetPrices(ctx context.Context, ticker, rangeKey string) ([]Price
 	if err != nil {
 		return nil, false, err
 	}
-	if !isFreshToday(time.Unix(fetchedAtUnix, 0)) {
+	if !isFreshToday(ticker, time.Unix(fetchedAtUnix, 0)) {
 		return nil, false, nil
 	}
 
@@ -107,8 +107,12 @@ func (c *Cache) StorePrices(ctx context.Context, ticker, rangeKey string, record
 	return tx.Commit()
 }
 
-func isFreshToday(fetchedAt time.Time) bool {
-	return marketdata.IsFreshEOD(fetchedAt, time.Now())
+// isFreshToday reports whether a cache entry fetched at fetchedAt already
+// includes the most recent settled EOD for the ticker's market. US tickers
+// (US:/NYSE:/NASDAQ:) are judged against the NYSE clock (16:00 ET); everything
+// else against the NSE clock (21:00 IST). See pkg/marketcal.
+func isFreshToday(ticker string, fetchedAt time.Time) bool {
+	return marketcal.ClockForTicker(ticker).IsFreshEOD(fetchedAt, time.Now())
 }
 
 // GetPricesByDateRange returns cached price records for [from, to] for a ticker.
@@ -129,11 +133,15 @@ func (c *Cache) GetPricesByDateRange(ctx context.Context, ticker string, from, t
 		return nil, false, err
 	}
 
-	ist := time.FixedZone("IST", 5*3600+30*60)
-	todayIST := time.Now().In(ist).Truncate(24 * time.Hour)
-	toIST := to.In(ist).Truncate(24 * time.Hour)
+	// Determine "today" in the ticker's own market calendar: the range is treated
+	// as historical (always fresh) only if it ends before the market's current
+	// settled trading date. US tickers use the NYSE clock, others NSE.
+	clock := marketcal.ClockForTicker(ticker)
+	loc := clock.Loc
+	todayLocal := time.Now().In(loc).Truncate(24 * time.Hour)
+	toLocal := to.In(loc).Truncate(24 * time.Hour)
 	// Only apply freshness check when the range ends today (historical = always fresh)
-	if !toIST.Before(todayIST) && !isFreshToday(time.Unix(fetchedAt, 0)) {
+	if !toLocal.Before(todayLocal) && !isFreshToday(ticker, time.Unix(fetchedAt, 0)) {
 		return nil, false, nil
 	}
 

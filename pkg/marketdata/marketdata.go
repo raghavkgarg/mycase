@@ -2,11 +2,13 @@
 // across the codebase: HistoricalData (daily OHLCV series), Fundamentals, and the
 // small annual-metric helpers they nest.
 //
-// It is a leaf package with zero internal imports. Extracting these types out of
-// pkg/yfinance lets type-only consumers — broker/schwab, attribution, optimizer,
-// datafetcher — reference the shared shapes without importing yfinance (and thus
-// transitively the DuckDB cache). This removes the inverted "a broker client
-// imports the Yahoo Finance package" edge (R16 problem P1).
+// It is a low-level leaf package (L0). Its only internal dependency is the pure
+// algorithmic pkg/marketcal floor (L-1), used to implement the EOD-settlement
+// time helpers below; it imports nothing else internal. Extracting these types
+// out of pkg/yfinance lets type-only consumers — broker/schwab, attribution,
+// optimizer, datafetcher — reference the shared shapes without importing yfinance
+// (and thus transitively the DuckDB cache). This removes the inverted "a broker
+// client imports the Yahoo Finance package" edge (R16 problem P1).
 //
 // pkg/yfinance re-exports these via type aliases (yfinance.HistoricalData =
 // marketdata.HistoricalData, etc.) so existing yfinance.* call sites are unchanged.
@@ -18,6 +20,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/raghavkgarg/mycase/pkg/marketcal"
 )
 
 // AnnualFinancial holds annual revenue and earnings.
@@ -214,81 +218,58 @@ func (h *HistoricalData) truncateLast() {
 	}
 }
 
-// LastSettledEODTime returns the timestamp of the most recent completed market EOD settlement cutoff (21:00 IST).
-// - On Saturday, Sunday, or Monday before 21:00 IST: the last settled session is Friday at 21:00 IST.
-// - On Tuesday through Friday before 21:00 IST: the last settled session is yesterday at 21:00 IST.
-// - On Monday through Friday at or after 21:00 IST: the last settled session is today at 21:00 IST.
+// The EOD-settlement time helpers below preserve the historical India (NSE)
+// behavior — a 21:00 IST daily cutoff with weekend rollback — by delegating to
+// pkg/marketcal.NSE. They keep their original signatures so existing call sites
+// (cmd/pick, cmd/db, cmd/pit) and tests are unchanged. New, market-aware call
+// sites should prefer the *ForTicker variants (or use marketcal directly), which
+// pick the NSE or NYSE clock from the ticker's market prefix.
+
+// LastSettledEODTime returns the most recent completed NSE (India) EOD settlement
+// cutoff (21:00 IST) at or before t. See marketcal.Clock.LastSettledEOD.
 func LastSettledEODTime(t time.Time) time.Time {
-	ist := time.FixedZone("IST", 5*3600+30*60)
-	tIST := t.In(ist)
-	weekday := tIST.Weekday()
-
-	switch weekday {
-	case time.Saturday:
-		fri := tIST.AddDate(0, 0, -1)
-		return time.Date(fri.Year(), fri.Month(), fri.Day(), 21, 0, 0, 0, ist)
-	case time.Sunday:
-		fri := tIST.AddDate(0, 0, -2)
-		return time.Date(fri.Year(), fri.Month(), fri.Day(), 21, 0, 0, 0, ist)
-	case time.Monday:
-		if tIST.Hour() >= 21 {
-			return time.Date(tIST.Year(), tIST.Month(), tIST.Day(), 21, 0, 0, 0, ist)
-		}
-		fri := tIST.AddDate(0, 0, -3)
-		return time.Date(fri.Year(), fri.Month(), fri.Day(), 21, 0, 0, 0, ist)
-	default: // Tuesday through Friday
-		if tIST.Hour() >= 21 {
-			return time.Date(tIST.Year(), tIST.Month(), tIST.Day(), 21, 0, 0, 0, ist)
-		}
-		yesterday := tIST.AddDate(0, 0, -1)
-		return time.Date(yesterday.Year(), yesterday.Month(), yesterday.Day(), 21, 0, 0, 0, ist)
-	}
+	return marketcal.NSE.LastSettledEOD(t)
 }
 
-// IsFreshEOD returns true if fetchedAt was recorded at or after the last settled EOD session cutoff.
+// LastSettledEODTimeForTicker is the market-aware variant: it uses the NSE or
+// NYSE settlement clock selected from the ticker's market prefix.
+func LastSettledEODTimeForTicker(ticker string, t time.Time) time.Time {
+	return marketcal.ClockForTicker(ticker).LastSettledEOD(t)
+}
+
+// IsFreshEOD reports whether fetchedAt is at or after the last NSE (India) settled
+// EOD cutoff relative to now. See marketcal.Clock.IsFreshEOD.
 func IsFreshEOD(fetchedAt, now time.Time) bool {
-	cutoff := LastSettledEODTime(now)
-	return !fetchedAt.Before(cutoff)
+	return marketcal.NSE.IsFreshEOD(fetchedAt, now)
 }
 
-// EODSettlementDate returns the effective settled EOD market date for a given time t in IST.
-// The sole daily cutoff is 21:00 IST (9:00 PM):
-// - Any time before 21:00 IST belongs to the previous completed trading day's EOD cycle.
-// - Any time at or after 21:00 IST belongs to today's completed EOD cycle.
-// - Weekend awareness: Saturday, Sunday, and Monday before 21:00 IST map to Friday's settled EOD date.
+// IsFreshEODForTicker is the market-aware variant: freshness is judged against
+// the ticker's own market clock (NSE 21:00 IST vs NYSE 16:00 ET).
+func IsFreshEODForTicker(ticker string, fetchedAt, now time.Time) bool {
+	return marketcal.ClockForTicker(ticker).IsFreshEOD(fetchedAt, now)
+}
+
+// EODSettlementDate returns the NSE (India) settled trading date (midnight IST)
+// for t. See marketcal.Clock.SettlementDate.
 func EODSettlementDate(t time.Time) time.Time {
-	cutoff := LastSettledEODTime(t)
-	ist := time.FixedZone("IST", 5*3600+30*60)
-	return time.Date(cutoff.Year(), cutoff.Month(), cutoff.Day(), 0, 0, 0, 0, ist)
+	return marketcal.NSE.SettlementDate(t)
 }
 
-// NextEODAvailableDate returns the date on which the next day's EOD file will be available (at 21:00 IST).
-// Handles weekends gracefully: Friday post-21:00, Saturday, and Sunday point to Monday at 21:00 IST.
-func NextEODAvailableDate(t time.Time) time.Time {
-	ist := time.FixedZone("IST", 5*3600+30*60)
-	tIST := t.In(ist)
-	weekday := tIST.Weekday()
+// EODSettlementDateForTicker is the market-aware variant.
+func EODSettlementDateForTicker(ticker string, t time.Time) time.Time {
+	return marketcal.ClockForTicker(ticker).SettlementDate(t)
+}
 
-	switch weekday {
-	case time.Friday:
-		if tIST.Hour() < 21 {
-			return time.Date(tIST.Year(), tIST.Month(), tIST.Day(), 21, 0, 0, 0, ist)
-		}
-		mon := tIST.AddDate(0, 0, 3)
-		return time.Date(mon.Year(), mon.Month(), mon.Day(), 21, 0, 0, 0, ist)
-	case time.Saturday:
-		mon := tIST.AddDate(0, 0, 2)
-		return time.Date(mon.Year(), mon.Month(), mon.Day(), 21, 0, 0, 0, ist)
-	case time.Sunday:
-		mon := tIST.AddDate(0, 0, 1)
-		return time.Date(mon.Year(), mon.Month(), mon.Day(), 21, 0, 0, 0, ist)
-	default:
-		if tIST.Hour() < 21 {
-			return time.Date(tIST.Year(), tIST.Month(), tIST.Day(), 21, 0, 0, 0, ist)
-		}
-		nextDay := tIST.AddDate(0, 0, 1)
-		return time.Date(nextDay.Year(), nextDay.Month(), nextDay.Day(), 21, 0, 0, 0, ist)
-	}
+// NextEODAvailableDate returns when the next NSE (India) EOD file will be
+// available (next 21:00 IST cutoff, skipping weekends). See
+// marketcal.Clock.NextEODAvailable.
+func NextEODAvailableDate(t time.Time) time.Time {
+	return marketcal.NSE.NextEODAvailable(t)
+}
+
+// NextEODAvailableDateForTicker is the market-aware variant.
+func NextEODAvailableDateForTicker(ticker string, t time.Time) time.Time {
+	return marketcal.ClockForTicker(ticker).NextEODAvailable(t)
 }
 
 // FormatOrdinalDay returns e.g. "21st", "22nd", "23rd", "24th" for a day number.

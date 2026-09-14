@@ -29,7 +29,14 @@ const ModulePrefix = "github.com/raghavkgarg/mycase/"
 // The checker fails on any pkg/ package missing from this map, so new packages
 // must be placed deliberately.
 var Layers = map[string]int{
-	// L0 — leaves: zero internal imports.
+	// L-1 — the absolute floor: a pure, zero-import algorithmic leaf that even the
+	// L0 leaves may import downward. marketcal holds market-calendar / EOD-settlement
+	// time math (stdlib-only) so marketdata, cache, and selectiontracker consume one
+	// implementation instead of each duplicating it. It is the sole MustBeLeaf member
+	// among this group; its consumers are permitted exactly this one downward import.
+	"marketcal": -1,
+
+	// L0 — leaves: zero internal imports (except the permitted downward marketcal import).
 	"alert":            0,
 	"broker/types":     0,
 	"cache":            0,
@@ -80,17 +87,18 @@ var Layers = map[string]int{
 	"server": 6,
 }
 
-// MustBeLeaf lists the L0 packages that must never acquire an internal import.
-// Called out explicitly because these are the ones R16 deliberately made/kept
-// leaves.
+// MustBeLeaf lists packages that must never acquire ANY internal import — the
+// true zero-import floor. marketcal is the pure algorithmic leaf that the former
+// leaves (marketdata, cache, market) now import downward for EOD settlement math;
+// those three are therefore no longer zero-import, but remain L0 and may import
+// ONLY marketcal (enforced by the strictly-downward layer check). broker/types,
+// config, costs, render, logging, alert remain pure DTO/config/primitive leaves.
 var MustBeLeaf = map[string]bool{
-	"marketdata":   true,
+	"marketcal":    true,
 	"broker/types": true,
-	"cache":        true,
 	"config":       true,
 	"costs":        true,
 	"render":       true,
-	"market":       true,
 	"logging":      true,
 	"alert":        true,
 }
