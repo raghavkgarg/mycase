@@ -168,7 +168,7 @@ func (p *DB) GetCandidateHistoryFiltered(ctx context.Context, ticker, indexName,
 	}
 
 	var query string
-	var args []interface{}
+	var args []any
 
 	if indexName != "" {
 		indexName = NormalizeIndexName(indexName)
@@ -549,7 +549,7 @@ ORDER BY diff DESC;
 		shiftRows, err := p.db.QueryContext(ctx, shiftsQuery, latestRun.AsOfDate, prevRun.AsOfDate, indexName, method)
 		if err == nil {
 			type shiftRecord struct {
-				ticker, sec                                           string
+				ticker, sec                                          string
 				prevScore, currScore, diff, priceChg, vcp, rs, deliv float64
 			}
 			var gainers []shiftRecord
@@ -1218,14 +1218,8 @@ ORDER BY total_shadow_pool DESC;
 					var sec string
 					var totPool, legPool, resPool int
 					if err := capRows.Scan(&sec, &totPool, &legPool, &resPool); err == nil {
-						maxAlloc := totPool
-						if maxAlloc > 3 {
-							maxAlloc = 3
-						}
-						excess := totPool - 3
-						if excess < 0 {
-							excess = 0
-						}
+						maxAlloc := min(totPool, 3)
+						excess := max(totPool-3, 0)
 						fmt.Printf("  %-18s | %11d | %11d | %9d | %15d | %15d\n",
 							formatConciseSector(sec), totPool, legPool, resPool, maxAlloc, excess)
 					}
@@ -1524,4 +1518,3 @@ LIMIT ?;
 	fmt.Println(strings.Repeat("=", 108))
 	return nil
 }
-

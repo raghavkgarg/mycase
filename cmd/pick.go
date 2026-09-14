@@ -278,4 +278,3 @@ func displayCachedRunOutput(ctx context.Context, pitDB *pithistory.DB, opts *sto
 		fmt.Printf("Final Selected Stocks:                 %d stocks\n\n", r.SelectedCount)
 	}
 }
-

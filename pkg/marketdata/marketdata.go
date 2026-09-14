@@ -50,7 +50,7 @@ func (d *DeliveryRecord) UnmarshalJSON(data []byte) error {
 		ClosePrice     any    `json:"close_price"`
 		DeliverableQty any    `json:"deliverable_qty"`
 		DeliveryPct    any    `json:"delivery_pct"`
-		Series         string      `json:"series"`
+		Series         string `json:"series"`
 	}
 	if err := json.Unmarshal(data, &aux); err != nil {
 		return err
