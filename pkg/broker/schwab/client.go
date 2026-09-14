@@ -7,8 +7,9 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"sync"
 	"time"
+
+	"golang.org/x/time/rate"
 
 	"github.com/raghavkgarg/mycase/pkg/logging"
 )
@@ -19,12 +20,17 @@ const (
 
 	defaultTimeout = 15 * time.Second
 
-	// Schwab rate limit: 120 requests per minute.
+	// Schwab rate limit: 120 requests per minute. Enforced by a token-bucket
+	// limiter (golang.org/x/time/rate): a burst of up to rateLimitBurst tokens
+	// refilled at rateLimitPerSecond tokens/sec, keeping steady-state traffic
+	// under the 120/min ceiling while allowing an initial burst.
 	rateLimitPerMinute = 120
+	rateLimitPerSecond = rateLimitPerMinute / 60.0 // 2 tokens/sec
+	rateLimitBurst     = rateLimitPerMinute        // allow up to a full minute's budget as burst
 )
 
 // Client is the Schwab API HTTP client. It handles Bearer token injection,
-// auto-refresh on 401, and basic rate limiting.
+// auto-refresh on 401, and rate limiting (token bucket, 120 req/min).
 type Client struct {
 	httpClient *http.Client
 	tokenMgr   *TokenManager
@@ -33,10 +39,8 @@ type Client struct {
 	traderBase     string
 	marketDataBase string
 
-	requestLog []time.Time
-
-	// Rate limiting
-	mu sync.Mutex
+	// Rate limiting: token bucket sized to Schwab's 120 req/min ceiling.
+	limiter *rate.Limiter
 }
 
 // NewClient creates a Schwab API client with the given token manager.
@@ -46,7 +50,7 @@ func NewClient(tokenMgr *TokenManager) *Client {
 		tokenMgr:       tokenMgr,
 		traderBase:     traderBaseURL,
 		marketDataBase: marketDataBaseURL,
-		requestLog:     make([]time.Time, 0, rateLimitPerMinute),
+		limiter:        rate.NewLimiter(rate.Limit(rateLimitPerSecond), rateLimitBurst),
 	}
 }
 
@@ -91,10 +95,6 @@ func (c *Client) GetMarketData(ctx context.Context, path string) (*http.Response
 
 // doRequest performs an authenticated HTTP request with auto-refresh on 401.
 func (c *Client) doRequest(ctx context.Context, method, url string, body io.Reader) (*http.Response, error) {
-	if err := c.waitForRateLimit(ctx); err != nil {
-		return nil, err
-	}
-
 	token, err := c.tokenMgr.GetAccessToken(ctx)
 	if err != nil {
 		return nil, err
@@ -135,8 +135,14 @@ func (c *Client) doRequest(ctx context.Context, method, url string, body io.Read
 	return resp, nil
 }
 
-// executeRequest builds and sends a single HTTP request.
+// executeRequest builds and sends a single HTTP request. It blocks on the
+// rate limiter before sending, so every send (including the post-401 retry)
+// consumes one token from the 120 req/min budget.
 func (c *Client) executeRequest(ctx context.Context, method, url string, body io.Reader, token string) (*http.Response, error) {
+	if err := c.limiter.Wait(ctx); err != nil {
+		return nil, fmt.Errorf("schwab: rate limiter wait: %w", err)
+	}
+
 	req, err := http.NewRequestWithContext(ctx, method, url, body)
 	if err != nil {
 		return nil, err
@@ -147,7 +153,6 @@ func (c *Client) executeRequest(ctx context.Context, method, url string, body io
 		req.Header.Set("Content-Type", "application/json")
 	}
 
-	c.recordRequest()
 	start := time.Now()
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -156,53 +161,6 @@ func (c *Client) executeRequest(ctx context.Context, method, url string, body io
 	}
 	logging.LogResponse(ctx, slog.Default(), method, url, resp.StatusCode, time.Since(start))
 	return resp, nil
-}
-
-// waitForRateLimit blocks until a request slot is available.
-func (c *Client) waitForRateLimit(ctx context.Context) error {
-	for {
-		c.mu.Lock()
-		now := time.Now()
-		cutoff := now.Add(-1 * time.Minute)
-
-		// Prune old entries
-		valid := c.requestLog[:0]
-		for _, t := range c.requestLog {
-			if t.After(cutoff) {
-				valid = append(valid, t)
-			}
-		}
-		c.requestLog = valid
-
-		if len(c.requestLog) < rateLimitPerMinute {
-			c.mu.Unlock()
-			return nil
-		}
-
-		// Calculate wait time until oldest entry expires
-		oldest := c.requestLog[0]
-		waitUntil := oldest.Add(1 * time.Minute)
-		c.mu.Unlock()
-
-		waitDur := time.Until(waitUntil)
-		if waitDur <= 0 {
-			continue
-		}
-
-		select {
-		case <-time.After(waitDur):
-			// retry
-		case <-ctx.Done():
-			return ctx.Err()
-		}
-	}
-}
-
-// recordRequest logs the current time for rate limiting.
-func (c *Client) recordRequest() {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.requestLog = append(c.requestLog, time.Now())
 }
 
 // parseAPIError extracts error details from a non-2xx response.
