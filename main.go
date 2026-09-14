@@ -62,6 +62,7 @@ func main() {
 			},
 			&cli.StringFlag{Name: "index", Aliases: []string{"i"}, Value: "niftytotalmarket", Usage: "Index name to analyze or pick"},
 			&cli.StringFlag{Name: "method", Aliases: []string{"m"}, Value: "earlymb", Usage: "Strategy method"},
+			&cli.StringFlag{Name: "market", Aliases: []string{"mkt"}, Usage: "Target market: 'india' or 'us' (defaults to config/defaults.json or auto-detected from --index)"},
 			&cli.BoolFlag{Name: "analysis", Aliases: []string{"a"}, Usage: "Run deep quantitative deduction analysis using DuckDB"},
 			&cli.BoolFlag{Name: "database", Aliases: []string{"db"}, Usage: "Operate on consolidated data/mycase.db"},
 			&cli.BoolFlag{Name: "update", Aliases: []string{"u"}, Usage: "Execute unified EOD database update across market data, PIT, and themes"},
@@ -130,7 +131,7 @@ func main() {
 				return mycmd.RunDBUpdateDirect(ctx, true, c.String("index"), c.String("method"), 10, c.Bool("dry-run"), "")
 			}
 			if c.Bool("analysis") {
-				return mycmd.RunPitAnalysisDirect(ctx, c.String("index"), c.String("method"))
+				return mycmd.RunPitAnalysisDirect(ctx, c.String("index"), c.String("method"), c.String("market"))
 			}
 			return cli.ShowAppHelp(c)
 		},

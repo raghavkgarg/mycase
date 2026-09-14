@@ -19,6 +19,7 @@ var PitCommand = &cli.Command{
 	Flags: []cli.Flag{
 		&cli.StringFlag{Name: "index", Aliases: []string{"i"}, Value: "niftytotalmarket", Usage: "Index name to analyze"},
 		&cli.StringFlag{Name: "method", Aliases: []string{"m"}, Value: "earlymb", Usage: "Strategy method to analyze"},
+		&cli.StringFlag{Name: "market", Aliases: []string{"mkt"}, Usage: "Target market: 'india' or 'us' (defaults to config/defaults.json or auto-detected from --index)"},
 		&cli.BoolFlag{Name: "analysis", Aliases: []string{"a"}, Usage: "Run deep quantitative deduction analysis using DuckDB"},
 	},
 	Action: func(ctx context.Context, c *cli.Command) error {
@@ -45,6 +46,7 @@ var PitCommand = &cli.Command{
 			Flags: []cli.Flag{
 				&cli.StringFlag{Name: "index", Aliases: []string{"i"}, Value: "microcap250_smallcap250", Usage: "Index name to analyze"},
 				&cli.StringFlag{Name: "method", Aliases: []string{"m"}, Value: "earlymb", Usage: "Strategy method to analyze"},
+				&cli.StringFlag{Name: "market", Aliases: []string{"mkt"}, Usage: "Target market: 'india' or 'us' (defaults to config/defaults.json or auto-detected from --index)"},
 				&cli.IntFlag{Name: "days", Value: 60, Usage: "Rolling history lookback window in calendar days (0 for all)"},
 				&cli.StringFlag{Name: "ticker", Usage: "Optional specific ticker to view score trajectory for"},
 				&cli.BoolFlag{Name: "analysis", Aliases: []string{"a"}, Usage: "Run deep quantitative deduction analysis using DuckDB"},
@@ -67,6 +69,7 @@ var PitCommand = &cli.Command{
 			Flags: []cli.Flag{
 				&cli.StringFlag{Name: "index", Aliases: []string{"i"}, Value: "niftytotalmarket", Usage: "Index name to analyze"},
 				&cli.StringFlag{Name: "method", Aliases: []string{"m"}, Value: "earlymb", Usage: "Strategy method to analyze"},
+				&cli.StringFlag{Name: "market", Aliases: []string{"mkt"}, Usage: "Target market: 'india' or 'us' (defaults to config/defaults.json or auto-detected from --index)"},
 				&cli.IntFlag{Name: "days", Value: 60, Usage: "Rolling history lookback window in calendar days (0 for all)"},
 				&cli.StringFlag{Name: "ticker", Usage: "Optional specific ticker to view score trajectory for"},
 			},
@@ -272,11 +275,12 @@ func runPitStats(ctx context.Context, c *cli.Command) error {
 func runPitAnalysis(ctx context.Context, c *cli.Command) error {
 	indexVal := strings.NewReplacer(",", "_", " ", "_", "^", "").Replace(c.String("index"))
 	methodVal := c.String("method")
-	return RunPitAnalysisDirect(ctx, indexVal, methodVal)
+	marketVal := c.String("market")
+	return RunPitAnalysisDirect(ctx, indexVal, methodVal, marketVal)
 }
 
 // RunPitAnalysisDirect executes the DuckDB deep analysis engine directly without CLI context overhead.
-func RunPitAnalysisDirect(ctx context.Context, indexName, method string) error {
+func RunPitAnalysisDirect(ctx context.Context, indexName, method string, marketOverride ...string) error {
 	indexVal := strings.NewReplacer(",", "_", " ", "_", "^", "").Replace(indexName)
 	if indexVal == "" {
 		indexVal = "niftytotalmarket"
@@ -291,7 +295,7 @@ func RunPitAnalysisDirect(ctx context.Context, indexName, method string) error {
 	}
 	defer db.Close()
 
-	return db.RunDeepAnalysis(ctx, indexVal, method)
+	return db.RunDeepAnalysis(ctx, indexVal, method, marketOverride...)
 }
 
 func runPitShadow(ctx context.Context, c *cli.Command) error {

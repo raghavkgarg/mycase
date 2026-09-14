@@ -14,6 +14,7 @@ import (
 	"github.com/raghavkgarg/mycase/pkg/config"
 	"github.com/raghavkgarg/mycase/pkg/csvloader"
 	"github.com/raghavkgarg/mycase/pkg/render"
+	"github.com/raghavkgarg/mycase/pkg/stockpicker"
 	"github.com/raghavkgarg/mycase/pkg/yfinance"
 )
 
@@ -30,6 +31,7 @@ var BacktestCommand = &cli.Command{
 		&cli.FloatFlag{Name: "slippage", Value: 0.1, Usage: "Slippage per trade in % (e.g. 0.1 = 0.1%)"},
 		&cli.StringFlag{Name: "benchmark", Value: "", Usage: "Benchmark ticker (default: from config/defaults.json)"},
 		&cli.FloatFlag{Name: "drift-threshold", Value: 5.0, Usage: "Drift % to trigger rebalance (drift-triggered mode)"},
+		&cli.StringFlag{Name: "market", Aliases: []string{"mkt"}, Usage: "Target market: 'india' or 'us' (defaults to config/defaults.json or auto-detected from portfolio)"},
 	},
 	Action: runBacktest,
 }
@@ -159,11 +161,24 @@ func runBacktest(ctx context.Context, c *cli.Command) error {
 		return fmt.Errorf("backtest failed: %w", err)
 	}
 
-	printBacktestResults(res, capital, benchmark, rebalFreq, slippage)
+	currSym := "₹"
+	marketFlag := strings.ToLower(c.String("market"))
+	if marketFlag == "us" || (marketFlag == "" && (stockpicker.IsUSIndex(filename) || stockpicker.IsUSIndex(benchmark))) {
+		currSym = "$"
+	} else if marketFlag == "" {
+		for _, h := range holdings {
+			if strings.HasPrefix(h.Ticker, "US:") || stockpicker.IsUSIndex(h.Ticker) {
+				currSym = "$"
+				break
+			}
+		}
+	}
+
+	printBacktestResults(res, capital, benchmark, rebalFreq, slippage, currSym)
 	return nil
 }
 
-func printBacktestResults(res backtest.SimResult, capital float64, benchmark string, freq backtest.RebalanceFreq, slippage float64) {
+func printBacktestResults(res backtest.SimResult, capital float64, benchmark string, freq backtest.RebalanceFreq, slippage float64, currSym string) {
 	out := os.Stdout
 	render.Banner(out, "BACKTEST RESULTS")
 
@@ -193,9 +208,9 @@ func printBacktestResults(res backtest.SimResult, capital float64, benchmark str
 		finalPort := res.Snapshots[len(res.Snapshots)-1].PortfolioValue
 		finalBench := capital * (1 + res.BenchmarkReturn)
 		render.KV(out, []render.KVPair{
-			{Key: "Initial Capital", Value: render.Currency(capital, "Rs. ")},
-			{Key: "Final Portfolio", Value: render.Currency(finalPort, "Rs. ")},
-			{Key: "Final Benchmark", Value: render.Currency(finalBench, "Rs. ")},
+			{Key: "Initial Capital", Value: render.Currency(capital, currSym)},
+			{Key: "Final Portfolio", Value: render.Currency(finalPort, currSym)},
+			{Key: "Final Benchmark", Value: render.Currency(finalBench, currSym)},
 		})
 	}
 

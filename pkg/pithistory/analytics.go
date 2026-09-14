@@ -12,6 +12,7 @@ import (
 	"github.com/raghavkgarg/mycase/pkg/config"
 	"github.com/raghavkgarg/mycase/pkg/csvloader"
 	"github.com/raghavkgarg/mycase/pkg/render"
+	"github.com/raghavkgarg/mycase/pkg/stockpicker"
 )
 
 type RunSummaryRow struct {
@@ -300,7 +301,7 @@ ORDER BY as_of_date ASC;
 }
 
 // RunDeepAnalysis performs institutional deduction analytics purely from DuckDB tables.
-func (p *DB) RunDeepAnalysis(ctx context.Context, indexName, method string) error {
+func (p *DB) RunDeepAnalysis(ctx context.Context, indexName, method string, marketOverride ...string) error {
 	indexName = NormalizeIndexName(indexName)
 	runs, err := p.GetRunHistory(ctx, indexName, method, 10)
 	if err != nil {
@@ -309,6 +310,17 @@ func (p *DB) RunDeepAnalysis(ctx context.Context, indexName, method string) erro
 	if len(runs) == 0 {
 		fmt.Printf("No PIT historical records found in %s for index=%s, method=%s\n", DefaultDBPath, indexName, method)
 		return nil
+	}
+
+	market := ""
+	if len(marketOverride) > 0 && marketOverride[0] != "" {
+		market = strings.ToLower(marketOverride[0])
+	}
+	currSym := "₹"
+	marketDisplay := "India (NSE)"
+	if market == "us" || (market == "" && stockpicker.IsUSIndex(indexName)) {
+		currSym = "$"
+		marketDisplay = "US (NYSE/NASDAQ)"
 	}
 
 	latestRun := runs[0]
@@ -323,6 +335,7 @@ func (p *DB) RunDeepAnalysis(ctx context.Context, indexName, method string) erro
 	fmt.Printf("Database:       %s\n", DefaultDBPath)
 	fmt.Printf("Universe:       %s\n", indexName)
 	fmt.Printf("Strategy:       %s\n", method)
+	fmt.Printf("Market:         %s (Currency: %s)\n", marketDisplay, currSym)
 	fmt.Printf("Total PIT Runs: %d recorded runs (Latest As-Of: %s)\n", len(runs), latestRun.AsOfDate)
 	fmt.Println("-----------------------------------------------------------------------------------------------------------------------")
 
@@ -947,8 +960,10 @@ ORDER BY radar_return_pct DESC;
 			if len(graduates) > 0 {
 				fmt.Printf("\n  --- Graduated Stocks Performance (Radar Alpha Audit: First-Seen Date -> Clear Date) ---\n")
 				fmt.Println("  Quantifying pre-breakout radar predictive value and opportunity cost of waiting for Stage-1 clearance:")
+				entryHdr := fmt.Sprintf("Entry (%s)", currSym)
+				clearHdr := fmt.Sprintf("Clear (%s)", currSym)
 				fmt.Printf("  %-15s | %-15s | %-19s | %-10s | %-10s | %-12s | %11s | %11s | %-12s\n",
-					"Ticker", "Sector", "Channel", "First Seen", "Clear Date", "Incub (Hits)", "Entry (₹)", "Clear (₹)", "Radar Return")
+					"Ticker", "Sector", "Channel", "First Seen", "Clear Date", "Incub (Hits)", entryHdr, clearHdr, "Radar Return")
 				fmt.Println("  -----------------------------------------------------------------------------------------------------------------------------------")
 				totalRet := 0.0
 				wins := 0
@@ -975,7 +990,7 @@ ORDER BY radar_return_pct DESC;
 					}
 					incubStr := fmt.Sprintf("%dd (%dx)", gr.elapsedDays, gr.daysOnRadar)
 					fmt.Printf("  %-15s | %-15s | %-19s | %-10s | %-10s | %-12s | %11s | %11s | %+11.2f%%\n",
-						gr.ticker, formatConciseSector(gr.sec), gr.channel, fs, cd, incubStr, render.Currency(gr.firstClose, "₹"), render.Currency(gr.clearClose, "₹"), gr.retPct)
+						gr.ticker, formatConciseSector(gr.sec), gr.channel, fs, cd, incubStr, render.Currency(gr.firstClose, currSym), render.Currency(gr.clearClose, currSym), gr.retPct)
 				}
 				avgRet := totalRet / float64(len(graduates))
 				winRate := float64(wins) / float64(len(graduates)) * 100.0
@@ -1051,8 +1066,10 @@ LIMIT 15;
 				}
 			}
 
+			prevHdr := fmt.Sprintf("Prev (%s)", currSym)
+			closeHdr := fmt.Sprintf("Close (%s)", currSym)
 			fmt.Printf("  %-15s | %11s | %11s | %-11s | %-7s | %-5s | %-7s | %-12s | %-28s | %-12s\n",
-				"Ticker", "Prev (₹)", "Close (₹)", gainHeader, "Deliv Δ", "Accum", "Comp RS", "Gate Type", "Stage-1 Bottleneck", "Radar")
+				"Ticker", prevHdr, closeHdr, gainHeader, "Deliv Δ", "Accum", "Comp RS", "Gate Type", "Stage-1 Bottleneck", "Radar")
 			fmt.Println("  --------------------------------------------------------------------------------------------------------------------------------------")
 			foundGainer := false
 			for gRows.Next() {
@@ -1082,7 +1099,7 @@ LIMIT 15;
 						overlapStr = "DUAL HIT"
 					}
 					fmt.Printf("  %-15s | %11s | %11s | %+10.2f%% | %-7s | %-5s | %-7s | %-12s | %-28s | %-12s\n",
-						ticker, render.Currency(prevClose, "₹"), render.Currency(currClose, "₹"), pctGain, delivStr, realAccumStr, rsStr, gateType, conciseStatus, overlapStr)
+						ticker, render.Currency(prevClose, currSym), render.Currency(currClose, currSym), pctGain, delivStr, realAccumStr, rsStr, gateType, conciseStatus, overlapStr)
 				}
 			}
 			gRows.Close()

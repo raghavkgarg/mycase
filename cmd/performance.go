@@ -20,6 +20,7 @@ import (
 	"github.com/raghavkgarg/mycase/pkg/cache"
 	"github.com/raghavkgarg/mycase/pkg/csvloader"
 	"github.com/raghavkgarg/mycase/pkg/render"
+	"github.com/raghavkgarg/mycase/pkg/stockpicker"
 )
 
 var PerformanceCommand = &cli.Command{
@@ -34,6 +35,7 @@ var PerformanceCommand = &cli.Command{
 		&cli.BoolFlag{Name: "decompose", Usage: "With --vs-benchmark: decompose active return into selection (picks vs index) and rebalancing (re-selection vs holding the first basket) effects"},
 		&cli.StringFlag{Name: "benchmark", Usage: "Benchmark ticker for --vs-benchmark (default: US:SPY)"},
 		&cli.StringFlag{Name: "since", Usage: "Start date for --vs-benchmark NAV series in YYYY-MM-DD or YYYYMMDD (default: 1 year ago)"},
+		&cli.StringFlag{Name: "market", Aliases: []string{"mkt"}, Usage: "Target market: 'india' or 'us' (defaults to config/defaults.json or auto-detected from portfolio)"},
 	},
 	Action: runPerformance,
 }
@@ -42,10 +44,10 @@ func runPerformance(ctx context.Context, c *cli.Command) error {
 	if c.Bool("vs-benchmark") {
 		return runVsBenchmark(ctx, c.String("file"), c.Float("capital"), c.String("since"), c.String("benchmark"), c.Bool("decompose"))
 	}
-	return runPerfWithParams(ctx, c.String("file"), c.Float("capital"), c.String("date"), c.String("time"))
+	return runPerfWithParams(ctx, c.String("file"), c.Float("capital"), c.String("date"), c.String("time"), c.String("market"))
 }
 
-func runPerfWithParams(ctx context.Context, filePath string, capital float64, targetDateStr, targetTimeStr string) error {
+func runPerfWithParams(ctx context.Context, filePath string, capital float64, targetDateStr, targetTimeStr string, marketOverride ...string) error {
 	if filePath == "" {
 		return fmt.Errorf("--file parameter is required")
 	}
@@ -61,42 +63,6 @@ func runPerfWithParams(ctx context.Context, filePath string, capital float64, ta
 	targetMin, err := strconv.Atoi(timeParts[1])
 	if err != nil {
 		return fmt.Errorf("parsing minute: %w", err)
-	}
-
-	istLoc := time.FixedZone("IST", 5*3600+30*60)
-	nowIST := time.Now().In(istLoc)
-
-	targetDate, err := parsePerfDate(targetDateStr, istLoc)
-	if err != nil {
-		return err
-	}
-
-	targetTime := time.Date(targetDate.Year(), targetDate.Month(), targetDate.Day(), targetHour, targetMin, 0, 0, istLoc)
-
-	useDailyClose := false
-	rangeStr := "1d"
-	daysDiff := nowIST.Sub(targetTime).Hours() / 24.0
-
-	if targetTime.Before(time.Date(nowIST.Year(), nowIST.Month(), nowIST.Day(), 0, 0, 0, 0, istLoc)) {
-		rangeStr = "7d"
-	}
-	if daysDiff > 7.0 {
-		useDailyClose = true
-		switch {
-		case daysDiff <= 30.0:
-			rangeStr = "1mo"
-		case daysDiff <= 90.0:
-			rangeStr = "3mo"
-		case daysDiff <= 180.0:
-			rangeStr = "6mo"
-		case daysDiff <= 365.0:
-			rangeStr = "1y"
-		case daysDiff <= 730.0:
-			rangeStr = "2y"
-		default:
-			rangeStr = "5y"
-		}
-		fmt.Printf("Target purchase time is %.1f days ago (> 7 days). Switching to daily Close prices for %s (ignoring time flag).\n", daysDiff, targetTime.Format("2006-01-02"))
 	}
 
 	file, err := os.Open(filePath)
@@ -144,31 +110,84 @@ func runPerfWithParams(ctx context.Context, filePath string, capital float64, ta
 		return fmt.Errorf("no valid stocks found in CSV")
 	}
 
-	// Market-aware display: US portfolios ("US:" prefixed tickers) render in
-	// dollars with ET framing; India portfolios keep rupees / IST. Derived from
-	// the portfolio's own tickers so the performance flow is correct regardless
-	// of the globally configured default market.
-	mkt := perfMarketConfig(portfolio)
-	cur := mkt.Currency
-	if cur == "" {
-		cur = "₹"
+	marketVal := ""
+	if len(marketOverride) > 0 && marketOverride[0] != "" {
+		marketVal = strings.ToLower(marketOverride[0])
 	}
-	dispLoc := istLoc
-	tzLabel := "IST"
-	if loc, lerr := time.LoadLocation(mkt.Timezone); lerr == nil && mkt.Timezone != "" {
-		dispLoc = loc
-		if mkt.Market == "us" {
-			tzLabel = "ET"
+	isUS := false
+	if marketVal == "us" {
+		isUS = true
+	} else if marketVal == "india" {
+		isUS = false
+	} else {
+		isUS = broker.LoadMarketConfig().Market == "us" || stockpicker.IsUSIndex(filePath)
+		if !isUS {
+			for _, h := range portfolio {
+				if strings.HasPrefix(h.Ticker, "US:") || stockpicker.IsUSIndex(h.Ticker) {
+					isUS = true
+					break
+				}
+			}
 		}
+	}
+
+	currSym := "₹"
+	timeZoneAbbr := "IST"
+	var mktLoc *time.Location
+	if isUS {
+		currSym = "$"
+		timeZoneAbbr = "ET"
+		loc, err := time.LoadLocation("America/New_York")
+		if err == nil {
+			mktLoc = loc
+		} else {
+			mktLoc = time.FixedZone("ET", -5*3600)
+		}
+	} else {
+		mktLoc = time.FixedZone("IST", 5*3600+30*60)
+	}
+
+	nowMkt := time.Now().In(mktLoc)
+	targetDate, err := parsePerfDate(targetDateStr, mktLoc)
+	if err != nil {
+		return err
+	}
+
+	targetTime := time.Date(targetDate.Year(), targetDate.Month(), targetDate.Day(), targetHour, targetMin, 0, 0, mktLoc)
+
+	useDailyClose := false
+	rangeStr := "1d"
+	daysDiff := nowMkt.Sub(targetTime).Hours() / 24.0
+
+	if targetTime.Before(time.Date(nowMkt.Year(), nowMkt.Month(), nowMkt.Day(), 0, 0, 0, 0, mktLoc)) {
+		rangeStr = "7d"
+	}
+	if daysDiff > 7.0 {
+		useDailyClose = true
+		switch {
+		case daysDiff <= 30.0:
+			rangeStr = "1mo"
+		case daysDiff <= 90.0:
+			rangeStr = "3mo"
+		case daysDiff <= 180.0:
+			rangeStr = "6mo"
+		case daysDiff <= 365.0:
+			rangeStr = "1y"
+		case daysDiff <= 730.0:
+			rangeStr = "2y"
+		default:
+			rangeStr = "5y"
+		}
+		fmt.Printf("Target purchase time is %.1f days ago (> 7 days). Switching to daily Close prices for %s (ignoring time flag).\n", daysDiff, targetTime.Format("2006-01-02"))
 	}
 
 	if useDailyClose {
 		fmt.Printf("Analyzing portfolio performance: Bought at Close on %s till latest Close...\n\n", targetTime.Format("2006-01-02"))
 	} else {
-		fmt.Printf("Analyzing portfolio performance: Bought on %s at %s %s till latest Close...\n\n", targetTime.Format("2006-01-02"), targetTime.Format("15:04"), tzLabel)
+		fmt.Printf("Analyzing portfolio performance: Bought on %s at %s %s till latest Close...\n\n", targetTime.Format("2006-01-02"), targetTime.Format("15:04"), timeZoneAbbr)
 	}
 
-	results := backtest.ValuatePortfolio(ctx, newDataRouter(), portfolio, capital, targetTime, useDailyClose, rangeStr, dispLoc)
+	results := backtest.ValuatePortfolio(ctx, newDataRouter(), portfolio, capital, targetTime, useDailyClose, rangeStr, mktLoc)
 
 	out := os.Stdout
 	var totalInitial, totalFinal float64
@@ -181,18 +200,18 @@ func runPerfWithParams(ctx context.Context, filePath string, capital float64, ta
 		rows = append(rows, []string{
 			res.Ticker,
 			fmt.Sprintf("%.4f", res.Weight),
-			render.Currency(res.Allocated, cur),
-			render.Currency(res.BuyPrice, cur),
+			render.Currency(res.Allocated, currSym),
+			render.Currency(res.BuyPrice, currSym),
 			res.BuyTime,
-			render.Currency(res.ClosePrice, cur),
-			render.Currency(res.FinalValue, cur),
+			render.Currency(res.ClosePrice, currSym),
+			render.Currency(res.FinalValue, currSym),
 			render.PctRaw(res.PctReturn),
 		})
 		totalInitial += res.Allocated
 		totalFinal += res.FinalValue
 	}
 	render.TableWithOpts(out, render.TableOpts{
-		Headers: []string{"Ticker", "Weight", "Allocated", "Buy Price", "Buy Time/Date (" + tzLabel + ")", "Close Price", "Final Value", "Return"},
+		Headers: []string{"Ticker", "Weight", "Allocated", "Buy Price", fmt.Sprintf("Buy Time/Date (%s)", timeZoneAbbr), "Close Price", "Final Value", "Return"},
 		Rows:    rows,
 		Align: []render.Alignment{
 			render.AlignLeft, render.AlignRight, render.AlignRight, render.AlignRight,
@@ -206,10 +225,10 @@ func runPerfWithParams(ctx context.Context, filePath string, capital float64, ta
 
 	render.Section(out, "Portfolio Performance")
 	render.KV(out, []render.KVPair{
-		{Key: "Total Allocated Capital", Value: render.Currency(totalInitial, cur)},
-		{Key: "Unallocated Cash", Value: render.Currency(unallocated, cur)},
-		{Key: "Total End of Day Value", Value: render.Currency(totalFinal+unallocated, cur)},
-		{Key: "Net Profit/Loss", Value: render.PnL(netReturn, cur)},
+		{Key: "Total Allocated Capital", Value: render.Currency(totalInitial, currSym)},
+		{Key: "Unallocated Cash", Value: render.Currency(unallocated, currSym)},
+		{Key: "Total End of Day Value", Value: render.Currency(totalFinal+unallocated, currSym)},
+		{Key: "Net Profit/Loss", Value: render.PnL(netReturn, currSym)},
 		{Key: "Percentage Return", Value: render.PnLPct(pctReturn)},
 	})
 	return nil
