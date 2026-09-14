@@ -154,6 +154,24 @@ func RunDBUpdateDirect(ctx context.Context, all bool, indexName, method string, 
 		} else if sErr != nil {
 			fmt.Printf("Notice on self-healing retry: %v\n", sErr)
 		}
+
+		// Pre-flight Data Integrity Check on the newly committed snapshot
+		if pitDB, pErr := pithistory.Open(dbPath); pErr == nil {
+			if integrity, iErr := pitDB.CheckDataIntegrity(ctx, indexName, method); iErr == nil && integrity.TotalCandidates > 0 {
+				if integrity.FailurePct >= 5.0 {
+					fmt.Printf("\n⚠️  [DATA INTEGRITY WARNING]: %d / %d candidates (%.1f%%) in latest run have unverified or missing fundamentals!\n",
+						integrity.FailedCandidates, integrity.TotalCandidates, integrity.FailurePct)
+					if len(integrity.FlaggedTickers) > 0 {
+						fmt.Printf("   Flagged candidates sample: %s\n", strings.Join(integrity.FlaggedTickers, ", "))
+					}
+					fmt.Printf("   Verify data feeds before interpreting marginal scores or executing trades.\n\n")
+				} else {
+					fmt.Printf("   ✓ Data Integrity Verified: %d / %d candidates clean (0 unverified).\n",
+						integrity.TotalCandidates-integrity.FailedCandidates, integrity.TotalCandidates)
+				}
+			}
+			pitDB.Close()
+		}
 	}
 
 

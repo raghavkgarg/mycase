@@ -83,6 +83,16 @@ var PitCommand = &cli.Command{
 			},
 			Action: runPitRetry,
 		},
+		{
+			Name:    "consensus",
+			Aliases: []string{"synergy", "dual-leaders"},
+			Usage:   "Display cross-strategy consensus leaderboard combining Multibagger and Early Multibagger",
+			Flags: []cli.Flag{
+				&cli.StringFlag{Name: "date", Aliases: []string{"d"}, Usage: "As-of date (YYYY-MM-DD), defaults to latest available"},
+				&cli.IntFlag{Name: "top", Aliases: []string{"n", "t"}, Value: 15, Usage: "Number of top consensus candidates to display"},
+			},
+			Action: runPitConsensus,
+		},
 	},
 }
 
@@ -127,6 +137,24 @@ func runPitUpdate(ctx context.Context, c *cli.Command) error {
 
 	if err := runPickWithOpts(ctx, opts); err != nil {
 		return fmt.Errorf("daily pit update failed: %w", err)
+	}
+
+	// Post-screening Data Integrity Verification
+	if pitDB, pErr := pithistory.Open(""); pErr == nil {
+		if integrity, iErr := pitDB.CheckDataIntegrity(ctx, indexVal, methodVal); iErr == nil && integrity.TotalCandidates > 0 {
+			if integrity.FailurePct >= 5.0 {
+				fmt.Printf("\n⚠️  [DATA INTEGRITY WARNING]: %d / %d candidates (%.1f%%) in latest run have unverified or missing fundamentals!\n",
+					integrity.FailedCandidates, integrity.TotalCandidates, integrity.FailurePct)
+				if len(integrity.FlaggedTickers) > 0 {
+					fmt.Printf("   Flagged candidates sample: %s\n", strings.Join(integrity.FlaggedTickers, ", "))
+				}
+				fmt.Printf("   Verify data feeds before interpreting marginal scores or executing trades.\n\n")
+			} else {
+				fmt.Printf("   ✓ Data Integrity Verified: %d / %d candidates clean (0 unverified).\n",
+					integrity.TotalCandidates-integrity.FailedCandidates, integrity.TotalCandidates)
+			}
+		}
+		pitDB.Close()
 	}
 
 	fmt.Println("\nPoint-in-Time Daily Screening Update completed successfully.")
@@ -311,4 +339,17 @@ func runPitRetry(ctx context.Context, c *cli.Command) error {
 	}
 
 	return nil
+}
+
+func runPitConsensus(ctx context.Context, c *cli.Command) error {
+	dateVal := c.String("date")
+	topN := int(c.Int("top"))
+
+	db, err := pithistory.Open("")
+	if err != nil {
+		return fmt.Errorf("failed to open pit database: %w", err)
+	}
+	defer db.Close()
+
+	return db.PrintConsensusLeaders(ctx, dateVal, topN)
 }

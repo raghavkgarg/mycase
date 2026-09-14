@@ -69,6 +69,11 @@ func (p *DB) Close() error {
 	return nil
 }
 
+// Conn returns the underlying *sql.DB connection.
+func (p *DB) Conn() *sql.DB {
+	return p.db
+}
+
 const schemaDDL = `
 CREATE TABLE IF NOT EXISTS pit_runs (
     as_of_date         DATE,
@@ -136,10 +141,11 @@ func (p *DB) initSchema(ctx context.Context) error {
 	_, _ = p.db.ExecContext(ctx, "ALTER TABLE pit_candidate_scores ADD COLUMN IF NOT EXISTS pillar4_uncalibrated BOOLEAN DEFAULT false;")
 	_, _ = p.db.ExecContext(ctx, "ALTER TABLE pit_candidate_scores ADD COLUMN IF NOT EXISTS pillar4_insufficient_history BOOLEAN DEFAULT false;")
 	_, _ = p.db.ExecContext(ctx, "ALTER TABLE pit_runs ADD COLUMN IF NOT EXISTS pillar4_uncalibrated BOOLEAN DEFAULT false;")
-	_, _ = p.db.ExecContext(ctx, "UPDATE pit_candidate_scores SET pillar4_uncalibrated = TRUE WHERE as_of_date <= '2026-09-10';")
-	_, _ = p.db.ExecContext(ctx, "UPDATE pit_runs SET pillar4_uncalibrated = TRUE WHERE as_of_date <= '2026-09-10';")
 	// Clean out any artificial dummy index placeholder rows (e.g. DUMMYINXGN, DUMMYTRVN)
 	_, _ = p.db.ExecContext(ctx, "DELETE FROM pit_candidate_scores WHERE UPPER(ticker) LIKE '%DUMMY%';")
+	// Consolidate onto pure niftytotalmarket base: remove redundant sub-index physical rows
+	_, _ = p.db.ExecContext(ctx, "DELETE FROM pit_candidate_scores WHERE index_name IN ('small250', 'smallcap250', 'microcap250', 'microsmall', 'microcap250_smallcap250');")
+	_, _ = p.db.ExecContext(ctx, "DELETE FROM pit_runs WHERE index_name IN ('small250', 'smallcap250', 'microcap250', 'microsmall', 'microcap250_smallcap250');")
 	_ = p.initIndexConstituents(ctx)
 	_ = p.initViews(ctx)
 	return nil
@@ -150,6 +156,8 @@ func (p *DB) SaveRunSnapshot(ctx context.Context, snap *stockpicker.PITRunSnapsh
 	if snap == nil {
 		return fmt.Errorf("nil snapshot")
 	}
+
+	canonIndex := NormalizeIndexName(snap.IndexName)
 
 	tx, err := p.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -166,7 +174,7 @@ INSERT OR REPLACE INTO pit_runs (
 `
 	_, err = tx.ExecContext(ctx, runQuery,
 		snap.AsOfDate,
-		snap.IndexName,
+		canonIndex,
 		snap.Method,
 		snap.RegimeMultiplier,
 		snap.TotalConstituents,
@@ -198,7 +206,7 @@ INSERT OR REPLACE INTO pit_candidate_scores (
 	for _, c := range snap.Candidates {
 		_, err := stmt.ExecContext(ctx,
 			snap.AsOfDate,
-			snap.IndexName,
+			canonIndex,
 			snap.Method,
 			c.Ticker,
 			c.Sector,
@@ -228,12 +236,13 @@ INSERT OR REPLACE INTO pit_candidate_scores (
 	}
 
 	// Synchronize shadow divergence results in background
-	_ = p.SyncShadowResults(ctx, snap.AsOfDate, snap.IndexName, snap.Method)
+	_ = p.SyncShadowResults(ctx, snap.AsOfDate, canonIndex, snap.Method)
 	return nil
 }
 
 // SyncShadowResults computes and synchronizes Stage-1 shadow divergence for a given date, index, and method.
 func (p *DB) SyncShadowResults(ctx context.Context, asOfDate, indexName, method string) error {
+	indexName = NormalizeIndexName(indexName)
 	syncQuery := `
 INSERT OR REPLACE INTO stage1_shadow_results (
     as_of_date, index_name, method, ticker, sector,
@@ -664,6 +673,28 @@ SELECT
     count(CASE WHEN rejection_reason LIKE '%Unverified%' OR rejection_reason LIKE '%fetch%' THEN 1 END)::INT AS unverified_count
 FROM pit_candidate_scores
 GROUP BY as_of_date, index_name, method;
+
+CREATE OR REPLACE VIEW v_strategy_consensus AS
+SELECT 
+    m.as_of_date,
+    m.ticker,
+    m.sector,
+    m.effective_score AS mb_score,
+    e.effective_score AS earlymb_score,
+    (COALESCE(m.effective_score, 0) + COALESCE(e.effective_score, 0)) AS consensus_score,
+    m.passed_stage1 AS mb_passed_stage1,
+    e.passed_stage1 AS earlymb_passed_stage1,
+    e.vcp_ratio,
+    e.delivery_delta,
+    e.rvol_z_score
+FROM pit_candidate_scores m
+JOIN pit_candidate_scores e 
+  ON m.as_of_date = e.as_of_date 
+ AND m.ticker = e.ticker
+ AND m.index_name = e.index_name
+WHERE m.method = 'multibagger' 
+  AND e.method = 'earlymb'
+  AND m.index_name = 'niftytotalmarket';
 `
 	_, err := p.db.ExecContext(ctx, viewDDL)
 	return err

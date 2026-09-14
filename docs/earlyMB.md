@@ -34,7 +34,7 @@ graph TD
     E1["Pillar 1: Idiosyncratic Momentum - 25% - Composite RS in -30% to +70%"]
     E2["Pillar 2: Pure Volatility Contraction - 25% - VCP ATR Ratio in 0.25 to 0.75"]
     E3["Pillar 3: Volume Footprint - 25% - RVOL Z in 0 to 3.0 + PP Score in 0 to 12.0"]
-    E4["Pillar 4: Institutional Accumulation - 25% - Delivery Delta in -10% to +30%"]
+    E4["Pillar 4: Institutional Accumulation - 25% - Delivery Delta in -10% to +15%"]
     end
 
     B --> B1
@@ -147,9 +147,9 @@ $$\text{Pillar 3 Score} = \text{Score}_{\text{RVOL}} + \text{Score}_{\text{PP}} 
   - **Disjoint Baseline ($\overline{\text{Delivery}}_{20\text{D Baseline}}$)**: Arithmetic mean of the 20 trading sessions immediately prior to the recent window ($t-24 \dots t-5$).
   - **Orthogonality / Zero Self-Contamination**: Disjoint windowing guarantees that an institutional buying burst in the last 5 days does not artificially pull up the baseline against which it is evaluated.
   - **Data History Requirement**: Requires $\ge 25$ confirmed settled sessions (with T+1 PIT lag). If $< 25$ sessions exist, returns neutral delta ($0.0$).
-* **Reference Bounds**: $[-10\%, \, +30\%]$ delta vs baseline.
+* **Reference Bounds**: $[-10\%, \, +15\%]$ delta vs baseline (recalibrated from legacy $[-10\%, +30\%]$; see Section 20).
 * **Formula**:
-  $$\text{Pillar 4 Score} = 25.0 \times \text{Clamp}\left(\frac{\Delta\text{Delivery} - (-0.10)}{0.30 - (-0.10)}, \, 0.0, \, 1.0\right)$$
+  $$\text{Pillar 4 Score} = 25.0 \times \text{Clamp}\left(\frac{\Delta\text{Delivery} - (-0.10)}{0.15 - (-0.10)}, \, 0.0, \, 1.0\right)$$
 
 ---
 
@@ -699,10 +699,13 @@ All production paths that previously used `(f.DeliveryPct / 100.0) - 0.35` now c
 
 The Pillar 4 disjoint delivery delta fix was deployed and validated in production on **September 11, 2026** against the full `niftytotalmarket` run. All validation criteria passed:
 
-#### Check 1: `pillar4_uncalibrated` flag correctness — [PASSED]
-- Verified via DuckDB (`pit_candidate_scores` and `pit_runs`):
+#### Check 1: `pillar4_uncalibrated` flag correctness & Full Historical Backfill — [PASSED & COMPLETED]
+- Initial state on Sep 11:
   - New rows (`2026-09-11`): `pillar4_uncalibrated = false`.
-  - Historical rows (Aug 28 through `2026-09-10`): `pillar4_uncalibrated = true`.
+  - Historical rows (Aug 26 through `2026-09-10`): tagged `pillar4_uncalibrated = true`.
+- **Subsequent Full Historical Backfill (Sep 14, 2026)**:
+  - Recalculated calibrated disjoint delivery deltas across all historical dates (`2026-08-26` through `2026-09-10`) with bounds `[-0.10, +0.15]`.
+  - **Current State**: `pillar4_uncalibrated = false` across **100% of all dates and candidate scores in `data/mycase.db`**. The entire database history is now fully calibrated without legacy subsidy artifacts (see Section 27).
 
 #### Check 2: Swing magnitude reduction on known-volatile tickers — [PASSED]
 - Day-to-day delivery swings on volatile tickers (`VMART`, `APARINDS`, `RUBICON`) dropped from wild single-day 30+ pp swings to smooth variations within expected bounds ($< 10$ pp).
@@ -1120,15 +1123,17 @@ Tracking institutional footprints blocked by Stage-1 gates, persistence across r
 
   --- Graduated Stocks Performance (Radar Alpha Audit: First-Seen Date -> Clear Date) ---
   Quantifying pre-breakout radar predictive value and opportunity cost of waiting for Stage-1 clearance:
-  Ticker          | Sector          | Channel          | First Seen | Clear Date | Days |   Entry (₹) |   Clear (₹) | Radar Return
-  --------------------------------------------------------------------------------------------------------------------------------
-  NSE:MANORAMA    | Cons Defensive  | base_duration    | 2026-08-28 | 2026-09-11 |   6d |   ₹1,889.40 |   ₹2,055.70 |       +8.80%
-  NSE:ASAHIINDIA  | Cons Cyclical   | base_duration    | 2026-08-28 | 2026-09-11 |  10d |     ₹952.70 |     ₹985.80 |       +3.47%
-  NSE:KRBL        | Cons Defensive  | base_duration    | 2026-08-31 | 2026-09-11 |   4d |     ₹422.25 |     ₹421.05 |       -0.28%
-  NSE:QPOWER      | Industrials     | base_duration    | 2026-08-31 | 2026-09-11 |   9d |   ₹1,435.80 |   ₹1,426.50 |       -0.65%
-  NSE:AVALON      | Technology      | base_duration    | 2026-09-08 | 2026-09-11 |   2d |   ₹2,290.30 |   ₹2,264.50 |       -1.13%
-  Rolling Win Rate: 2/5 (40.0%) | Average Radar Return: +2.04% (Alpha left on table by waiting for formal Stage-1 pass)
-  Channel Breakdown: base_duration: 2/5 (40.0%, avg +2.04%)
+  Ticker          | Sector          | Channel             | First Seen | Clear Date | Incub (Hits) |   Entry (₹) |   Clear (₹) | Radar Return
+  -----------------------------------------------------------------------------------------------------------------------------------
+  NSE:BLACKBUCK   | Technology      | natural_clear       | 2026-08-28 | 2026-09-11 | 14d (5x)     |     ₹588.15 |     ₹628.15 |       +6.80%
+  NSE:ABDL        | Cons Defensive  | base_duration       | 2026-09-09 | 2026-09-11 | 2d (2x)      |     ₹604.15 |     ₹632.50 |       +4.69%
+  NSE:CONCORDBIO  | Healthcare      | base_duration       | 2026-09-10 | 2026-09-11 | 1d (1x)      |   ₹1,452.80 |   ₹1,505.70 |       +3.64%
+  NSE:NAM-INDIA   | Financial Serv  | promoter_exempt     | 2026-09-01 | 2026-09-11 | 10d (5x)     |   ₹1,178.90 |   ₹1,189.60 |       +0.91%
+  NSE:AGARWALEYE  | Healthcare      | delivery_override   | 2026-08-28 | 2026-09-11 | 14d (1x)     |     ₹507.80 |     ₹508.40 |       +0.12%
+  NSE:SUDEEPPHRM  | Healthcare      | base_duration       | 2026-08-31 | 2026-09-11 | 11d (3x)     |   ₹1,209.70 |   ₹1,202.80 |       -0.57%
+  NSE:INDIANB     | Financial Serv  | delivery_override   | 2026-09-03 | 2026-09-11 | 8d (1x)      |     ₹888.75 |     ₹853.50 |       -3.97%
+  Rolling Win Rate: 5/7 (71.4%) | Average Radar Return: +1.66% (Alpha left on table by waiting for formal Stage-1 pass)
+  Channel Breakdown: natural_clear: 1/1 (100.0%, avg +6.80%) | base_duration: 2/3 (66.7%, avg +2.59%) | promoter_exempt: 1/1 (100.0%, avg +0.91%) | delivery_override: 1/2 (50.0%, avg -1.92%)
 ```
 
 ---
@@ -1136,23 +1141,30 @@ Tracking institutional footprints blocked by Stage-1 gates, persistence across r
 ### 23. Section 10: Daily Top Price Gainers (Universe Cross-Section)
 
 #### 1. Quantitative Purpose
-Surfaces actual single-session percentage gainers across the index universe ($T-1 \to T$), cross-referencing price momentum against institutional delivery confirmation and Stage-1 qualification.
-- **Real Accumulation Flag (`Real Accum? YES / NO`)**: Separates authentic accumulation ($\Delta\text{Deliv} \ge +6.0\%$) from speculative retail gap-ups with negative delivery.
-- **Dual Radar Tagging (`DUAL HIT`)**: Automatically flags high-conviction candidates present in both Section 9 (accumulating near-miss) and Section 10 (top daily price gainer).
+Surfaces actual single-session percentage gainers across the index universe ($T-1 \to T$), cross-referencing price momentum against institutional delivery confirmation, Stage-1 qualification, and radar status.
+- **Real Accumulation Flag (`Accum: YES / NO`)**: Identifies authentic accumulation ($\Delta\text{Deliv} \ge +6.0\%$) from speculative retail gap-ups with negative delivery.
+- **Dynamic Price Change Column**: Automatically evaluates session time-span, printing `1D Gain` for consecutive trading sessions and `% Price Chg` for multi-day or holiday intervals.
+- **Graduated Radar Tagging (`GRADUATED` / `ACTIVE RADAR` / `DUAL HIT`)**: Automatically flags high-conviction candidates linked from Section 9 (e.g. `NSE:BLACKBUCK` showing `GRADUATED`).
 
 #### 2. Output Snapshot (`mycase pit stats --analysis`)
 
 ```text
 --- 10. DAILY TOP PRICE GAINERS (2026-09-10 -> 2026-09-11 | niftytotalmarket) ---
 Cross-sectional price gainers across the index universe, delivery volume confirmation, and EBM qualification:
-  Ticker          |    Prev (₹) |   Close (₹) | 1D Gain  | Deliv Δ | Accum | Comp RS | Gate Type    | Stage-1 Bottleneck           | Radar    
-  -----------------------------------------------------------------------------------------------------------------------------------
-  NSE:AWFIS       |     ₹249.60 |     ₹293.20 |  +17.47% |   -7.8% | NO    |   -9.9% | [Structural] | Below 200-SMA (0.86 < 0.95)  | -        
-  NSE:PINELABS    |     ₹173.17 |     ₹202.17 |  +16.75% |   -5.9% | NO    |  +15.6% | [Fixable]    | Low ROCE (< 12.0%)           | -        
-  NSE:BBOX        |     ₹744.85 |     ₹800.80 |   +7.51% |   -8.8% | NO    |  +18.1% | [Structural] | Far from 52W High (74.3%)    | -        
-  NSE:PWL         |     ₹126.73 |     ₹136.10 |   +7.39% |   +0.0% | NO    |  +12.2% | [Fixable]    | Low ROCE (< 12.0%)           | -        
-  NSE:BLACKBUCK   |     ₹585.90 |     ₹628.15 |   +7.21% |   +5.8% | NO    |  +10.3% | [Fixable]    | Low ROCE (< 12.0%)           | -        
-  NSE:DIACABS     |     ₹351.50 |     ₹369.05 |   +4.99% |  +13.4% | YES   |  +69.8% | [Fixable]    | Low ROCE (< 12.0%)           | DUAL HIT 
+  Ticker          |    Prev (₹) |   Close (₹) | 1D Gain     | Deliv Δ | Accum | Comp RS | Gate Type    | Stage-1 Bottleneck           | Radar       
+  --------------------------------------------------------------------------------------------------------------------------------------
+  NSE:AWFIS       |     ₹249.60 |     ₹293.20 |     +17.47% |   -7.8% | NO    |   -8.4% | [Structural] | Below 200-SMA (0.86 < 0.95)  | -           
+  NSE:PINELABS    |     ₹173.17 |     ₹202.17 |     +16.75% |   -5.7% | NO    |  +17.3% | [Fixable]    | Low ROCE (< 12.0%)           | -           
+  NSE:BBOX        |     ₹744.85 |     ₹800.80 |      +7.51% |   -8.8% | NO    |  +17.4% | [Structural] | Far from 52W High (74.3%)    | -           
+  NSE:PWL         |     ₹126.73 |     ₹136.10 |      +7.39% |   +0.2% | NO    |  +13.9% | [Fixable]    | Low ROCE (< 12.0%)           | -           
+  NSE:BLACKBUCK   |     ₹585.90 |     ₹628.15 |      +7.21% |   +5.8% | NO    |  +11.8% | [CLEARED]    | Stage-1 Qualified            | GRADUATED   
+  NSE:AIIL        |     ₹512.30 |     ₹544.35 |      +6.26% |   -7.2% | NO    |   -3.7% | [Structural] | Financial Services weak r... | -           
+  NSE:CCAVENUE    |      ₹15.36 |      ₹16.29 |      +6.05% |   -9.6% | NO    |  +10.3% | [Fixable]    | Low ROCE (< 12.0%)           | -           
+  NSE:PTCIL       |  ₹22,385.00 |  ₹23,630.00 |      +5.56% |   -0.5% | NO    |  +42.1% | [Structural] | Cash Flow Quality check f... | -           
+  NSE:TDPOWERSYS  |     ₹762.75 |     ₹804.90 |      +5.53% |   -0.5% | NO    |  +76.9% | [Structural] | DSO Deterioration (+16.3%)   | -           
+  NSE:YESBANK     |      ₹22.30 |      ₹23.48 |      +5.29% |   -3.1% | NO    |   +8.1% | [Structural] | Low Financial ROE (< 12%)    | -           
+  NSE:STLTECH     |     ₹854.75 |     ₹897.40 |      +4.99% |   +0.0% | NO    | +223.0% | [Structural] | Low Interest Coverage (ra... | -           
+  NSE:DIACABS     |     ₹351.50 |     ₹369.05 |      +4.99% |   +6.6% | YES   |  +67.9% | [Structural] | Cash Flow Quality check f... | -           
   ... [15 daily gainers tracked; full list via CLI]
 ```
 
@@ -1361,5 +1373,139 @@ Following the complete database purge of stale fundamentals, caches, and deliver
    • Post-Audit: pass=false | channel=blocked           | deliv_delta=0.0662 | cause=Cash Flow Quality check failed
    ```
 4. **Clean Survivor Pool**: The Stage-1 survivor pool reflects 100% verified fundamental and technical criteria, with Base Duration graduated scoring properly discounting fresh setups while allowing mature compounders to lead the portfolio allocation.
+
+---
+
+## 27. System-Wide Quantitative Hardening, Historical Recalibration Backfill & Bug Fixes (Sep 14, 2026)
+
+Following live production execution, data reconciliation, and audit of the Stage-1 elimination funnel and Point-in-Time analytics, seven high-priority systemic issues were resolved and validated across Go and Python codebases (formally tracked in [`docs/Bugs_EMB.md`](file:///Users/raghavgarg/Projects/myGo/mycase/docs/Bugs_EMB.md)). In addition, the Point-in-Time history was fully restored and 100% recalibrated.
+
+### 1. Full Historical Recalibration Backfill & Sep 10 Snapshot Restoration
+1. **Restoration of Sep 10 Snapshot**:
+   - The missing historical run for `2026-09-10` was restored directly from `data/pit_snapshots/niftytotalmarket_earlymb_2026-09-10.json` into `data/mycase.db`.
+   - All 750 candidate scores and run metadata were fully ingested, ensuring unbroken chronological continuity.
+2. **Backfill of Disjoint Delivery Deltas Across Entire History**:
+   - Recalculated calibrated disjoint delivery deltas ($\overline{\text{Deliv}}_{5\text{D}} - \overline{\text{Deliv}}_{20\text{D Baseline}}$) with canonical bounds `[-0.10, +0.15]` across all runs in `data/mycase.db` from `2026-08-26` through `2026-09-10`.
+   - Updated raw scores, effective scores, and regime scalings consistently across 19 runs (9 `earlymb` runs, 10 `multibagger` runs).
+   - **Result**: `pillar4_uncalibrated = false` across **100% of all dates and runs in `mycase.db`**. The database is now mathematically unified without legacy subsidy discontinuities.
+
+---
+
+### 2. Resolution of Bugs 001 through 007 (`docs/Bugs_EMB.md`)
+
+#### Bug-001: Score Shift Partitioning & Methodology Discontinuity Guard (Section 5)
+- **Problem**: Threshold `|diff| >= 4.0` without partitioning dumped dozens of rows to the console. Furthermore, comparing uncalibrated with calibrated runs falsely presented methodology upgrades as technical breakdowns.
+- **Fix**:
+  - Partitioned Section 5 into **Top 10 Positive Gainers** (ordered by `diff DESC`) and **Top 10 Negative Decliners** (ordered by `diff ASC`).
+  - Added universe summary metrics: `Total Shifts (|Δ| >= 4.0 pts): X candidates (Y gainers, Z decliners)`.
+  - Added an automated **Calibration Discontinuity Warning Banner** if consecutive runs span uncalibrated-to-calibrated dates.
+
+#### Bug-002: Stale Delivery Thresholds Recalibrated (Sections 7 & 8)
+- **Problem**: Hardcoded legacy delivery thresholds (`deliv > 0.20` and `deliv > 0.30`) remained in Section 7 and Section 8 after the canonical bounds shifted from `[-10%, +30%]` to `[-10%, +15%]`. High-conviction setups like `NSE:IPCALAB` (+10.0% Deliv Δ) and `NSE:AGARWALEYE` (+9.2%) failed to receive institutional accumulation tags.
+- **Fix**:
+  - Lowered Section 7 threshold to `deliv >= 0.06` (+6.0%) for `"Tight VCP Coil + Heavy Deliv"` and `deliv >= 0.08` (+8.0%) for `"Stealth Institutional Accum"`.
+  - Lowered Section 8 threshold to `deliv >= 0.08` (+8.0%) for `"Stealth Institutional Absorption"`.
+  - `IPCALAB` and `AGARWALEYE` are now properly recognized and classified.
+
+#### Bug-003: Comprehensive Elimination Bottleneck Taxonomy (Section 1)
+- **Problem**: 205 out of 616 eliminated stocks (33.3% blindspot) fell into a generic `"Other Hard Filter"` catch-all because SQL `rejectionQuery` lacked `CASE` branches for newer fundamental filters.
+- **Fix**:
+  - Added explicit SQL branches for:
+    - `Weak Cash Conversion (CFO < PAT)` (captures 173 stocks)
+    - `Financial Services Gated (ROE/RS)` (captures 32 stocks)
+    - `High Promoter Pledging (> 20%)`
+    - `Operating Margin Deterioration`
+  - **Result**: Reduced `Other Hard Filter` from **205 stocks (33.3%) to exactly 0 stocks (0.0%)**, achieving 100% transparent attribution.
+
+#### Bug-004: Graduated Radar Linking (Section 10)
+- **Problem**: Section 10's price gainers table evaluated radar status strictly on whether `passed_stage1 = false`. Stocks that were on the near-miss radar and graduated today (clearing Stage 1) printed `-` under the `Radar` column.
+- **Fix**:
+  - Collected graduated tickers from Section 9's radar audit and linked them into Section 10.
+  - Graduated stocks (e.g. `NSE:BLACKBUCK`) now display `"GRADUATED"` under the `Radar` column.
+
+#### Bug-005: Multi-Run Accumulation Velocity Precedence & Noise Inversion (Section 8)
+- **Problem**: Float precision noise between unrounded scores (`32.61 > 32.58` = +0.03 pt) triggered `"3-Session Consecutive Surge"` over single-session explosive breakouts (`sT0 >= sT1 + 5.0`).
+- **Fix**:
+  - Prioritized `"Velocity Breakout (+5pt Δ)"` when `sT0 >= sT1 + 5.0`.
+  - Enforced a minimum increment for consecutive surges (`sT0 > sT1 + 0.5 && sT1 > sT2 + 0.5`).
+
+#### Bug-006: Dynamic Price Change Column Header (Section 10)
+- **Problem**: Column header was hardcoded as `"1D Gain"` even when runs spanned multi-day intervals or holidays (e.g. 2026-09-09 to 2026-09-11).
+- **Fix**:
+  - Evaluated trading calendar day distance between runs.
+  - Prints `"1D Gain"` for consecutive trading days, and `"% Price Chg"` for multi-day gaps.
+
+#### Bug-007: Radar Graduation `Days` Ambiguity & Legacy Uncalibrated Run Leak (Section 9)
+- **Problem**:
+  - In Section 9, `Days` showed `1d` for intervals like `First Seen: 2026-08-28 | Clear Date: 2026-09-11` (a 14-calendar-day span) because the query selected `COUNT(DISTINCT as_of_date) AS days_on_radar`.
+  - Uncalibrated August 28 data leaked phantom entries (`JAMNAAUTO`, `MANORAMA`) into the radar due to the old legacy subsidy formula.
+- **Fix**:
+  - Computed `elapsed_days = CAST((curr.as_of_date - pr.first_seen_date) AS INT)`.
+  - Formatted the column as `Incub (Hits)` (`%dd (%dx)`), e.g. `14d (5x)` or `10d (5x)`.
+  - Added filter `AND (pillar4_uncalibrated = false OR pillar4_uncalibrated IS NULL)`.
+  - Backfilled calibrated scores for August 26–28, completely purging legacy subsidy phantom records.
+
+---
+
+### 3. NSE Exchange Holiday Calendar Integration in Daily Sync
+- **The Issue**: LaunchAgent runs (`com.mycase.daily_sync.plist`) scheduled for 21:00 IST ran on NSE trading holidays, triggering API calls when exchanges were closed.
+- **The Solution**:
+  - Integrated NSE holiday calendar checking into `scripts/fetch_nse_data.py` and daily sync routines.
+  - Automatically verifies exchange trading calendar before initiating data pulls, preventing redundant scraping and empty cache writes on market holidays.
+
+---
+
+### 4. Strategy Stratification, Nifty Total Market Consolidation & Consensus Radar (September 14, 2026)
+
+#### A. Production vs. Testing Stratification
+To maintain strict operational discipline, the dual strategies are stratified into distinct operational domains on the shared **`niftytotalmarket`** master universe (750 stocks):
+* **Live Production Engine (`multibagger`)**: Authoritative live strategy driving active theme capital (`data/microsmall.csv`) and executable broker orders (`mycase basket`).
+* **Quant Research & Incubator Radar (`earlymb`)**: Testing engine detecting pre-breakout institutional accumulation and volatility contraction 1–3 weeks before stage-2 markups. It generates research signals and radar watchlists without placing live broker orders.
+
+#### B. Master Universe Consolidation & Sub-Index Dynamic Slicing
+* **Pure Master Base**: All Indian equity research is stored under `index_name = 'niftytotalmarket'` in `pit_runs` and `pit_candidate_scores`.
+* **Database Cleanup**: Purged 2,446 redundant sub-index physical records (`small250`, `smallcap250`, `microcap250`, `microsmall`, `microcap250_smallcap250`) from `data/mycase.db`.
+* **Relational Projections**: Dynamic SQL views `v_pit_candidate_scores` and `v_pit_runs` project any sub-index (e.g. SmallCap 250, MicroCap 250) on-the-fly via `index_constituents` table with zero physical duplication.
+* **Canonical Ingestion**: `SaveRunSnapshot` normalizes all incoming index names via `NormalizeIndexName()`, preventing future alias fragmentation.
+
+#### C. Cross-Strategy Consensus View & CLI Command
+The dynamic view `v_strategy_consensus` joins `multibagger` and `earlymb` factor scores on `(as_of_date, ticker)`:
+$$\text{Consensus Score} = \text{Multibagger Effective Score} + \text{EarlyMB Effective Score}$$
+
+##### CLI Execution:
+```bash
+# Display top 15 consensus leaders for the latest common date
+mycase pit consensus
+
+# Custom lookback and candidate depth
+mycase pit consensus --date 2026-09-11 --top 20
+```
+
+##### Sample Output:
+```
+====================================================================
+  TOP DUAL-CONVICTION LEADERS (2026-09-11) — NIFTY TOTAL MARKET   
+====================================================================
+Live Prod Strategy : multibagger (Capital Compounder)
+Testing Radar      : earlymb (Pre-Breakout Momentum)
+Universe           : niftytotalmarket (750 Stocks)
+As-Of Date         : 2026-09-11
+------------------------------------------------------------------------------------------------------------
+Rank  Ticker           Sector              Consensus  MB Score   EarlyMB    VCP   Deliv Δ  Stage-1       Portfolio
+----  ------           ------              ---------  --------   -------    ---   -------  -------       ---------
+1     NSE:MCX          Financial Serv          64.86     57.03      7.84   0.95     -1.6%  PASS / PASS   ACTIVE (6.1%)
+2     NSE:TMCV         Cons Cyclical           63.54     56.63      6.91   1.05     +3.6%  PASS / PASS   ACTIVE (5.9%)
+3     NSE:NETWEB       Technology              59.67     50.90      8.78   0.79     +6.9%  PASS / PASS   ACTIVE (5.4%)
+4     NSE:MANORAMA     Cons Defensive          57.65     48.39      9.26   1.18     +3.3%  PASS / PASS   ACTIVE (5.2%)
+5     NSE:CHENNPETRO   Energy                  56.66     52.07      4.59   1.00     -6.5%  PASS / PASS   ACTIVE (5.6%)
+6     NSE:NAVINFLUOR   Basic Materials         55.41     47.69      7.72   0.74     -0.1%  PASS / PASS   ACTIVE (5.1%)
+7     NSE:VARROC       Cons Cyclical           55.18     46.95      8.23   1.49     -0.3%  PASS / PASS   ACTIVE (5.1%)
+8     NSE:LAURUSLABS   Healthcare              51.47     45.40      6.07   1.01    -11.9%  PASS / PASS   ACTIVE (4.9%)
+9     NSE:LUMAXTECH    Cons Cyclical           50.21     41.73      8.48   1.05     +3.2%  PASS / PASS   ACTIVE (4.6%)
+10    NSE:SMLMAH       Cons Cyclical           50.07     45.25      4.82   1.42     -0.3%  PASS / PASS   ACTIVE (4.9%)
+============================================================================================================
+```
+
+
 
 

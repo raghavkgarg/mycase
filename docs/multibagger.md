@@ -709,4 +709,44 @@ During the portfolio rebalancing audit of September 12–13, 2026, running `myca
   - **`NSE:AVALON`**: Heavy EMS capex expansion (-₹40.7 Cr in FY23, -₹18.2 Cr in FY24, -₹21.1 Cr in FY25, +₹3.5 Cr in FY26). Latest CROIC is 0.46% and 3-year average CROIC is -1.83%.
 * **Architectural Invariant**: Both stocks legitimately fail the CROIC gate. The system correctly distinguishes between established cash compounders in temporary capex cycles (`VARROC`) and businesses whose cash generation has not yet matured (`DATAPATTNS`, `AVALON`).
 
+---
+
+### 6. Universe Migration to Nifty Total Market & Cross-Strategy Consensus (September 14, 2026)
+
+#### A. Master Universe Migration in `config/pipeline.yaml`
+On September 14, 2026, the candidate universe for Theme Microsmall (`data/microsmall.csv`) was transitioned from dual sub-indices (`microcap250` + `small250`) to the unified **`niftytotalmarket`** master universe (750 stocks):
+```yaml
+indices:
+  - niftytotalmarket
+golden_copy_path:
+  - data/microsmall.csv
+strategy:
+  - multibagger
+top_n:
+  - 20
+```
+
+#### B. Theme Lifecycle & Unbroken Version Audit
+* **Lifecycle Continuity**: In `data/mycase.db`, the rebalance was successfully committed as **`v26`** (56.47% turnover), preserving the complete 25-version historical audit trail from July 18, 2026 to September 14, 2026.
+* **Constituent Transition**:
+  - **7 Exits** (registered at `0.0000` weight for cooldown tracking): `AVALON`, `CCL`, `CUPID`, `GOKULAGRO`, `JAMNAAUTO`, `MSTCLTD`, `TENNIND`.
+  - **7 Entrants**: `MCX` (6.07%), `TMCV` (5.91%), `LAURUSLABS` (4.92%), `ICICIAMC` (4.77%), `LUMAXTECH` (4.56%), `OFSS` (4.51%), `ARVIND` (4.43%).
+  - **13 Retained Compounders**: `CHENNPETRO`, `NETWEB`, `HINDCOPPER`, `SARDAEN`, `MANORAMA`, `NAVINFLUOR`, `VARROC`, `LTFOODS`, `SMLMAH`, `THYROCARE`, `ENGINERSIN`, `SUMICHEM`, `CASTROLIND`.
+  - **Total Active Weight**: Exactly **1.0000 (100.00%)**.
+
+#### C. Strategy Stratification
+* **`multibagger` (Live Production Engine)**: Operates with full execution authority. Drives real capital, active portfolio weightings, and feeds executable broker orders (`mycase basket`).
+* **`earlymb` (Quant Research / Testing Radar)**: Operates as an empirical incubator and signal detector (VCP, Delivery Delta, institutional accumulation) without placing live orders.
+
+#### D. Database Cleanliness & Consensus Command
+* **Physical Database Pure Base**: Purged 2,446 redundant sub-index physical records (`small250`, `smallcap250`, `microcap250`, `microsmall`) from `data/mycase.db`. All Indian equity point-in-time scores are anchored solely on `niftytotalmarket`.
+* **Dynamic Slicing**: Views `v_pit_candidate_scores` and `v_pit_runs` project any sub-index on demand via `index_constituents`.
+* **Consensus Command**:
+  ```bash
+  # View top dual-conviction leaders combining Multibagger and EarlyMB
+  mycase pit consensus [--top 15] [--date YYYY-MM-DD]
+  ```
+  Surfaces institutional compounders supported by both fundamental cash generation and pre-breakout volume accumulation (e.g., `MCX`, `TMCV`, `NETWEB`, `MANORAMA`), while displaying active portfolio holding tags and Stage-1 dual pass statuses.
+
+
 
