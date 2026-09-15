@@ -17,7 +17,7 @@ import (
 
 // LoadStrategyConfig loads the weights, filters, and governance from external configurations.
 func LoadStrategyConfig(method string) (*StrategyConfig, error) {
-	mfsCfg, err := config.LoadMFSConfig("config/mfs.json", method)
+	mfsCfg, err := config.LoadMFSConfig(config.Path("mfs.json"), method)
 	var loadErr error
 	if err != nil {
 		loadErr = fmt.Errorf("failed to load config/mfs.json: %w", err)
@@ -42,12 +42,12 @@ func LoadStrategyConfig(method string) (*StrategyConfig, error) {
 		InsidersPercent:  mfsCfg.InsidersPercent,
 	}
 
-	hardFilters, err := config.LoadHardFilters("config/mfs.json", method)
+	hardFilters, err := config.LoadHardFilters(config.Path("mfs.json"), method)
 	if err != nil && loadErr == nil {
 		loadErr = fmt.Errorf("failed to load hard filters from mfs.json: %w", err)
 	}
 
-	govMap, govErr := config.LoadGovernance("config/governance.json")
+	govMap, govErr := config.LoadGovernance(config.Path("governance.json"))
 	if govErr != nil {
 		slog.Warn("config.governance_load_failed", "err", govErr, "fallback", "0pct_pledging")
 		govMap = make(map[string]float64)

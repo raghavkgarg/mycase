@@ -65,7 +65,7 @@ Two concrete techniques, both now in the tree:
 
 ### Network IO: rate limits as a budget, cache-first, save-raw-for-debug
 
-- **Rate limit is a ceiling, not a target.** `pkg/broker/schwab/client.go` enforces a client-side sliding window (`rateLimitPerMinute = 120`): `doRequest` calls `waitForRateLimit(ctx)`, which prunes entries older than a minute, proceeds if `< 120`, else sleeps until the oldest expires (respecting `ctx.Done()`); `recordRequest` timestamps each send. 401s trigger a single token refresh + retry.
+- **Rate limit is a ceiling, not a target.** `pkg/broker/schwab/client.go` enforces a client-side `golang.org/x/time/rate` token bucket (`rateLimitPerMinute = 120` → `rate.Limit(2)`/sec, burst 120): `executeRequest` calls `limiter.Wait(ctx)` before every send (including the post-401 retry), returning the context error on cancellation. 401s trigger a single token refresh + retry. All three external clients (edgar, schwab, yfinance) now pace through `x/time/rate`.
 - **Cache-first.** `pkg/cache/prices.go` `GetPrices` returns a miss unless `isFreshToday` (same IST calendar day); `GetPricesByDateRange` treats historical ranges (ending before today) as never-expiring. Fundamentals use a rolling 24h TTL (`isFreshFundamentals`, `pkg/cache/fundamentals.go`). Always check the cache before hitting the network.
 - **Save raw for debugging.** During development, save the full JSON response to `data/debug/schwab_response_YYYYMMDD.json` and analyze offline rather than re-hitting the endpoint from different angles. This is a documented discipline (`.kiro/steering/api-rules.md`), not a code path.
 

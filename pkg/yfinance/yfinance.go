@@ -235,7 +235,13 @@ func FetchFundamentals(ctx context.Context, tickers []string) (map[string]Fundam
 				tsReq, tsErr := http.NewRequestWithContext(ctx, "GET", tsURL, nil)
 				if tsErr == nil {
 					tsReq.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36")
-					tsResp, tsRespErr := client.Do(tsReq)
+					// This call bypasses executeYFinanceRequest, so gate it on the
+					// rate limiter directly to keep aggregate Yahoo pacing correct.
+					tsRespErr := waitRate(ctx)
+					var tsResp *http.Response
+					if tsRespErr == nil {
+						tsResp, tsRespErr = client.Do(tsReq)
+					}
 					if tsRespErr == nil {
 						if tsResp.StatusCode == http.StatusOK {
 							var tsRes TimeseriesResponse

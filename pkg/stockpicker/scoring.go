@@ -1138,11 +1138,8 @@ func ApplyHysteresisSelectionSmart(
 
 	// Phase 3: Fill available slots from eligible existing holdings in the buffer zone
 	// that have not been displaced by score-dominant candidates.
-	numEligibleBufferToRetain := len(eligibleBufferHoldings) - displacedCount
-	if numEligibleBufferToRetain < 0 {
-		numEligibleBufferToRetain = 0
-	}
-	for i := 0; i < numEligibleBufferToRetain; i++ {
+	numEligibleBufferToRetain := max(len(eligibleBufferHoldings)-displacedCount, 0)
+	for i := range numEligibleBufferToRetain {
 		if len(selected) >= topN {
 			break
 		}

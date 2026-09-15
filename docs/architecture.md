@@ -675,7 +675,7 @@ Schwab's Trader API (`pkg/broker/schwab`) uses OAuth2 `authorization_code` flow,
 
 - **Token lifetimes**: access token ~30 min (auto-refreshed before each call when within 60s of expiry), refresh token ~7 days (requires re-running `mycase auth --broker schwab`). Tokens live in `config/schwab_token.json` (gitignored); app credentials in `config/schwab.json` (gitignored).
 - **Dual-purpose API**: the same authenticated client serves both market data (`marketdata/v1/` — quotes, price history, fundamentals) and brokerage (`trader/v1/` — accounts, positions, orders, transactions). Accounts are addressed by hashed ID, not raw number.
-- **Rate limit**: 120 req/min ceiling, enforced client-side by a sliding window. Batch via `/quotes?symbols=A,B,C`; cache aggressively.
+- **Rate limit**: 120 req/min ceiling, enforced client-side by a `golang.org/x/time/rate` token bucket (2 tokens/s, burst 120) — `executeRequest` calls `limiter.Wait(ctx)` before every send. Batch via `/quotes?symbols=A,B,C`; cache aggressively.
 - **No GTT**: Schwab has no server-side Good-Till-Triggered order (a Zerodha/Kite innovation). `PlaceGTT` returns an error directing the caller to a GTC stop-limit via `PlaceOrder` instead. GTT is India-specific and stays in the Zerodha implementation only.
 - **T+1 settlement, no buckets**: US settles T+1 with no visible T1/T2 quantity split, so `Holding.T1Quantity`/`T2Quantity` stay 0 (Zerodha exposes both).
 - **Custom HTTP client**: there is no official Go SDK for Schwab (unlike `gokiteconnect/v4` for Zerodha), so `pkg/broker/schwab` is a hand-rolled `net/http` client. Broker factory (`cmd/broker.go`) selects Schwab or Zerodha from `config/defaults.json`; both satisfy the `broker.Broker` interface (D6), so commands are broker-agnostic.

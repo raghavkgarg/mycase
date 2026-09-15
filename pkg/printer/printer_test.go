@@ -207,4 +207,3 @@ func TestRenderHoldingsSnapshot_ReturnBannerPlacement(t *testing.T) {
 		t.Errorf("return banner was rendered BEFORE theme PnL summary (bannerIdx: %d, pnlIdx: %d)", bannerIdx, pnlIdx)
 	}
 }
-

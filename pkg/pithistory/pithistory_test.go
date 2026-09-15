@@ -473,4 +473,3 @@ func TestFormatConciseBottleneck(t *testing.T) {
 		}
 	}
 }
-

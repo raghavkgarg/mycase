@@ -7,6 +7,7 @@ import (
 	"log/slog"
 
 	"github.com/raghavkgarg/mycase/pkg/attribution"
+	"github.com/raghavkgarg/mycase/pkg/config"
 	"github.com/raghavkgarg/mycase/pkg/csvloader"
 )
 
@@ -64,7 +65,7 @@ func (s *Server) handlePerformance(w http.ResponseWriter, r *http.Request) {
 	}
 
 	name := r.PathValue("name")
-	weights, tickers, err := csvloader.LoadBasketCSV("data/" + name + ".csv")
+	weights, tickers, err := csvloader.LoadBasketCSV(config.DataPath(name + ".csv"))
 	if err != nil {
 		writeError(w, http.StatusNotFound, "portfolio not found: "+err.Error())
 		return
@@ -99,7 +100,7 @@ func (s *Server) handlePerformance(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	portfolioName := csvloader.GetUniverseName("data/" + name + ".csv")
+	portfolioName := csvloader.GetUniverseName(config.DataPath(name + ".csv"))
 	tracker := attribution.NewTracker(s.fetcher, slog.Default())
 	cfg := attribution.Config{
 		From:     from,

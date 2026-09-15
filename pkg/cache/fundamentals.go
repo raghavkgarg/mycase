@@ -5,7 +5,7 @@ import (
 	"database/sql"
 	"time"
 
-	"github.com/raghavkgarg/mycase/pkg/marketdata"
+	"github.com/raghavkgarg/mycase/pkg/marketcal"
 )
 
 // GetFundamentalsJSON returns the cached JSON blob for ticker if it was
@@ -31,7 +31,7 @@ func (c *Cache) GetFundamentalsJSONWithTime(ctx context.Context, ticker string) 
 		return nil, time.Time{}, false, err
 	}
 	fetchedAt := time.Unix(fetchedAtUnix, 0)
-	if !isFreshFundamentals(fetchedAt) {
+	if !isFreshFundamentals(ticker, fetchedAt) {
 		return nil, time.Time{}, false, nil
 	}
 	return []byte(rawJSON), fetchedAt, true, nil
@@ -53,8 +53,12 @@ func (c *Cache) StoreFundamentalsJSON(ctx context.Context, ticker string, data [
 	return err
 }
 
-func isFreshFundamentals(fetchedAt time.Time) bool {
-	if marketdata.IsFreshEOD(fetchedAt, time.Now()) {
+// isFreshFundamentals reports whether cached fundamentals fetched at fetchedAt
+// are still fresh: either they already include the ticker market's most recent
+// settled EOD (NYSE 16:00 ET for US, NSE 21:00 IST otherwise), or they were
+// fetched within the last 24 hours.
+func isFreshFundamentals(ticker string, fetchedAt time.Time) bool {
+	if marketcal.ClockForTicker(ticker).IsFreshEOD(fetchedAt, time.Now()) {
 		return true
 	}
 	return time.Since(fetchedAt) < 24*time.Hour

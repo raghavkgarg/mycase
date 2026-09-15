@@ -231,3 +231,91 @@ func TestRouterFetchIntradayNilSchwab(t *testing.T) {
 	}
 	var _ func(context.Context, string, string) (*yfinance.IntradayData, error) = router.FetchIntradayData
 }
+
+// fakeEDGAR is a test double for the fundamentalsSource capability.
+type fakeEDGAR struct {
+	out  map[string]yfinance.Fundamentals
+	err  error
+	seen []string
+}
+
+func (f *fakeEDGAR) FetchFundamentals(_ context.Context, tickers []string) (map[string]yfinance.Fundamentals, error) {
+	f.seen = tickers
+	return f.out, f.err
+}
+
+func schwabAAPLHandler(t *testing.T) http.Handler {
+	t.Helper()
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(schwab.InstrumentResponse{
+			Instruments: []schwab.Instrument{{
+				Symbol: "AAPL",
+				Fundamental: &schwab.Fundamental{
+					Symbol:               "AAPL",
+					MarketCap:            3_000_000,
+					ReturnOnEquity:       42.0,
+					FreeCashFlowPerShare: 6.0,
+					SharesOutstanding:    15_000_000_000,
+				},
+			}},
+		})
+	})
+}
+
+func TestRouterOverlayEDGAR_Enriches(t *testing.T) {
+	client := buildSchwabTestClient(t, schwabAAPLHandler(t))
+	fake := &fakeEDGAR{out: map[string]yfinance.Fundamentals{
+		"US:AAPL": {
+			OperatingCashflow: 111_000_000_000,
+			FreeCashflow:      99_000_000_000, // EDGAR authoritative — should win
+			AnnualRevenue:     []yfinance.AnnualMetric{{Date: "2023-09-30", Value: 383_000_000_000}},
+		},
+	}}
+	router := NewRouter(client).WithEDGAR(fake)
+
+	funds, err := router.FetchFundamentals(context.Background(), []string{"US:AAPL"})
+	if err != nil {
+		t.Fatalf("FetchFundamentals: %v", err)
+	}
+	f := funds["US:AAPL"]
+	// Schwab base preserved.
+	if f.ROE != 0.42 {
+		t.Errorf("ROE = %v, want 0.42 (schwab)", f.ROE)
+	}
+	// EDGAR overlay applied.
+	if f.OperatingCashflow != 111_000_000_000 {
+		t.Errorf("OperatingCashflow = %v, want EDGAR 111e9", f.OperatingCashflow)
+	}
+	if f.FreeCashflow != 99_000_000_000 {
+		t.Errorf("FreeCashflow = %v, want EDGAR 99e9 (authoritative)", f.FreeCashflow)
+	}
+	if len(f.AnnualRevenue) != 1 {
+		t.Errorf("AnnualRevenue = %+v, want 1 EDGAR entry", f.AnnualRevenue)
+	}
+	// EDGAR was queried with the US ticker.
+	if len(fake.seen) != 1 || fake.seen[0] != "US:AAPL" {
+		t.Errorf("EDGAR queried with %v, want [US:AAPL]", fake.seen)
+	}
+}
+
+func TestRouterOverlayEDGAR_FetchErrorKeepsSchwab(t *testing.T) {
+	client := buildSchwabTestClient(t, schwabAAPLHandler(t))
+	fake := &fakeEDGAR{err: context.DeadlineExceeded}
+	router := NewRouter(client).WithEDGAR(fake)
+
+	funds, err := router.FetchFundamentals(context.Background(), []string{"US:AAPL"})
+	if err != nil {
+		t.Fatalf("FetchFundamentals should not fail on EDGAR error: %v", err)
+	}
+	// Schwab-derived FCF (FCF/share 6 × 15e9 shares = 90e9) survives.
+	if funds["US:AAPL"].FreeCashflow != 6.0*15_000_000_000 {
+		t.Errorf("FreeCashflow = %v, want schwab-derived 90e9 (EDGAR errored)", funds["US:AAPL"].FreeCashflow)
+	}
+}
+
+func TestRouterWithEDGARNilSafe(t *testing.T) {
+	router := NewRouter(nil).WithEDGAR(nil)
+	if router.edgarSource != nil {
+		t.Error("WithEDGAR(nil) should leave edgarSource nil")
+	}
+}

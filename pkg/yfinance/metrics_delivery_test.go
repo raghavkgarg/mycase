@@ -18,7 +18,7 @@ func TestCalculateDeliveryDelta_ExactWorkedExample(t *testing.T) {
 	// Days 21..25 (recent):  45.0% delivery
 	var records []marketdata.DeliveryRecord
 
-	for i := 0; i < 20; i++ {
+	for i := range 20 {
 		dStr := fmt.Sprintf("2026-08-%02d", i+1)
 		records = append(records, marketdata.DeliveryRecord{
 			Date:        dStr,
@@ -238,4 +238,3 @@ func TestCalculateDeliveryDelta_StaleHistoryRejected(t *testing.T) {
 		t.Fatalf("expected ErrStaleDeliveryHistory, got %v", err)
 	}
 }
-

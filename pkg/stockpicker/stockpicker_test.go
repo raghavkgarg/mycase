@@ -1252,7 +1252,7 @@ func TestEarlyMultibaggerStrategyFilters(t *testing.T) {
 
 	// 3. Test Technology Sector ROCE relaxation (Requires institutional delivery confirmation)
 	var confirmedDelivery []marketdata.DeliveryRecord
-	for i := 0; i < 35; i++ {
+	for i := range 35 {
 		// baseline 20D: 40.0%
 		pct := 40.0
 		if i >= 30 {
@@ -1344,4 +1344,3 @@ func TestEarlyMultibaggerStrategyFilters(t *testing.T) {
 		t.Errorf("expected fresh breakout with short base duration to pass Stage-1 under graduated scoring rule, failed: %s", reasonBase)
 	}
 }
-

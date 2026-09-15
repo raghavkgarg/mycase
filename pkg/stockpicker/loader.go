@@ -296,9 +296,9 @@ func LoadConstituents(filePath, indexName string) (*TickersSource, error) {
 		}, nil
 	}
 
-	csvLinks, err := config.LoadCSVLinks("config/csvlinks.json")
+	csvLinks, err := config.LoadCSVLinks(config.Path("csvlinks.json"))
 	if err != nil {
-		return nil, fmt.Errorf("failed to load config/csvlinks.json: %w", err)
+		return nil, fmt.Errorf("failed to load %s: %w", config.Path("csvlinks.json"), err)
 	}
 
 	rawNames := strings.FieldsFunc(indexName, func(r rune) bool {

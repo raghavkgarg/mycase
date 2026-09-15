@@ -100,7 +100,7 @@ func runCalibrate(ctx context.Context, c *cli.Command) error {
 	}
 
 	// 5. Load Strategy Hard Filters
-	hardFilters, _ := config.LoadHardFilters("config/mfs.json", method)
+	hardFilters, _ := config.LoadHardFilters(config.Path("mfs.json"), method)
 
 	// 6. Run Calibration Engine
 	fmt.Printf("\nRunning Out-of-Sample Rolling Spearman IC Calibration...\n")

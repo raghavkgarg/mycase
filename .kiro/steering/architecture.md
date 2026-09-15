@@ -30,10 +30,11 @@ and the rule going forward:
 
 | Layer | Packages | Role |
 |-------|----------|------|
-| **L0 — leaves** | `alert`, `broker/types`, `cache`, `config`, `costs`, `csvloader`, `excel`, `logging`, `market`, `marketdata`, `render`, `selectiontracker`, `universe` | Zero internal imports. Pure types, config, generic stores, rendering primitives. |
-| **L1 — stores/impls** | `broker`, `kiteclient`, `tax`, `yfinance` | Thin layers over leaves. (`kiteclient` = Zerodha/Kite low-level client, India legacy.) |
+| **L-1 — pure algorithmic floor** | `marketcal` | Zero-import (stdlib only). Market-calendar / EOD-settlement time math. Sits below the L0 leaves so `marketdata`, `cache`, `selectiontracker` share one implementation instead of duplicating it. |
+| **L0 — leaves** | `alert`, `broker/types`, `cache`, `config`, `costs`, `csvloader`, `excel`, `logging`, `market`, `marketdata`, `render`, `selectiontracker`, `universe` | Pure types, config, generic stores, rendering primitives. Zero internal imports **except** the permitted downward import of `marketcal` (used by `cache`, `marketdata`, `selectiontracker`). |
+| **L1 — stores/impls** | `broker`, `edgar`, `kiteclient`, `portfolio`, `tax`, `themedb`, `yfinance` | Thin layers over leaves. (`kiteclient` = Zerodha/Kite low-level client, India legacy; `edgar` = SEC EDGAR fundamentals client, owns its CIK-map + facts tables; `themedb` = theme rebalance/history store.) |
 | **L2 — domains/data** | `backtest`, `broker/schwab`, `broker/zerodha`, `monitoring`, `optimizer` | Strategy math, broker clients, data providers. |
-| **L3 — higher domains** | `attribution`, `datafetcher`, `printer`, `stockpicker` | Compose L0–L2. |
+| **L3 — higher domains** | `attribution`, `datafetcher`, `printer`, `stockpicker`, `themereturn` | Compose L0–L2. (`themereturn` = India legacy theme-return matcher.) |
 | **L4 — orchestration/IO** | `daemon`, `executor`, `pithistory` | Long-running / order placement / PIT snapshot analytics (`pithistory` imports `stockpicker`). |
 | **L5 — top composition** | `autopilot` | Wires the pipeline. |
 | **L6 — server** | `server` | Embeds autopilot + most domains. |
@@ -41,11 +42,18 @@ and the rule going forward:
 `cmd/*` and `main.go` sit above all of `pkg/` (the composition root) and are not
 layer-checked.
 
-## Designated leaves (never acquire an internal import)
+## Designated leaves (never acquire ANY internal import)
 
-`marketdata`, `broker/types`, `cache`, `config`, `costs`, `render`, `market`,
-`logging`, `alert`. `devtools/checkdeps` fails hard if any of these imports another
-internal package.
+`marketcal`, `broker/types`, `config`, `costs`, `render`, `logging`, `alert`.
+`devtools/checkdeps` fails hard if any of these imports another internal package.
+
+`marketcal` is the pure algorithmic floor (L-1). The former hard leaves
+`marketdata`, `cache`, and `market` are no longer zero-import: they may import
+`marketcal` (and only `marketcal`) downward for EOD-settlement time math. They
+remain L0, so the strictly-downward layer check still forbids them from importing
+each other or anything else. This replaced the earlier pattern where the 21:00-IST
+settlement math was duplicated into `cache` and `selectiontracker` because those
+leaves could not import `marketdata`.
 
 ## Adding or moving a package
 

@@ -29,7 +29,7 @@ var PipelineCommand = &cli.Command{
 	Usage: "Run the automated selection → report → execution pipeline",
 	Flags: []cli.Flag{
 		&cli.BoolFlag{Name: "exec-only", Usage: "Start directly from execution steps (auth + basket)"},
-		&cli.StringFlag{Name: "config", Value: "config/pipeline.yaml", Usage: "Path to pipeline YAML configuration file"},
+		&cli.StringFlag{Name: "config", Value: config.Path("pipeline.yaml"), Usage: "Path to pipeline YAML configuration file"},
 		&cli.StringFlag{Name: "index", Aliases: []string{"i"}, Usage: "Index to pick stocks from (e.g. nifty50, smallcap250)"},
 		&cli.StringFlag{Name: "file", Aliases: []string{"f"}, Usage: "Path to custom CSV/XLSX file"},
 		&cli.StringFlag{Name: "strategy", Aliases: []string{"method", "m"}, Usage: "Scoring strategy (balanced, aggressive, conservative, multibagger, value)"},
@@ -120,7 +120,7 @@ func runPipeline(ctx context.Context, c *cli.Command) error {
 	reader := bufio.NewReader(os.Stdin)
 
 	// Clean up stale cache files from previous days
-	if files, err := filepath.Glob("data/.cache/*"); err == nil {
+	if files, err := filepath.Glob(config.DataPath(".cache", "*")); err == nil {
 		today := time.Now().Format("2006-01-02")
 		for _, f := range files {
 			if !strings.Contains(f, today) {
@@ -549,7 +549,7 @@ func runPipeline(ctx context.Context, c *cli.Command) error {
 		execChoice = strings.ToLower(strings.TrimSpace(execChoice))
 		if execChoice == "" || execChoice == "y" || execChoice == "yes" {
 			goldenBase := csvloader.GetUniverseName(cfg.GoldenCopyPath)
-			basketFile := "data/" + goldenBase + ".csv"
+			basketFile := config.DataPath(goldenBase + ".csv")
 			if err := runBasketWithParams(ctx, true, basketFile, false, cfg.Broker); err != nil {
 				return fmt.Errorf("step %d (basket): %w", stepCounter, err)
 			}

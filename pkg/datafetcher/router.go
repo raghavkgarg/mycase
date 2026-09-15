@@ -11,17 +11,45 @@ import (
 	"github.com/raghavkgarg/mycase/pkg/yfinance"
 )
 
+// fundamentalsSource is the narrow capability the Router needs from an EDGAR
+// client: statement-level fundamentals for a batch of US tickers, returned as
+// partial marketdata.Fundamentals keyed by the input ticker. Defined here (the
+// consumer) so *edgar.Client satisfies it structurally and the Router can be
+// tested with a fake — consistent with the layering rule that consumers define
+// their interfaces.
+type fundamentalsSource interface {
+	FetchFundamentals(ctx context.Context, tickers []string) (map[string]yfinance.Fundamentals, error)
+}
+
 // Router dispatches market data requests to the appropriate provider
 // based on ticker prefix. US-prefixed tickers go to Schwab (if client
 // is available); everything else goes through Yahoo Finance.
+//
+// When an EDGAR source is configured (Phase 10c, opt-in), US fundamentals are
+// composed from Schwab TTM ratios + EDGAR statement facts via the merger; a nil
+// edgarSource leaves behavior exactly as it was before EDGAR existed.
 type Router struct {
-	schwabClient *schwab.Client // nil if Schwab is not configured
+	schwabClient *schwab.Client     // nil if Schwab is not configured
+	edgarSource  fundamentalsSource // nil if EDGAR is not configured/enabled
 }
 
 // NewRouter creates a Router. Pass nil for schwabClient if Schwab is not configured
-// (US tickers will fall back to Yahoo Finance).
+// (US tickers will fall back to Yahoo Finance). EDGAR is off by default; use
+// WithEDGAR to enable the composite US-fundamentals path.
 func NewRouter(schwabClient *schwab.Client) *Router {
 	return &Router{schwabClient: schwabClient}
+}
+
+// WithEDGAR attaches an EDGAR fundamentals source, enabling the Schwab+EDGAR
+// composite for US fundamentals. Passing nil is a no-op (behavior unchanged).
+// Returns the Router for chaining at construction.
+func (r *Router) WithEDGAR(src fundamentalsSource) *Router {
+	// Guard against a typed-nil interface wrapping a nil *edgar.Client.
+	if src == nil {
+		return r
+	}
+	r.edgarSource = src
+	return r
 }
 
 // FetchHistoricalDataWithTimestamps fetches daily OHLCV for a ticker over a range.
@@ -138,7 +166,7 @@ func (r *Router) FetchFundamentals(ctx context.Context, tickers []string) (map[s
 		maps.Copy(result, yfFund)
 	}
 
-	// US: Schwab (or Yahoo fallback)
+	// US: Schwab (or Yahoo fallback), optionally overlaid with EDGAR statements.
 	if len(usTickers) > 0 {
 		if r.schwabClient != nil {
 			schwabFund, err := r.schwabClient.FetchFundamentals(ctx, usTickers)
@@ -155,6 +183,7 @@ func (r *Router) FetchFundamentals(ctx context.Context, tickers []string) (map[s
 			} else {
 				slog.DebugContext(ctx, "datafetcher.fundamentals_served",
 					"source", "schwab", "count", len(usTickers))
+				r.overlayEDGAR(ctx, usTickers, schwabFund)
 				maps.Copy(result, schwabFund)
 			}
 		} else {
@@ -169,6 +198,37 @@ func (r *Router) FetchFundamentals(ctx context.Context, tickers []string) (map[s
 	}
 
 	return result, nil
+}
+
+// overlayEDGAR enriches Schwab-sourced US fundamentals in place with EDGAR
+// statement facts (operating cash flow, net income, annual series, authoritative
+// FCF) via the field-level, non-destructive merger. A nil EDGAR source or an
+// EDGAR fetch error leaves the Schwab fundamentals untouched — EDGAR is a strict
+// enrichment, never a regression (fail-gracefully per the API rules).
+func (r *Router) overlayEDGAR(ctx context.Context, usTickers []string, schwabFund map[string]yfinance.Fundamentals) {
+	if r.edgarSource == nil {
+		return
+	}
+	edgarFund, err := r.edgarSource.FetchFundamentals(ctx, usTickers)
+	if err != nil {
+		slog.WarnContext(ctx, "datafetcher.edgar_overlay_failed",
+			"count", len(usTickers), "err", err, "action", "keeping_schwab")
+		return
+	}
+	if len(edgarFund) == 0 {
+		return
+	}
+	merged := 0
+	for ticker, base := range schwabFund {
+		partial, ok := edgarFund[ticker]
+		m, _ := mergeFundamentals(base, partial, true, ok)
+		schwabFund[ticker] = m
+		if ok {
+			merged++
+		}
+	}
+	slog.DebugContext(ctx, "datafetcher.edgar_overlay_applied",
+		"source", "schwab+edgar", "us_tickers", len(usTickers), "edgar_matched", merged)
 }
 
 // FetchIntradayData fetches 1-minute intraday OHLC for a ticker over a range.

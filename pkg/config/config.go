@@ -258,11 +258,11 @@ func LoadThemes(filename string) ([]ThemeConfig, error) {
 	if err != nil {
 		// Fallback to default configs
 		return []ThemeConfig{
-			{Name: "Theme KK Advise", Prefix: "My KK", CSVPath: "data/myall.csv", TargetWeight: 0.30},
-			{Name: "Theme AI Advice", Prefix: "My AI", CSVPath: "data/aitheme.csv", TargetWeight: 0.20},
-			{Name: "Theme Micro Advice", Prefix: "My Micro", CSVPath: "data/modularmicro.csv", TargetWeight: 0.30},
-			{Name: "Theme Hydrogen Nuclear", Prefix: "My Hydrogen", CSVPath: "data/hydrogen.csv", TargetWeight: 0.00},
-			{Name: "Theme Microsmall", Prefix: "My MicroSmall", CSVPath: "data/microsmall.csv", TargetWeight: 0.20},
+			{Name: "Theme KK Advise", Prefix: "My KK", CSVPath: DataPath("myall.csv"), TargetWeight: 0.30},
+			{Name: "Theme AI Advice", Prefix: "My AI", CSVPath: DataPath("aitheme.csv"), TargetWeight: 0.20},
+			{Name: "Theme Micro Advice", Prefix: "My Micro", CSVPath: DataPath("modularmicro.csv"), TargetWeight: 0.30},
+			{Name: "Theme Hydrogen Nuclear", Prefix: "My Hydrogen", CSVPath: DataPath("hydrogen.csv"), TargetWeight: 0.00},
+			{Name: "Theme Microsmall", Prefix: "My MicroSmall", CSVPath: DataPath("microsmall.csv"), TargetWeight: 0.20},
 		}, nil
 	}
 	defer file.Close()
@@ -489,7 +489,21 @@ type UserDefaults struct {
 	Range          string        `json:"range"`
 	PipelineConfig string        `json:"pipeline_config"`
 	Logging        LoggingConfig `json:"logging"`
+	EDGAR          EDGARConfig   `json:"edgar"`
 	TopN           int           `json:"top_n"`
+}
+
+// EDGARConfig holds SEC EDGAR fundamentals-source settings (Phase 10c). EDGAR is
+// opt-in: Enabled defaults to false so the data pipeline is unchanged until a
+// deliberate turn-on. UserAgent is mandatory when enabled — data.sec.gov blocks
+// requests with a missing or generic User-Agent, so it must declare identity +
+// contact (e.g. "mycase/1.0 you@example.com"). The env var
+// MYCASE_EDGAR_USER_AGENT overrides UserAgent (flag > env > config > default).
+type EDGARConfig struct {
+	UserAgent    string `json:"user_agent"`
+	Enabled      bool   `json:"enabled"`
+	FactsTTLDays int    `json:"facts_ttl_days"` // EDGAR companyfacts freshness (default 80 ≈ one quarter with margin)
+	CIKTTLDays   int    `json:"cik_ttl_days"`   // ticker→CIK map freshness (default 7)
 }
 
 // LoggingConfig holds structured-logging defaults. CLI flags and env vars

@@ -3,7 +3,7 @@
 ## Schwab Trader API
 
 ### Rate Limits
-- **Hard cap**: 120 requests/minute (enforced by client-side sliding window)
+- **Hard cap**: 120 requests/minute (enforced by a `golang.org/x/time/rate` token bucket in `pkg/broker/schwab/client.go`: `rate.Limit(2)`/sec, burst 120; `executeRequest` calls `limiter.Wait(ctx)` before every send)
 - **Order limit**: 120 per app registration
 - **Auth tokens**: Access token expires in 30 minutes, refresh token in 7 days
 - **Fundamentals**: fetched one ticker at a time via `/instruments?symbol=X&projection=fundamental`
@@ -29,7 +29,8 @@
 ## Yahoo Finance (Fallback)
 - No API key required (public endpoints)
 - Rate limit: ~2000 requests/hour (unofficial, aggressive bursts get 429s)
-- 15-worker concurrent pool for historical prices (`pkg/stockpicker/loader.go`)
+- Paced by a process-wide `golang.org/x/time/rate` token bucket in `pkg/yfinance` (10 req/s, burst 20; gated in `executeYFinanceRequest` + the fundamentals timeseries call; overridable via `yfinance.SetRateLimiter`)
+- 15-worker concurrent pool for historical prices (`pkg/stockpicker/loader.go`) bounds *concurrency*; the limiter bounds aggregate *rate* across all pools
 - Cache applies identically — always check DuckDB first
 
 ## General Principles

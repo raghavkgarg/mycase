@@ -52,7 +52,7 @@ func resolveFilePath(p string) string {
 // ResolveTheme resolves a theme by name, keyword, or direct CSV path.
 func ResolveTheme(themeArg, explicitCSV, themesConfigPath string) (*MatchedTheme, error) {
 	if themesConfigPath == "" {
-		themesConfigPath = "config/themes.json"
+		themesConfigPath = config.Path("themes.json")
 	}
 	resolvedConfigPath := resolveFilePath(themesConfigPath)
 
@@ -246,7 +246,7 @@ func ResolveTheme(themeArg, explicitCSV, themesConfigPath string) (*MatchedTheme
 	}
 
 	// Search proposals directory
-	proposalsDir := resolveFilePath("data/candidates/proposals")
+	proposalsDir := resolveFilePath(config.DataPath("candidates", "proposals"))
 	if entries, err := os.ReadDir(proposalsDir); err == nil {
 		for _, e := range entries {
 			if e.IsDir() || !strings.HasSuffix(e.Name(), ".csv") {

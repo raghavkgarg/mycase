@@ -86,7 +86,7 @@ func runReturns(ctx context.Context, c *cli.Command) error {
 
 	// Fetch live quotes from Zerodha if requested
 	if liveMode {
-		b := zerodha.New(true, "config/config.json")
+		b := zerodha.New(true, config.Path("config.json"))
 		if rawHoldings, hErr := b.GetHoldings(); hErr == nil {
 			for _, h := range rawHoldings {
 				ltpMap[h.TradingSymbol] = h.LastPrice
@@ -109,14 +109,14 @@ func runReturns(ctx context.Context, c *cli.Command) error {
 	evaluateAll := c.Bool("all")
 
 	if evaluateAll {
-		themes, err := config.LoadThemes("config/themes.json")
+		themes, err := config.LoadThemes(config.Path("themes.json"))
 		if err != nil {
 			return fmt.Errorf("loading themes: %w", err)
 		}
 
 		var reports []*themereturn.ThemeReturnReport
 		for _, tc := range themes {
-			matched, err := themereturn.ResolveTheme(tc.Name, "", "config/themes.json")
+			matched, err := themereturn.ResolveTheme(tc.Name, "", config.Path("themes.json"))
 			if err != nil {
 				continue
 			}
@@ -141,7 +141,7 @@ func runReturns(ctx context.Context, c *cli.Command) error {
 	themeArg := c.String("theme")
 	fileArg := c.String("file")
 
-	matched, err := themereturn.ResolveTheme(themeArg, fileArg, "config/themes.json")
+	matched, err := themereturn.ResolveTheme(themeArg, fileArg, config.Path("themes.json"))
 	if err != nil {
 		return fmt.Errorf("resolving theme: %w", err)
 	}

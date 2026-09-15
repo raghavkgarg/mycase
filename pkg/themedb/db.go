@@ -197,7 +197,7 @@ INSERT OR REPLACE INTO theme_rebalances (
     status, notes
 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 `
-	var execTime interface{}
+	var execTime any
 	if r.ExecutedAt != nil && !r.ExecutedAt.IsZero() {
 		execTime = *r.ExecutedAt
 	}

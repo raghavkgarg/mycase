@@ -19,6 +19,7 @@ import (
 	"github.com/raghavkgarg/mycase/pkg/costs"
 	"github.com/raghavkgarg/mycase/pkg/csvloader"
 	"github.com/raghavkgarg/mycase/pkg/datafetcher"
+	"github.com/raghavkgarg/mycase/pkg/edgar"
 	"github.com/raghavkgarg/mycase/pkg/optimizer"
 	"github.com/raghavkgarg/mycase/pkg/stockpicker"
 )
@@ -46,29 +47,67 @@ var _ stockpicker.DataFetcher = (*datafetcher.Router)(nil)
 
 // newDataRouter builds a datafetcher.Router from the pipeline config's Schwab
 // credentials. If Schwab is not configured (or creds are missing), the router
-// falls back to Yahoo Finance for all tickers.
+// falls back to Yahoo Finance for all tickers. When the EDGAR fundamentals
+// source is enabled in config/defaults.json, it is wired as an opt-in overlay
+// for US fundamentals (Phase 10c); a disabled or misconfigured EDGAR simply
+// leaves the Schwab-only path in place.
 func newDataRouter(cfg config.PipelineConfig) *datafetcher.Router {
+	var router *datafetcher.Router
 	if !strings.EqualFold(cfg.Broker, "schwab") {
-		return datafetcher.NewRouter(nil)
+		router = datafetcher.NewRouter(nil)
+	} else {
+		schwabConfigPath := cfg.SchwabConfig
+		if schwabConfigPath == "" {
+			schwabConfigPath = config.Path("schwab.json")
+		}
+		schwabTokenPath := cfg.SchwabToken
+		if schwabTokenPath == "" {
+			schwabTokenPath = config.Path("schwab_token.json")
+		}
+
+		app, err := schwab.LoadAppConfig(schwabConfigPath)
+		if err != nil {
+			fmt.Printf("[autopilot] Schwab config unavailable (%v); US tickers will use Yahoo Finance.\n", err)
+			router = datafetcher.NewRouter(nil)
+		} else {
+			tokenMgr := schwab.NewTokenManager(app, schwabTokenPath)
+			router = datafetcher.NewRouter(schwab.NewClient(tokenMgr))
+		}
 	}
 
-	schwabConfigPath := cfg.SchwabConfig
-	if schwabConfigPath == "" {
-		schwabConfigPath = "config/schwab.json"
+	if e := newEDGARClient(); e != nil {
+		router = router.WithEDGAR(e)
 	}
-	schwabTokenPath := cfg.SchwabToken
-	if schwabTokenPath == "" {
-		schwabTokenPath = "config/schwab_token.json"
-	}
+	return router
+}
 
-	app, err := schwab.LoadAppConfig(schwabConfigPath)
+// newEDGARClient constructs an EDGAR client from config/defaults.json when the
+// EDGAR fundamentals source is enabled. Returns nil (not an error) when disabled
+// or misconfigured, so any setup problem leaves the Schwab-only path intact.
+// The User-Agent honors the MYCASE_EDGAR_USER_AGENT env override.
+func newEDGARClient() *edgar.Client {
+	defaults := config.LoadUserDefaults(config.Path("defaults.json"))
+	ec := defaults.EDGAR
+	if !ec.Enabled {
+		return nil
+	}
+	ua := ec.UserAgent
+	if env := os.Getenv("MYCASE_EDGAR_USER_AGENT"); env != "" {
+		ua = env
+	}
+	var opts []edgar.Option
+	if ec.FactsTTLDays > 0 {
+		opts = append(opts, edgar.WithFactsTTL(time.Duration(ec.FactsTTLDays)*24*time.Hour))
+	}
+	if ec.CIKTTLDays > 0 {
+		opts = append(opts, edgar.WithCIKTTL(time.Duration(ec.CIKTTLDays)*24*time.Hour))
+	}
+	client, err := edgar.NewClient(ua, cache.GetDB(), opts...)
 	if err != nil {
-		fmt.Printf("[autopilot] Schwab config unavailable (%v); US tickers will use Yahoo Finance.\n", err)
-		return datafetcher.NewRouter(nil)
+		fmt.Printf("[autopilot] EDGAR disabled: %v\n", err)
+		return nil
 	}
-
-	tokenMgr := schwab.NewTokenManager(app, schwabTokenPath)
-	return datafetcher.NewRouter(schwab.NewClient(tokenMgr))
+	return client
 }
 
 // Run executes the full non-interactive pipeline:
@@ -545,7 +584,7 @@ func diffPortfolio(oldWeights, newWeights map[string]float64) (entries []StockCh
 
 // cleanStaleCache removes cached files from previous days.
 func cleanStaleCache() {
-	files, err := filepath.Glob("data/.cache/*")
+	files, err := filepath.Glob(config.DataPath(".cache", "*"))
 	if err != nil {
 		return
 	}

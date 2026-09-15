@@ -96,7 +96,7 @@ Treasury data is a non-issue: none of the current factors use a risk-free rate.
 
 ### 4.1 Schwab Market Data API (current US primary)
 
-`pkg/broker/schwab/` — OAuth2, 120 req/min ceiling (client-side sliding window), access token 30 min / refresh 7 days. See `docs/api-rules.md`.
+`pkg/broker/schwab/` — OAuth2, 120 req/min ceiling (client-side `golang.org/x/time/rate` token bucket), access token 30 min / refresh 7 days. See `docs/api-rules.md`.
 
 | Capability | Method | Endpoint | Shape |
 |-----------|--------|----------|-------|
@@ -184,7 +184,7 @@ Per data type, which source can supply it — and the honest quality.
 ### The three real gaps
 
 1. ~~**Sector is empty for US**~~ **✅ FIXED (Phase 10a).** `mapSchwabFundamentals` still leaves `Sector: ""`, but the constituents CSV's GICS Sector column is now carried through `TickersSource.Sectors` and backfilled by `stockpicker.InjectSectors` (fill-if-empty, so Yahoo sectors survive). Routed US stocks get their GICS sector, so sector caps engage instead of collapsing to `"Unknown"`.
-2. **Operating cash flow & annual series are absent from Schwab.** Earnings-quality degrades to an FCF proxy; ROIC always uses the ROA/ROE fallback instead of the preferred NOPAT/invested-capital calc. **Authoritative fix: SEC EDGAR (Phase 10c).** *(Still open.)*
+2. **Operating cash flow & annual series are absent from Schwab.** ~~Earnings-quality degrades to an FCF proxy; ROIC always uses the ROA/ROE fallback instead of the preferred NOPAT/invested-capital calc.~~ **✅ FIXED (Phase 10c).** The `pkg/edgar` client sources operating cash flow, net income, authoritative free cash flow (OCF − capex), and the full annual series (operating income, assets, current liabilities, revenue, gross profit, PPE, receivables, capex, interest expense) from SEC EDGAR XBRL `companyfacts`, and the `datafetcher` merger overlays them onto Schwab's TTM ratios. Opt-in (`edgar.enabled` in `config/defaults.json`, default false).
 3. ~~**Two fields Schwab could supply but the mapper drops**~~ **✅ FIXED (Phase 10a).** `mapSchwabFundamentals` now derives `NetIncome` (`revenueTTM × netProfitMarginTTM/100`) and `RegularPrice` (`marketCap / sharesOutstanding`, guarded). These are *derived* values; authoritative statement-level figures still come from EDGAR in Phase 10c.
 
 ---
@@ -214,9 +214,9 @@ These constructed no Router and called `yfinance.*` directly, so US holdings got
 | `pkg/backtest/valuation.go` | historical + intraday |
 | `pkg/autopilot/schedule.go` | benchmark trading-day probe |
 
-### Problem 2 — Thin routed fundamentals
+### Problem 2 — Thin routed fundamentals ✅ FIXED (Phase 10c)
 
-Even on the Schwab-routed happy path, US fundamentals lack sector, cash flow, and annual series ([§5](#5-capability-matrix--gap-analysis)).
+~~Even on the Schwab-routed happy path, US fundamentals lack sector, cash flow, and annual series.~~ Sector is backfilled from the constituents CSV (Phase 10a); cash flow and annual series now come from SEC EDGAR via the `pkg/edgar` client, composed with Schwab's TTM ratios by the `datafetcher` merger (Phase 10c). Opt-in via `edgar.enabled`.
 
 ### Problem 3 — Benchmark was always Yahoo ✅ FIXED (Phase 10b / R17)
 
@@ -298,7 +298,7 @@ EDGAR facts being quarterly-stable means each company's `companyfacts.json` is f
 |-------------------|-----------|
 | Sector from CSV; derive `NetIncome`/`RegularPrice`; delete dead `GetCache()` | roadmap **Phase 10a** |
 | Wire the 7 bypass paths through the Router; `US:SPY` benchmark; `source` column + slog | roadmap **Phase 10b** / refactor **R17** |
-| `pkg/edgar` client + XBRL mapper + `FundamentalsMerger` | roadmap **Phase 10c** |
+| `pkg/edgar` client + XBRL mapper + `FundamentalsMerger` | roadmap **Phase 10c** ✅ done |
 | Capability interfaces + provenance surfaced in reports | roadmap **Phase 10d** |
 
 ---

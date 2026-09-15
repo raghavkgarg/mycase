@@ -28,10 +28,47 @@ Practical usage guide: common workflows, every command with realistic examples, 
 ### Install the binary
 
 ```bash
-make build && make install
-# or: go install github.com/raghavkgarg/mycase@latest
+make build && make install    # symlinks /usr/local/bin/mycase -> ./dist/mycase
 mycase --version
 ```
+
+`make install` builds `dist/mycase` and symlinks it into `/usr/local/bin`
+(it uses `sudo` only if that directory isn't writable). The symlink is
+deliberate: **mycase finds its `config/` and `data/` directories by following
+the symlink back to this project tree**, so the installed `mycase` works from any
+directory without copying config around.
+
+How the home directory is resolved (precedence):
+
+1. **`$MYCASE_HOME`** — explicit override. Point this at the project root for any
+   layout the symlink trick doesn't cover.
+2. **Binary-relative** — resolves the executable (following symlinks) and walks
+   up from `<home>/dist/mycase` to `<home>`, accepted only if `<home>/config`
+   exists. This is what makes the `/usr/local/bin` symlink resolve correctly.
+3. **Current working directory** — so running from the project root still works.
+
+`$MYCASE_CONFIG_DIR` and `$MYCASE_DATA_DIR` override the `config/` and `data/`
+locations independently if you need them elsewhere.
+
+Install variants:
+
+```bash
+make install PREFIX=~/.local     # user-local install (no sudo): ~/.local/bin/mycase
+make uninstall                   # remove the /usr/local/bin/mycase symlink
+make install-gopath              # go install to GOPATH/bin (set MYCASE_HOME so it finds config/ + data/)
+```
+
+**One binary, one location.** Keep `mycase` in exactly one place on your `PATH`.
+`make install` targets `/usr/local/bin` and automatically removes any stale
+standalone `~/go/bin/mycase` (from a prior `go install`) that would otherwise
+shadow the symlink. Verify with `which mycase` — it should point at
+`/usr/local/bin/mycase`. If you prefer `~/go/bin` instead, use `make install-gopath`
+and set `MYCASE_HOME` (a standalone binary there can't auto-resolve `config/`).
+
+> [!NOTE]
+> A plain `go install` / copied binary has no adjacent project tree, so it can't
+> auto-resolve `config/`. Either use `make install` (symlink) or set
+> `MYCASE_HOME=/path/to/mycase` in your shell profile.
 
 ### Authenticate with Zerodha (live mode only)
 

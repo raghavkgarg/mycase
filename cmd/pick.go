@@ -110,7 +110,7 @@ func runPick(ctx context.Context, c *cli.Command) error {
 }
 
 func pickOptsFromCmd(c *cli.Command) *stockpicker.Options {
-	defaults := config.LoadUserDefaults("config/defaults.json")
+	defaults := config.LoadUserDefaults(config.Path("defaults.json"))
 
 	indexName := c.String("index")
 	if indexName == "" {
@@ -278,4 +278,3 @@ func displayCachedRunOutput(ctx context.Context, pitDB *pithistory.DB, opts *sto
 		fmt.Printf("Final Selected Stocks:                 %d stocks\n\n", r.SelectedCount)
 	}
 }
-

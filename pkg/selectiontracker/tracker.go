@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/raghavkgarg/mycase/pkg/marketdata"
+	"github.com/raghavkgarg/mycase/pkg/marketcal"
 )
 
 // DriverMetrics holds the structured numeric driver values recorded for a ticker
@@ -367,7 +367,7 @@ func (t *Tracker) SaveReport(displayName, method string, existingHoldings map[st
 	writeLine("Strategy Preset:  %s\n", method)
 	basedOnStr := t.BasedOn
 	if basedOnStr == "" {
-		basedOnStr = marketdata.LastSettledEODTime(time.Now()).Format("2006-01-02 15:04:05 MST")
+		basedOnStr = marketcal.NSE.LastSettledEOD(time.Now()).Format("2006-01-02 15:04:05 MST")
 	}
 	writeLine("Based on:         %s\n", basedOnStr)
 	writeLine("Generated:        %s\n", time.Now().Format("2006-01-02 15:04:05 MST"))

@@ -13,6 +13,8 @@ Automated US equity factor-tilt system (Go). Single binary, quarterly rebalance,
 ## Build, Test & Lint (use Makefile)
 ```bash
 make build           # Build dist/mycase binary
+make install         # Symlink /usr/local/bin/mycase -> dist/mycase (sudo only if needed)
+make uninstall       # Remove the /usr/local/bin/mycase symlink
 make test            # Run all tests (30s timeout)
 make test-race       # Tests with race detector
 make test-coverage   # Tests + coverage.html report
@@ -24,6 +26,7 @@ make help            # Show all targets
 
 **Always use `make` targets** instead of raw `go build`, `go test`, `go vet`:
 - `make build` injects version/commit/date via LDFLAGS
+- `make install` symlinks the binary so it resolves `config/`+`data/` from the project tree (see `pkg/config` home resolution: `$MYCASE_HOME` > binary-relative > CWD)
 - `make test` enforces consistent timeout
 - `make cleanup` runs the full lint suite
 
@@ -52,6 +55,7 @@ pkg/
 ├── cache/        DuckDB price + fundamentals cache (zero-import leaf; domains own their tables)
 ├── yfinance/     Yahoo Finance client
 ├── marketdata/   Shared price/fundamental DTOs — zero-import leaf
+├── marketcal/    Market-calendar / EOD-settlement time math (NSE + NYSE) — pure algorithmic leaf (below L0)
 ├── tax/          FIFO lots, TLH, wash-sale, order sequencing (US); owns its DuckDB tables
 ├── attribution/  Live performance vs benchmark; owns its DuckDB table
 ├── costs/        Transaction cost model (India + US)

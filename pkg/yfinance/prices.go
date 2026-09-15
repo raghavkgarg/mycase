@@ -98,10 +98,7 @@ func FetchQuotes(ctx context.Context, tickers []string) (map[string]float64, err
 	}
 	jobs := make(chan quoteJob, len(tickers))
 
-	workerCount := min(len(tickers), 10)
-	if workerCount < 1 {
-		workerCount = 1
-	}
+	workerCount := max(min(len(tickers), 10), 1)
 
 	fetchSingleQuote := func(ticker string) (float64, error) {
 		ySym := MapTickerToYahoo(ticker)
@@ -163,9 +160,7 @@ func FetchQuotes(ctx context.Context, tickers []string) (map[string]float64, err
 	}
 
 	for range workerCount {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			for job := range jobs {
 				price, err := fetchSingleQuote(job.ticker)
 				if err != nil {
@@ -176,7 +171,7 @@ func FetchQuotes(ctx context.Context, tickers []string) (map[string]float64, err
 				prices[job.ticker] = price
 				mu.Unlock()
 			}
-		}()
+		})
 	}
 
 	for _, t := range tickers {

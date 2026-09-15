@@ -36,8 +36,8 @@ var AuthCommand = &cli.Command{
 		},
 		&cli.StringFlag{
 			Name:  "token-path",
-			Value: "config/schwab_token.json",
-			Usage: "Path to save Schwab OAuth tokens",
+			Value: "",
+			Usage: "Path to save Schwab OAuth tokens (default: <config>/schwab_token.json)",
 		},
 		&cli.BoolFlag{
 			Name:  "manual",
@@ -55,7 +55,7 @@ var AuthCommand = &cli.Command{
 	Action: func(ctx context.Context, c *cli.Command) error {
 		broker := strings.ToLower(c.String("broker"))
 		if broker == "" {
-			defaults := config.LoadUserDefaults("config/defaults.json")
+			defaults := config.LoadUserDefaults(config.Path("defaults.json"))
 			broker = defaults.Broker
 		}
 		if broker == "" {
@@ -65,9 +65,12 @@ var AuthCommand = &cli.Command{
 		case "schwab":
 			configPath := c.String("config")
 			if configPath == "" {
-				configPath = "config/schwab.json"
+				configPath = config.Path("schwab.json")
 			}
 			tokenPath := c.String("token-path")
+			if tokenPath == "" {
+				tokenPath = config.Path("schwab_token.json")
+			}
 			return runSchwabAuth(ctx, configPath, tokenPath)
 		case "zerodha":
 			return runAuthCmdWithFlags(ctx, c.Bool("manual"), c.Bool("force"), c.Bool("no-browser"))
@@ -88,7 +91,7 @@ func runAuthCmdWithFlags(ctx context.Context, forceManual, forceRefresh, noBrows
 		fmt.Println("  (Make sure this IP is whitelisted under App Settings on https://developers.kite.trade/profile)")
 	}
 
-	configFile := "config/config.json"
+	configFile := config.Path("config.json")
 	var apiKey, apiSecret string
 
 	cfg, err := config.LoadConfig(configFile)
@@ -103,7 +106,7 @@ func runAuthCmdWithFlags(ctx context.Context, forceManual, forceRefresh, noBrows
 
 	if apiKey == "" {
 		if noBrowser {
-			return fmt.Errorf("Zerodha Kite API Key is missing and --no-browser is set")
+			return fmt.Errorf("zerodha Kite API Key is missing and --no-browser is set")
 		}
 		fmt.Print("Enter your Zerodha Kite API Key: ")
 		apiKey, _ = reader.ReadString('\n')
@@ -114,7 +117,7 @@ func runAuthCmdWithFlags(ctx context.Context, forceManual, forceRefresh, noBrows
 
 	if apiSecret == "" {
 		if noBrowser {
-			return fmt.Errorf("Zerodha Kite API Secret is missing and --no-browser is set")
+			return fmt.Errorf("zerodha Kite API Secret is missing and --no-browser is set")
 		}
 		fmt.Print("Enter your Zerodha Kite API Secret: ")
 		apiSecret, _ = reader.ReadString('\n')

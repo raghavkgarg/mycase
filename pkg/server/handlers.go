@@ -18,6 +18,7 @@ import (
 	"github.com/raghavkgarg/mycase/pkg/backtest"
 	"github.com/raghavkgarg/mycase/pkg/broker"
 	"github.com/raghavkgarg/mycase/pkg/cache"
+	"github.com/raghavkgarg/mycase/pkg/config"
 	"github.com/raghavkgarg/mycase/pkg/costs"
 	"github.com/raghavkgarg/mycase/pkg/csvloader"
 	"github.com/raghavkgarg/mycase/pkg/daemon"
@@ -68,7 +69,7 @@ func (s *Server) handlePortfolios(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleWeights(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
-	weights, keys, err := csvloader.LoadBasketCSV("data/" + name + ".csv")
+	weights, keys, err := csvloader.LoadBasketCSV(config.DataPath(name + ".csv"))
 	if err != nil {
 		writeError(w, http.StatusNotFound, "portfolio not found: "+err.Error())
 		return
@@ -103,7 +104,7 @@ type holdingsSummary struct {
 
 func (s *Server) handleHoldings(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
-	targetWeights, basketKeys, err := csvloader.LoadBasketCSV("data/" + name + ".csv")
+	targetWeights, basketKeys, err := csvloader.LoadBasketCSV(config.DataPath(name + ".csv"))
 	if err != nil {
 		writeError(w, http.StatusNotFound, "portfolio not found: "+err.Error())
 		return
@@ -193,7 +194,7 @@ func (s *Server) handleHoldings(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleDrift(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
-	targetWeights, basketKeys, err := csvloader.LoadBasketCSV("data/" + name + ".csv")
+	targetWeights, basketKeys, err := csvloader.LoadBasketCSV(config.DataPath(name + ".csv"))
 	if err != nil {
 		writeError(w, http.StatusNotFound, "portfolio not found: "+err.Error())
 		return
@@ -229,7 +230,7 @@ type orderSummary struct {
 
 func (s *Server) handleOrders(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
-	targetWeights, basketKeys, err := csvloader.LoadBasketCSV("data/" + name + ".csv")
+	targetWeights, basketKeys, err := csvloader.LoadBasketCSV(config.DataPath(name + ".csv"))
 	if err != nil {
 		writeError(w, http.StatusNotFound, "portfolio not found: "+err.Error())
 		return
@@ -385,7 +386,7 @@ func (s *Server) handleMonitor(w http.ResponseWriter, r *http.Request) {
 		style = "moderate"
 	}
 
-	weights, keys, err := csvloader.LoadBasketCSV("data/" + name + ".csv")
+	weights, keys, err := csvloader.LoadBasketCSV(config.DataPath(name + ".csv"))
 	if err != nil {
 		writeError(w, http.StatusNotFound, "portfolio not found: "+err.Error())
 		return
@@ -497,7 +498,7 @@ func (s *Server) handleBacktest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	weights, keys, err := csvloader.LoadBasketCSV("data/" + name + ".csv")
+	weights, keys, err := csvloader.LoadBasketCSV(config.DataPath(name + ".csv"))
 	if err != nil {
 		writeError(w, http.StatusNotFound, "portfolio not found: "+err.Error())
 		return
@@ -665,7 +666,7 @@ func (s *Server) handleExecute(w http.ResponseWriter, r *http.Request) {
 	}
 
 	name := r.PathValue("name")
-	targetWeights, basketKeys, err := csvloader.LoadBasketCSV("data/" + name + ".csv")
+	targetWeights, basketKeys, err := csvloader.LoadBasketCSV(config.DataPath(name + ".csv"))
 	if err != nil {
 		writeError(w, http.StatusNotFound, "portfolio not found: "+err.Error())
 		return

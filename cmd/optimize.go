@@ -26,7 +26,7 @@ var OptimizeCommand = &cli.Command{
 	Usage: "Optimize portfolio weights using volatility or multi-factor scoring",
 	Flags: []cli.Flag{
 		&cli.StringFlag{Name: "method", Aliases: []string{"m"}, Value: "multifactor", Usage: "Weighting method (volatility or multifactor)"},
-		&cli.StringFlag{Name: "file", Aliases: []string{"f"}, Value: "data/basket.csv", Usage: "Path to basket CSV"},
+		&cli.StringFlag{Name: "file", Aliases: []string{"f"}, Value: config.DataPath("basket.csv"), Usage: "Path to basket CSV"},
 		&cli.StringFlag{Name: "remove", Usage: "Comma-separated tickers to remove (e.g. NSE:FCL,NSE:PARACABLES)"},
 		&cli.StringFlag{Name: "range", Value: "3mo", Usage: "Historical data range (3mo, 6mo, 1y)"},
 		&cli.FloatFlag{Name: "cap", Value: 0.10, Usage: "Maximum weight per stock (e.g. 0.10 for 10%%)"},
@@ -134,7 +134,7 @@ func runOptimizeWithParams(ctx context.Context, method, basketPath, removeTicker
 	var newWeights map[string]float64
 	var fundamentals map[string]yfinance.Fundamentals
 	if method != "volatility" {
-		mfsCfg, err := config.LoadMFSConfig("config/mfs.json", method)
+		mfsCfg, err := config.LoadMFSConfig(config.Path("mfs.json"), method)
 		if err != nil {
 			fmt.Printf("Warning: Failed to load config/mfs.json: %v. Using defaults.\n", err)
 		}
@@ -184,7 +184,7 @@ func runOptimizeWithParams(ctx context.Context, method, basketPath, removeTicker
 		}
 		priceHistory = prunedPriceHistory
 		if method != "volatility" {
-			mfsCfg, _ := config.LoadMFSConfig("config/mfs.json", method)
+			mfsCfg, _ := config.LoadMFSConfig(config.Path("mfs.json"), method)
 			optWeights := optimizer.MFSWeights{
 				Sharpe: mfsCfg.Sharpe, Sortino: mfsCfg.Sortino, Return: mfsCfg.Return,
 				Alpha: mfsCfg.Alpha, Volatility: mfsCfg.Volatility, Beta: mfsCfg.Beta,

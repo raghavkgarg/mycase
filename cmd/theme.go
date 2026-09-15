@@ -43,16 +43,16 @@ var themeSyncCmd = &cli.Command{
 		&cli.StringFlag{
 			Name:    "proposals",
 			Aliases: []string{"p"},
-			Value:   "data/candidates/proposals",
-			Usage:   "Directory containing historical proposal CSV files",
+			Value:   "",
+			Usage:   "Directory containing historical proposal CSV files (default: <data>/candidates/proposals)",
 		},
 		&cli.StringFlag{
-			Name:    "db",
-			Usage:   "Path to mycase.db DuckDB database file",
+			Name:  "db",
+			Usage: "Path to mycase.db DuckDB database file",
 		},
 		&cli.BoolFlag{
-			Name:    "all",
-			Usage:   "Synchronize all configured themes from config/themes.json",
+			Name:  "all",
+			Usage: "Synchronize all configured themes from config/themes.json",
 		},
 	},
 	Action: runThemeSync,
@@ -67,6 +67,9 @@ func runThemeSync(ctx context.Context, c *cli.Command) error {
 	defer db.Close()
 
 	proposalsDir := c.String("proposals")
+	if proposalsDir == "" {
+		proposalsDir = config.DataPath("candidates", "proposals")
+	}
 	syncOne := func(themeName, goldenPath, keyword string) error {
 		fmt.Printf("🔄 Syncing theme '%s' (Golden: %s)... ", themeName, goldenPath)
 		opts := themedb.SyncThemeOptions{
@@ -87,7 +90,7 @@ func runThemeSync(ctx context.Context, c *cli.Command) error {
 	}
 
 	if c.Bool("all") {
-		cfgPath := "config/themes.json"
+		cfgPath := config.Path("themes.json")
 		themes, err := config.LoadThemes(cfgPath)
 		if err != nil {
 			return fmt.Errorf("loading themes config: %w", err)
@@ -109,7 +112,7 @@ func runThemeSync(ctx context.Context, c *cli.Command) error {
 	goldenPath := c.String("golden")
 	themeName := themeArg
 
-	if themes, err := config.LoadThemes("config/themes.json"); err == nil {
+	if themes, err := config.LoadThemes(config.Path("themes.json")); err == nil {
 		for _, tc := range themes {
 			cleanArg := strings.ToLower(strings.TrimSpace(themeArg))
 			uName := csvloader.GetUniverseName(tc.CSVPath)
@@ -127,7 +130,7 @@ func runThemeSync(ctx context.Context, c *cli.Command) error {
 		}
 	}
 	if goldenPath == "" {
-		goldenPath = fmt.Sprintf("data/%s.csv", themeName)
+		goldenPath = config.DataPath(fmt.Sprintf("%s.csv", themeName))
 	}
 	themeName = csvloader.GetUniverseName(goldenPath)
 
@@ -141,7 +144,7 @@ func runThemeSync(ctx context.Context, c *cli.Command) error {
 
 func resolveThemeArg(themeArg string) string {
 	cleanArg := strings.ToLower(strings.TrimSpace(themeArg))
-	if themes, err := config.LoadThemes("config/themes.json"); err == nil {
+	if themes, err := config.LoadThemes(config.Path("themes.json")); err == nil {
 		for _, tc := range themes {
 			uName := csvloader.GetUniverseName(tc.CSVPath)
 			if strings.EqualFold(tc.Name, themeArg) ||
@@ -157,8 +160,8 @@ func resolveThemeArg(themeArg string) string {
 }
 
 var themeHistoryCmd = &cli.Command{
-	Name:    "history",
-	Usage:   "Show rebalance versions and turnover events for a theme",
+	Name:  "history",
+	Usage: "Show rebalance versions and turnover events for a theme",
 	Flags: []cli.Flag{
 		&cli.StringFlag{
 			Name:    "theme",
@@ -204,8 +207,8 @@ var themeHistoryCmd = &cli.Command{
 }
 
 var themeShowCmd = &cli.Command{
-	Name:    "show",
-	Usage:   "Display active or exited constituents for a theme",
+	Name:  "show",
+	Usage: "Display active or exited constituents for a theme",
 	Flags: []cli.Flag{
 		&cli.StringFlag{
 			Name:    "theme",
