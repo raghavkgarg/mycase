@@ -16,6 +16,7 @@ import (
 
 	"github.com/raghavkgarg/mycase/pkg/attribution"
 	"github.com/raghavkgarg/mycase/pkg/backtest"
+	"github.com/raghavkgarg/mycase/pkg/broker"
 	"github.com/raghavkgarg/mycase/pkg/cache"
 	"github.com/raghavkgarg/mycase/pkg/csvloader"
 	"github.com/raghavkgarg/mycase/pkg/render"
@@ -143,13 +144,31 @@ func runPerfWithParams(ctx context.Context, filePath string, capital float64, ta
 		return fmt.Errorf("no valid stocks found in CSV")
 	}
 
+	// Market-aware display: US portfolios ("US:" prefixed tickers) render in
+	// dollars with ET framing; India portfolios keep rupees / IST. Derived from
+	// the portfolio's own tickers so the performance flow is correct regardless
+	// of the globally configured default market.
+	mkt := perfMarketConfig(portfolio)
+	cur := mkt.Currency
+	if cur == "" {
+		cur = "₹"
+	}
+	dispLoc := istLoc
+	tzLabel := "IST"
+	if loc, lerr := time.LoadLocation(mkt.Timezone); lerr == nil && mkt.Timezone != "" {
+		dispLoc = loc
+		if mkt.Market == "us" {
+			tzLabel = "ET"
+		}
+	}
+
 	if useDailyClose {
 		fmt.Printf("Analyzing portfolio performance: Bought at Close on %s till latest Close...\n\n", targetTime.Format("2006-01-02"))
 	} else {
-		fmt.Printf("Analyzing portfolio performance: Bought on %s at %s IST till latest Close...\n\n", targetTime.Format("2006-01-02"), targetTime.Format("15:04"))
+		fmt.Printf("Analyzing portfolio performance: Bought on %s at %s %s till latest Close...\n\n", targetTime.Format("2006-01-02"), targetTime.Format("15:04"), tzLabel)
 	}
 
-	results := backtest.ValuatePortfolio(ctx, newDataRouter(), portfolio, capital, targetTime, useDailyClose, rangeStr, istLoc)
+	results := backtest.ValuatePortfolio(ctx, newDataRouter(), portfolio, capital, targetTime, useDailyClose, rangeStr, dispLoc)
 
 	out := os.Stdout
 	var totalInitial, totalFinal float64
@@ -162,18 +181,18 @@ func runPerfWithParams(ctx context.Context, filePath string, capital float64, ta
 		rows = append(rows, []string{
 			res.Ticker,
 			fmt.Sprintf("%.4f", res.Weight),
-			render.Currency(res.Allocated, "Rs. "),
-			render.Currency(res.BuyPrice, "Rs. "),
+			render.Currency(res.Allocated, cur),
+			render.Currency(res.BuyPrice, cur),
 			res.BuyTime,
-			render.Currency(res.ClosePrice, "Rs. "),
-			render.Currency(res.FinalValue, "Rs. "),
+			render.Currency(res.ClosePrice, cur),
+			render.Currency(res.FinalValue, cur),
 			render.PctRaw(res.PctReturn),
 		})
 		totalInitial += res.Allocated
 		totalFinal += res.FinalValue
 	}
 	render.TableWithOpts(out, render.TableOpts{
-		Headers: []string{"Ticker", "Weight", "Allocated", "Buy Price", "Buy Time/Date (IST)", "Close Price", "Final Value", "Return"},
+		Headers: []string{"Ticker", "Weight", "Allocated", "Buy Price", "Buy Time/Date (" + tzLabel + ")", "Close Price", "Final Value", "Return"},
 		Rows:    rows,
 		Align: []render.Alignment{
 			render.AlignLeft, render.AlignRight, render.AlignRight, render.AlignRight,
@@ -187,13 +206,42 @@ func runPerfWithParams(ctx context.Context, filePath string, capital float64, ta
 
 	render.Section(out, "Portfolio Performance")
 	render.KV(out, []render.KVPair{
-		{Key: "Total Allocated Capital", Value: render.Currency(totalInitial, "Rs. ")},
-		{Key: "Unallocated Cash", Value: render.Currency(unallocated, "Rs. ")},
-		{Key: "Total End of Day Value", Value: render.Currency(totalFinal+unallocated, "Rs. ")},
-		{Key: "Net Profit/Loss", Value: render.PnL(netReturn, "Rs. ")},
+		{Key: "Total Allocated Capital", Value: render.Currency(totalInitial, cur)},
+		{Key: "Unallocated Cash", Value: render.Currency(unallocated, cur)},
+		{Key: "Total End of Day Value", Value: render.Currency(totalFinal+unallocated, cur)},
+		{Key: "Net Profit/Loss", Value: render.PnL(netReturn, cur)},
 		{Key: "Percentage Return", Value: render.PnLPct(pctReturn)},
 	})
 	return nil
+}
+
+// perfMarketConfig derives the market (and therefore currency symbol + timezone)
+// for a portfolio from its tickers. US tickers carry a "US:" exchange prefix
+// (e.g. "US:CF"); India tickers use "NSE:"/"BSE:" or none. If every prefixed
+// ticker is US we treat the portfolio as US; otherwise we fall back to the
+// configured default market (config/defaults.json). This keeps the Rs.→$ fix
+// scoped to the performance flow without a global config change.
+func perfMarketConfig(holdings []backtest.Holding) broker.MarketConfig {
+	sawPrefix := false
+	allUS := true
+	for _, h := range holdings {
+		ex := broker.ExchangeFromTicker(h.Ticker, "")
+		if ex == "" {
+			continue
+		}
+		sawPrefix = true
+		if strings.ToUpper(ex) != "US" {
+			allUS = false
+		}
+	}
+	if sawPrefix && allUS {
+		return broker.MarketConfigForName("us")
+	}
+	if sawPrefix && !allUS {
+		return broker.MarketConfigForName("india")
+	}
+	// No prefixes at all — defer to the configured default market.
+	return broker.LoadMarketConfig()
 }
 
 func parsePerfDate(dateStr string, loc *time.Location) (time.Time, error) {
