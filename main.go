@@ -23,8 +23,8 @@ var BuildDate = "unknown"
 var appLogger *logging.Logger
 
 func main() {
-	// Open DuckDB cache in data/mycase.db (best-effort; non-fatal if data/ doesn't exist yet).
-	if c, err := cache.Open("data/mycase.db"); err == nil {
+	// Open DuckDB cache in <home>/data/mycase.db (best-effort; non-fatal if data/ doesn't exist yet).
+	if c, err := cache.Open(config.DataPath("mycase.db")); err == nil {
 		cache.SetGlobal(c)
 		yfinance.SetCache(c)
 		defer c.Close()
@@ -126,7 +126,7 @@ func main() {
 // setupLogging resolves logging config with precedence flag > env > config file >
 // built-in default, then constructs the process logger and prunes old log files.
 func setupLogging(c *cli.Command) *logging.Logger {
-	defaults := config.LoadUserDefaults("config/defaults.json").Logging
+	defaults := config.LoadUserDefaults(config.Path("defaults.json")).Logging
 
 	// Level: --verbose > --log-level/env > config > "info".
 	level := defaults.Level
@@ -140,13 +140,13 @@ func setupLogging(c *cli.Command) *logging.Logger {
 		level = "info"
 	}
 
-	// Dir: --log-dir/env > config > default.
+	// Dir: --log-dir/env > config > default (<home>/data/logs).
 	dir := defaults.Dir
 	if d := c.String("log-dir"); d != "" {
 		dir = d
 	}
 	if dir == "" {
-		dir = logging.DefaultDir
+		dir = config.DataPath("logs")
 	}
 
 	// File: config *bool (absent → true).

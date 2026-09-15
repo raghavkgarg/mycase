@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/raghavkgarg/mycase/pkg/config"
 	"github.com/raghavkgarg/mycase/pkg/csvloader"
 	"github.com/raghavkgarg/mycase/pkg/render"
 )
@@ -1428,9 +1429,9 @@ func (p *DB) PrintConsensusLeaders(ctx context.Context, asOfDate string, topN in
 		topN = 15
 	}
 
-	// Load active holdings from data/microsmall.csv if available
+	// Load active holdings from <data>/microsmall.csv if available
 	holdingsMap := make(map[string]float64)
-	if weights, err := csvloader.ReadCSVWeights("data/microsmall.csv"); err == nil {
+	if weights, err := csvloader.ReadCSVWeights(config.DataPath("microsmall.csv")); err == nil {
 		for t, w := range weights {
 			if w > 0 {
 				clean := strings.ToUpper(strings.TrimSpace(t))

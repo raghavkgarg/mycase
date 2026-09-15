@@ -7,8 +7,6 @@ import (
 	"github.com/raghavkgarg/mycase/pkg/config"
 )
 
-const defaultsPath = "config/defaults.json"
-
 // MarketConfig is the market-defaults DTO; it lives in pkg/broker/types (a
 // zero-import leaf, R16 P3). This alias keeps broker.MarketConfig call sites
 // unchanged. The Load/For-name constructors below populate it from config.
@@ -16,7 +14,7 @@ type MarketConfig = types.MarketConfig
 
 // LoadMarketConfig returns market-specific configuration based on config/defaults.json.
 func LoadMarketConfig() MarketConfig {
-	defaults := config.LoadUserDefaults(defaultsPath)
+	defaults := config.LoadUserDefaults(config.Path("defaults.json"))
 	return MarketConfigForName(defaults.Market)
 }
 
@@ -82,7 +80,7 @@ func IsUSBroker(brokerName string) bool {
 
 // BrokerName returns the configured broker name from defaults.
 func BrokerName() string {
-	defaults := config.LoadUserDefaults(defaultsPath)
+	defaults := config.LoadUserDefaults(config.Path("defaults.json"))
 	if defaults.Broker == "" {
 		return "zerodha"
 	}

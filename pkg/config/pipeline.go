@@ -151,7 +151,7 @@ func (cfg *PipelineConfig) UnmarshalYAML(value *yaml.Node) error {
 
 	cfg.Strategy = resolveFirst(a.Strategy, "balanced")
 	cfg.TopN = resolveFirst(a.TopN, 20)
-	cfg.GoldenCopyPath = resolveFirst(a.GoldenCopyPath, "data/microsmall.csv")
+	cfg.GoldenCopyPath = resolveFirst(a.GoldenCopyPath, DataPath("microsmall.csv"))
 	cfg.Capital = resolveFirst(a.Capital, 100000)
 	cfg.PurchaseDate = resolveFirst(a.PurchaseDate, "2026-01-01")
 	tol := resolveFirst(a.RebalanceTolerancePct, 0.10)
@@ -199,11 +199,11 @@ func (cfg *PipelineConfig) UnmarshalYAML(value *yaml.Node) error {
 	}
 	cfg.SchwabConfig = a.SchwabConfig
 	if cfg.SchwabConfig == "" {
-		cfg.SchwabConfig = "config/schwab.json"
+		cfg.SchwabConfig = Path("schwab.json")
 	}
 	cfg.SchwabToken = a.SchwabToken
 	if cfg.SchwabToken == "" {
-		cfg.SchwabToken = "config/schwab_token.json"
+		cfg.SchwabToken = Path("schwab_token.json")
 	}
 	return nil
 }

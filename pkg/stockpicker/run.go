@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/raghavkgarg/mycase/pkg/cache"
+	"github.com/raghavkgarg/mycase/pkg/config"
 	"github.com/raghavkgarg/mycase/pkg/csvloader"
 	"github.com/raghavkgarg/mycase/pkg/marketdata"
 	"github.com/raghavkgarg/mycase/pkg/selectiontracker"
@@ -116,7 +117,7 @@ func RunWithResult(ctx context.Context, opts *Options) (*PickResult, error) {
 
 	cfg, err := LoadStrategyConfig(opts.Method)
 	if err != nil {
-		slog.WarnContext(ctx, "pick.config_load_failed", "path", "config/mfs.json", "err", err, "fallback", "defaults")
+		slog.WarnContext(ctx, "pick.config_load_failed", "path", config.Path("mfs.json"), "err", err, "fallback", "defaults")
 	}
 
 	fundamentals, err := fetchFundamentalsVia(ctx, opts.DataFetcher, activeKeys)

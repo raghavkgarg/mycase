@@ -58,11 +58,11 @@ func newDataRouter(cfg config.PipelineConfig) *datafetcher.Router {
 	} else {
 		schwabConfigPath := cfg.SchwabConfig
 		if schwabConfigPath == "" {
-			schwabConfigPath = "config/schwab.json"
+			schwabConfigPath = config.Path("schwab.json")
 		}
 		schwabTokenPath := cfg.SchwabToken
 		if schwabTokenPath == "" {
-			schwabTokenPath = "config/schwab_token.json"
+			schwabTokenPath = config.Path("schwab_token.json")
 		}
 
 		app, err := schwab.LoadAppConfig(schwabConfigPath)
@@ -86,7 +86,7 @@ func newDataRouter(cfg config.PipelineConfig) *datafetcher.Router {
 // or misconfigured, so any setup problem leaves the Schwab-only path intact.
 // The User-Agent honors the MYCASE_EDGAR_USER_AGENT env override.
 func newEDGARClient() *edgar.Client {
-	defaults := config.LoadUserDefaults("config/defaults.json")
+	defaults := config.LoadUserDefaults(config.Path("defaults.json"))
 	ec := defaults.EDGAR
 	if !ec.Enabled {
 		return nil
@@ -584,7 +584,7 @@ func diffPortfolio(oldWeights, newWeights map[string]float64) (entries []StockCh
 
 // cleanStaleCache removes cached files from previous days.
 func cleanStaleCache() {
-	files, err := filepath.Glob("data/.cache/*")
+	files, err := filepath.Glob(config.DataPath(".cache", "*"))
 	if err != nil {
 		return
 	}

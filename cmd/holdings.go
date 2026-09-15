@@ -49,7 +49,7 @@ func runHoldings(ctx context.Context, c *cli.Command) error {
 		return fmt.Errorf("fetching holdings: %w", err)
 	}
 
-	themeConfigs, err := config.LoadThemes("config/themes.json")
+	themeConfigs, err := config.LoadThemes(config.Path("themes.json"))
 	if err != nil {
 		fmt.Printf("Warning: Failed to load config/themes.json: %v. Using defaults.\n", err)
 	}
@@ -117,7 +117,7 @@ func runHoldings(ctx context.Context, c *cli.Command) error {
 				if len(g.Holdings) == 0 {
 					continue
 				}
-				matched, mErr := themereturn.ResolveTheme(g.Name, g.CSVPath, "config/themes.json")
+				matched, mErr := themereturn.ResolveTheme(g.Name, g.CSVPath, config.Path("themes.json"))
 				if mErr != nil {
 					continue
 				}

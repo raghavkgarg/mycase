@@ -176,7 +176,7 @@ func RunDBUpdateDirect(ctx context.Context, all bool, indexName, method string, 
 
 	// 3. Stage 3: Theme Lifecycle, Exit Detection & Return Auditing
 	fmt.Printf("\n▶ STAGE 3/3: Synchronizing Theme Lifecycles & Return Intelligence...\n")
-	themes, tErr := config.LoadThemes("config/themes.json")
+	themes, tErr := config.LoadThemes(config.Path("themes.json"))
 	if tErr == nil {
 		for _, tc := range themes {
 			uName := csvloader.GetUniverseName(tc.CSVPath)
@@ -187,7 +187,7 @@ func RunDBUpdateDirect(ctx context.Context, all bool, indexName, method string, 
 			syncOpts := themedb.SyncThemeOptions{
 				ThemeName:     uName,
 				GoldenCSVPath: tc.CSVPath,
-				ProposalsDir:  "data/candidates/proposals",
+				ProposalsDir:  config.DataPath("candidates", "proposals"),
 				Keyword:       kw,
 			}
 			if err := db.SyncThemeFromProposals(ctx, syncOpts); err != nil {
@@ -263,14 +263,23 @@ var dbMigrateCmd = &cli.Command{
 	Aliases: []string{"consolidate"},
 	Usage:   "Migrate all tables from cache.db and pit_history.db into mycase.db",
 	Flags: []cli.Flag{
-		&cli.StringFlag{Name: "cache-db", Value: "data/cache.db", Usage: "Path to source cache.db"},
-		&cli.StringFlag{Name: "pit-db", Value: "data/pit_history.db", Usage: "Path to source pit_history.db"},
-		&cli.StringFlag{Name: "target-db", Value: "data/mycase.db", Usage: "Path to target mycase.db"},
+		&cli.StringFlag{Name: "cache-db", Value: "", Usage: "Path to source cache.db (default: <data>/cache.db)"},
+		&cli.StringFlag{Name: "pit-db", Value: "", Usage: "Path to source pit_history.db (default: <data>/pit_history.db)"},
+		&cli.StringFlag{Name: "target-db", Value: "", Usage: "Path to target mycase.db (default: <data>/mycase.db)"},
 	},
 	Action: func(ctx context.Context, c *cli.Command) error {
 		targetPath := c.String("target-db")
+		if targetPath == "" {
+			targetPath = config.DataPath("mycase.db")
+		}
 		cachePath := c.String("cache-db")
+		if cachePath == "" {
+			cachePath = config.DataPath("cache.db")
+		}
 		pitPath := c.String("pit-db")
+		if pitPath == "" {
+			pitPath = config.DataPath("pit_history.db")
+		}
 
 		fmt.Printf("🚀 Consolidating tables into %s...\n", targetPath)
 		db, err := themedb.Open(targetPath)

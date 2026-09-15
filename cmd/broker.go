@@ -15,12 +15,15 @@ import (
 	"github.com/raghavkgarg/mycase/pkg/edgar"
 )
 
-const defaultsPath = "config/defaults.json"
+const defaultsFileName = "defaults.json"
+
+// defaultsPath returns the resolved path to config/defaults.json.
+func defaultsPath() string { return config.Path(defaultsFileName) }
 
 // newBroker creates the appropriate broker based on config/defaults.json.
 // If live is false or credentials are missing/invalid, returns MockBroker.
 func newBroker(live bool) (broker.Broker, error) {
-	defaults := config.LoadUserDefaults(defaultsPath)
+	defaults := config.LoadUserDefaults(defaultsPath())
 	return newBrokerByName(defaults.Broker, live)
 }
 
@@ -35,7 +38,7 @@ func newBrokerByName(name string, live bool) (broker.Broker, error) {
 	case "schwab":
 		return newSchwabBroker()
 	case "zerodha":
-		return zerodha.New(true, "config/config.json"), nil
+		return zerodha.New(true, config.Path("config.json")), nil
 	case "", "mock":
 		return &broker.MockBroker{}, nil
 	default:
@@ -45,10 +48,10 @@ func newBrokerByName(name string, live bool) (broker.Broker, error) {
 
 // newSchwabBroker constructs a live SchwabBroker from config files.
 func newSchwabBroker() (broker.Broker, error) {
-	defaults := config.LoadUserDefaults(defaultsPath)
+	defaults := config.LoadUserDefaults(defaultsPath())
 
-	schwabConfigPath := "config/schwab.json"
-	schwabTokenPath := "config/schwab_token.json"
+	schwabConfigPath := config.Path("schwab.json")
+	schwabTokenPath := config.Path("schwab_token.json")
 
 	if defaults.PipelineConfig != "" {
 		if pipeCfg, err := config.LoadPipelineConfig(defaults.PipelineConfig); err == nil {
@@ -82,10 +85,10 @@ func newSchwabBroker() (broker.Broker, error) {
 // Returns nil if Schwab credentials are not configured or tokens are invalid (not an error —
 // the Router will fall back to Yahoo Finance).
 func newSchwabClient() *schwab.Client {
-	defaults := config.LoadUserDefaults(defaultsPath)
+	defaults := config.LoadUserDefaults(defaultsPath())
 
-	schwabConfigPath := "config/schwab.json"
-	schwabTokenPath := "config/schwab_token.json"
+	schwabConfigPath := config.Path("schwab.json")
+	schwabTokenPath := config.Path("schwab_token.json")
 
 	if defaults.PipelineConfig != "" {
 		if pipeCfg, err := config.LoadPipelineConfig(defaults.PipelineConfig); err == nil {
@@ -125,7 +128,7 @@ func newDataRouter() *datafetcher.Router {
 // MYCASE_EDGAR_USER_AGENT env override (env > config), per the config precedence
 // convention.
 func newEDGARClient() *edgar.Client {
-	defaults := config.LoadUserDefaults(defaultsPath)
+	defaults := config.LoadUserDefaults(defaultsPath())
 	ec := defaults.EDGAR
 	if !ec.Enabled {
 		return nil

@@ -27,7 +27,7 @@ var MonitorCommand = &cli.Command{
 	Name:  "monitor",
 	Usage: "Run portfolio drift monitoring simulation",
 	Flags: []cli.Flag{
-		&cli.StringFlag{Name: "file", Aliases: []string{"f"}, Value: "data/microsmall.csv", Usage: "Path to the portfolio CSV file"},
+		&cli.StringFlag{Name: "file", Aliases: []string{"f"}, Value: config.DataPath("microsmall.csv"), Usage: "Path to the portfolio CSV file"},
 		&cli.BoolFlag{Name: "interactive", Usage: "Run in interactive terminal mode"},
 		&cli.StringFlag{Name: "style", Value: "moderate", Usage: "Monitoring style preset (hyper-aggressive, moderate, passive)"},
 		&cli.FloatFlag{Name: "capital", Value: 100000.0, Usage: "Initial capital invested"},
@@ -114,7 +114,7 @@ func runMonitorWithParams(ctx context.Context, filePath string, interactive bool
 		}
 	}
 
-	mfsCfg, err := config.LoadHardFilters("config/mfs.json", "multibagger")
+	mfsCfg, err := config.LoadHardFilters(config.Path("mfs.json"), "multibagger")
 	maxCapEx := 2.00
 	if err == nil && mfsCfg != nil {
 		maxCapEx = mfsCfg.MaxCapExYoYMultiplier
@@ -372,7 +372,7 @@ func monitorPromptTimeframeChoice() string {
 }
 
 func monitorGetPipelinePurchaseDate() string {
-	file, err := os.Open("config/pipeline.yaml")
+	file, err := os.Open(config.Path("pipeline.yaml"))
 	if err != nil {
 		return "2026-01-01"
 	}
@@ -398,7 +398,7 @@ func monitorGetPipelinePurchaseDate() string {
 }
 
 func monitorGetPipelineStrategy() string {
-	file, err := os.Open("config/pipeline.yaml")
+	file, err := os.Open(config.Path("pipeline.yaml"))
 	if err != nil {
 		return "balanced"
 	}

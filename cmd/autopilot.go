@@ -35,7 +35,7 @@ var autopilotRunCmd = &cli.Command{
 	Name:  "run",
 	Usage: "Execute the non-interactive pipeline: pick → optimize → propose orders → alert",
 	Flags: []cli.Flag{
-		&cli.StringFlag{Name: "config", Value: "config/pipeline.yaml", Usage: "Pipeline config file"},
+		&cli.StringFlag{Name: "config", Value: config.Path("pipeline.yaml"), Usage: "Pipeline config file"},
 		&cli.BoolFlag{Name: "live", Usage: "Use live broker for holdings/quotes (default: mock)"},
 		&cli.BoolFlag{Name: "skip-trading-day-check", Usage: "Run even if today is not a trading day"},
 	},
@@ -46,7 +46,7 @@ var autopilotStatusCmd = &cli.Command{
 	Name:  "status",
 	Usage: "Show pending proposal status and next scheduled run",
 	Flags: []cli.Flag{
-		&cli.StringFlag{Name: "config", Value: "config/pipeline.yaml", Usage: "Pipeline config file"},
+		&cli.StringFlag{Name: "config", Value: config.Path("pipeline.yaml"), Usage: "Pipeline config file"},
 	},
 	Action: runAutopilotStatus,
 }
@@ -61,7 +61,7 @@ var autopilotInstallCmd = &cli.Command{
 	Name:  "install",
 	Usage: "Install system service for scheduled autopilot (launchd on macOS, systemd on Linux)",
 	Flags: []cli.Flag{
-		&cli.StringFlag{Name: "config", Value: "config/pipeline.yaml", Usage: "Pipeline config file"},
+		&cli.StringFlag{Name: "config", Value: config.Path("pipeline.yaml"), Usage: "Pipeline config file"},
 	},
 	Action: runAutopilotInstall,
 }

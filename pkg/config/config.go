@@ -258,11 +258,11 @@ func LoadThemes(filename string) ([]ThemeConfig, error) {
 	if err != nil {
 		// Fallback to default configs
 		return []ThemeConfig{
-			{Name: "Theme KK Advise", Prefix: "My KK", CSVPath: "data/myall.csv", TargetWeight: 0.30},
-			{Name: "Theme AI Advice", Prefix: "My AI", CSVPath: "data/aitheme.csv", TargetWeight: 0.20},
-			{Name: "Theme Micro Advice", Prefix: "My Micro", CSVPath: "data/modularmicro.csv", TargetWeight: 0.30},
-			{Name: "Theme Hydrogen Nuclear", Prefix: "My Hydrogen", CSVPath: "data/hydrogen.csv", TargetWeight: 0.00},
-			{Name: "Theme Microsmall", Prefix: "My MicroSmall", CSVPath: "data/microsmall.csv", TargetWeight: 0.20},
+			{Name: "Theme KK Advise", Prefix: "My KK", CSVPath: DataPath("myall.csv"), TargetWeight: 0.30},
+			{Name: "Theme AI Advice", Prefix: "My AI", CSVPath: DataPath("aitheme.csv"), TargetWeight: 0.20},
+			{Name: "Theme Micro Advice", Prefix: "My Micro", CSVPath: DataPath("modularmicro.csv"), TargetWeight: 0.30},
+			{Name: "Theme Hydrogen Nuclear", Prefix: "My Hydrogen", CSVPath: DataPath("hydrogen.csv"), TargetWeight: 0.00},
+			{Name: "Theme Microsmall", Prefix: "My MicroSmall", CSVPath: DataPath("microsmall.csv"), TargetWeight: 0.20},
 		}, nil
 	}
 	defer file.Close()

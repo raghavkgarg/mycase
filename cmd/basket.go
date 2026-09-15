@@ -31,20 +31,23 @@ var BasketCommand = &cli.Command{
 	Usage: "Execute or preview basket orders",
 	Flags: []cli.Flag{
 		&cli.BoolFlag{Name: "live", Usage: "Use live broker API (default: dry-run mock mode)"},
-		&cli.StringFlag{Name: "file", Value: "data/basket.csv", Usage: "Path to basket CSV file"},
+		&cli.StringFlag{Name: "file", Value: "", Usage: "Path to basket CSV file (default: <data>/basket.csv)"},
 		&cli.StringFlag{Name: "broker", Usage: "Broker to use: zerodha, schwab (default from config/defaults.json)"},
 		&cli.BoolFlag{Name: "tax-optimize", Usage: "Sequence orders to maximize tax-loss harvesting (US; requires 'mycase tax import')"},
 	},
 	Action: func(ctx context.Context, c *cli.Command) error {
 		filename := c.String("file")
+		if filename == "" {
+			filename = config.DataPath("basket.csv")
+		}
 		// Also accept first positional arg as basket name (backward compat)
 		if arg := c.Args().Get(0); arg != "" {
 			cleaned := cleanBasketArg(arg)
 			if cleaned != "" {
 				if strings.HasSuffix(cleaned, ".csv") {
-					filename = "data/" + cleaned
+					filename = config.DataPath(cleaned)
 				} else {
-					filename = "data/" + cleaned + ".csv"
+					filename = config.DataPath(cleaned + ".csv")
 				}
 			}
 		}
@@ -66,7 +69,7 @@ func runBasketWithParams(ctx context.Context, liveMode bool, basketFilename stri
 	if len(brokerOverride) > 0 && brokerOverride[0] != "" {
 		brokerName = brokerOverride[0]
 	} else {
-		defaults := config.LoadUserDefaults(defaultsPath)
+		defaults := config.LoadUserDefaults(defaultsPath())
 		brokerName = defaults.Broker
 		if brokerName == "" {
 			brokerName = "zerodha"

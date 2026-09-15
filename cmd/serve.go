@@ -27,13 +27,13 @@ var ServeCommand = &cli.Command{
 		}
 
 		var dc *cache.Cache
-		if cc, err := cache.Open("data/mycase.db"); err == nil {
+		if cc, err := cache.Open(config.DataPath("mycase.db")); err == nil {
 			yfinance.SetCache(cc)
 			dc = cc
 			defer dc.Close()
 		}
 
-		alertCfg, _ := config.LoadAlertConfig("config/pipeline.yaml")
+		alertCfg, _ := config.LoadAlertConfig(config.Path("pipeline.yaml"))
 
 		addr := ":" + c.String("port")
 		fmt.Printf("Dashboard running at http://localhost%s\n", addr)

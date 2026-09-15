@@ -38,7 +38,7 @@ var daemonStartCmd = &cli.Command{
 	Usage: "Start the drift monitoring loop (blocks until stopped; use install for system service)",
 	Flags: []cli.Flag{
 		&cli.BoolFlag{Name: "live", Usage: "Use live broker API (default: mock)"},
-		&cli.StringFlag{Name: "config", Value: "config/pipeline.yaml", Usage: "Pipeline config file"},
+		&cli.StringFlag{Name: "config", Value: config.Path("pipeline.yaml"), Usage: "Pipeline config file"},
 		&cli.StringFlag{Name: "file", Usage: "Portfolio CSV to check drift against (overrides config)"},
 	},
 	Action: runDaemonStart,
@@ -61,7 +61,7 @@ var daemonCheckCmd = &cli.Command{
 	Usage: "Run a one-shot drift check and exit",
 	Flags: []cli.Flag{
 		&cli.BoolFlag{Name: "live", Usage: "Use live broker API (default: mock)"},
-		&cli.StringFlag{Name: "config", Value: "config/pipeline.yaml", Usage: "Pipeline config file"},
+		&cli.StringFlag{Name: "config", Value: config.Path("pipeline.yaml"), Usage: "Pipeline config file"},
 		&cli.StringFlag{Name: "file", Usage: "Portfolio CSV to check drift against (overrides config)"},
 	},
 	Action: runDaemonCheck,
@@ -86,7 +86,7 @@ func resolvePortfolioFile(c *cli.Command, alertCfg config.AlertConfig) string {
 	if alertCfg.PortfolioFile != "" {
 		return alertCfg.PortfolioFile
 	}
-	return "data/microsmall.csv"
+	return config.DataPath("microsmall.csv")
 }
 
 func runDaemonStart(ctx context.Context, c *cli.Command) error {

@@ -281,7 +281,7 @@ func PrintScuttlebutt(selectedKeys []string, fundamentals map[string]yfinance.Fu
 	exec.Command(pyPath, "scripts/update_sector_tam.py").Run()
 
 	tamMap := make(map[string]string)
-	if data, err := os.ReadFile("config/sector_tam.json"); err == nil {
+	if data, err := os.ReadFile(config.Path("sector_tam.json")); err == nil {
 		json.Unmarshal(data, &tamMap)
 	}
 
