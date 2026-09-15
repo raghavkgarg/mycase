@@ -31,7 +31,7 @@ var PitCommand = &cli.Command{
 	Commands: []*cli.Command{
 		{
 			Name:  "update",
-			Usage: "Execute daily PIT screening run and update data/pit_history.db",
+			Usage: "Execute daily PIT screening run and update data/mycase.db",
 			Flags: []cli.Flag{
 				&cli.StringFlag{Name: "index", Aliases: []string{"i"}, Value: "microcap250,smallcap250", Usage: "Indices to evaluate"},
 				&cli.StringFlag{Name: "method", Aliases: []string{"m"}, Value: "earlymb", Usage: "Strategy method (earlymb, multibagger)"},
@@ -42,7 +42,7 @@ var PitCommand = &cli.Command{
 		},
 		{
 			Name:  "stats",
-			Usage: "Display empirical percentile distributions and historical run stats from data/pit_history.db",
+			Usage: "Display empirical percentile distributions and historical run stats from data/mycase.db",
 			Flags: []cli.Flag{
 				&cli.StringFlag{Name: "index", Aliases: []string{"i"}, Value: "microcap250_smallcap250", Usage: "Index name to analyze"},
 				&cli.StringFlag{Name: "method", Aliases: []string{"m"}, Value: "earlymb", Usage: "Strategy method to analyze"},
@@ -338,7 +338,7 @@ func runPitRetry(ctx context.Context, c *cli.Command) error {
 		if dbErr := db.SaveRunSnapshot(ctx, snap); dbErr != nil {
 			fmt.Printf("Warning: failed to update DuckDB: %v\n", dbErr)
 		} else {
-			fmt.Println("Successfully synchronized updated run snapshot into DuckDB (data/pit_history.db).")
+			fmt.Printf("Successfully synchronized updated run snapshot into DuckDB (%s).\n", pithistory.DefaultDBPath)
 		}
 	}
 
