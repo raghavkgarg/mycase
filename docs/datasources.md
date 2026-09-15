@@ -96,7 +96,7 @@ Treasury data is a non-issue: none of the current factors use a risk-free rate.
 
 ### 4.1 Schwab Market Data API (current US primary)
 
-`pkg/broker/schwab/` — OAuth2, 120 req/min ceiling (client-side sliding window), access token 30 min / refresh 7 days. See `docs/api-rules.md`.
+`pkg/broker/schwab/` — OAuth2, 120 req/min ceiling (client-side `golang.org/x/time/rate` token bucket), access token 30 min / refresh 7 days. See `docs/api-rules.md`.
 
 | Capability | Method | Endpoint | Shape |
 |-----------|--------|----------|-------|

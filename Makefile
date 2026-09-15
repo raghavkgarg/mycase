@@ -1,5 +1,5 @@
 .PHONY: build build-linux-arm64 build-linux-amd64 build-darwin-arm64 build-darwin-amd64
-.PHONY: install run test test-verbose test-race test-integration test-coverage cleanup analyze clean fetch-echarts check-deps deps-graph arch-graph overview-graph help
+.PHONY: install install-gopath uninstall run test test-verbose test-race test-integration test-coverage cleanup analyze clean fetch-echarts check-deps deps-graph arch-graph overview-graph help
 
 # Pinned advisory-analysis tool versions (run via `go run` — no global install needed).
 # Bump deliberately; keep reproducible per the project's determinism convention.
@@ -23,14 +23,57 @@ LDFLAGS    := -X github.com/raghavkgarg/mycase/cmd.Version=$(VERSION) \
               -X github.com/raghavkgarg/mycase/cmd.GitCommit=$(GIT_COMMIT) \
               -X github.com/raghavkgarg/mycase/cmd.BuildDate=$(BUILD_DATE)
 
+# Install location for `make install`. The installed entry is a SYMLINK back to
+# the built dist/mycase in this project tree — mycase resolves its config/ and
+# data/ dirs by following the symlink to the project root (see pkg/config
+# resolveHome). Override with `make install PREFIX=~/.local` for a sudo-free
+# user install, or set MYCASE_HOME to point a plain-copy binary at the tree.
+PREFIX ?= /usr/local
+BINDIR ?= $(PREFIX)/bin
+DIST_BIN := $(abspath dist/mycase)
+INSTALL_LINK := $(BINDIR)/mycase
+
 build:
 	@echo "Building mycase..."
 	@mkdir -p dist
 	@go build -ldflags "$(LDFLAGS)" -o dist/mycase .
 	@echo "Build complete: dist/mycase"
 
-install:
+# install symlinks $(BINDIR)/mycase -> dist/mycase (this project tree). The
+# symlink is deliberate: mycase follows it back to the project root to find
+# config/ and data/ (pkg/config resolveHome). A plain copy into /usr/local/bin
+# would NOT find them — use MYCASE_HOME in that case. Tries without sudo first
+# and only escalates if the link can't be created (e.g. root-owned /usr/local/bin).
+#
+# To keep a SINGLE binary on PATH, it also removes any stale standalone
+# go/bin/mycase (a prior `go install`) that would otherwise shadow this symlink.
+install: build
+	@echo "Installing symlink $(INSTALL_LINK) -> $(DIST_BIN)"
+	@if mkdir -p "$(BINDIR)" 2>/dev/null && ln -sf "$(DIST_BIN)" "$(INSTALL_LINK)" 2>/dev/null; then \
+		:; \
+	else \
+		echo "  $(BINDIR) not writable — retrying with sudo"; \
+		sudo mkdir -p "$(BINDIR)" && sudo ln -sf "$(DIST_BIN)" "$(INSTALL_LINK)"; \
+	fi
+	@gobin="$$(go env GOBIN)"; [ -n "$$gobin" ] || gobin="$$(go env GOPATH)/bin"; \
+	if [ -f "$$gobin/mycase" ] && [ ! -L "$$gobin/mycase" ]; then \
+		echo "Removing stale standalone binary $$gobin/mycase (would shadow the symlink on PATH)"; \
+		rm -f "$$gobin/mycase"; \
+	fi
+	@echo "Installed. 'mycase' resolves config/ and data/ from $(abspath .)"
+	@echo "Verify with:  which mycase && mycase --version   (ensure $(BINDIR) is on your PATH)"
+
+uninstall:
+	@echo "Removing $(INSTALL_LINK)"
+	@if rm -f "$(INSTALL_LINK)" 2>/dev/null; then :; else sudo rm -f "$(INSTALL_LINK)"; fi
+	@echo "Uninstalled."
+
+# install-gopath installs a standalone binary into GOPATH/bin (go install). Note:
+# such a binary has no adjacent project tree, so set MYCASE_HOME (or MYCASE_CONFIG_DIR
+# / MYCASE_DATA_DIR) for it to find config/ and data/.
+install-gopath:
 	@go install -ldflags "$(LDFLAGS)" .
+	@echo "Installed to GOPATH/bin. Set MYCASE_HOME=$(abspath .) so it finds config/ and data/."
 
 build-linux-arm64:
 	@echo "Building for Linux ARM64..."
@@ -175,7 +218,9 @@ fetch-echarts:
 help:
 	@echo "Available targets:"
 	@echo "  build              - Build dist/mycase binary"
-	@echo "  install            - Install to GOPATH/bin"
+	@echo "  install            - Symlink PREFIX/bin/mycase -> dist/mycase (default PREFIX=/usr/local; sudo if needed)"
+	@echo "  install-gopath     - go install to GOPATH/bin (set MYCASE_HOME so it finds config/ + data/)"
+	@echo "  uninstall          - Remove the PREFIX/bin/mycase symlink"
 	@echo "  build-linux-arm64  - Cross-compile for Linux ARM64"
 	@echo "  build-linux-amd64  - Cross-compile for Linux AMD64"
 	@echo "  build-darwin-arm64 - Build for macOS ARM64"
