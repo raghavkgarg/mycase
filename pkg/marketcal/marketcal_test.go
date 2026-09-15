@@ -23,8 +23,10 @@ func TestNSE_SettlementDate(t *testing.T) {
 		{"Saturday Sept 12 10:00 -> Friday Sept 11", time.Date(2026, 9, 12, 10, 0, 0, 0, ist), "2026-09-11"},
 		{"Saturday Sept 12 22:00 -> Friday Sept 11", time.Date(2026, 9, 12, 22, 0, 0, 0, ist), "2026-09-11"},
 		{"Sunday Sept 13 14:00 -> Friday Sept 11", time.Date(2026, 9, 13, 14, 0, 0, 0, ist), "2026-09-11"},
-		{"Monday Sept 14 10:00 (before cutoff) -> Friday Sept 11", time.Date(2026, 9, 14, 10, 0, 0, 0, ist), "2026-09-11"},
-		{"Monday Sept 14 21:05 (after cutoff) -> Monday Sept 14", time.Date(2026, 9, 14, 21, 5, 0, 0, ist), "2026-09-14"},
+		{"Monday Sept 14 10:00 (holiday before cutoff) -> Friday Sept 11", time.Date(2026, 9, 14, 10, 0, 0, 0, ist), "2026-09-11"},
+		{"Monday Sept 14 21:05 (holiday after cutoff) -> Friday Sept 11", time.Date(2026, 9, 14, 21, 5, 0, 0, ist), "2026-09-11"},
+		{"Tuesday Sept 15 14:00 (day after holiday before cutoff) -> Friday Sept 11", time.Date(2026, 9, 15, 14, 0, 0, 0, ist), "2026-09-11"},
+		{"Tuesday Sept 15 21:05 (day after holiday after cutoff) -> Tuesday Sept 15", time.Date(2026, 9, 15, 21, 5, 0, 0, ist), "2026-09-15"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -45,9 +47,11 @@ func TestNSE_NextEODAvailable(t *testing.T) {
 	}{
 		{"Sept 22 10:00 -> same day 21:00", time.Date(2026, 9, 22, 10, 0, 0, 0, ist), "2026-09-22 21:00"},
 		{"Sept 22 21:15 -> next day 21:00", time.Date(2026, 9, 22, 21, 15, 0, 0, ist), "2026-09-23 21:00"},
-		{"Friday 21:15 -> Monday 21:00", time.Date(2026, 9, 11, 21, 15, 0, 0, ist), "2026-09-14 21:00"},
-		{"Saturday 10:00 -> Monday 21:00", time.Date(2026, 9, 12, 10, 0, 0, 0, ist), "2026-09-14 21:00"},
-		{"Sunday 14:00 -> Monday 21:00", time.Date(2026, 9, 13, 14, 0, 0, 0, ist), "2026-09-14 21:00"},
+		{"Friday 21:15 before holiday Monday -> Tuesday 21:00", time.Date(2026, 9, 11, 21, 15, 0, 0, ist), "2026-09-15 21:00"},
+		{"Saturday 10:00 before holiday Monday -> Tuesday 21:00", time.Date(2026, 9, 12, 10, 0, 0, 0, ist), "2026-09-15 21:00"},
+		{"Sunday 14:00 before holiday Monday -> Tuesday 21:00", time.Date(2026, 9, 13, 14, 0, 0, 0, ist), "2026-09-15 21:00"},
+		{"Monday holiday 10:00 -> Tuesday 21:00", time.Date(2026, 9, 14, 10, 0, 0, 0, ist), "2026-09-15 21:00"},
+		{"Normal Saturday 10:00 -> Monday 21:00", time.Date(2026, 9, 19, 10, 0, 0, 0, ist), "2026-09-21 21:00"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -72,18 +76,26 @@ func TestNSE_IsFreshEOD(t *testing.T) {
 		t.Error("Friday 15:00 fetch should be stale on Saturday (before 21:00 settlement)")
 	}
 
+	// On Monday morning (Holiday), Friday fetch remains fresh
 	nowMonPre := time.Date(2026, 9, 14, 10, 0, 0, 0, ist)
 	if !NSE.IsFreshEOD(friSettled, nowMonPre) {
-		t.Error("Friday 21:15 fetch should remain fresh Monday morning before cutoff")
+		t.Error("Friday 21:15 fetch should remain fresh Monday morning")
 	}
 
+	// On Monday evening (Holiday), market was closed so Friday fetch STILL remains fresh
 	nowMonPost := time.Date(2026, 9, 14, 21, 5, 0, 0, ist)
-	if NSE.IsFreshEOD(friSettled, nowMonPost) {
-		t.Error("Friday fetch should be stale Monday after 21:00 settlement")
+	if !NSE.IsFreshEOD(friSettled, nowMonPost) {
+		t.Error("Friday fetch should remain fresh Monday evening because Monday was an NSE holiday")
 	}
-	monSettled := time.Date(2026, 9, 14, 21, 2, 0, 0, ist)
-	if !NSE.IsFreshEOD(monSettled, nowMonPost) {
-		t.Error("Monday 21:02 fetch should be fresh Monday after 21:00 settlement")
+
+	// On Tuesday evening after 21:00 settlement, Tuesday settled, so Friday fetch is now stale
+	nowTuePost := time.Date(2026, 9, 15, 21, 5, 0, 0, ist)
+	if NSE.IsFreshEOD(friSettled, nowTuePost) {
+		t.Error("Friday fetch should be stale Tuesday after 21:00 settlement")
+	}
+	tueSettled := time.Date(2026, 9, 15, 21, 2, 0, 0, ist)
+	if !NSE.IsFreshEOD(tueSettled, nowTuePost) {
+		t.Error("Tuesday 21:02 fetch should be fresh Tuesday after 21:00 settlement")
 	}
 }
 

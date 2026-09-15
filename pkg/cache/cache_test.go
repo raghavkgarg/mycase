@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/raghavkgarg/mycase/pkg/marketdata"
 )
 
 // openTestCache opens a fresh Cache in t.TempDir() and registers cleanup.
@@ -492,6 +494,7 @@ func TestClearAll(t *testing.T) {
 func TestIsFreshToday(t *testing.T) {
 	ist := time.FixedZone("IST", 5*3600+30*60)
 	nowIST := time.Now().In(ist)
+	lastCutoff := marketdata.LastSettledEODTime(time.Now())
 
 	wantStartOfDay := (nowIST.Hour() < 21)
 	tests := []struct {
@@ -504,7 +507,7 @@ func TestIsFreshToday(t *testing.T) {
 		// historical default behavior.
 		{"NSE just now", "RELIANCE", time.Now(), true},
 		{"NSE start of today IST", "RELIANCE", time.Date(nowIST.Year(), nowIST.Month(), nowIST.Day(), 0, 0, 0, 0, ist), wantStartOfDay},
-		{"NSE yesterday", "RELIANCE", time.Now().AddDate(0, 0, -1), false},
+		{"NSE before last settlement cutoff", "RELIANCE", lastCutoff.Add(-1 * time.Hour), false},
 		{"NSE last week", "RELIANCE", time.Now().AddDate(0, 0, -7), false},
 		// US ticker resolves to the NYSE clock (16:00 ET). A just-now fetch is
 		// always fresh; a week-old fetch never is, regardless of market.
@@ -521,19 +524,22 @@ func TestIsFreshToday(t *testing.T) {
 }
 
 func TestIsFreshFundamentals(t *testing.T) {
+	ist := time.FixedZone("IST", 5*3600+30*60)
+	nowIST := time.Now().In(ist)
+	lastCutoff := marketdata.LastSettledEODTime(time.Now())
+
+	wantStartOfDay := (nowIST.Hour() < 21)
 	tests := []struct {
 		name      string
 		ticker    string
 		fetchedAt time.Time
 		want      bool
 	}{
-		{"just now", "RELIANCE", time.Now(), true},
-		{"23h ago", "RELIANCE", time.Now().Add(-23 * time.Hour), true},
-		{"exactly 24h ago", "RELIANCE", time.Now().Add(-24 * time.Hour), false},
-		{"25h ago", "RELIANCE", time.Now().Add(-25 * time.Hour), false},
-		// US ticker: 24h fallback window applies identically. Use a fetch old
-		// enough (8 days) to predate the last settled EOD in any market, so
-		// neither the EOD-freshness branch nor the 24h window keeps it fresh.
+		{"NSE just now", "RELIANCE", time.Now(), true},
+		{"NSE start of today IST", "RELIANCE", time.Date(nowIST.Year(), nowIST.Month(), nowIST.Day(), 0, 0, 0, 0, ist), wantStartOfDay},
+		{"NSE before last settlement cutoff", "RELIANCE", lastCutoff.Add(-1 * time.Hour), false},
+		{"NSE last week", "RELIANCE", time.Now().AddDate(0, 0, -7), false},
+		// US ticker resolves to the NYSE clock (16:00 ET).
 		{"US just now", "US:AAPL", time.Now(), true},
 		{"US 8 days ago", "US:AAPL", time.Now().AddDate(0, 0, -8), false},
 	}

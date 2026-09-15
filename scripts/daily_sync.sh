@@ -23,19 +23,20 @@ if [ "$DAY_OF_WEEK" -ge 6 ]; then
     exit 0
 fi
 
-# 3. NSE Trading Holidays (YYYY-MM-DD : Holiday Name)
-typeset -A NSE_HOLIDAYS=(
-    ["2026-09-14"]="Ganesh Chaturthi"
-    ["2026-10-02"]="Mahatma Gandhi Jayanti"
-    ["2026-10-20"]="Dussehra"
-    ["2026-11-10"]="Diwali-Balipratipada"
-    ["2026-11-24"]="Prakash Gurpurb Sri Guru Nanak Dev"
-    ["2026-12-25"]="Christmas"
-)
+# 3. NSE Trading Holidays (from config/nse_holidays.json)
+HOLIDAYS_FILE="$PROJECT_DIR/config/nse_holidays.json"
+if [ -f "$HOLIDAYS_FILE" ]; then
+    HOLIDAY_NAME=""
+    if command -v jq >/dev/null 2>&1; then
+        HOLIDAY_NAME=$(jq -r --arg d "$TODAY" '.[$d] // empty' "$HOLIDAYS_FILE" 2>/dev/null || true)
+    elif command -v python3 >/dev/null 2>&1; then
+        HOLIDAY_NAME=$(python3 -c "import json; d=json.load(open('$HOLIDAYS_FILE')); print(d.get('$TODAY', ''))" 2>/dev/null || true)
+    fi
 
-if [[ -n "${NSE_HOLIDAYS[$TODAY]:-}" ]]; then
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] Today ($TODAY) is an NSE Holiday: ${NSE_HOLIDAYS[$TODAY]}. Skipping run." >> "$LOG_FILE"
-    exit 0
+    if [[ -n "$HOLIDAY_NAME" ]]; then
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] Today ($TODAY) is an NSE Holiday: $HOLIDAY_NAME. Skipping run." >> "$LOG_FILE"
+        exit 0
+    fi
 fi
 
 # 4. Authenticate with broker (Zerodha Kite)

@@ -27,7 +27,10 @@
 package marketcal
 
 import (
+	"encoding/json"
+	"os"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -38,6 +41,66 @@ import (
 type Clock struct {
 	Loc        *time.Location
 	CutoffHour int
+	IsHoliday  func(t time.Time) bool
+}
+
+const defaultNSEHolidaysPath = "config/nse_holidays.json"
+
+var (
+	nseHolidaysMu sync.RWMutex
+	nseHolidays   = make(map[string]string)
+)
+
+func init() {
+	// Dynamically load from config/nse_holidays.json, checking root and parent paths (for tests).
+	candidates := []string{
+		defaultNSEHolidaysPath,
+		"../../" + defaultNSEHolidaysPath,
+		"../" + defaultNSEHolidaysPath,
+	}
+	for _, path := range candidates {
+		if err := LoadNSEHolidaysFromFile(path); err == nil {
+			break
+		}
+	}
+}
+
+// LoadNSEHolidaysFromFile loads holidays from a JSON file path and merges them into the active holiday set.
+func LoadNSEHolidaysFromFile(path string) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	var parsed map[string]string
+	if err := json.Unmarshal(data, &parsed); err != nil {
+		return err
+	}
+	nseHolidaysMu.Lock()
+	defer nseHolidaysMu.Unlock()
+	for k, v := range parsed {
+		nseHolidays[k] = v
+	}
+	return nil
+}
+
+// SetNSEHolidays replaces or sets the active NSE trading holidays map.
+func SetNSEHolidays(holidays map[string]string) {
+	nseHolidaysMu.Lock()
+	defer nseHolidaysMu.Unlock()
+	nseHolidays = make(map[string]string, len(holidays))
+	for k, v := range holidays {
+		nseHolidays[k] = v
+	}
+}
+
+// IsNSEHoliday reports whether the given date (in IST) is an NSE trading holiday.
+func IsNSEHoliday(t time.Time) bool {
+	ist := mustLoad("Asia/Kolkata", 5*3600+30*60)
+	dateKey := t.In(ist).Format("2006-01-02")
+	nseHolidaysMu.RLock()
+	defer nseHolidaysMu.RUnlock()
+	_, ok := nseHolidays[dateKey]
+	return ok
 }
 
 func mustLoad(name string, fallbackOffsetSec int) *time.Location {
@@ -53,9 +116,12 @@ func mustLoad(name string, fallbackOffsetSec int) *time.Location {
 	return time.FixedZone(abbrev, fallbackOffsetSec)
 }
 
-// NSE is the India (NSE) settlement clock: Asia/Kolkata, 21:00 IST cutoff.
-// This preserves the exact behavior of the legacy marketdata IST helpers.
-var NSE = Clock{Loc: mustLoad("Asia/Kolkata", 5*3600+30*60), CutoffHour: 21}
+// NSE is the India (NSE) settlement clock: Asia/Kolkata, 21:00 IST cutoff, holiday-aware.
+var NSE = Clock{
+	Loc:        mustLoad("Asia/Kolkata", 5*3600+30*60),
+	CutoffHour: 21,
+	IsHoliday:  IsNSEHoliday,
+}
 
 // NYSE is the US settlement clock: America/New_York, 16:00 ET regular close.
 var NYSE = Clock{Loc: mustLoad("America/New_York", -5*3600), CutoffHour: 16}
@@ -79,14 +145,23 @@ func (c Clock) atCutoff(d time.Time) time.Time {
 	return time.Date(d.Year(), d.Month(), d.Day(), c.CutoffHour, 0, 0, 0, c.Loc)
 }
 
+func (c Clock) isTradingDay(d time.Time) bool {
+	if d.Weekday() == time.Saturday || d.Weekday() == time.Sunday {
+		return false
+	}
+	if c.IsHoliday != nil && c.IsHoliday(d) {
+		return false
+	}
+	return true
+}
+
 // LastSettledEOD returns the timestamp of the most recent completed EOD
 // settlement cutoff at or before t.
 //
-// The rule (expressed once, weekend-aware): interpret t in the market's
+// The rule (expressed once, weekend- and holiday-aware): interpret t in the market's
 // timezone; if it is before today's cutoff hour, today has not settled yet so
-// step back a day; then walk back over any weekend days (no settlement on
-// Saturday/Sunday) to the most recent weekday. The result is that weekday's
-// cutoff timestamp.
+// step back a day; then walk back over any non-trading days (weekends and holidays)
+// to the most recent trading day. The result is that trading day's cutoff timestamp.
 func (c Clock) LastSettledEOD(t time.Time) time.Time {
 	local := t.In(c.Loc)
 
@@ -94,8 +169,8 @@ func (c Clock) LastSettledEOD(t time.Time) time.Time {
 	if local.Hour() < c.CutoffHour {
 		local = local.AddDate(0, 0, -1)
 	}
-	// Walk back over weekend days (markets don't settle Sat/Sun).
-	for local.Weekday() == time.Saturday || local.Weekday() == time.Sunday {
+	// Walk back over non-trading days (weekends and exchange holidays).
+	for !c.isTradingDay(local) {
 		local = local.AddDate(0, 0, -1)
 	}
 	return c.atCutoff(local)
@@ -117,17 +192,17 @@ func (c Clock) SettlementDate(t time.Time) time.Time {
 
 // NextEODAvailable returns the timestamp at which the next EOD file will become
 // available (the next settlement cutoff strictly after the current one),
-// skipping weekends. If t is before today's cutoff on a weekday, that is today's
-// cutoff; otherwise it is the next trading day's cutoff.
+// skipping weekends and holidays. If t is before today's cutoff on an active
+// trading day, that is today's cutoff; otherwise it searches forward.
 func (c Clock) NextEODAvailable(t time.Time) time.Time {
 	local := t.In(c.Loc)
 
-	// Candidate is today's cutoff if we're still before it on a weekday;
+	// Candidate is today's cutoff if we're still before it on an active trading day;
 	// otherwise advance to the next calendar day and search forward.
-	if local.Hour() >= c.CutoffHour {
+	if local.Hour() >= c.CutoffHour || !c.isTradingDay(local) {
 		local = local.AddDate(0, 0, 1)
 	}
-	for local.Weekday() == time.Saturday || local.Weekday() == time.Sunday {
+	for !c.isTradingDay(local) {
 		local = local.AddDate(0, 0, 1)
 	}
 	return c.atCutoff(local)
