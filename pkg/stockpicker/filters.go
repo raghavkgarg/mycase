@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/raghavkgarg/mycase/pkg/config"
+	"github.com/raghavkgarg/mycase/pkg/marketfmt"
 	"github.com/raghavkgarg/mycase/pkg/optimizer"
 	"github.com/raghavkgarg/mycase/pkg/selectiontracker"
 	"github.com/raghavkgarg/mycase/pkg/yfinance"
@@ -397,6 +398,7 @@ func isEligible(
 	rsPercentiles map[string]float64,
 	stats *FilterStats,
 	isExisting bool,
+	mkt marketfmt.Market,
 ) (bool, string) {
 	// Soft-band tolerance adjustments for existing portfolio holdings (anti-churn preservation)
 	minROCE := hardFilters.MinROCE
@@ -439,7 +441,7 @@ func isEligible(
 	if (hardFilters.MinMarketCap > 0 && f.MarketCap < hardFilters.MinMarketCap) ||
 		(hardFilters.MaxMarketCap > 0 && f.MarketCap > hardFilters.MaxMarketCap) {
 		stats.EliminatedSize++
-		return false, fmt.Sprintf("Market Cap limit check failed (Market Cap: %.0fCr)", f.MarketCap/1e7)
+		return false, fmt.Sprintf("Market Cap limit check failed (Market Cap: %s)", marketfmt.Compact(f.MarketCap, mkt))
 	}
 
 	// 2. Liquidity Limit check
@@ -450,7 +452,7 @@ func isEligible(
 	adv := f.AverageVolume * price
 	if hardFilters.MinADV > 0 && adv < hardFilters.MinADV {
 		stats.EliminatedLiquidity++
-		return false, fmt.Sprintf("ADV limit check failed (ADV: %.2fCr < %.2fCr limit)", adv/1e7, hardFilters.MinADV/1e7)
+		return false, fmt.Sprintf("ADV limit check failed (ADV: %s < %s limit)", marketfmt.Compact(adv, mkt), marketfmt.Compact(hardFilters.MinADV, mkt))
 	}
 
 	// 3. Cash Flow Quality check
@@ -797,6 +799,30 @@ func isEligible(
 	return true, ""
 }
 
+// marketFromTickers infers the market for formatting from constituent tickers.
+// US tickers carry a "US:" exchange prefix; India tickers use "NSE:"/"BSE:" or
+// none. If every prefixed ticker is US, the set is US; otherwise India. This
+// mirrors the convention used across the picker and keeps marketfmt a pure leaf
+// (stockpicker owns the ticker→market policy, not marketfmt).
+func marketFromTickers(tickers []string) marketfmt.Market {
+	sawPrefix := false
+	allUS := true
+	for _, tk := range tickers {
+		idx := strings.Index(tk, ":")
+		if idx <= 0 {
+			continue
+		}
+		sawPrefix = true
+		if !strings.EqualFold(tk[:idx], "US") {
+			allUS = false
+		}
+	}
+	if sawPrefix && allUS {
+		return marketfmt.US
+	}
+	return marketfmt.India
+}
+
 // ApplySafetyFilters filters out companies based on safety/fundamental thresholds.
 func ApplySafetyFilters(
 	ctx context.Context,
@@ -810,6 +836,8 @@ func ApplySafetyFilters(
 ) []string {
 	var filteredKeys []string
 	var stats FilterStats
+
+	mkt := marketFromTickers(activeKeys)
 
 	tracker.InitialCount = len(activeKeys)
 
@@ -863,7 +891,7 @@ func ApplySafetyFilters(
 		if existingHoldings != nil {
 			_, isExisting = existingHoldings[t]
 		}
-		eligible, reason := isEligible(t, f, method, hardFilters, hist.Closes, hist.Opens, hist.Volumes, rsPercentiles, &stats, isExisting)
+		eligible, reason := isEligible(t, f, method, hardFilters, hist.Closes, hist.Opens, hist.Volumes, rsPercentiles, &stats, isExisting, mkt)
 		if eligible {
 			filteredKeys = append(filteredKeys, t)
 		} else {
@@ -871,7 +899,7 @@ func ApplySafetyFilters(
 		}
 	}
 
-	PrintSafetyFilterSummary(hardFilters, stats, method, len(filteredKeys), len(activeKeys))
+	PrintSafetyFilterSummary(hardFilters, stats, method, len(filteredKeys), len(activeKeys), mkt)
 	return filteredKeys
 }
 

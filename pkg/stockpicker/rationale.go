@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/raghavkgarg/mycase/pkg/config"
+	"github.com/raghavkgarg/mycase/pkg/marketfmt"
 	"github.com/raghavkgarg/mycase/pkg/yfinance"
 )
 
@@ -48,7 +49,7 @@ func BuildRationale(
 		}
 		passedAsset, atPrev, atLatest, pctCapExChange, capexLatestAbs := yfinance.CalculateAssetTurnoverCapEx(&fund, maxCapEx)
 		if passedAsset || (atPrev > 0 && atLatest > 0) {
-			rationale = append(rationale, fmt.Sprintf("Asset Turnover & CapEx Inflection: Asset turnover expanded YoY from %.2f to %.2f, indicating rising sales efficiency, while CapEx stabilized (YoY change of %+.1f%%, latest CapEx: %.1fCr).", atPrev, atLatest, pctCapExChange, capexLatestAbs/1e7))
+			rationale = append(rationale, fmt.Sprintf("Asset Turnover & CapEx Inflection: Asset turnover expanded YoY from %.2f to %.2f, indicating rising sales efficiency, while CapEx stabilized (YoY change of %+.1f%%, latest CapEx: %s).", atPrev, atLatest, pctCapExChange, marketfmt.Compact(capexLatestAbs, marketFromTickers([]string{ticker}))))
 		} else {
 			rationale = append(rationale, "Asset Turnover & CapEx Inflection: Insufficient matching annual net PPE and CapEx data to determine operating leverage.")
 		}

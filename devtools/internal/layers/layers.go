@@ -48,6 +48,7 @@ var Layers = map[string]int{
 	"logging":          0,
 	"market":           0,
 	"marketdata":       0,
+	"marketfmt":        0, // market-aware currency/magnitude formatting (₹ Cr/L, $ K/M/B/T) — pure, zero-import
 	"render":           0,
 	"selectiontracker": 0,
 	"universe":         0,

@@ -11,6 +11,7 @@ import (
 
 	"github.com/raghavkgarg/mycase/pkg/config"
 	"github.com/raghavkgarg/mycase/pkg/marketdata"
+	"github.com/raghavkgarg/mycase/pkg/marketfmt"
 	"github.com/raghavkgarg/mycase/pkg/selectiontracker"
 	"github.com/raghavkgarg/mycase/pkg/yfinance"
 )
@@ -300,6 +301,7 @@ func TestIsEligible(t *testing.T) {
 		nil,
 		stats,
 		false,
+		marketfmt.India,
 	)
 
 	if !eligible {
@@ -317,6 +319,7 @@ func TestIsEligible(t *testing.T) {
 		nil,
 		stats,
 		false,
+		marketfmt.India,
 	)
 
 	// Since mockFilters.MinMarketCap is 500 and market cap is 1000, it passes.
@@ -337,6 +340,7 @@ func TestIsEligible(t *testing.T) {
 		nil,
 		stats,
 		false,
+		marketfmt.India,
 	)
 	if eligibleLowCapFail {
 		t.Errorf("expected stock to fail due to low market cap, but it passed")
@@ -361,7 +365,7 @@ func TestSoftBandToleranceForExistingHoldings(t *testing.T) {
 	statsExisting := &FilterStats{}
 
 	// New candidate (isExisting = false) should fail CROIC 6.0% check
-	passedNew, reasonNew := isEligible("NSE:TEST", f, "balanced", &filters, nil, nil, nil, nil, statsNew, false)
+	passedNew, reasonNew := isEligible("NSE:TEST", f, "balanced", &filters, nil, nil, nil, nil, statsNew, false, marketfmt.India)
 	if passedNew {
 		t.Errorf("expected new candidate with 5.5%% CROIC to fail 6.0%% check")
 	}
@@ -370,7 +374,7 @@ func TestSoftBandToleranceForExistingHoldings(t *testing.T) {
 	}
 
 	// Existing holding (isExisting = true) gets 20% soft buffer (0.06 * 0.8 = 4.8%), so 5.5% passes!
-	passedExisting, reasonExisting := isEligible("NSE:TEST", f, "balanced", &filters, nil, nil, nil, nil, statsExisting, true)
+	passedExisting, reasonExisting := isEligible("NSE:TEST", f, "balanced", &filters, nil, nil, nil, nil, statsExisting, true, marketfmt.India)
 	if !passedExisting {
 		t.Errorf("expected existing holding with 5.5%% CROIC to pass via soft buffer, failed with: %s", reasonExisting)
 	}
@@ -389,11 +393,11 @@ func TestSoftBandToleranceForExistingHoldings(t *testing.T) {
 	fBasic := yfinance.Fundamentals{
 		MarketCap: 1e11,
 	}
-	passedSMANew, _ := isEligible("NSE:TEST", fBasic, "balanced", &smaFilters, closes, nil, nil, nil, &FilterStats{}, false)
+	passedSMANew, _ := isEligible("NSE:TEST", fBasic, "balanced", &smaFilters, closes, nil, nil, nil, &FilterStats{}, false, marketfmt.India)
 	if passedSMANew {
 		t.Errorf("expected new candidate with 0.94 SMA ratio to fail 0.95 limit")
 	}
-	passedSMAExisting, reasonSMA := isEligible("NSE:TEST", fBasic, "balanced", &smaFilters, closes, nil, nil, nil, &FilterStats{}, true)
+	passedSMAExisting, reasonSMA := isEligible("NSE:TEST", fBasic, "balanced", &smaFilters, closes, nil, nil, nil, &FilterStats{}, true, marketfmt.India)
 	if !passedSMAExisting {
 		t.Errorf("expected existing holding with 0.94 SMA ratio to pass via 0.90 soft cushion, failed with: %s", reasonSMA)
 	}
@@ -417,11 +421,11 @@ func TestSoftBandToleranceForExistingHoldings(t *testing.T) {
 	testCloses := []float64{99.0, 105.0}
 	testOpens := []float64{100.0, 100.0}
 	testVolumes := []float64{1000.0, 5000.0}
-	passedOpNew, _ := isEligible("NSE:TEST", fOp, "multibagger", &opFilters, testCloses, testOpens, testVolumes, nil, &FilterStats{}, false)
+	passedOpNew, _ := isEligible("NSE:TEST", fOp, "multibagger", &opFilters, testCloses, testOpens, testVolumes, nil, &FilterStats{}, false, marketfmt.India)
 	if passedOpNew {
 		t.Errorf("expected new candidate with 1/3 operational criteria to fail 2/3 requirement")
 	}
-	passedOpExisting, reasonOp := isEligible("NSE:TEST", fOp, "multibagger", &opFilters, testCloses, testOpens, testVolumes, nil, &FilterStats{}, true)
+	passedOpExisting, reasonOp := isEligible("NSE:TEST", fOp, "multibagger", &opFilters, testCloses, testOpens, testVolumes, nil, &FilterStats{}, true, marketfmt.India)
 	if !passedOpExisting {
 		t.Errorf("expected existing holding with 1/3 operational criteria to pass 1/3 requirement, failed with: %s", reasonOp)
 	}
@@ -1205,7 +1209,7 @@ func TestEarlyMultibaggerStrategyFilters(t *testing.T) {
 		MinROE:             0.12,
 		MinPromoterPercent: 0.25,
 	}
-	passedFin, reasonFin := isEligible("NSE:HDFC", fFinPass, "earlymb", &filters, nil, nil, nil, nil, &FilterStats{}, false)
+	passedFin, reasonFin := isEligible("NSE:HDFC", fFinPass, "earlymb", &filters, nil, nil, nil, nil, &FilterStats{}, false, marketfmt.India)
 	if !passedFin {
 		t.Errorf("expected Financial Services stock with 15%% ROE and 16%% promoter stake to pass Stage-1, failed: %s", reasonFin)
 	}
@@ -1215,7 +1219,7 @@ func TestEarlyMultibaggerStrategyFilters(t *testing.T) {
 		ROE:             0.08, // 8% ROE < 12% threshold
 		InsidersPercent: 0.16,
 	}
-	passedFinFail, reasonFinFail := isEligible("NSE:WEAKBANK", fFinFail, "earlymb", &filters, nil, nil, nil, nil, &FilterStats{}, false)
+	passedFinFail, reasonFinFail := isEligible("NSE:WEAKBANK", fFinFail, "earlymb", &filters, nil, nil, nil, nil, &FilterStats{}, false, marketfmt.India)
 	if passedFinFail {
 		t.Errorf("expected Financial Services stock with 8%% ROE to fail Stage-1 ROE gate")
 	}
@@ -1228,7 +1232,7 @@ func TestEarlyMultibaggerStrategyFilters(t *testing.T) {
 	for i := range testClosesFalling {
 		testClosesFalling[i] = 200.0 - float64(i)*2.0 // falling price, negative RS
 	}
-	passedWeakRS, reasonWeakRS := isEligible("NSE:WEAKRSBANK", fFinPass, "earlymb", &filters, testClosesFalling, nil, nil, nil, &FilterStats{}, false)
+	passedWeakRS, reasonWeakRS := isEligible("NSE:WEAKRSBANK", fFinPass, "earlymb", &filters, testClosesFalling, nil, nil, nil, &FilterStats{}, false, marketfmt.India)
 	if passedWeakRS {
 		t.Errorf("expected Financial Services stock with negative relative strength to fail promoter exemption")
 	}
@@ -1242,7 +1246,7 @@ func TestEarlyMultibaggerStrategyFilters(t *testing.T) {
 		ROE:             0.20,
 		InsidersPercent: 0.18, // < 25% floor
 	}
-	passedNonFin, reasonNonFin := isEligible("NSE:MANUF", fNonFin, "earlymb", &filters, nil, nil, nil, nil, &FilterStats{}, false)
+	passedNonFin, reasonNonFin := isEligible("NSE:MANUF", fNonFin, "earlymb", &filters, nil, nil, nil, nil, &FilterStats{}, false, marketfmt.India)
 	if passedNonFin {
 		t.Errorf("expected Non-Financial stock with 18%% promoter stake to fail 25%% promoter floor")
 	}
@@ -1287,7 +1291,7 @@ func TestEarlyMultibaggerStrategyFilters(t *testing.T) {
 	}
 	// In production, delivery override stays in shadow mode; the legacy ROCE floor is strictly enforced.
 	// A 5.0% ROCE (< 7.0% floor) must be rejected in production.
-	passedTech, reasonTech := isEligible("NSE:TECHCO", fTechConfirmed, "earlymb", &filters, testClosesRising, nil, nil, nil, &FilterStats{}, false)
+	passedTech, reasonTech := isEligible("NSE:TECHCO", fTechConfirmed, "earlymb", &filters, testClosesRising, nil, nil, nil, &FilterStats{}, false, marketfmt.India)
 	if passedTech {
 		t.Errorf("expected Tech stock with 5%% ROCE to be rejected under production legacy ROCE floor")
 	}
@@ -1309,7 +1313,7 @@ func TestEarlyMultibaggerStrategyFilters(t *testing.T) {
 			{Date: "2025-03-31", Value: 200}, // Cap Employed = 1000 => ROCE = 10.0% (< 12.0%)
 		},
 	}
-	passedInd, reasonInd := isEligible("NSE:INDCO", fIndNoDeliv, "earlymb", &filters, testClosesRising, nil, nil, nil, &FilterStats{}, false)
+	passedInd, reasonInd := isEligible("NSE:INDCO", fIndNoDeliv, "earlymb", &filters, testClosesRising, nil, nil, nil, &FilterStats{}, false, marketfmt.India)
 	if passedInd {
 		t.Errorf("expected Industrials stock with 10%% ROCE and no delivery to fail 12%% ROCE floor")
 	}
@@ -1339,7 +1343,7 @@ func TestEarlyMultibaggerStrategyFilters(t *testing.T) {
 			{Date: "2025-03-31", Value: 200},
 		},
 	}
-	passedBase, reasonBase := isEligible("NSE:FRESH", fFresh, "earlymb", &earlyFilters, closesFreshBase, nil, nil, nil, &FilterStats{}, false)
+	passedBase, reasonBase := isEligible("NSE:FRESH", fFresh, "earlymb", &earlyFilters, closesFreshBase, nil, nil, nil, &FilterStats{}, false, marketfmt.India)
 	if !passedBase {
 		t.Errorf("expected fresh breakout with short base duration to pass Stage-1 under graduated scoring rule, failed: %s", reasonBase)
 	}

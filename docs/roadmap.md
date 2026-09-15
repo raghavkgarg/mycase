@@ -111,6 +111,12 @@ Automation eliminates all four. The system runs quarterly, follows its rules, an
 | Steering `architecture.md` layer table is stale | `.kiro/steering/architecture.md` | Table omitted `universe` (L0), `kiteclient` (L1), `pithistory` (L4) | **RESOLVED (R18)** — table synced to `layers.go` | ✅ |
 | API-layer diagnostics still on `fmt.Print*`; `pkg/logging` `LogResponse`/`Timer` helpers built but never called | `pkg/broker/schwab/*`, `pkg/yfinance/{yfinance,prices,metrics,screener}.go`, `pkg/datafetcher/datafetcher.go` | Fetch warnings/progress polluted stdout; the API-rule enforcement helper (`LogResponse`) was dead | **RESOLVED (R14.5 / R19)** — API diagnostics → `slog.*Context`; genuine interactive/user lines kept on stdout | ✅ |
 | ~~Schwab fundamentals mapper drops derivable fields~~ | ~~`pkg/broker/schwab/market.go` `mapSchwabFundamentals`~~ | **PARTLY RESOLVED (Phase 10a)** — `NetIncome` + `RegularPrice` now derived; `Sector` backfilled from constituents CSV via `stockpicker.InjectSectors` | 🟧 sector-via-CSV done, EDGAR statements → 10c |
+| `pick` eliminates all constituents at the market-cap gate (`0 / N`) | `pkg/stockpicker/filters.go` `isEligible` (size check) ← `pkg/broker/schwab/market.go` fundamentals mapper | **OPEN (2026-09-15)** — for US runs `Fundamentals.MarketCap` is `0` for every ticker, so `0 < MinMarketCap` eliminates all. The fundamentals endpoint returns **200** (confirmed in logs), so this is a **parse/mapping bug downstream of a successful fetch**, not auth/fetch. `marketfmt` (this session) fixed the band *label* (`$5.0B–$5.0T`), not the zero values. Triage offline via saved responses. | 🟥 needs raw-capture first |
+| `pick` report dir/CSV naming ignores `--index` / `--method` flags | report/basket writers | **OPEN (2026-09-15)** — ran `--index sp500 --method us_quality_momentum` but artifacts filed under `us_microsmall_multibagger/` and the report said "Multibagger Preset". Naming derives from config/golden-copy, not the actual flags. | 🟧 |
+| Two divergent cache DBs coexist | `data/cache.db` (Sep 8, `source=NULL`, 507 tickers, tax tables) vs `data/mycase.db` (newer schema) | **OPEN (2026-09-15)** — `cache.db` looks like a stale pre-refactor artifact; confirm no live reader and retire. | 🟧 |
+| No raw-response archive / offline replay | API clients (`schwab`, `yfinance`) | **OPEN (2026-09-15)** — API rules mandate "fetch once, analyze offline" but nothing enforces it; triage repeatedly wants live calls. See `docs/plans/raw-response-capture.md`. | 🟧 |
+| `data/` + `report/` are deeply nested with path-encoded identity | `data/**`, `report/**`; writers in `selectiontracker`, proposal/backup/monitor paths | **OPEN (2026-09-15)** — flatten to a single `data/` tree (+ disposable `data/raw/`) with a filename naming convention. See `docs/plans/data-report-flatten.md`. | 🟧 |
+| `docs/` sprawl (28 md files, heavy overlap) | `docs/**` | **OPEN (2026-09-15)** — consolidate to a maintained core + `archive/`; add an index. See `docs/plans/docs-consolidation.md`. | 🟩 low |
 
 ---
 
@@ -180,6 +186,66 @@ Small items left open by shipped phases:
 - **Market-aware EOD settlement — `pkg/marketcal`** ✅ **DONE**: extracted the EOD-settlement time math into a pure, stdlib-only leaf (`pkg/marketcal`, layer L-1 below the L0 leaves) parameterized by a market `Clock{Loc, CutoffHour}`. `NSE` = Asia/Kolkata @ 21:00 IST (India legacy), `NYSE` = America/New_York @ 16:00 ET (DST-correct via `LoadLocation`); `ClockForTicker` selects by ticker prefix (`US:`/`NYSE:`/`NASDAQ:` → NYSE, else NSE). `marketdata` keeps its four exported EOD funcs as thin NSE-default delegations (+ new `*ForTicker` variants), so existing call sites/tests are unchanged. **Bug fix**: cache freshness (`pkg/cache`) previously judged *all* rows — including US data — against the 21:00 IST clock; `isFreshToday`/`isFreshFundamentals` now take the ticker and use its market clock. Resolves the layering triplication that had copied the settlement math into `cache` and `selectiontracker`. Known limitation: weekend-aware only, no exchange holiday calendar yet.
 - **Standardized external-API rate limiting on `golang.org/x/time/rate`** ✅ **DONE**: all three API clients now pace through the same token-bucket package. `pkg/edgar` (10 req/s, from 10c), `pkg/broker/schwab` (migrated off a hand-rolled sliding window → 120 req/min = 2/s, burst 120), and `pkg/yfinance` (new process-wide limiter, 10 req/s burst 20, gated at `executeYFinanceRequest` + the raw timeseries call; overridable via `SetRateLimiter`). Yahoo previously had *no* rate limit — only fixed worker-pool sizes — the 429 risk the API rules warn about.
 - **Home-relative config/data resolution** ✅ **DONE**: config was loaded via CWD-relative paths, so the binary only worked from the repo root. Added a home resolver in `pkg/config` (`Home()`/`Path()`/`DataPath()`): precedence `$MYCASE_HOME` > binary-relative (follows a `/usr/local/bin` symlink back to the project tree via `EvalSymlinks`, validated by `config/` existing) > CWD; plus `$MYCASE_CONFIG_DIR`/`$MYCASE_DATA_DIR` overrides. `make install` now symlinks `/usr/local/bin/mycase → dist/mycase` so the installed binary resolves `config/`+`data/` from the tree. **Deferred (R15)**: package-level *write/state* dir constants (`logging.DefaultDir`, daemon PID/state, autopilot proposal dir, snapshot dirs) remain relative — those live in leaf packages and need the dir injected from the composition root (`MYCASE_DATA_DIR` write path).
+
+---
+
+### Phase 11: Data & observability hygiene (planned)
+
+Foundational cleanup surfaced during the 2026-09-15 session. Ordered by dependency —
+raw-capture unblocks the fundamentals-mapping fix; formatting groundwork already
+shipped.
+
+- **Market-aware formatting — `pkg/marketfmt`** ✅ **DONE (2026-09-15)**: pure,
+  zero-import leaf (sibling to `marketcal`, L0) for currency/magnitude formatting —
+  US `$` K/M/B/T, India `₹` L/Cr. Wired into `cmd/performance` and the stock-picker
+  filter summary / eligibility reasons / rationale, replacing hardcoded `Rs. `/`%.0fCr`
+  / `/1e7`. Fixes the nonsensical `500Cr–500000Cr` band label for US runs
+  (`$5.0B–$5.0T`, "no cap" when max=0).
+- **Raw API response capture + offline replay** ⬜ **TODO**: nothing enforces the
+  API rule "fetch once, analyze offline", so triage keeps re-hitting live endpoints.
+  Hook the single chokepoints (`schwab.Client.doRequest`, yfinance
+  `executeYFinanceRequest`): on a 2xx, buffer the body, write raw bytes to a
+  disposable `data/raw/<source>/<date>/<endpoint>__<symbol>__<HHMMSS>.json`, then
+  replace `resp.Body` so callers are unchanged. **Never** capture token/auth
+  responses (secrets). Phase 2: a replay `http.RoundTripper` backed by the archive
+  (`--replay`) so `pick`/etc. rerun the whole pipeline with zero live calls — this
+  is what makes the fundamentals-mapping bug below debuggable offline. Open call:
+  capture default on (with retention bound) vs off behind `--capture`/`MYCASE_CAPTURE`.
+- **Fix `pick` `0 / N` — Schwab fundamentals mapping** ⬜ **TODO**: `MarketCap`
+  (and likely other fields) land as `0` despite 200 responses (confirmed in logs), so
+  the size filter (`isEligible`, `pkg/stockpicker/filters.go`) eliminates every US
+  constituent at the market-cap gate. This is a parse/mapping bug in
+  `pkg/broker/schwab/market.go` downstream of a successful fetch — not auth, not
+  fetch. `marketfmt` fixed the *label*, not the zero values. Triage offline once
+  raw-capture lands.
+- **Fix `pick` report/CSV naming** ⬜ **TODO**: name artifacts from the actual
+  `--index`/`--method`, not config/golden-copy defaults. This session a
+  `--index sp500 --method us_quality_momentum` run filed under
+  `us_microsmall_multibagger/` and labelled itself "Multibagger Preset".
+- **Flatten `data/` + `report/`** ⬜ **TODO**: collapse both nested trees into one
+  flat `data/` plus a single disposable `data/raw/`; `report/` goes away. Filename
+  convention carries the identity the paths used to:
+  `<domain>__<portfolio>__<method>__<YYYYMMDD-HHMMSS>__<kind>.<ext>` (double-underscore
+  field separator; `domain` ∈ universe/pick/proposal/backup/report/sim/research;
+  `method`/`stamp` = `na` when N/A). E.g.
+  `report/sp500_multibagger/simulations/20260915_000347_monitoring.txt` →
+  `sim__sp500__multibagger__20260915-000347__monitoring.txt`. Centralize name
+  construction in one path helper (`pkg/config` `DataPath` family) so writers compose
+  and readers glob identically. Writers to change: `selectiontracker.SaveReport`,
+  proposal/basket/backup/monitoring/scuttlebutt writers, golden-copy CSV resolution.
+  Destructive (deletes `report/` + old `data/**`) — needs sign-off; prefer clean
+  cutover after new writers verified.
+- **Retire stale `data/cache.db`** ⬜ **TODO**: `cache.db` (Sep 8, `source=NULL`,
+  507 tickers, tax tables) looks like a pre-refactor artifact vs the newer
+  `data/mycase.db`. Confirm no live reader, back up, delete → single DB at
+  `data/mycase.db`.
+- **Docs consolidation** ⬜ **TODO**: `docs/` has 28 md files with heavy overlap and
+  no index. Reduce to a maintained canonical core (`roadmap`, `architecture`,
+  `runbook`, `principles`, `datasources`) + `strategies/` (per-method specs) +
+  `design/` (durable subsystem docs) + `archive/` (point-in-time bug/impl notes).
+  Add `docs/README.md` index first (highest value); fold small subsystem docs into
+  `architecture.md`/`runbook.md` sections; update steering-file cross-refs. **Keep
+  roadmap the single home for status/plans — do not spawn satellite plan docs.**
 
 ---
 
