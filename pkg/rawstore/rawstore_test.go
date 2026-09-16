@@ -58,6 +58,16 @@ func TestNew_EmptyBase(t *testing.T) {
 	}
 }
 
+func TestReqID(t *testing.T) {
+	if got := New(t.TempDir(), "req-42").ReqID(); got != "req-42" {
+		t.Errorf("ReqID() = %q, want %q", got, "req-42")
+	}
+	var nilStore *Store
+	if got := nilStore.ReqID(); got != "" {
+		t.Errorf("nil ReqID() = %q, want empty", got)
+	}
+}
+
 func TestWrite_And_Layout(t *testing.T) {
 	base := t.TempDir()
 	s := New(base, "req-1")

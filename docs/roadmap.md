@@ -203,7 +203,9 @@ shipped.
   token-exchange/refresh flows through `auth.go`'s `tokenURL` path, which never
   reaches `executeRequest`/`Capture`/`Replay`, so credentials are never archived or
   replayed; non-2xx (incl. 401) bodies are skipped. Implemented as env toggles
-  (`MYCASE_CAPTURE` / `MYCASE_REPLAY`, both off by default) rather than CLI flags.
+  (`MYCASE_CAPTURE` / `MYCASE_REPLAY`) rather than CLI flags — originally both off by
+  default; capture flipped to **on by default** in R-store-2 (see below), with
+  `MYCASE_CAPTURE=0` as the opt-out.
   **Follow-up (capture-as-default + retention) is designed below** — see
   *"Raw response store — capture-by-default + retention (design)"*.
 
@@ -291,9 +293,22 @@ the lost evidence was. This reframes the feature.
   env-gated (`MYCASE_CAPTURE` / `MYCASE_REPLAY`), still off by default. `rawstore`
   registered at L4 in `layers.go`; `make check-deps`, `make test`, `make build` green.
   *This is the enabling refactor; everything below builds on it.*
-- ⬜ **R-store-2 — Capture ON by default + clean opt-out.** Sink wired ⇒ capture on;
-  `MYCASE_CAPTURE=0`/`off` opts out. Replay mode suppresses capture (don't re-archive
-  replayed bytes). Attach the `req_id` so captures are attributable to a run.
+- ✅ **DONE — R-store-2 — Capture ON by default + clean opt-out.** Wiring the sink
+  (in `main`'s `Before`) turns capture on: `rawcapture.Enabled()` is now default-on,
+  suppressed only by an explicit falsy `MYCASE_CAPTURE` (`0`/`false`/`no`/`off`, via a
+  new `falsy()` helper) or by replay mode (`Enabled = !falsy && !ReplayEnabled`, so
+  replayed bytes are never re-archived). The inert-without-sink guarantee is
+  preserved — `Capture` still no-ops when no sink is wired, so tests/library callers
+  archive nothing despite the default-on stance, and `main` remains the sole
+  `SetSink` caller. `rawstore.Write` emits a Debug `rawstore.captured` event
+  (`source`/`endpoint`/`symbol`/`file`/`bytes` — never the body); the `req_id` is
+  attached by the default logger (`main`'s `Before` hook), making every capture
+  attributable to its run without changing the on-disk filename convention.
+  `rawstore` retains the `req_id` (with a `ReqID()` accessor) for later
+  run-grouping/retention. Verified end-to-end: a `backtest` run with default env
+  archived the Yahoo chart responses to `data/raw/`; the same run with
+  `MYCASE_CAPTURE=0` archived nothing. `make check-deps`/`test`/`build` + staticcheck
+  green.
 - ⬜ **R-store-3 — Retention: age + size ceiling (flat, no run/verdict).** Prune
   captures older than N days or when the store exceeds X MB (oldest-first); config in
   `defaults.json` (flag>env>config>default). Runs inline best-effort at process exit

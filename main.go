@@ -71,9 +71,9 @@ func main() {
 			slog.SetDefault(appLogger.With("req_id", reqID))
 
 			// Wire the raw-response archive sink (rawcapture is a zero-import
-			// leaf that delegates persistence here). Inert until now; capture
-			// and replay stay env-gated (MYCASE_CAPTURE / MYCASE_REPLAY) and
-			// off by default.
+			// leaf that delegates persistence here). Wiring the sink turns
+			// capture ON by default; opt out with MYCASE_CAPTURE=0/off. Replay
+			// (MYCASE_REPLAY) serves recorded bodies and suppresses capture.
 			rawcapture.SetSink(rawstore.NewDefault(reqID))
 
 			slog.DebugContext(ctx, "command start",

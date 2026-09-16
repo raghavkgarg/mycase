@@ -24,6 +24,7 @@ package rawstore
 import (
 	"bytes"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -46,16 +47,18 @@ const (
 // treat "no store" as "archiving disabled".
 type Store struct {
 	rawDir string
-	// reqID identifies the current process/run. Reserved for run-grouping and
-	// retention (later R-store tasks); not yet encoded into filenames so the
-	// on-disk convention is unchanged for R-store-1.
+	// reqID identifies the current process/run. Captures are already
+	// attributable via the default slog logger, which main's Before hook tags
+	// with the same req_id; this field retains it for run-grouping/retention
+	// (later R-store tasks) and is not yet encoded into filenames, so the
+	// on-disk convention is unchanged.
 	reqID string
 }
 
 // New constructs a Store rooted at base (typically config.DataDir()); the
 // archive lives under <base>/raw. reqID is the run identity (e.g.
-// logging.ReqID(ctx)) reserved for future retention/run-grouping. base must be
-// non-empty.
+// logging.ReqID(ctx)) attached to capture log lines and reserved for future
+// retention/run-grouping. base must be non-empty.
 func New(base, reqID string) *Store {
 	if base == "" {
 		return nil
@@ -68,10 +71,23 @@ func NewDefault(reqID string) *Store {
 	return New(config.DataDir(), reqID)
 }
 
+// ReqID returns the run identity this store was constructed with. A nil Store
+// returns "". Reserved for run-grouping/retention (later R-store tasks).
+func (s *Store) ReqID() string {
+	if s == nil {
+		return ""
+	}
+	return s.reqID
+}
+
 // Write archives data flat under the raw dir as
 // "<source>__<endpoint>__<symbol>__<YYYYMMDD-HHMMSS>.json". All errors are
 // swallowed: archiving is diagnostic and must never break a fetch. A nil Store
 // is a no-op.
+//
+// On a successful write it emits a Debug "rawstore.captured" line (tagged with
+// the run's req_id by the default logger) recording the archive key/size —
+// never the body — so a capture is attributable to the run that produced it.
 func (s *Store) Write(source, endpoint, symbol string, data []byte) {
 	if s == nil {
 		return
@@ -80,7 +96,16 @@ func (s *Store) Write(source, endpoint, symbol string, data []byte) {
 		return
 	}
 	name := Filename(source, endpoint, symbol, time.Now())
-	_ = os.WriteFile(filepath.Join(s.rawDir, name), data, 0o644)
+	if err := os.WriteFile(filepath.Join(s.rawDir, name), data, 0o644); err != nil {
+		return
+	}
+	slog.Debug("rawstore.captured",
+		"source", source,
+		"endpoint", endpoint,
+		"symbol", symbol,
+		"file", name,
+		"bytes", len(data),
+	)
 }
 
 // Open returns the newest archived body for (source, endpoint, symbol) and true

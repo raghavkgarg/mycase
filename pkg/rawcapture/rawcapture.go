@@ -3,12 +3,12 @@
 // Phase 11).
 //
 // It hooks the single HTTP chokepoint in each API client. On a 2xx response the
-// caller hands the response body to Capture, which — when capture is enabled and
-// a Sink has been wired — buffers the bytes, hands them to the Sink to archive,
+// caller hands the response body to Capture, which — when capture is on and a
+// Sink has been wired — buffers the bytes, hands them to the Sink to archive,
 // and returns a fresh io.ReadCloser over the same bytes so the caller's decode
-// path is unchanged. When capture is disabled (the default) or no Sink is wired,
-// Capture returns the original body untouched with zero overhead — no read, no
-// allocation.
+// path is unchanged. Capture is ON by default (see Enabled); when it is off
+// (MYCASE_CAPTURE=0/off, or during replay) or no Sink is wired, Capture returns
+// the original body untouched with zero overhead — no read, no allocation.
 //
 // # Offline replay
 //
@@ -70,7 +70,12 @@ type Sink interface {
 
 // Env toggles.
 const (
-	// captureEnv, when truthy (1/true/yes/on, case-insensitive), enables capture.
+	// captureEnv is the capture opt-OUT. Capture is ON by default (once a Sink
+	// is wired); setting MYCASE_CAPTURE to a falsy value (0/false/no/off,
+	// case-insensitive) disables it. Any other value (including unset or a
+	// truthy value) leaves capture on. The default-on stance is deliberate: the
+	// failure it guards against is evidence loss — the surprising run is the one
+	// you didn't think to arm (see docs/roadmap.md R-store-2).
 	captureEnv = "MYCASE_CAPTURE"
 	// replayEnv, when truthy, enables offline replay: API-client chokepoints
 	// serve archived bodies from the Sink instead of hitting the network.
@@ -103,10 +108,23 @@ func currentSink() Sink {
 	return sink
 }
 
-// Enabled reports whether capture is on (via MYCASE_CAPTURE). Cached after the
-// first call, so a process decides once at startup.
+// Enabled reports whether capture is on. Capture is ON by default and is
+// suppressed only when:
+//
+//   - MYCASE_CAPTURE is set to a falsy value (0/false/no/off) — the explicit
+//     operator opt-out; or
+//   - replay is enabled (MYCASE_REPLAY) — replayed bytes must not be
+//     re-archived, which would compound copies of the same recorded response.
+//
+// Cached after the first call, so a process decides once at startup.
+//
+// Note this reports only the env/replay policy; Capture is still inert unless a
+// Sink has been wired (SetSink). Tests and library callers that never wire a
+// sink therefore archive nothing, default-on notwithstanding.
 func Enabled() bool {
-	enabledOnce.Do(func() { enabled = truthy(os.Getenv(captureEnv)) })
+	enabledOnce.Do(func() {
+		enabled = !falsy(os.Getenv(captureEnv)) && !ReplayEnabled()
+	})
 	return enabled
 }
 
@@ -126,12 +144,24 @@ func truthy(v string) bool {
 	}
 }
 
+// falsy reports whether v is an explicit "off" value. Only these turn capture
+// off; unset or any other value leaves the default (on) in place.
+func falsy(v string) bool {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "0", "false", "no", "off":
+		return true
+	default:
+		return false
+	}
+}
+
 // Capture archives an API response body when capture is enabled and a Sink is
 // wired, returning a ReadCloser the caller must use in place of the original
 // body.
 //
-//   - Disabled (default) or no Sink wired: returns body unchanged; no read, no I/O.
-//   - Enabled + Sink: buffers body fully, hands the bytes to the Sink, and
+//   - Capture off (MYCASE_CAPTURE=0/off, or replay mode) or no Sink wired:
+//     returns body unchanged; no read, no I/O.
+//   - On + Sink: buffers body fully, hands the bytes to the Sink, and
 //     returns a new reader over the buffered bytes. A read error never fails the
 //     caller — on a read error the buffered-so-far bytes are handed back as a
 //     fresh reader. The Sink's Write is best-effort and never propagates errors.
