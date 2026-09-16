@@ -81,6 +81,7 @@ var Layers = map[string]int{
 	"daemon":     4, // alert, broker, config, csvloader
 	"executor":   4, // broker, config, market, printer, render, yfinance
 	"pithistory": 4, // stockpicker
+	"rawstore":   4, // config, rawcapture — filesystem impl of rawcapture.Sink; owns data dir + archive filename convention
 
 	// L5 — top composition (below cmd/main, which live outside pkg/).
 	"autopilot": 5,

@@ -11,6 +11,8 @@ import (
 	"github.com/raghavkgarg/mycase/pkg/cache"
 	"github.com/raghavkgarg/mycase/pkg/config"
 	"github.com/raghavkgarg/mycase/pkg/logging"
+	"github.com/raghavkgarg/mycase/pkg/rawcapture"
+	"github.com/raghavkgarg/mycase/pkg/rawstore"
 	"github.com/raghavkgarg/mycase/pkg/yfinance"
 	"github.com/urfave/cli/v3"
 )
@@ -67,6 +69,12 @@ func main() {
 			reqID := logging.GenerateReqID(commandName(c))
 			ctx = logging.WithReqID(ctx, reqID)
 			slog.SetDefault(appLogger.With("req_id", reqID))
+
+			// Wire the raw-response archive sink (rawcapture is a zero-import
+			// leaf that delegates persistence here). Inert until now; capture
+			// and replay stay env-gated (MYCASE_CAPTURE / MYCASE_REPLAY) and
+			// off by default.
+			rawcapture.SetSink(rawstore.NewDefault(reqID))
 
 			slog.DebugContext(ctx, "command start",
 				"command", commandName(c), "version", Version)

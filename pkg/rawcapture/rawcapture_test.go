@@ -2,124 +2,34 @@ package rawcapture
 
 import (
 	"io"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 )
 
-func TestFilename(t *testing.T) {
-	ts := time.Date(2026, 9, 15, 13, 4, 5, 0, time.UTC)
-	tests := []struct {
-		name     string
-		source   string
-		endpoint string
-		symbol   string
-		want     string
-	}{
-		{"with symbol", "schwab", "quotes", "AAPL", "schwab__quotes__AAPL__20260915-130405.json"},
-		{"no symbol", "schwab", "accounts", "", "schwab__accounts__20260915-130405.json"},
-		{"sanitizes slashes", "yahoo", "market/data", "US:AAPL", "yahoo__market_data__US_AAPL__20260915-130405.json"},
-		{"empty endpoint falls back", "yahoo", "", "AAPL", "yahoo__endpoint__AAPL__20260915-130405.json"},
-		{"empty source falls back", "", "quotes", "AAPL", "unknown__quotes__AAPL__20260915-130405.json"},
-		{"multi-symbol query", "schwab", "quotes", "A,B,C", "schwab__quotes__A_B_C__20260915-130405.json"},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			if got := Filename(tc.source, tc.endpoint, tc.symbol, ts); got != tc.want {
-				t.Errorf("Filename(%q,%q,%q) = %q, want %q", tc.source, tc.endpoint, tc.symbol, got, tc.want)
-			}
-		})
-	}
+// fakeSink records Write calls and serves a canned body on Open, so the leaf's
+// delegation can be tested without any filesystem/store dependency.
+type fakeSink struct {
+	writes  []capturedWrite
+	body    string // served by Open when openHit is true
+	openHit bool
+	lastKey [3]string // source, endpoint, symbol of the last Open call
 }
 
-func TestFilename_SymbolLengthBound(t *testing.T) {
-	ts := time.Date(2026, 9, 15, 0, 0, 0, 0, time.UTC)
-	long := strings.Repeat("A", 200)
-	got := Filename("schwab", "quotes", long, ts)
-	// Fields are separated by "__": source, endpoint, symbol, stamp.
-	parts := strings.Split(strings.TrimSuffix(got, ".json"), "__")
-	if len(parts) != 4 {
-		t.Fatalf("unexpected filename shape: %q", got)
-	}
-	if len(parts[2]) != maxSymbolLen {
-		t.Errorf("symbol segment len = %d, want %d", len(parts[2]), maxSymbolLen)
-	}
+type capturedWrite struct {
+	source, endpoint, symbol string
+	body                     string
 }
 
-func TestCapture_Disabled_PassThrough(t *testing.T) {
-	t.Setenv(captureEnv, "")
-	t.Setenv(dataDirEnv, t.TempDir())
-	resetEnabled()
-
-	orig := io.NopCloser(strings.NewReader("hello"))
-	got := Capture("yahoo", "quotes", "AAPL", orig)
-
-	// When disabled, the exact same ReadCloser is returned (no buffering).
-	body, err := io.ReadAll(got)
-	if err != nil {
-		t.Fatalf("read: %v", err)
-	}
-	if string(body) != "hello" {
-		t.Errorf("body = %q, want %q", body, "hello")
-	}
-
-	// Nothing should have been written under the data dir.
-	rawDir := filepath.Join(os.Getenv(dataDirEnv), rawSubdir)
-	if _, err := os.Stat(rawDir); !os.IsNotExist(err) {
-		t.Errorf("expected no raw dir when disabled, stat err = %v", err)
-	}
+func (f *fakeSink) Write(source, endpoint, symbol string, body []byte) {
+	f.writes = append(f.writes, capturedWrite{source, endpoint, symbol, string(body)})
 }
 
-func TestCapture_Enabled_WritesAndBodyReadable(t *testing.T) {
-	dataDir := t.TempDir()
-	t.Setenv(captureEnv, "1")
-	t.Setenv(dataDirEnv, dataDir)
-	resetEnabled()
-
-	const payload = `{"ok":true}`
-	got := Capture("schwab", "instruments", "AAPL", io.NopCloser(strings.NewReader(payload)))
-
-	// Caller can still fully read the body.
-	body, err := io.ReadAll(got)
-	if err != nil {
-		t.Fatalf("read: %v", err)
+func (f *fakeSink) Open(source, endpoint, symbol string) (io.ReadCloser, bool) {
+	f.lastKey = [3]string{source, endpoint, symbol}
+	if !f.openHit {
+		return nil, false
 	}
-	if string(body) != payload {
-		t.Errorf("body = %q, want %q", body, payload)
-	}
-
-	// A file was archived flat under data/raw/ with the right prefix.
-	rawDir := filepath.Join(dataDir, rawSubdir)
-	entries, err := os.ReadDir(rawDir)
-	if err != nil {
-		t.Fatalf("read archive dir: %v", err)
-	}
-	if len(entries) != 1 {
-		t.Fatalf("expected 1 archived file, got %d", len(entries))
-	}
-	name := entries[0].Name()
-	if !strings.HasPrefix(name, "schwab__instruments__AAPL__") || !strings.HasSuffix(name, ".json") {
-		t.Errorf("unexpected archive filename: %q", name)
-	}
-
-	// Archived content matches the payload.
-	archived, err := os.ReadFile(filepath.Join(rawDir, name))
-	if err != nil {
-		t.Fatalf("read archived file: %v", err)
-	}
-	if string(archived) != payload {
-		t.Errorf("archived = %q, want %q", archived, payload)
-	}
-}
-
-func TestCapture_NilBody(t *testing.T) {
-	t.Setenv(captureEnv, "1")
-	resetEnabled()
-	if got := Capture("yahoo", "quotes", "AAPL", nil); got != nil {
-		t.Errorf("Capture(nil) = %v, want nil", got)
-	}
+	return io.NopCloser(strings.NewReader(f.body)), true
 }
 
 func TestTruthy(t *testing.T) {
@@ -137,39 +47,109 @@ func TestTruthy(t *testing.T) {
 	}
 }
 
-// writeFixture drops a raw archive file with the given name and content under
-// <dataDir>/raw, creating the dir. Returns the raw dir.
-func writeFixture(t *testing.T, dataDir, name, content string) string {
-	t.Helper()
-	rawDir := filepath.Join(dataDir, rawSubdir)
-	if err := os.MkdirAll(rawDir, 0o755); err != nil {
-		t.Fatalf("mkdir: %v", err)
+func TestCapture_Disabled_PassThrough(t *testing.T) {
+	t.Setenv(captureEnv, "")
+	resetState()
+	fs := &fakeSink{}
+	SetSink(fs)
+	t.Cleanup(func() { SetSink(nil) })
+
+	orig := io.NopCloser(strings.NewReader("hello"))
+	got := Capture("yahoo", "quotes", "AAPL", orig)
+
+	body, err := io.ReadAll(got)
+	if err != nil {
+		t.Fatalf("read: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(rawDir, name), []byte(content), 0o644); err != nil {
-		t.Fatalf("write fixture: %v", err)
+	if string(body) != "hello" {
+		t.Errorf("body = %q, want %q", body, "hello")
 	}
-	return rawDir
+	if len(fs.writes) != 0 {
+		t.Errorf("expected no Write when capture disabled, got %d", len(fs.writes))
+	}
+}
+
+func TestCapture_NoSink_PassThrough(t *testing.T) {
+	t.Setenv(captureEnv, "1")
+	resetState()
+	SetSink(nil)
+
+	orig := io.NopCloser(strings.NewReader("hello"))
+	got := Capture("yahoo", "quotes", "AAPL", orig)
+
+	// With no sink wired the leaf is inert: the exact same body is returned.
+	if got != orig {
+		t.Error("expected the original body to be returned unchanged when no sink is wired")
+	}
+}
+
+func TestCapture_Enabled_WritesAndBodyReadable(t *testing.T) {
+	t.Setenv(captureEnv, "1")
+	resetState()
+	fs := &fakeSink{}
+	SetSink(fs)
+	t.Cleanup(func() { SetSink(nil) })
+
+	const payload = `{"ok":true}`
+	got := Capture("schwab", "instruments", "AAPL", io.NopCloser(strings.NewReader(payload)))
+
+	// Caller can still fully read the body.
+	body, err := io.ReadAll(got)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if string(body) != payload {
+		t.Errorf("body = %q, want %q", body, payload)
+	}
+
+	// The bytes and key were handed to the sink.
+	if len(fs.writes) != 1 {
+		t.Fatalf("expected 1 Write, got %d", len(fs.writes))
+	}
+	w := fs.writes[0]
+	if w.source != "schwab" || w.endpoint != "instruments" || w.symbol != "AAPL" || w.body != payload {
+		t.Errorf("unexpected Write: %+v", w)
+	}
+}
+
+func TestCapture_NilBody(t *testing.T) {
+	t.Setenv(captureEnv, "1")
+	resetState()
+	SetSink(&fakeSink{})
+	t.Cleanup(func() { SetSink(nil) })
+	if got := Capture("yahoo", "quotes", "AAPL", nil); got != nil {
+		t.Errorf("Capture(nil) = %v, want nil", got)
+	}
 }
 
 func TestReplay_Disabled_Miss(t *testing.T) {
-	dataDir := t.TempDir()
 	t.Setenv(replayEnv, "")
-	t.Setenv(dataDirEnv, dataDir)
-	resetEnabled()
-	writeFixture(t, dataDir, "schwab__quotes__AAPL__20260915-130405.json", `{"x":1}`)
+	resetState()
+	SetSink(&fakeSink{body: `{"x":1}`, openHit: true})
+	t.Cleanup(func() { SetSink(nil) })
 
 	if _, ok := Replay("schwab", "quotes", "AAPL"); ok {
 		t.Error("Replay returned a hit when disabled")
 	}
 }
 
-func TestReplay_Hit(t *testing.T) {
-	dataDir := t.TempDir()
+func TestReplay_NoSink_Miss(t *testing.T) {
 	t.Setenv(replayEnv, "1")
-	t.Setenv(dataDirEnv, dataDir)
-	resetEnabled()
+	resetState()
+	SetSink(nil)
+
+	if _, ok := Replay("schwab", "quotes", "AAPL"); ok {
+		t.Error("Replay returned a hit with no sink wired")
+	}
+}
+
+func TestReplay_Hit_DelegatesToSink(t *testing.T) {
+	t.Setenv(replayEnv, "1")
+	resetState()
 	const want = `{"symbol":"AAPL"}`
-	writeFixture(t, dataDir, "schwab__quotes__AAPL__20260915-130405.json", want)
+	fs := &fakeSink{body: want, openHit: true}
+	SetSink(fs)
+	t.Cleanup(func() { SetSink(nil) })
 
 	rc, ok := Replay("schwab", "quotes", "AAPL")
 	if !ok {
@@ -179,54 +159,19 @@ func TestReplay_Hit(t *testing.T) {
 	if string(got) != want {
 		t.Errorf("body = %q, want %q", got, want)
 	}
-}
-
-func TestReplay_NewestWins(t *testing.T) {
-	dataDir := t.TempDir()
-	t.Setenv(replayEnv, "1")
-	t.Setenv(dataDirEnv, dataDir)
-	resetEnabled()
-	writeFixture(t, dataDir, "yahoo__quoteSummary__AAPL__20260915-090000.json", `"old"`)
-	writeFixture(t, dataDir, "yahoo__quoteSummary__AAPL__20260915-170000.json", `"new"`)
-
-	rc, ok := Replay("yahoo", "quoteSummary", "AAPL")
-	if !ok {
-		t.Fatal("expected replay hit")
-	}
-	got, _ := io.ReadAll(rc)
-	if string(got) != `"new"` {
-		t.Errorf("body = %q, want newest %q", got, `"new"`)
+	if fs.lastKey != [3]string{"schwab", "quotes", "AAPL"} {
+		t.Errorf("Open called with %v, want [schwab quotes AAPL]", fs.lastKey)
 	}
 }
 
-func TestReplay_SymbolMiss(t *testing.T) {
-	dataDir := t.TempDir()
+func TestReplay_Miss_DelegatesToSink(t *testing.T) {
 	t.Setenv(replayEnv, "1")
-	t.Setenv(dataDirEnv, dataDir)
-	resetEnabled()
-	writeFixture(t, dataDir, "schwab__quotes__AAPL__20260915-130405.json", `{"x":1}`)
+	resetState()
+	fs := &fakeSink{openHit: false}
+	SetSink(fs)
+	t.Cleanup(func() { SetSink(nil) })
 
 	if _, ok := Replay("schwab", "quotes", "MSFT"); ok {
-		t.Error("expected miss for a non-archived symbol")
-	}
-}
-
-// A symbol-less request must not match a symbol-carrying archive file (prefix
-// collision guard).
-func TestReplay_SymbollessDoesNotMatchSymbolFile(t *testing.T) {
-	dataDir := t.TempDir()
-	t.Setenv(replayEnv, "1")
-	t.Setenv(dataDirEnv, dataDir)
-	resetEnabled()
-	writeFixture(t, dataDir, "schwab__quotes__AAPL__20260915-130405.json", `{"x":1}`)
-
-	if _, ok := Replay("schwab", "quotes", ""); ok {
-		t.Error("symbol-less replay must not match a symbol-carrying file")
-	}
-
-	// But it should match a genuinely symbol-less archive file.
-	writeFixture(t, dataDir, "schwab__accounts__20260915-130405.json", `[{"h":"x"}]`)
-	if _, ok := Replay("schwab", "accounts", ""); !ok {
-		t.Error("expected hit for symbol-less archive file")
+		t.Error("expected miss when sink reports no hit")
 	}
 }

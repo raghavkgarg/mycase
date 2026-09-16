@@ -105,16 +105,10 @@ Automation eliminates all four. The system runs quarterly, follows its rules, an
 
 | Debt | Location | Impact | Fix effort |
 |------|----------|--------|-----------|
-| ~~`yfinance.GetCache()` still exists (deprecated)~~ | ~~`pkg/yfinance/duckdbcache.go`~~ | **RESOLVED (Phase 10a)** — deleted; zero callers | ✅ |
-| Seven command paths bypass `datafetcher.Router` | `cmd/report.go`, `cmd/monitor.go`, `cmd/optimize.go`, `pkg/server/handlers.go`, `pkg/executor/executor.go`, `pkg/backtest/valuation.go`, `pkg/autopilot/schedule.go` | US holdings got Yahoo data even when Schwab is configured | **RESOLVED (Phase 10b / R17)** — all seven routed through the Router; `US:SPY` benchmark; `source` column + slog fallback logging | ✅ |
-| Diagnostic output still on `fmt.Print*` instead of `slog` (violates logging steering two-channel rule) | `pkg/stockpicker/*` (run.go, loader.go, retry.go, scoring.go, scoring_us.go, filters.go, velocity.go, incubator.go), `pkg/executor/executor.go` | Operational trace ("Warning: ...", counts, retry summaries) polluted stdout | **RESOLVED (R18)** — diagnostic sites → `slog.*Context` (stderr+file, req_id-traced); user-facing results (io.go tables, PrintDiffReport, PIT RETRY SUMMARY, `pit analysis` report, live order feed) stay on stdout | ✅ |
-| Steering `architecture.md` layer table is stale | `.kiro/steering/architecture.md` | Table omitted `universe` (L0), `kiteclient` (L1), `pithistory` (L4) | **RESOLVED (R18)** — table synced to `layers.go` | ✅ |
-| API-layer diagnostics still on `fmt.Print*`; `pkg/logging` `LogResponse`/`Timer` helpers built but never called | `pkg/broker/schwab/*`, `pkg/yfinance/{yfinance,prices,metrics,screener}.go`, `pkg/datafetcher/datafetcher.go` | Fetch warnings/progress polluted stdout; the API-rule enforcement helper (`LogResponse`) was dead | **RESOLVED (R14.5 / R19)** — API diagnostics → `slog.*Context`; genuine interactive/user lines kept on stdout | ✅ |
 | ~~Schwab fundamentals mapper drops derivable fields~~ | ~~`pkg/broker/schwab/market.go` `mapSchwabFundamentals`~~ | **PARTLY RESOLVED (Phase 10a)** — `NetIncome` + `RegularPrice` now derived; `Sector` backfilled from constituents CSV via `stockpicker.InjectSectors` | 🟧 sector-via-CSV done, EDGAR statements → 10c |
 | `pick` eliminates all constituents at the market-cap gate (`0 / N`) | `pkg/stockpicker/filters.go` `isEligible` (size check) ← `pkg/broker/schwab/market.go` fundamentals mapper | **OPEN (2026-09-15)** — for US runs `Fundamentals.MarketCap` is `0` for every ticker, so `0 < MinMarketCap` eliminates all. The fundamentals endpoint returns **200** (confirmed in logs), so this is a **parse/mapping bug downstream of a successful fetch**, not auth/fetch. `marketfmt` (this session) fixed the band *label* (`$5.0B–$5.0T`), not the zero values. Triage offline via saved responses. | 🟥 needs raw-capture first |
 | `pick` report dir/CSV naming ignores `--index` / `--method` flags | report/basket writers | **OPEN (2026-09-15)** — ran `--index sp500 --method us_quality_momentum` but artifacts filed under `us_microsmall_multibagger/` and the report said "Multibagger Preset". Naming derives from config/golden-copy, not the actual flags. | 🟧 |
 | Two divergent cache DBs coexist | `data/cache.db` (Sep 8, `source=NULL`, 507 tickers, tax tables) vs `data/mycase.db` (newer schema) | **OPEN (2026-09-15)** — `cache.db` looks like a stale pre-refactor artifact; confirm no live reader and retire. | 🟧 |
-| No raw-response archive / offline replay | API clients (`schwab`, `yfinance`) | **RESOLVED (2026-09-15)** — `pkg/rawcapture` archives 2xx bodies (`MYCASE_CAPTURE`) and replays them offline (`MYCASE_REPLAY`), short-circuiting network/token/limiter at both client chokepoints; token/auth responses excluded by construction. | ✅ |
 | `data/` + `report/` are deeply nested with path-encoded identity | `data/**`, `report/**`; writers in `selectiontracker`, proposal/backup/monitor paths | **OPEN (2026-09-15)** — flatten to a single `data/` tree (+ disposable `data/raw/`) with a filename naming convention. See `docs/plans/data-report-flatten.md`. | 🟧 |
 | `docs/` sprawl (28 md files, heavy overlap) | `docs/**` | **OPEN (2026-09-15)** — consolidate to a maintained core + `archive/`; add an index. See `docs/plans/docs-consolidation.md`. | 🟩 low |
 
@@ -136,23 +130,6 @@ Small items left open by shipped phases:
 - ✅ **DONE** — Plumb `rsi` / `momentum_1y` from the scoring pass to the `selectiontracker.RecordDriverMetrics` site so the `selections` columns persist non-zero. The US quality-momentum selector (`SelectTopNUSQMWithCooldown`) now receives `fullHistory` and records `Momentum1Y` (via `computeMomentumSkip1Mo`) and `RSI` (via `yfinance.CalculateRSI`) at the `RecordDriverMetrics` call site; the round-trip to the `selections` table was already wired.
 - ✅ **DONE** — Extend `mycase pipeline diff` to compare selection-level driver metrics between runs. Added a `--metrics`/`-m` flag that appends a "Selection Driver Metrics" section diffing per-ticker RSI, momentum, FCF yield, ROIC, TTM growth, revenue CAGR, and DSO delta (via `cache.GetSelections`) for tickers held in both runs, rendered through `pkg/render`.
 - ⬜ **TODO** — Retire the `.txt`-parsing golden-copy comparison (DuckDB migration deferred item C3). `csvloader.PrintComparisonReport` still calls `parseSelectionReport` to read back `report/*_01_selection_reasons.txt` for prev/curr rank+score, and locates the previous run by directory-listing + filename string-sort — the exact brittle text-parsing the DuckDB migration set out to kill (see `docs/duckdb-migration.md`). The `selections` table now holds `rank`/`score` (and driver metrics) structurally, and `GetSelections`/`GetPreviousSelections` expose them. Source the comparison from the DB and drop the `.txt` round-trip. Touches the live `pick` (`stockpicker/run.go`) and autopilot paths, so run-id/portfolio context must be threaded to query the right selections. Impl details TBD.
-
----
-
-### Phase R18: Finish the slog migration + doc/tooling hygiene ✅ DONE
-
-**What**: Close the two principle gaps surfaced by the EBM union-merge review (commit `53d99d6`). The merge itself preserved R16 layering (verified: `check-deps` green, no reverse imports, all designated leaves clean), but two pre-existing debts remained:
-
-1. **Complete the R14 slog migration into `stockpicker` and `executor`.** These packages predated R14 and still emitted *diagnostic/operational* trace via `fmt.Print*` — violating the logging steering's two-channel rule (results→stdout, diagnostics→slog/stderr). The new EBM code (`retry.go`, `velocity.go`, `incubator.go`) correctly followed the surrounding convention, so it inherited the debt rather than introducing it.
-2. **Refresh `.kiro/steering/architecture.md`** so its layer table matches `devtools/internal/layers/layers.go` (add `universe` L0, `kiteclient` L1, `pithistory` L4).
-
-**Outcome**: All diagnostic `fmt.Print*` in `stockpicker` (run.go, loader.go, retry.go, scoring.go, scoring_us.go, filters.go, velocity.go, incubator.go) and `executor.go` migrated to `slog.*Context` (stderr+file, req_id-traced) with dotted event names (`pick.*`, `prices.*`, `score.*`, `select.*`, `normalize.*`, `filter.*`, `constituents.*`, `executor.*`). Levels: Info for stage/counts, Warn for recoverable fallbacks, Error for critical fetch-failure rate, Debug for per-item internals.
-
-**Deliberately left on stdout (user-facing results, classified not blind-replaced)**: `io.go` result tables (`PrintHeader`, `Print*Table`, `PrintScuttlebutt`, `PrintSafetyFilterSummary`), `diff.go` `PrintDiffReport`, `retry.go` PIT RETRY SUMMARY, and **all of `pithistory/analytics.go`** — its 57 `fmt` sites are the `pit analysis` report the operator reads, so migrating them would have *broken* the command's output. `executor.go` kept its interactive prompts (y/n, mode menu, IP-whitelist banner) and live order-execution feed on stdout, since `basket --live` is interactive and those lines are the product.
-
-**Verified**: `make cleanup` (all hard gates) + `make test` (23 pkgs) green; live `mycase pick --file <2-ticker> >out 2>err` confirmed stdout carries only the result banner while stderr carries only req_id-traced slog events.
-
-**Effort**: ~half a day. No algorithm change, no layering change.
 
 ---
 
@@ -226,15 +203,129 @@ shipped.
   token-exchange/refresh flows through `auth.go`'s `tokenURL` path, which never
   reaches `executeRequest`/`Capture`/`Replay`, so credentials are never archived or
   replayed; non-2xx (incl. 401) bodies are skipped. Implemented as env toggles
-  (`MYCASE_CAPTURE` / `MYCASE_REPLAY`, both off by default) rather than CLI flags;
-  capture-default-on with a retention bound remains an open call.
+  (`MYCASE_CAPTURE` / `MYCASE_REPLAY`, both off by default) rather than CLI flags.
+  **Follow-up (capture-as-default + retention) is designed below** — see
+  *"Raw response store — capture-by-default + retention (design)"*.
+
+#### Raw response store — capture-by-default + retention (design, 2026-09-15)
+
+Design conclusion from a working-through of *why* we built capture/replay. The
+motivating incident: Schwab returned HTTP **200** hundreds of times but the report
+came out empty, and the bodies had been **thrown away** — so we could not tell a
+**data issue** (Schwab genuinely returned zeros/thin fields) from a **code issue**
+(`mapSchwabFundamentals` mis-parsed a full body). Transport was never in doubt (200s);
+the lost evidence was. This reframes the feature.
+
+**Decisions reached:**
+
+1. **Three independent activities, not one "offline mode":** *capture* (record a
+   response), *triage* (read/understand recorded responses — the primary need, and
+   the current gap), *replay* (re-serve them). Replay is a distant third — it only
+   pays off *after* triage has localized a bug to code; it delivered nothing for the
+   "200-but-empty" incident. Capture + triage is the real value.
+
+2. **Capture must be ON by default, not on-demand.** On-demand capture is
+   after-the-fact: the run that surprises you is the run you didn't arm. The failure
+   mode was evidence loss, so default-on. Sampling (save X%) is rejected — it is a
+   throughput answer to a problem we don't have (quarterly, ~500 tickers, single-digit
+   MB/run) and statistically drops exactly the one weird ticker triage needs.
+
+3. **Bound growth by retention, not by not-capturing.** "Define *broken*, not *okay*."
+   Correctness-gated pruning is a tar pit — subtle bugs *look okay*, so an "okay →
+   prune" rule deletes precisely the interesting evidence. Instead: **keep everything
+   recent + anything flagged broken; prune only the boring old middle.** Delete
+   triggers are *age*, *total size*, and (optionally, later) *run known-not-broken*.
+   False-keep is cheap (disk); false-delete is catastrophic (unreproducible bug).
+
+4. **Layering: split `rawcapture` into a leaf hook + an injected high store.** The
+   env-duplication smell (`rawcapture` re-reading `MYCASE_DATA_DIR` instead of calling
+   `config`) is *not* "config is at the wrong layer" (config is correctly L0). It is a
+   **non-leaf policy hiding inside a leaf**. `rawcapture` is called from `yfinance`(L1)
+   and `schwab`(L2), so its *hook* half must stay below L1 (L0). But retention /
+   run-grouping / config / verdicts want to be high. Resolve by **dependency
+   inversion**, not by relaxing layering:
+   - **Leaf (L0, stays `rawcapture`, `MustBeLeaf`, zero imports):** declares a `Sink`
+     interface (`Write(source, endpoint, symbol, body)`, `Open(source, endpoint,
+     symbol) (io.ReadCloser, bool)`), a settable package var + `SetSink`, and thin
+     `Capture`/`Replay` delegators. **Holds no filenames, no directories, no config** —
+     both write and replay route through the injected `Sink`. Inert (silent no-op)
+     until a sink is wired, which is correct for tests/library use.
+   - **`rawstore` (new, L4):** *implements* `Sink`; owns the data dir (via `config`),
+     the filename convention (`sanitize`/`Filename`/glob move here — the writer/reader
+     contract lives in one place, at the only layer that constructs names), run
+     identity (reuse the existing `req_id` from `main`'s `Before` hook / `ctx`), and
+     retention policy. May import `config`/`logging`/`marketcal` legally.
+   - **`main` `Before`:** constructs `rawstore`, calls `rawcapture.SetSink(store)`,
+     supplies req_id + config. Only the composition root names `rawstore`; nothing
+     below L4 references it (arrows always point down; `check-deps` stays green).
+   - This is the architecture-doc pattern (consumer-defined interface in a leaf;
+     domains own their persistence) — same shape as `attribution.Store`/`tax.Store`.
+
+5. **Extensible (not generic) triage.** A generic "understand any response" engine is a
+   worse `jq`. Instead a stable, schema-blind spine (list/show by filename fields —
+   works for *every* source, incl. future EDGAR, for free) plus a small **per-source
+   field inspector** that lives *with its source* and registers in — Schwab's inspector
+   imports Schwab's mapper, EDGAR's imports EDGAR's XBRL mapper. Adding a source's
+   inspector touches only that source, never the spine or other inspectors. The
+   inspector's value is showing **raw-wire value vs. what production mapped** (the diff
+   that localizes a `0/N`-style mapping bug); it must reuse the production parser to
+   stay truthful yet surface the raw field even when production drops it. Contract must
+   be expressible for XBRL without contortion — validate against Schwab **and** EDGAR
+   before trusting it (two implementations prove extensibility; one bakes in Schwab's
+   shape).
+
+**Task sequence** (dependency-ordered; each independently shippable):
+
+- ✅ **DONE — R-store-1 — Split `rawcapture` into leaf + `rawstore`, wire in `main`.**
+  `rawcapture` (L0, `MustBeLeaf`) now declares the `Sink` interface
+  (`Write(source, endpoint, symbol, body []byte)`, `Open(source, endpoint, symbol)
+  (io.ReadCloser, bool)`), a `sync.RWMutex`-guarded sink var + `SetSink`, and thin
+  `Capture`/`Replay` delegators that hold no filenames/dirs/config and are inert
+  no-ops until a sink is wired (correct for tests/library use). All dir/config
+  resolution, the `<source>__<endpoint>__<symbol>__<stamp>.json` filename convention
+  (`sanitize`/`Filename`/`findLatest`/glob), and run identity moved to a new L4
+  `rawstore` (`New(base, reqID)` / `NewDefault(reqID)` over `config.DataDir()`;
+  `reqID` reserved for later retention/run-grouping, not yet encoded in filenames).
+  `main`'s `Before` hook constructs the store and calls
+  `rawcapture.SetSink(rawstore.NewDefault(reqID))`. No behavior change: still
+  env-gated (`MYCASE_CAPTURE` / `MYCASE_REPLAY`), still off by default. `rawstore`
+  registered at L4 in `layers.go`; `make check-deps`, `make test`, `make build` green.
+  *This is the enabling refactor; everything below builds on it.*
+- ⬜ **R-store-2 — Capture ON by default + clean opt-out.** Sink wired ⇒ capture on;
+  `MYCASE_CAPTURE=0`/`off` opts out. Replay mode suppresses capture (don't re-archive
+  replayed bytes). Attach the `req_id` so captures are attributable to a run.
+- ⬜ **R-store-3 — Retention: age + size ceiling (flat, no run/verdict).** Prune
+  captures older than N days or when the store exceeds X MB (oldest-first); config in
+  `defaults.json` (flag>env>config>default). Runs inline best-effort at process exit
+  **and** exposed as `mycase raw prune`. Minimal complete growth-bound; needs no run
+  concept. *Sufficient on its own for a quarterly-scale tool.*
+- ⬜ **R-store-4 (Tier-1 triage) — `mycase raw` command group.** `raw ls` (parse
+  filename fields into columns: source, endpoint, symbol, when, size), `raw show
+  <symbol>` / `raw path` (open/pretty-print / print path for `jless`/`jq`).
+  Schema-blind; works for every source incl. EDGAR the day it captures.
+- ⬜ **R-store-5 (Tier-2 triage, demand-driven) — per-source field inspectors.** First:
+  a Schwab-fundamentals inspector surfacing raw-JSON-field vs `mapSchwabFundamentals`
+  output — built *because of* the `0/N` bug, reused every future fundamentals bug.
+  Registers from `broker/schwab`. Do **not** speculatively build others; add EDGAR's
+  when EDGAR misbehaves (also validates the contract against a second, XBRL-shaped
+  source).
+- ⬜ **R-store-6 (optional) — Verdict-driven early deletion.** Only if clean captures
+  start crowding out interesting ones. Needs a *run + outcome* primitive: keep-floor
+  (recent + flagged-broken runs pinned) vs prune-ceiling (plausibly-fine old runs
+  deleted early). Lean entirely on cheap "broken" signals already emitted (`0/N`, empty
+  report, high fetch-failure rate) — never attempt to define "correct". Highest risk of
+  deleting the wrong thing; defer until demonstrably needed.
+
+
 - **Fix `pick` `0 / N` — Schwab fundamentals mapping** ⬜ **TODO**: `MarketCap`
   (and likely other fields) land as `0` despite 200 responses (confirmed in logs), so
   the size filter (`isEligible`, `pkg/stockpicker/filters.go`) eliminates every US
   constituent at the market-cap gate. This is a parse/mapping bug in
   `pkg/broker/schwab/market.go` downstream of a successful fetch — not auth, not
-  fetch. `marketfmt` fixed the *label*, not the zero values. Triage offline once
-  raw-capture lands.
+  fetch. `marketfmt` fixed the *label*, not the zero values. Capture/replay have
+  landed; triage offline via `MYCASE_CAPTURE=1` then `MYCASE_REPLAY=1`, and the
+  Schwab-fundamentals field inspector (R-store-5 above) is the purpose-built tool to
+  localize this — raw-wire `MarketCap` vs what `mapSchwabFundamentals` produced.
 - **Fix `pick` report/CSV naming** ⬜ **TODO**: name artifacts from the actual
   `--index`/`--method`, not config/golden-copy defaults. This session a
   `--index sp500 --method us_quality_momentum` run filed under
@@ -292,8 +383,8 @@ Active and planned phases only (completed/dropped phases removed):
 
 | Phase | Target | Dependency | Core value delivered | Status |
 |-------|--------|------------|---------------------|--------|
-| R18. slog migration + doc/tooling hygiene | Q4 2026 | none | Clean stdout/stderr separation in stockpicker/executor; accurate layer docs | ✅ Done |
 | 10. Data Source Resilience | Q4 2026 | Phase 2 (Schwab) | Authoritative US data (SEC EDGAR), Schwab everywhere, provenance | 🟧 10a+10b+10c done, 10d pending |
+| 11. Data & observability hygiene | Q4 2026 | none | Raw-response capture/replay (done); raw-store split + capture-by-default + retention + triage; pick `0/N` fix | 🟧 in progress |
 | 6. Options Overlay | H2 2027 | 6mo live data | Income optimization | ⬜ |
 
 ---
