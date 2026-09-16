@@ -7,11 +7,15 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
+	"slices"
+	"strings"
 	"time"
 
 	"golang.org/x/time/rate"
 
 	"github.com/raghavkgarg/mycase/pkg/logging"
+	"github.com/raghavkgarg/mycase/pkg/rawcapture"
 )
 
 const (
@@ -160,7 +164,44 @@ func (c *Client) executeRequest(ctx context.Context, method, url string, body io
 		return nil, err
 	}
 	logging.LogResponse(ctx, slog.Default(), method, url, resp.StatusCode, time.Since(start))
+
+	// Archive the raw body for offline replay/triage (no-op unless MYCASE_CAPTURE
+	// is set). Only 2xx bodies are captured; error bodies flow to parseAPIError.
+	// Token/auth responses never reach here (they use auth.go's tokenURL path),
+	// so no credentials are archived.
+	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		endpoint, symbol := captureLabels(url)
+		resp.Body = rawcapture.Capture("schwab", endpoint, symbol, resp.Body)
+	}
 	return resp, nil
+}
+
+// captureLabels derives a short endpoint name and primary symbol from a Schwab
+// request URL, for the raw-capture archive filename. Best-effort: on any parse
+// issue it falls back to a generic label.
+func captureLabels(rawURL string) (endpoint, symbol string) {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return "request", ""
+	}
+	// Last non-empty path segment is the logical endpoint
+	// (e.g. .../marketdata/v1/quotes → "quotes",
+	//       .../instruments → "instruments").
+	segs := strings.Split(strings.Trim(u.Path, "/"), "/")
+	endpoint = "request"
+	for _, seg := range slices.Backward(segs) {
+		if seg != "" {
+			endpoint = seg
+			break
+		}
+	}
+	q := u.Query()
+	// Schwab uses "symbol" (instruments/fundamentals) and "symbols" (quotes).
+	symbol = q.Get("symbol")
+	if symbol == "" {
+		symbol = q.Get("symbols")
+	}
+	return endpoint, symbol
 }
 
 // parseAPIError extracts error details from a non-2xx response.

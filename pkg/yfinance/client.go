@@ -5,6 +5,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/raghavkgarg/mycase/pkg/rawcapture"
 )
 
 // newYFinanceHTTPClient returns an *http.Client configured for Yahoo Finance.
@@ -48,10 +50,55 @@ func executeYFinanceRequest(client *http.Client, req *http.Request) (*http.Respo
 		}
 		retryReq := req.Clone(req.Context())
 		if directResp, directErr := directClient.Do(retryReq); directErr == nil {
-			return directResp, nil
+			return captureYFinance(directResp), nil
 		}
 	}
-	return resp, err
+	return captureYFinance(resp), err
+}
+
+// captureYFinance archives a successful (2xx) Yahoo response body for offline
+// replay/triage (no-op unless MYCASE_CAPTURE is set), returning the response
+// with a replacement body so callers are unchanged. nil / non-2xx pass through.
+func captureYFinance(resp *http.Response) *http.Response {
+	if resp == nil || resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return resp
+	}
+	endpoint, symbol := yfinanceCaptureLabels(resp.Request)
+	resp.Body = rawcapture.Capture("yahoo", endpoint, symbol, resp.Body)
+	return resp
+}
+
+// yfinanceCaptureLabels derives a short endpoint name and primary symbol from a
+// Yahoo request for the raw-capture archive filename. Best-effort.
+func yfinanceCaptureLabels(req *http.Request) (endpoint, symbol string) {
+	if req == nil || req.URL == nil {
+		return "request", ""
+	}
+	u := req.URL
+	// Yahoo encodes the symbol as the last path segment on quoteSummary /
+	// timeseries / chart endpoints; the endpoint name is the segment before it
+	// (e.g. .../quoteSummary/AAPL → endpoint "quoteSummary", symbol "AAPL").
+	segs := strings.Split(strings.Trim(u.Path, "/"), "/")
+	var nonEmpty []string
+	for _, s := range segs {
+		if s != "" {
+			nonEmpty = append(nonEmpty, s)
+		}
+	}
+	switch len(nonEmpty) {
+	case 0:
+		endpoint = "request"
+	case 1:
+		endpoint = nonEmpty[0]
+	default:
+		endpoint = nonEmpty[len(nonEmpty)-2]
+		symbol = nonEmpty[len(nonEmpty)-1]
+	}
+	// Prefer an explicit ?symbol= when present (timeseries carries it in query).
+	if s := u.Query().Get("symbol"); s != "" {
+		symbol = s
+	}
+	return endpoint, symbol
 }
 
 func isProxyFailure(err error) bool {

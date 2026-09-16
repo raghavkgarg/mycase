@@ -49,6 +49,7 @@ var Layers = map[string]int{
 	"market":           0,
 	"marketdata":       0,
 	"marketfmt":        0, // market-aware currency/magnitude formatting (₹ Cr/L, $ K/M/B/T) — pure, zero-import
+	"rawcapture":       0, // raw API response archive for offline replay/triage — pure, zero-import (env-gated)
 	"render":           0,
 	"selectiontracker": 0,
 	"universe":         0,
@@ -102,6 +103,7 @@ var MustBeLeaf = map[string]bool{
 	"render":       true,
 	"logging":      true,
 	"alert":        true,
+	"rawcapture":   true,
 }
 
 // Pkg is the subset of `go list -json` output both commands consume.

@@ -11,7 +11,7 @@
 ### Usage Discipline
 - **Never burst**: Space requests evenly. The code rate-limiter handles this, but when testing manually or adding new endpoints, respect the 120/min ceiling.
 - **Cache aggressively**: DuckDB cache (`pkg/cache/`) stores prices and fundamentals. Always check cache before hitting the API. Price cache expires daily (IST); fundamentals cache expires after 24h.
-- **Save raw responses during development**: When triaging issues or exploring new endpoints, save the full JSON response to a local file (e.g., `data/debug/schwab_response_YYYYMMDD.json`) and analyze offline. Do NOT repeatedly call the same endpoint from different angles — fetch once, inspect locally.
+- **Save raw responses during development**: Automated via `pkg/rawcapture` — set `MYCASE_CAPTURE=1` and every 2xx API body is archived flat to `data/raw/<source>__<endpoint>__<symbol>__<YYYYMMDD-HHMMSS>.json` (both the Schwab and Yahoo client chokepoints are hooked; token/auth responses are never captured). Analyze the archived JSON offline. Do NOT repeatedly call the same endpoint from different angles — fetch once, inspect locally.
 - **Batch where possible**: Use the multi-symbol `/quotes?symbols=A,B,C` endpoint instead of individual calls when fetching prices.
 - **No unnecessary re-fetches**: If a command fails mid-way (e.g., scoring crashes after fundamentals are fetched), the cached fundamentals survive. Fix the bug and re-run — the cache will serve warm data.
 

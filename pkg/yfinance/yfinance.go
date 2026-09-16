@@ -241,6 +241,7 @@ func FetchFundamentals(ctx context.Context, tickers []string) (map[string]Fundam
 					var tsResp *http.Response
 					if tsRespErr == nil {
 						tsResp, tsRespErr = client.Do(tsReq)
+						tsResp = captureYFinance(tsResp)
 					}
 					if tsRespErr == nil {
 						if tsResp.StatusCode == http.StatusOK {
