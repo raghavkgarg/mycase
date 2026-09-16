@@ -38,6 +38,11 @@ func newYFinanceHTTPClient(timeout time.Duration, jar http.CookieJar) *http.Clie
 // It first blocks on the process-wide Yahoo rate limiter (see ratelimit.go), so
 // every request routed through here is paced.
 func executeYFinanceRequest(client *http.Client, req *http.Request) (*http.Response, error) {
+	// Offline replay: serve a recorded body from the archive, skipping the rate
+	// limiter and network (no-op unless MYCASE_REPLAY).
+	if resp, ok := replayYFinance(req); ok {
+		return resp, nil
+	}
 	if err := waitRate(req.Context()); err != nil {
 		return nil, err
 	}
@@ -54,6 +59,24 @@ func executeYFinanceRequest(client *http.Client, req *http.Request) (*http.Respo
 		}
 	}
 	return captureYFinance(resp), err
+}
+
+// replayYFinance serves a recorded Yahoo response body for req from the raw
+// archive as a synthetic 200 response. Returns ok=false when replay is disabled
+// or no matching archive file exists.
+func replayYFinance(req *http.Request) (*http.Response, bool) {
+	endpoint, symbol := yfinanceCaptureLabels(req)
+	bodyRC, ok := rawcapture.Replay("yahoo", endpoint, symbol)
+	if !ok {
+		return nil, false
+	}
+	return &http.Response{
+		StatusCode: http.StatusOK,
+		Status:     "200 OK (replay)",
+		Header:     http.Header{"Content-Type": []string{"application/json"}},
+		Body:       bodyRC,
+		Request:    req,
+	}, true
 }
 
 // captureYFinance archives a successful (2xx) Yahoo response body for offline

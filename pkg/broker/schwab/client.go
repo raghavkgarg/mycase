@@ -99,6 +99,12 @@ func (c *Client) GetMarketData(ctx context.Context, path string) (*http.Response
 
 // doRequest performs an authenticated HTTP request with auto-refresh on 401.
 func (c *Client) doRequest(ctx context.Context, method, url string, body io.Reader) (*http.Response, error) {
+	// Offline replay: serve a recorded body from the archive and skip token
+	// fetch, rate limiter, and network entirely (no-op unless MYCASE_REPLAY).
+	if resp, ok := c.replay(ctx, url); ok {
+		return resp, nil
+	}
+
 	token, err := c.tokenMgr.GetAccessToken(ctx)
 	if err != nil {
 		return nil, err
@@ -174,6 +180,26 @@ func (c *Client) executeRequest(ctx context.Context, method, url string, body io
 		resp.Body = rawcapture.Capture("schwab", endpoint, symbol, resp.Body)
 	}
 	return resp, nil
+}
+
+// replay serves a recorded response body for url from the raw archive, as a
+// synthetic 200 response. Returns ok=false when replay is disabled or no
+// matching archive file exists (caller then proceeds with a live request).
+func (c *Client) replay(ctx context.Context, url string) (*http.Response, bool) {
+	endpoint, symbol := captureLabels(url)
+	bodyRC, ok := rawcapture.Replay("schwab", endpoint, symbol)
+	if !ok {
+		return nil, false
+	}
+	slog.InfoContext(ctx, "schwab.replay_hit", "endpoint", endpoint, "symbol", symbol)
+	req, _ := http.NewRequestWithContext(ctx, "GET", url, nil)
+	return &http.Response{
+		StatusCode: http.StatusOK,
+		Status:     "200 OK (replay)",
+		Header:     http.Header{"Content-Type": []string{"application/json"}},
+		Body:       bodyRC,
+		Request:    req,
+	}, true
 }
 
 // captureLabels derives a short endpoint name and primary symbol from a Schwab

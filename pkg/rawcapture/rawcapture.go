@@ -12,6 +12,14 @@
 // path is unchanged. When capture is disabled (the default) Capture returns the
 // original body untouched with zero overhead — no read, no allocation.
 //
+// # Offline replay
+//
+// With replay enabled (MYCASE_REPLAY), the same chokepoints call Replay first:
+// on a hit it returns the newest archived body for (source, endpoint, symbol),
+// and the caller short-circuits into a synthetic 200 response — no network, no
+// token, no rate limiter. This lets pick/report/etc. rerun the whole pipeline
+// against recorded responses with zero live calls.
+//
 // # Layering
 //
 // This is a pure L0 leaf (MustBeLeaf): stdlib only, zero internal imports. It
@@ -43,6 +51,9 @@ import (
 const (
 	// captureEnv, when truthy (1/true/yes/on, case-insensitive), enables capture.
 	captureEnv = "MYCASE_CAPTURE"
+	// replayEnv, when truthy, enables offline replay: API-client chokepoints
+	// serve archived bodies from data/raw instead of hitting the network.
+	replayEnv = "MYCASE_REPLAY"
 	// dataDirEnv overrides the base data directory. Mirrors pkg/config's env
 	// name so both resolve to the same tree; duplicated here (rather than
 	// imported) to keep this package a zero-import leaf.
@@ -60,6 +71,9 @@ const (
 var (
 	enabledOnce sync.Once
 	enabled     bool
+
+	replayOnce    sync.Once
+	replayEnabled bool
 )
 
 // Enabled reports whether capture is on (via MYCASE_CAPTURE). Cached after the
@@ -67,6 +81,13 @@ var (
 func Enabled() bool {
 	enabledOnce.Do(func() { enabled = truthy(os.Getenv(captureEnv)) })
 	return enabled
+}
+
+// ReplayEnabled reports whether offline replay is on (via MYCASE_REPLAY).
+// Cached after the first call.
+func ReplayEnabled() bool {
+	replayOnce.Do(func() { replayEnabled = truthy(os.Getenv(replayEnv)) })
+	return replayEnabled
 }
 
 func truthy(v string) bool {
@@ -130,6 +151,89 @@ func writeArchive(source, endpoint, symbol string, data []byte) {
 	}
 	name := Filename(source, endpoint, symbol, time.Now())
 	_ = os.WriteFile(filepath.Join(dir, name), data, 0o644)
+}
+
+// Replay serves a previously-archived response body for (source, endpoint,
+// symbol) when replay is enabled (MYCASE_REPLAY). It returns the newest matching
+// archive file's body and true on a hit; nil and false on a miss or when replay
+// is disabled.
+//
+// Matching is by the archive filename fields: it selects
+// "<source>__<endpoint>__<symbol>__*.json" (or "<source>__<endpoint>__*.json"
+// when symbol is empty), and — because the stamp field sorts lexically in
+// chronological order — returns the lexically-greatest (newest) match.
+//
+// Callers use a hit to short-circuit the network entirely: build a synthetic
+// 200 *http.Response around the returned body and skip auth, rate limiting, and
+// the actual request.
+func Replay(source, endpoint, symbol string) (io.ReadCloser, bool) {
+	if !ReplayEnabled() {
+		return nil, false
+	}
+	name, ok := findLatest(baseDir(), source, endpoint, symbol)
+	if !ok {
+		return nil, false
+	}
+	data, err := os.ReadFile(filepath.Join(baseDir(), name))
+	if err != nil {
+		return nil, false
+	}
+	return io.NopCloser(bytes.NewReader(data)), true
+}
+
+// findLatest returns the newest archive filename in dir matching the given
+// fields, and whether one was found. The stamp field's fixed-width
+// YYYYMMDD-HHMMSS format makes lexical order == chronological order, so the
+// max-by-name entry is the most recent.
+func findLatest(dir, source, endpoint, symbol string) (string, bool) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return "", false
+	}
+	prefix := matchPrefix(source, endpoint, symbol)
+	wantFields := 4 // source, endpoint, symbol, stamp
+	if sanitizeSymbol(symbol) == "" {
+		wantFields = 3 // source, endpoint, stamp
+	}
+	var latest string
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		n := e.Name()
+		if !strings.HasPrefix(n, prefix) || !strings.HasSuffix(n, ".json") {
+			continue
+		}
+		// Guard against a symbol-less query matching a symbol-carrying file
+		// (e.g. "yahoo__quotes__" would prefix "yahoo__quotes__AAPL__..."):
+		// require the exact field count.
+		if fieldCount(n) != wantFields {
+			continue
+		}
+		if n > latest {
+			latest = n
+		}
+	}
+	return latest, latest != ""
+}
+
+// matchPrefix builds the fixed leading portion of the archive filename for the
+// given fields (everything before the stamp), using the same sanitization as
+// Filename so a request and its archived response resolve to the same key.
+func matchPrefix(source, endpoint, symbol string) string {
+	src := sanitize(source, "unknown")
+	ep := sanitize(endpoint, "endpoint")
+	sym := sanitizeSymbol(symbol)
+	if sym == "" {
+		return src + "__" + ep + "__"
+	}
+	return src + "__" + ep + "__" + sym + "__"
+}
+
+// fieldCount counts the "__"-separated fields in an archive filename (with the
+// .json suffix stripped).
+func fieldCount(name string) int {
+	return len(strings.Split(strings.TrimSuffix(name, ".json"), "__"))
 }
 
 // Filename builds the flat archive filename for a capture at time t:

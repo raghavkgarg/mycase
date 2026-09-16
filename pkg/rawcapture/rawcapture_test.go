@@ -136,3 +136,97 @@ func TestTruthy(t *testing.T) {
 		}
 	}
 }
+
+// writeFixture drops a raw archive file with the given name and content under
+// <dataDir>/raw, creating the dir. Returns the raw dir.
+func writeFixture(t *testing.T, dataDir, name, content string) string {
+	t.Helper()
+	rawDir := filepath.Join(dataDir, rawSubdir)
+	if err := os.MkdirAll(rawDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(rawDir, name), []byte(content), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+	return rawDir
+}
+
+func TestReplay_Disabled_Miss(t *testing.T) {
+	dataDir := t.TempDir()
+	t.Setenv(replayEnv, "")
+	t.Setenv(dataDirEnv, dataDir)
+	resetEnabled()
+	writeFixture(t, dataDir, "schwab__quotes__AAPL__20260915-130405.json", `{"x":1}`)
+
+	if _, ok := Replay("schwab", "quotes", "AAPL"); ok {
+		t.Error("Replay returned a hit when disabled")
+	}
+}
+
+func TestReplay_Hit(t *testing.T) {
+	dataDir := t.TempDir()
+	t.Setenv(replayEnv, "1")
+	t.Setenv(dataDirEnv, dataDir)
+	resetEnabled()
+	const want = `{"symbol":"AAPL"}`
+	writeFixture(t, dataDir, "schwab__quotes__AAPL__20260915-130405.json", want)
+
+	rc, ok := Replay("schwab", "quotes", "AAPL")
+	if !ok {
+		t.Fatal("expected replay hit")
+	}
+	got, _ := io.ReadAll(rc)
+	if string(got) != want {
+		t.Errorf("body = %q, want %q", got, want)
+	}
+}
+
+func TestReplay_NewestWins(t *testing.T) {
+	dataDir := t.TempDir()
+	t.Setenv(replayEnv, "1")
+	t.Setenv(dataDirEnv, dataDir)
+	resetEnabled()
+	writeFixture(t, dataDir, "yahoo__quoteSummary__AAPL__20260915-090000.json", `"old"`)
+	writeFixture(t, dataDir, "yahoo__quoteSummary__AAPL__20260915-170000.json", `"new"`)
+
+	rc, ok := Replay("yahoo", "quoteSummary", "AAPL")
+	if !ok {
+		t.Fatal("expected replay hit")
+	}
+	got, _ := io.ReadAll(rc)
+	if string(got) != `"new"` {
+		t.Errorf("body = %q, want newest %q", got, `"new"`)
+	}
+}
+
+func TestReplay_SymbolMiss(t *testing.T) {
+	dataDir := t.TempDir()
+	t.Setenv(replayEnv, "1")
+	t.Setenv(dataDirEnv, dataDir)
+	resetEnabled()
+	writeFixture(t, dataDir, "schwab__quotes__AAPL__20260915-130405.json", `{"x":1}`)
+
+	if _, ok := Replay("schwab", "quotes", "MSFT"); ok {
+		t.Error("expected miss for a non-archived symbol")
+	}
+}
+
+// A symbol-less request must not match a symbol-carrying archive file (prefix
+// collision guard).
+func TestReplay_SymbollessDoesNotMatchSymbolFile(t *testing.T) {
+	dataDir := t.TempDir()
+	t.Setenv(replayEnv, "1")
+	t.Setenv(dataDirEnv, dataDir)
+	resetEnabled()
+	writeFixture(t, dataDir, "schwab__quotes__AAPL__20260915-130405.json", `{"x":1}`)
+
+	if _, ok := Replay("schwab", "quotes", ""); ok {
+		t.Error("symbol-less replay must not match a symbol-carrying file")
+	}
+
+	// But it should match a genuinely symbol-less archive file.
+	writeFixture(t, dataDir, "schwab__accounts__20260915-130405.json", `[{"h":"x"}]`)
+	if _, ok := Replay("schwab", "accounts", ""); !ok {
+		t.Error("expected hit for symbol-less archive file")
+	}
+}

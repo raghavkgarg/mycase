@@ -114,7 +114,7 @@ Automation eliminates all four. The system runs quarterly, follows its rules, an
 | `pick` eliminates all constituents at the market-cap gate (`0 / N`) | `pkg/stockpicker/filters.go` `isEligible` (size check) ← `pkg/broker/schwab/market.go` fundamentals mapper | **OPEN (2026-09-15)** — for US runs `Fundamentals.MarketCap` is `0` for every ticker, so `0 < MinMarketCap` eliminates all. The fundamentals endpoint returns **200** (confirmed in logs), so this is a **parse/mapping bug downstream of a successful fetch**, not auth/fetch. `marketfmt` (this session) fixed the band *label* (`$5.0B–$5.0T`), not the zero values. Triage offline via saved responses. | 🟥 needs raw-capture first |
 | `pick` report dir/CSV naming ignores `--index` / `--method` flags | report/basket writers | **OPEN (2026-09-15)** — ran `--index sp500 --method us_quality_momentum` but artifacts filed under `us_microsmall_multibagger/` and the report said "Multibagger Preset". Naming derives from config/golden-copy, not the actual flags. | 🟧 |
 | Two divergent cache DBs coexist | `data/cache.db` (Sep 8, `source=NULL`, 507 tickers, tax tables) vs `data/mycase.db` (newer schema) | **OPEN (2026-09-15)** — `cache.db` looks like a stale pre-refactor artifact; confirm no live reader and retire. | 🟧 |
-| No raw-response archive / offline replay | API clients (`schwab`, `yfinance`) | **PARTLY RESOLVED (2026-09-15)** — capture Phase 1 shipped: `pkg/rawcapture` (env-gated `MYCASE_CAPTURE`) hooks both client chokepoints, archiving 2xx bodies to flat `data/raw/<source>__<endpoint>__<symbol>__<stamp>.json` (token/auth responses excluded by construction). Replay `RoundTripper` (Phase 2) still TODO. | 🟧 |
+| No raw-response archive / offline replay | API clients (`schwab`, `yfinance`) | **RESOLVED (2026-09-15)** — `pkg/rawcapture` archives 2xx bodies (`MYCASE_CAPTURE`) and replays them offline (`MYCASE_REPLAY`), short-circuiting network/token/limiter at both client chokepoints; token/auth responses excluded by construction. | ✅ |
 | `data/` + `report/` are deeply nested with path-encoded identity | `data/**`, `report/**`; writers in `selectiontracker`, proposal/backup/monitor paths | **OPEN (2026-09-15)** — flatten to a single `data/` tree (+ disposable `data/raw/`) with a filename naming convention. See `docs/plans/data-report-flatten.md`. | 🟧 |
 | `docs/` sprawl (28 md files, heavy overlap) | `docs/**` | **OPEN (2026-09-15)** — consolidate to a maintained core + `archive/`; add an index. See `docs/plans/docs-consolidation.md`. | 🟩 low |
 
@@ -201,26 +201,33 @@ shipped.
   filter summary / eligibility reasons / rationale, replacing hardcoded `Rs. `/`%.0fCr`
   / `/1e7`. Fixes the nonsensical `500Cr–500000Cr` band label for US runs
   (`$5.0B–$5.0T`, "no cap" when max=0).
-- **Raw API response capture + offline replay** 🟧 **Phase 1 DONE (2026-09-15)**:
-  the API rule "fetch once, analyze offline" is now enforceable. New pure L0 leaf
-  `pkg/rawcapture` (zero-import, MustBeLeaf; self-configures from
-  `MYCASE_CAPTURE` toggle + `MYCASE_DATA_DIR` base — no `config` import, so it can
-  be called from deep inside the L1/L2 clients). `rawcapture.Capture(source,
-  endpoint, symbol, body)` is wired into the single chokepoint of each client:
-  `schwab.Client.executeRequest` (captures **2xx** market-data/trader bodies only)
-  and yfinance `executeYFinanceRequest` (+ the fundamentals-timeseries `client.Do`
-  that bypasses it). On a 2xx it buffers the body, writes raw bytes flat to a disposable
-  `data/raw/<source>__<endpoint>__<symbol>__<YYYYMMDD-HHMMSS>.json`, and returns
-  a fresh `io.ReadCloser` over the same bytes so callers are unchanged; disabled
-  (the default) it returns the body untouched with zero overhead. **Secret-safe by
-  construction**: Schwab OAuth token-exchange/refresh flows through `auth.go`'s
-  `tokenURL` path, which never reaches `executeRequest`/`Capture`, so credentials
-  are never archived; non-2xx (incl. 401) bodies are also skipped. **Phase 2 (TODO)**:
-  a replay `http.RoundTripper` backed by the archive (`--replay`) so `pick`/etc.
-  rerun the whole pipeline with zero live calls — this is what makes the
-  fundamentals-mapping bug below debuggable fully offline. Open call unchanged:
-  capture default-on (with retention bound) vs off behind `MYCASE_CAPTURE`
-  (currently off by default).
+- **Raw API response capture + offline replay** ✅ **DONE (2026-09-15)**:
+  the API rule "fetch once, analyze offline" is now enforceable end-to-end. New pure
+  L0 leaf `pkg/rawcapture` (zero-import, MustBeLeaf; self-configures from
+  `MYCASE_CAPTURE` / `MYCASE_REPLAY` toggles + `MYCASE_DATA_DIR` base — no `config`
+  import, so it can be called from deep inside the L1/L2 clients).
+  **Capture (Phase 1)**: `rawcapture.Capture(source, endpoint, symbol, body)` is wired
+  into the single chokepoint of each client — `schwab.Client.executeRequest`
+  (captures **2xx** market-data/trader bodies only) and yfinance
+  `executeYFinanceRequest` (+ the fundamentals-timeseries `client.Do` that bypasses
+  it). On a 2xx it buffers the body, writes raw bytes flat to a disposable
+  `data/raw/<source>__<endpoint>__<symbol>__<YYYYMMDD-HHMMSS>.json`, and returns a
+  fresh `io.ReadCloser` over the same bytes so callers are unchanged; disabled (the
+  default) it returns the body untouched with zero overhead.
+  **Replay (Phase 2)**: with `MYCASE_REPLAY` set, each chokepoint calls
+  `rawcapture.Replay(source, endpoint, symbol)` *first* — on a hit it returns the
+  newest matching archive file's body as a synthetic 200 and **short-circuits the
+  network, token fetch, and rate limiter entirely** (Schwab logs `schwab.replay_hit`).
+  `findLatest` globs by the filename fields (newest wins via the lexically-sortable
+  stamp) and guards field-count so a symbol-less request never matches a
+  symbol-carrying file. This lets `pick`/`report`/etc. rerun the whole pipeline
+  against recorded responses with zero live calls — the fundamentals-mapping bug
+  below is now debuggable fully offline. **Secret-safe by construction**: Schwab OAuth
+  token-exchange/refresh flows through `auth.go`'s `tokenURL` path, which never
+  reaches `executeRequest`/`Capture`/`Replay`, so credentials are never archived or
+  replayed; non-2xx (incl. 401) bodies are skipped. Implemented as env toggles
+  (`MYCASE_CAPTURE` / `MYCASE_REPLAY`, both off by default) rather than CLI flags;
+  capture-default-on with a retention bound remains an open call.
 - **Fix `pick` `0 / N` — Schwab fundamentals mapping** ⬜ **TODO**: `MarketCap`
   (and likely other fields) land as `0` despite 200 responses (confirmed in logs), so
   the size filter (`isEligible`, `pkg/stockpicker/filters.go`) eliminates every US
