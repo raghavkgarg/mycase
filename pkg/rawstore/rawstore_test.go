@@ -350,3 +350,176 @@ func TestResolveRetention_Defaults(t *testing.T) {
 		t.Errorf("default size = %d", ret.MaxBytes)
 	}
 }
+
+func TestParseFilename(t *testing.T) {
+	tests := []struct {
+		name         string
+		file         string
+		wantOK       bool
+		src, ep, sym string
+		when         time.Time
+	}{
+		{"with symbol", "schwab__quotes__AAPL__20260915-130405.json", true, "schwab", "quotes", "AAPL", time.Date(2026, 9, 15, 13, 4, 5, 0, time.Local)},
+		{"no symbol", "schwab__accounts__20260915-130405.json", true, "schwab", "accounts", "", time.Date(2026, 9, 15, 13, 4, 5, 0, time.Local)},
+		{"not json", "schwab__quotes__AAPL__20260915-130405.txt", false, "", "", "", time.Time{}},
+		{"too few fields", "schwab__20260915-130405.json", false, "", "", "", time.Time{}},
+		{"bad stamp", "schwab__quotes__AAPL__notatime.json", false, "", "", "", time.Time{}},
+		{"foreign file", "README.json", false, "", "", "", time.Time{}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			e, ok := ParseFilename(tc.file)
+			if ok != tc.wantOK {
+				t.Fatalf("ok = %v, want %v", ok, tc.wantOK)
+			}
+			if !ok {
+				return
+			}
+			if e.Source != tc.src || e.Endpoint != tc.ep || e.Symbol != tc.sym {
+				t.Errorf("fields = (%q,%q,%q), want (%q,%q,%q)", e.Source, e.Endpoint, e.Symbol, tc.src, tc.ep, tc.sym)
+			}
+			if !e.When.Equal(tc.when) {
+				t.Errorf("when = %v, want %v", e.When, tc.when)
+			}
+			if e.Name != tc.file {
+				t.Errorf("name = %q, want %q", e.Name, tc.file)
+			}
+		})
+	}
+}
+
+// ParseFilename must round-trip anything Filename produces.
+func TestParseFilename_RoundTrip(t *testing.T) {
+	ts := time.Date(2026, 9, 15, 13, 4, 5, 0, time.Local)
+	for _, tc := range []struct{ src, ep, sym string }{
+		{"schwab", "quotes", "AAPL"},
+		{"yahoo", "chart", ""},
+		{"edgar", "companyfacts", "US:MSFT"},
+	} {
+		name := Filename(tc.src, tc.ep, tc.sym, ts)
+		e, ok := ParseFilename(name)
+		if !ok {
+			t.Fatalf("ParseFilename(%q) failed", name)
+		}
+		wantSym := sanitizeSymbol(tc.sym)
+		if e.Source != sanitize(tc.src, "unknown") || e.Endpoint != sanitize(tc.ep, "endpoint") || e.Symbol != wantSym {
+			t.Errorf("round-trip mismatch for %q: got (%q,%q,%q)", name, e.Source, e.Endpoint, e.Symbol)
+		}
+		if !e.When.Equal(ts) {
+			t.Errorf("round-trip when = %v, want %v", e.When, ts)
+		}
+	}
+}
+
+func TestList_NilStore(t *testing.T) {
+	var s *Store
+	got, err := s.List(ListFilter{})
+	if err != nil || got != nil {
+		t.Errorf("nil List = (%v,%v), want (nil,nil)", got, err)
+	}
+}
+
+func TestList_MissingDir(t *testing.T) {
+	s := New(t.TempDir(), "req-1")
+	got, err := s.List(ListFilter{})
+	if err != nil || got != nil {
+		t.Errorf("missing-dir List = (%v,%v), want (nil,nil)", got, err)
+	}
+}
+
+func TestList_NewestFirstAndFilters(t *testing.T) {
+	base := t.TempDir()
+	writeFixture(t, base, "schwab__quotes__AAPL__20260101-000000.json", `{"a":1}`)
+	writeFixture(t, base, "schwab__quotes__MSFT__20260901-120000.json", `{"b":22}`)
+	writeFixture(t, base, "yahoo__chart__AAPL__20260601-000000.json", `{"c":333}`)
+	writeFixture(t, base, "notes.txt", "foreign")                 // must be ignored
+	writeFixture(t, base, "schwab__accounts__badstamp.json", `x`) // unparseable, ignored
+
+	s := New(base, "req-1")
+
+	// No filter: all 3 conforming files, newest-first.
+	all, err := s.List(ListFilter{})
+	if err != nil {
+		t.Fatalf("List err: %v", err)
+	}
+	if len(all) != 3 {
+		t.Fatalf("got %d entries, want 3 (foreign/unparseable excluded)", len(all))
+	}
+	wantOrder := []string{"MSFT", "AAPL", "AAPL"} // 2026-09, 2026-06, 2026-01
+	for i, e := range all {
+		if e.Symbol != wantOrder[i] {
+			t.Errorf("entry %d symbol = %q, want %q (newest-first order)", i, e.Symbol, wantOrder[i])
+		}
+	}
+	// Size is populated.
+	if all[0].Size == 0 {
+		t.Error("expected non-zero Size on entries")
+	}
+
+	// Source filter.
+	yahoo, _ := s.List(ListFilter{Source: "yahoo"})
+	if len(yahoo) != 1 || yahoo[0].Endpoint != "chart" {
+		t.Errorf("source filter = %+v, want 1 yahoo/chart entry", yahoo)
+	}
+
+	// Symbol filter (case-insensitive), combined with source.
+	aaplSchwab, _ := s.List(ListFilter{Source: "schwab", Symbol: "aapl"})
+	if len(aaplSchwab) != 1 || aaplSchwab[0].Symbol != "AAPL" {
+		t.Errorf("combined filter = %+v, want 1 schwab AAPL entry", aaplSchwab)
+	}
+}
+
+func TestResolvePath(t *testing.T) {
+	base := t.TempDir()
+	writeFixture(t, base, "schwab__quotes__AAPL__20260101-000000.json", `{"old":1}`)
+	writeFixture(t, base, "schwab__quotes__AAPL__20260901-000000.json", `{"new":1}`)
+	writeFixture(t, base, "yahoo__chart__MSFT__20260601-000000.json", `{"m":1}`)
+	rawDir := filepath.Join(base, rawSubdir)
+
+	s := New(base, "req-1")
+
+	// Empty query → newest overall (the 2026-09 AAPL).
+	p, ok := s.ResolvePath("")
+	if !ok || p != filepath.Join(rawDir, "schwab__quotes__AAPL__20260901-000000.json") {
+		t.Errorf("empty-query resolve = (%q,%v), want newest AAPL", p, ok)
+	}
+
+	// Symbol query → newest with that symbol.
+	p, ok = s.ResolvePath("AAPL")
+	if !ok || p != filepath.Join(rawDir, "schwab__quotes__AAPL__20260901-000000.json") {
+		t.Errorf("symbol resolve = (%q,%v), want newest AAPL", p, ok)
+	}
+
+	// Filename-field query (no symbol match) → fallback path match.
+	p, ok = s.ResolvePath("yahoo__chart")
+	if !ok || p != filepath.Join(rawDir, "yahoo__chart__MSFT__20260601-000000.json") {
+		t.Errorf("filename resolve = (%q,%v), want yahoo chart", p, ok)
+	}
+
+	// No match.
+	if _, ok := s.ResolvePath("NOSUCH"); ok {
+		t.Error("expected miss for non-existent query")
+	}
+}
+
+func TestResolvePath_NilAndEmpty(t *testing.T) {
+	var s *Store
+	if _, ok := s.ResolvePath("AAPL"); ok {
+		t.Error("nil store ResolvePath should miss")
+	}
+	empty := New(t.TempDir(), "req-1")
+	if _, ok := empty.ResolvePath(""); ok {
+		t.Error("empty archive ResolvePath should miss")
+	}
+}
+
+func TestRawDir(t *testing.T) {
+	base := t.TempDir()
+	if got := New(base, "r").RawDir(); got != filepath.Join(base, rawSubdir) {
+		t.Errorf("RawDir = %q", got)
+	}
+	var nilStore *Store
+	if got := nilStore.RawDir(); got != "" {
+		t.Errorf("nil RawDir = %q, want empty", got)
+	}
+}

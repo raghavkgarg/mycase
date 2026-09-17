@@ -324,10 +324,18 @@ the lost evidence was. This reframes the feature.
   `mycase raw prune [--retain-days N] [--max-size-mb N]` (0 disables a dimension).
   Minimal complete growth-bound; no run/verdict concept. `make
   check-deps`/`test`/`build`/`cleanup` green.
-- ⬜ **R-store-4 (Tier-1 triage) — `mycase raw` command group.** `raw ls` (parse
-  filename fields into columns: source, endpoint, symbol, when, size), `raw show
-  <symbol>` / `raw path` (open/pretty-print / print path for `jless`/`jq`).
-  Schema-blind; works for every source incl. EDGAR the day it captures.
+- ✅ **DONE — R-store-4 (Tier-1 triage) — `mycase raw` command group.** Schema-blind
+  triage over the archive, complementing R-store-3's prune. `raw ls` parses the
+  filename convention into columns (source, endpoint, symbol, when, size), newest-first,
+  with case-insensitive `--source`/`--endpoint`/`--symbol` substring filters and `-n`
+  limit; `raw show [query]` pretty-prints the newest matching capture (JSON indented,
+  non-JSON verbatim); `raw path [query]` prints just the path for piping
+  (`jless "$(mycase raw path AAPL)"`). `query` matches the symbol first, then the whole
+  filename, so both `raw show AAPL` and `raw show schwab__quotes` work; empty query =
+  newest capture overall. Backed by exported `rawstore.ParseFilename` (inverse of
+  `Filename`), `(*Store).List(ListFilter)`, and `(*Store).ResolvePath` — all
+  schema-blind, so they work for every source (schwab, yahoo, future EDGAR) the day it
+  captures. `make check-deps`/`test`/`build`/`cleanup` green.
 - ⬜ **R-store-5 (Tier-2 triage, demand-driven) — per-source field inspectors.** First:
   a Schwab-fundamentals inspector surfacing raw-JSON-field vs `mapSchwabFundamentals`
   output — built *because of* the `0/N` bug, reused every future fundamentals bug.

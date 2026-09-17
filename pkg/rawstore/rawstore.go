@@ -320,6 +320,160 @@ func (s *Store) Prune(ret Retention) (PruneResult, error) {
 	return res, nil
 }
 
+// stampLayout is the fixed-width timestamp format embedded in archive
+// filenames. Its fixed width makes lexical order == chronological order.
+const stampLayout = "20060102-150405"
+
+// Entry is a parsed view of one archived response, as surfaced by triage
+// (R-store-4). Source/Endpoint/Symbol come from the filename fields (Symbol is
+// "" for symbol-less captures); When is parsed from the filename stamp; Size and
+// Name come from the directory entry.
+type Entry struct {
+	When     time.Time
+	Name     string // on-disk filename (within the raw dir)
+	Source   string
+	Endpoint string
+	Symbol   string
+	Size     int64
+}
+
+// ParseFilename decodes an archive filename into its Source/Endpoint/Symbol/When
+// fields, returning false for any name that doesn't match the convention
+// (<source>__<endpoint>__[<symbol>__]<stamp>.json). Size/Name are not set here
+// (they come from the directory entry); callers that have the os.DirEntry fill
+// them in. This is the inverse of Filename and stays schema-blind — it works for
+// every source (schwab, yahoo, future edgar) without knowing their payloads.
+func ParseFilename(name string) (Entry, bool) {
+	if !strings.HasSuffix(name, ".json") {
+		return Entry{}, false
+	}
+	base := strings.TrimSuffix(name, ".json")
+	parts := strings.Split(base, "__")
+	var e Entry
+	switch len(parts) {
+	case 4: // source, endpoint, symbol, stamp
+		e.Source, e.Endpoint, e.Symbol = parts[0], parts[1], parts[2]
+	case 3: // source, endpoint, stamp (symbol-less)
+		e.Source, e.Endpoint = parts[0], parts[1]
+	default:
+		return Entry{}, false
+	}
+	stamp := parts[len(parts)-1]
+	when, err := time.ParseInLocation(stampLayout, stamp, time.Local)
+	if err != nil {
+		return Entry{}, false
+	}
+	e.When = when
+	e.Name = name
+	return e, true
+}
+
+// ListFilter narrows a List by case-insensitive substring match on each set
+// field. Empty fields match everything.
+type ListFilter struct {
+	Source   string
+	Endpoint string
+	Symbol   string
+}
+
+func (f ListFilter) matches(e Entry) bool {
+	return containsFold(e.Source, f.Source) &&
+		containsFold(e.Endpoint, f.Endpoint) &&
+		containsFold(e.Symbol, f.Symbol)
+}
+
+// containsFold reports whether needle is a case-insensitive substring of hay. An
+// empty needle always matches.
+func containsFold(hay, needle string) bool {
+	if needle == "" {
+		return true
+	}
+	return strings.Contains(strings.ToLower(hay), strings.ToLower(needle))
+}
+
+// List returns the archived entries matching filter, newest-first (ties broken
+// by descending name, which is stable and deterministic). Size and When come
+// from the on-disk file (When from the filename stamp, falling back to mtime if
+// the stamp is unparseable — which ParseFilename already rejects, so in practice
+// When is always the stamp). A nil Store or a missing raw dir yields (nil, nil):
+// "nothing captured" is not an error.
+func (s *Store) List(filter ListFilter) ([]Entry, error) {
+	if s == nil {
+		return nil, nil
+	}
+	dirEntries, err := os.ReadDir(s.rawDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	out := make([]Entry, 0, len(dirEntries))
+	for _, de := range dirEntries {
+		if de.IsDir() {
+			continue
+		}
+		e, ok := ParseFilename(de.Name())
+		if !ok {
+			continue // foreign / non-conforming file
+		}
+		if !filter.matches(e) {
+			continue
+		}
+		if info, err := de.Info(); err == nil {
+			e.Size = info.Size()
+		}
+		out = append(out, e)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if !out[i].When.Equal(out[j].When) {
+			return out[i].When.After(out[j].When)
+		}
+		return out[i].Name > out[j].Name
+	})
+	return out, nil
+}
+
+// ResolvePath returns the absolute path to the newest archived file matching
+// query, and true on a hit. query is a case-insensitive substring matched
+// against the symbol first, then — if nothing matches by symbol — against the
+// whole filename, so both `raw show AAPL` and `raw show schwab__quotes` work. An
+// empty query resolves to the single newest capture of any kind. A nil Store or
+// no match yields ("", false).
+func (s *Store) ResolvePath(query string) (string, bool) {
+	if s == nil {
+		return "", false
+	}
+	all, err := s.List(ListFilter{})
+	if err != nil || len(all) == 0 {
+		return "", false
+	}
+	if query == "" {
+		return filepath.Join(s.rawDir, all[0].Name), true
+	}
+	// Prefer a symbol match (the common case: `raw show AAPL`).
+	for _, e := range all {
+		if containsFold(e.Symbol, query) {
+			return filepath.Join(s.rawDir, e.Name), true
+		}
+	}
+	// Fall back to any filename-field match.
+	for _, e := range all {
+		if containsFold(e.Name, query) {
+			return filepath.Join(s.rawDir, e.Name), true
+		}
+	}
+	return "", false
+}
+
+// RawDir returns the archive directory (<base>/raw). A nil Store returns "".
+func (s *Store) RawDir() string {
+	if s == nil {
+		return ""
+	}
+	return s.rawDir
+}
+
 // findLatest returns the newest archive filename in dir matching the given
 // fields, and whether one was found. The stamp field's fixed-width
 // YYYYMMDD-HHMMSS format makes lexical order == chronological order, so the
