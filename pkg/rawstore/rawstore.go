@@ -27,6 +27,8 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -69,6 +71,62 @@ func New(base, reqID string) *Store {
 // NewDefault constructs a Store rooted at the resolved config.DataDir().
 func NewDefault(reqID string) *Store {
 	return New(config.DataDir(), reqID)
+}
+
+// Env overrides for retention (env layer of flag > env > config > default).
+const (
+	retainDaysEnv = "MYCASE_RAW_RETAIN_DAYS"
+	maxSizeMBEnv  = "MYCASE_RAW_MAX_SIZE_MB"
+)
+
+// ResolveRetention builds a Retention from config/defaults.json plus env
+// overrides, applying flag > env > config > default precedence for the
+// config/env/default layers (a caller with an explicit flag value should pass
+// it via the overrides). retainDaysOverride / maxSizeMBOverride are applied when
+// >= 0 (use -1 for "not set"), sitting above env and config.
+//
+// Precedence per field: override (>=0) > env > config (>0) > built-in default.
+func ResolveRetention(cfg config.RawConfig, retainDaysOverride, maxSizeMBOverride int) Retention {
+	days := config.DefaultRawRetainDays
+	if cfg.RetainDays > 0 {
+		days = cfg.RetainDays
+	}
+	if v, ok := envInt(retainDaysEnv); ok {
+		days = v
+	}
+	if retainDaysOverride >= 0 {
+		days = retainDaysOverride
+	}
+
+	sizeMB := config.DefaultRawMaxSizeMB
+	if cfg.MaxSizeMB > 0 {
+		sizeMB = cfg.MaxSizeMB
+	}
+	if v, ok := envInt(maxSizeMBEnv); ok {
+		sizeMB = v
+	}
+	if maxSizeMBOverride >= 0 {
+		sizeMB = maxSizeMBOverride
+	}
+
+	return Retention{
+		MaxAge:   time.Duration(days) * 24 * time.Hour,
+		MaxBytes: int64(sizeMB) * 1024 * 1024,
+	}
+}
+
+// envInt reads a non-negative integer env var. Returns (0,false) when unset or
+// unparseable so the caller keeps the lower-precedence value.
+func envInt(name string) (int, bool) {
+	s := strings.TrimSpace(os.Getenv(name))
+	if s == "" {
+		return 0, false
+	}
+	n, err := strconv.Atoi(s)
+	if err != nil || n < 0 {
+		return 0, false
+	}
+	return n, true
 }
 
 // ReqID returns the run identity this store was constructed with. A nil Store
@@ -123,6 +181,143 @@ func (s *Store) Open(source, endpoint, symbol string) (io.ReadCloser, bool) {
 		return nil, false
 	}
 	return io.NopCloser(bytes.NewReader(data)), true
+}
+
+// Retention bounds the growth of the archive. A file is pruned if it violates
+// *either* ceiling; both are independent and either can be disabled with a
+// non-positive value:
+//
+//   - MaxAge: delete archives whose modification time is older than now-MaxAge
+//     (<= 0 → age pruning disabled).
+//   - MaxBytes: cap the archive's total size; when the total exceeds MaxBytes,
+//     delete oldest-first (by modification time) until at or under the cap
+//     (<= 0 → size pruning disabled).
+//
+// This is deliberately the "keep everything recent, prune only the boring old
+// middle" policy from docs/roadmap.md R-store-3: no run/verdict concept, just
+// age and total size. False-keep is cheap (disk); false-delete is catastrophic
+// (an unreproducible bug), so the ceilings are the only triggers.
+type Retention struct {
+	MaxAge   time.Duration
+	MaxBytes int64
+}
+
+// PruneResult reports what a Prune call removed.
+type PruneResult struct {
+	RemovedByAge  int   // files deleted for exceeding MaxAge
+	RemovedBySize int   // files deleted to bring the total under MaxBytes
+	FreedBytes    int64 // total bytes reclaimed
+	RemainingSize int64 // archive size after pruning
+	Remaining     int   // file count after pruning
+}
+
+// Removed returns the total number of files deleted.
+func (r PruneResult) Removed() int { return r.RemovedByAge + r.RemovedBySize }
+
+// Prune enforces the Retention policy over the archive, oldest-first. It is
+// best-effort: unreadable entries and individual delete failures are skipped
+// rather than propagated (a nil error means "the pass ran", not "every delete
+// succeeded"). A nil Store or a missing raw dir is a no-op returning a zero
+// result. Only files matching the archive naming convention
+// (<...>__<stamp>.json) are considered; foreign files are ignored.
+//
+// It emits a single Info "rawstore.pruned" line summarizing the pass (never any
+// file bodies), and a Debug line per deleted file.
+func (s *Store) Prune(ret Retention) (PruneResult, error) {
+	var res PruneResult
+	if s == nil {
+		return res, nil
+	}
+
+	entries, err := os.ReadDir(s.rawDir)
+	if err != nil {
+		// Missing dir (nothing captured yet) is not an error worth surfacing.
+		if os.IsNotExist(err) {
+			return res, nil
+		}
+		return res, err
+	}
+
+	type archived struct {
+		name    string
+		size    int64
+		modTime time.Time
+	}
+	files := make([]archived, 0, len(entries))
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		n := e.Name()
+		// Only touch our own archive files; never delete foreign content.
+		if !strings.HasSuffix(n, ".json") || !strings.Contains(n, "__") {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil {
+			continue
+		}
+		files = append(files, archived{name: n, size: info.Size(), modTime: info.ModTime()})
+	}
+
+	// Oldest-first so both the age pass and the size pass evict in the same
+	// order (a size overflow removes the least-recently-useful captures first).
+	sort.Slice(files, func(i, j int) bool { return files[i].modTime.Before(files[j].modTime) })
+
+	remove := func(f archived) {
+		if err := os.Remove(filepath.Join(s.rawDir, f.name)); err != nil {
+			return
+		}
+		res.FreedBytes += f.size
+		slog.Debug("rawstore.pruned_file", "file", f.name, "bytes", f.size)
+	}
+
+	// Age pass.
+	kept := files[:0:0]
+	var total int64
+	if ret.MaxAge > 0 {
+		cutoff := time.Now().Add(-ret.MaxAge)
+		for _, f := range files {
+			if f.modTime.Before(cutoff) {
+				remove(f)
+				res.RemovedByAge++
+				continue
+			}
+			kept = append(kept, f)
+			total += f.size
+		}
+	} else {
+		for _, f := range files {
+			kept = append(kept, f)
+			total += f.size
+		}
+	}
+
+	// Size pass: evict oldest survivors until under the cap.
+	if ret.MaxBytes > 0 {
+		i := 0
+		for total > ret.MaxBytes && i < len(kept) {
+			remove(kept[i])
+			total -= kept[i].size
+			res.RemovedBySize++
+			i++
+		}
+		kept = kept[i:]
+	}
+
+	res.RemainingSize = total
+	res.Remaining = len(kept)
+
+	if res.Removed() > 0 {
+		slog.Info("rawstore.pruned",
+			"removed_by_age", res.RemovedByAge,
+			"removed_by_size", res.RemovedBySize,
+			"freed_bytes", res.FreedBytes,
+			"remaining", res.Remaining,
+			"remaining_bytes", res.RemainingSize,
+		)
+	}
+	return res, nil
 }
 
 // findLatest returns the newest archive filename in dir matching the given

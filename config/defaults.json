@@ -17,5 +17,9 @@
     "user_agent": "mycase/1.0 (set-your-contact@example.com)",
     "facts_ttl_days": 80,
     "cik_ttl_days": 7
+  },
+  "raw": {
+    "retain_days": 14,
+    "max_size_mb": 512
   }
 }

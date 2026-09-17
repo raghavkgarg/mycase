@@ -24,6 +24,9 @@ var BuildDate = "unknown"
 // appLogger holds the process logger so the After hook can close its file.
 var appLogger *logging.Logger
 
+// rawArchive holds the raw-response store so the After hook can prune it.
+var rawArchive *rawstore.Store
+
 func main() {
 	// Open DuckDB cache in <home>/data/mycase.db (best-effort; non-fatal if data/ doesn't exist yet).
 	if c, err := cache.Open(config.DataPath("mycase.db")); err == nil {
@@ -74,13 +77,21 @@ func main() {
 			// leaf that delegates persistence here). Wiring the sink turns
 			// capture ON by default; opt out with MYCASE_CAPTURE=0/off. Replay
 			// (MYCASE_REPLAY) serves recorded bodies and suppresses capture.
-			rawcapture.SetSink(rawstore.NewDefault(reqID))
+			rawArchive = rawstore.NewDefault(reqID)
+			rawcapture.SetSink(rawArchive)
 
 			slog.DebugContext(ctx, "command start",
 				"command", commandName(c), "version", Version)
 			return ctx, nil
 		},
 		After: func(_ context.Context, _ *cli.Command) error {
+			// Best-effort raw-archive retention at process exit: bound growth by
+			// age + total size (config/defaults.json "raw" block, env-overridable).
+			// Never fails the command. Skipped in replay mode (nothing captured).
+			if rawArchive != nil && !rawcapture.ReplayEnabled() {
+				rawCfg := config.LoadUserDefaults(config.Path("defaults.json")).Raw
+				_, _ = rawArchive.Prune(rawstore.ResolveRetention(rawCfg, -1, -1))
+			}
 			if appLogger != nil {
 				appLogger.Close()
 			}
@@ -101,6 +112,7 @@ func main() {
 			mycmd.MergeCommand,
 			mycmd.AuthCommand,
 			mycmd.CacheCommand,
+			mycmd.RawCommand,
 			mycmd.DaemonCommand,
 			mycmd.BacktestCommand,
 			mycmd.CalibrateCommand,

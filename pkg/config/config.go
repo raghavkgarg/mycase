@@ -490,8 +490,31 @@ type UserDefaults struct {
 	PipelineConfig string        `json:"pipeline_config"`
 	Logging        LoggingConfig `json:"logging"`
 	EDGAR          EDGARConfig   `json:"edgar"`
+	Raw            RawConfig     `json:"raw"`
 	TopN           int           `json:"top_n"`
 }
+
+// RawConfig holds retention settings for the raw-response archive (pkg/rawstore,
+// docs/roadmap.md R-store-3). Growth is bounded by pruning, not by declining to
+// capture — capture is ON by default (R-store-2). Two independent ceilings apply
+// (a file is pruned if it exceeds either):
+//
+//   - RetainDays: delete archives older than N days (0 or negative → disabled).
+//   - MaxSizeMB:  cap the total archive size; when exceeded, delete oldest-first
+//     until under the cap (0 or negative → disabled).
+//
+// Env overrides (flag > env > config > default): MYCASE_RAW_RETAIN_DAYS,
+// MYCASE_RAW_MAX_SIZE_MB.
+type RawConfig struct {
+	RetainDays int `json:"retain_days"` // days to keep raw captures (default 14)
+	MaxSizeMB  int `json:"max_size_mb"` // total archive size ceiling in MB (default 512)
+}
+
+// Raw-archive retention defaults, applied when config/env leave a field unset.
+const (
+	DefaultRawRetainDays = 14
+	DefaultRawMaxSizeMB  = 512
+)
 
 // EDGARConfig holds SEC EDGAR fundamentals-source settings (Phase 10c). EDGAR is
 // opt-in: Enabled defaults to false so the data pipeline is unchanged until a

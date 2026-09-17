@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/raghavkgarg/mycase/pkg/config"
 	"github.com/raghavkgarg/mycase/pkg/rawcapture"
 )
 
@@ -178,5 +179,174 @@ func TestOpen_SymbollessDoesNotMatchSymbolFile(t *testing.T) {
 	writeFixture(t, base, "schwab__accounts__20260915-130405.json", `[{"h":"x"}]`)
 	if _, ok := s.Open("schwab", "accounts", ""); !ok {
 		t.Error("expected hit for symbol-less archive file")
+	}
+}
+
+// setModTime backdates a fixture's modification time so age-based pruning can be
+// exercised deterministically.
+func setModTime(t *testing.T, base, name string, mod time.Time) {
+	t.Helper()
+	p := filepath.Join(base, rawSubdir, name)
+	if err := os.Chtimes(p, mod, mod); err != nil {
+		t.Fatalf("chtimes %s: %v", name, err)
+	}
+}
+
+func TestPrune_NilStore(t *testing.T) {
+	var s *Store
+	res, err := s.Prune(Retention{MaxAge: time.Hour})
+	if err != nil {
+		t.Fatalf("nil Prune err: %v", err)
+	}
+	if res.Removed() != 0 {
+		t.Errorf("nil Prune removed %d, want 0", res.Removed())
+	}
+}
+
+func TestPrune_MissingDir(t *testing.T) {
+	// Store pointed at a base with no raw/ dir yet — nothing captured.
+	s := New(t.TempDir(), "req-1")
+	res, err := s.Prune(Retention{MaxAge: time.Hour, MaxBytes: 1})
+	if err != nil {
+		t.Fatalf("missing-dir Prune err: %v", err)
+	}
+	if res.Removed() != 0 {
+		t.Errorf("missing-dir removed %d, want 0", res.Removed())
+	}
+}
+
+func TestPrune_ByAge(t *testing.T) {
+	base := t.TempDir()
+	now := time.Now()
+	writeFixture(t, base, "schwab__quotes__OLD__20260101-000000.json", `{"a":1}`)
+	writeFixture(t, base, "schwab__quotes__NEW__20260901-000000.json", `{"b":2}`)
+	setModTime(t, base, "schwab__quotes__OLD__20260101-000000.json", now.Add(-48*time.Hour))
+	setModTime(t, base, "schwab__quotes__NEW__20260901-000000.json", now.Add(-1*time.Hour))
+
+	s := New(base, "req-1")
+	res, err := s.Prune(Retention{MaxAge: 24 * time.Hour}) // size disabled
+	if err != nil {
+		t.Fatalf("Prune err: %v", err)
+	}
+	if res.RemovedByAge != 1 || res.RemovedBySize != 0 {
+		t.Errorf("removed byAge=%d bySize=%d, want 1/0", res.RemovedByAge, res.RemovedBySize)
+	}
+	if res.Remaining != 1 {
+		t.Errorf("remaining=%d, want 1", res.Remaining)
+	}
+	if _, err := os.Stat(filepath.Join(base, rawSubdir, "schwab__quotes__NEW__20260901-000000.json")); err != nil {
+		t.Errorf("recent file should survive: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(base, rawSubdir, "schwab__quotes__OLD__20260101-000000.json")); !os.IsNotExist(err) {
+		t.Errorf("old file should be pruned, stat err=%v", err)
+	}
+}
+
+func TestPrune_BySize_OldestFirst(t *testing.T) {
+	base := t.TempDir()
+	now := time.Now()
+	// Three 100-byte files; cap at 250 bytes => oldest one must go.
+	body := strings.Repeat("x", 100)
+	writeFixture(t, base, "yahoo__chart__A__20260901-000000.json", body)
+	writeFixture(t, base, "yahoo__chart__B__20260901-000001.json", body)
+	writeFixture(t, base, "yahoo__chart__C__20260901-000002.json", body)
+	setModTime(t, base, "yahoo__chart__A__20260901-000000.json", now.Add(-3*time.Hour))
+	setModTime(t, base, "yahoo__chart__B__20260901-000001.json", now.Add(-2*time.Hour))
+	setModTime(t, base, "yahoo__chart__C__20260901-000002.json", now.Add(-1*time.Hour))
+
+	s := New(base, "req-1")
+	res, err := s.Prune(Retention{MaxBytes: 250}) // age disabled
+	if err != nil {
+		t.Fatalf("Prune err: %v", err)
+	}
+	if res.RemovedBySize != 1 || res.RemovedByAge != 0 {
+		t.Errorf("removed byAge=%d bySize=%d, want 0/1", res.RemovedByAge, res.RemovedBySize)
+	}
+	if res.Remaining != 2 || res.RemainingSize != 200 {
+		t.Errorf("remaining=%d size=%d, want 2/200", res.Remaining, res.RemainingSize)
+	}
+	// The oldest (A) must be the one deleted.
+	if _, err := os.Stat(filepath.Join(base, rawSubdir, "yahoo__chart__A__20260901-000000.json")); !os.IsNotExist(err) {
+		t.Errorf("oldest file A should be pruned, stat err=%v", err)
+	}
+}
+
+func TestPrune_IgnoresForeignFiles(t *testing.T) {
+	base := t.TempDir()
+	writeFixture(t, base, "schwab__quotes__A__20260101-000000.json", `{"a":1}`)
+	writeFixture(t, base, "notes.txt", "keep me") // no __, wrong ext
+	writeFixture(t, base, "README.md", "keep me") // foreign
+	setModTime(t, base, "schwab__quotes__A__20260101-000000.json", time.Now().Add(-100*time.Hour))
+
+	s := New(base, "req-1")
+	res, err := s.Prune(Retention{MaxAge: time.Hour})
+	if err != nil {
+		t.Fatalf("Prune err: %v", err)
+	}
+	if res.RemovedByAge != 1 {
+		t.Errorf("removedByAge=%d, want 1", res.RemovedByAge)
+	}
+	for _, f := range []string{"notes.txt", "README.md"} {
+		if _, err := os.Stat(filepath.Join(base, rawSubdir, f)); err != nil {
+			t.Errorf("foreign file %s should be untouched: %v", f, err)
+		}
+	}
+}
+
+func TestPrune_DisabledCeilings(t *testing.T) {
+	base := t.TempDir()
+	writeFixture(t, base, "schwab__quotes__A__20260101-000000.json", strings.Repeat("x", 1000))
+	setModTime(t, base, "schwab__quotes__A__20260101-000000.json", time.Now().Add(-1000*time.Hour))
+
+	s := New(base, "req-1")
+	res, err := s.Prune(Retention{MaxAge: 0, MaxBytes: 0}) // both disabled
+	if err != nil {
+		t.Fatalf("Prune err: %v", err)
+	}
+	if res.Removed() != 0 {
+		t.Errorf("disabled ceilings removed %d, want 0", res.Removed())
+	}
+}
+
+func TestResolveRetention_Precedence(t *testing.T) {
+	// Config layer only.
+	cfg := config.RawConfig{RetainDays: 30, MaxSizeMB: 100}
+	ret := ResolveRetention(cfg, -1, -1)
+	if ret.MaxAge != 30*24*time.Hour {
+		t.Errorf("config age = %v, want 30d", ret.MaxAge)
+	}
+	if ret.MaxBytes != 100*1024*1024 {
+		t.Errorf("config size = %d, want 100MB", ret.MaxBytes)
+	}
+
+	// Env overrides config.
+	t.Setenv(retainDaysEnv, "7")
+	t.Setenv(maxSizeMBEnv, "50")
+	ret = ResolveRetention(cfg, -1, -1)
+	if ret.MaxAge != 7*24*time.Hour {
+		t.Errorf("env age = %v, want 7d", ret.MaxAge)
+	}
+	if ret.MaxBytes != 50*1024*1024 {
+		t.Errorf("env size = %d, want 50MB", ret.MaxBytes)
+	}
+
+	// Explicit override (flag) beats env, including 0 (disable).
+	ret = ResolveRetention(cfg, 0, 200)
+	if ret.MaxAge != 0 {
+		t.Errorf("override age = %v, want 0 (disabled)", ret.MaxAge)
+	}
+	if ret.MaxBytes != 200*1024*1024 {
+		t.Errorf("override size = %d, want 200MB", ret.MaxBytes)
+	}
+}
+
+func TestResolveRetention_Defaults(t *testing.T) {
+	// Empty config, no env, no overrides → built-in defaults.
+	ret := ResolveRetention(config.RawConfig{}, -1, -1)
+	if ret.MaxAge != time.Duration(config.DefaultRawRetainDays)*24*time.Hour {
+		t.Errorf("default age = %v", ret.MaxAge)
+	}
+	if ret.MaxBytes != int64(config.DefaultRawMaxSizeMB)*1024*1024 {
+		t.Errorf("default size = %d", ret.MaxBytes)
 	}
 }

@@ -309,11 +309,21 @@ the lost evidence was. This reframes the feature.
   archived the Yahoo chart responses to `data/raw/`; the same run with
   `MYCASE_CAPTURE=0` archived nothing. `make check-deps`/`test`/`build` + staticcheck
   green.
-- ⬜ **R-store-3 — Retention: age + size ceiling (flat, no run/verdict).** Prune
-  captures older than N days or when the store exceeds X MB (oldest-first); config in
-  `defaults.json` (flag>env>config>default). Runs inline best-effort at process exit
-  **and** exposed as `mycase raw prune`. Minimal complete growth-bound; needs no run
-  concept. *Sufficient on its own for a quarterly-scale tool.*
+- ✅ **DONE — R-store-3 — Retention: age + size ceiling (flat, no run/verdict).**
+  Bounds archive growth by two independent ceilings (a file is pruned if it
+  violates *either*): **age** (`raw.retain_days`, default 14) and **total size**
+  (`raw.max_size_mb`, default 512, oldest-first eviction until under the cap). Both
+  live in `config/defaults.json`'s new `raw` block, env-overridable
+  (`MYCASE_RAW_RETAIN_DAYS` / `MYCASE_RAW_MAX_SIZE_MB`) and flag-overridable, with
+  the standard flag>env>config>default precedence resolved once in
+  `rawstore.ResolveRetention`. `(*Store).Prune` is best-effort (unreadable entries
+  and individual delete failures are skipped, never propagated), only touches files
+  matching the archive naming convention (foreign files untouched), and emits a
+  single `rawstore.pruned` Info summary (never bodies). Runs inline at process exit
+  via `main`'s `After` hook (skipped in replay mode) **and** exposed as
+  `mycase raw prune [--retain-days N] [--max-size-mb N]` (0 disables a dimension).
+  Minimal complete growth-bound; no run/verdict concept. `make
+  check-deps`/`test`/`build`/`cleanup` green.
 - ⬜ **R-store-4 (Tier-1 triage) — `mycase raw` command group.** `raw ls` (parse
   filename fields into columns: source, endpoint, symbol, when, size), `raw show
   <symbol>` / `raw path` (open/pretty-print / print path for `jless`/`jq`).
