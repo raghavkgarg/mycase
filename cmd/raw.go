@@ -6,9 +6,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"github.com/urfave/cli/v3"
 
+	"github.com/raghavkgarg/mycase/pkg/broker/schwab"
 	"github.com/raghavkgarg/mycase/pkg/config"
 	"github.com/raghavkgarg/mycase/pkg/rawstore"
 	"github.com/raghavkgarg/mycase/pkg/render"
@@ -53,6 +55,19 @@ var RawCommand = &cli.Command{
 				"  jless \"$(mycase raw path AAPL)\"   |   jq . \"$(mycase raw path schwab__quotes)\"\n" +
 				"With no query, prints the archive directory when it is empty, else the newest file.",
 			Action: runRawPath,
+		},
+		{
+			Name:      "inspect",
+			Usage:     "Compare a Schwab fundamentals capture's raw wire fields vs. what the mapper produced",
+			ArgsUsage: "[symbol]",
+			Description: "Tier-2 triage (R-store-5): parses the newest archived Schwab\n" +
+				"/instruments (projection=fundamental) response exactly as production does,\n" +
+				"reruns mapSchwabFundamentals, and shows each raw wire field beside the\n" +
+				"marketdata.Fundamentals value it produced. Purpose-built to localize the\n" +
+				"`pick 0/N` bug (MarketCap landing as 0 despite HTTP 200s): it disambiguates\n" +
+				"a wire zero from a mapper zero and flags wire keys the struct fails to bind.\n" +
+				"symbol filters to a ticker (the capture endpoint is \"instruments\").",
+			Action: runRawInspect,
 		},
 		{
 			Name:  "prune",
@@ -148,6 +163,72 @@ func runRawPath(_ context.Context, c *cli.Command) error {
 		return noMatchErr(query)
 	}
 	fmt.Println(path)
+	return nil
+}
+
+func runRawInspect(_ context.Context, c *cli.Command) error {
+	symbol := c.Args().First()
+	store := rawstore.NewDefault("")
+
+	// The Schwab fundamentals capture endpoint is "instruments" (the projection
+	// is a query param, not a path segment), so filter on that.
+	entries, err := store.List(rawstore.ListFilter{
+		Source:   "schwab",
+		Endpoint: "instruments",
+		Symbol:   symbol,
+	})
+	if err != nil {
+		return fmt.Errorf("listing schwab instruments captures: %w", err)
+	}
+	if len(entries) == 0 {
+		if symbol != "" {
+			return fmt.Errorf("no schwab instruments capture found for %q "+
+				"(run a fundamentals fetch with MYCASE_CAPTURE unset first)", symbol)
+		}
+		return fmt.Errorf("no schwab instruments captures found " +
+			"(run a fundamentals fetch with MYCASE_CAPTURE unset first)")
+	}
+
+	// entries is newest-first; inspect the most recent.
+	e := entries[0]
+	body, err := os.ReadFile(filepath.Join(store.RawDir(), e.Name))
+	if err != nil {
+		return fmt.Errorf("reading %s: %w", e.Name, err)
+	}
+
+	insp, err := schwab.InspectFundamentals(body)
+	if err != nil {
+		return fmt.Errorf("inspecting %s: %w", e.Name, err)
+	}
+
+	fmt.Printf("Capture: %s  (%s)\n", e.Name, e.When.Format("2006-01-02 15:04:05"))
+	sym := insp.Symbol
+	if sym == "" {
+		sym = e.Symbol
+	}
+	fmt.Printf("Symbol: %s   instruments=%d   fundamental=%v\n\n",
+		sym, insp.InstrumentCount, insp.HasFundamental)
+
+	if len(insp.Fields) > 0 {
+		rows := make([][]string, 0, len(insp.Fields))
+		for _, fc := range insp.Fields {
+			rows = append(rows, []string{fc.MappedField, fc.WireKey, fc.WireValue, fc.MappedValue, fc.Note})
+		}
+		render.TableWithOpts(os.Stdout, render.TableOpts{
+			Headers: []string{"Mapped Field", "Wire Key", "Wire Value", "Mapped Value", "Note"},
+			Rows:    rows,
+			Align:   []render.Alignment{render.AlignLeft, render.AlignLeft, render.AlignRight, render.AlignRight, render.AlignLeft},
+		})
+	}
+
+	if len(insp.Diagnostics) > 0 {
+		fmt.Println("\nDiagnostics:")
+		for _, d := range insp.Diagnostics {
+			fmt.Printf("  • %s\n", d)
+		}
+	} else {
+		fmt.Println("\nNo anomalies detected.")
+	}
 	return nil
 }
 

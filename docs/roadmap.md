@@ -336,12 +336,27 @@ the lost evidence was. This reframes the feature.
   `Filename`), `(*Store).List(ListFilter)`, and `(*Store).ResolvePath` — all
   schema-blind, so they work for every source (schwab, yahoo, future EDGAR) the day it
   captures. `make check-deps`/`test`/`build`/`cleanup` green.
-- ⬜ **R-store-5 (Tier-2 triage, demand-driven) — per-source field inspectors.** First:
-  a Schwab-fundamentals inspector surfacing raw-JSON-field vs `mapSchwabFundamentals`
-  output — built *because of* the `0/N` bug, reused every future fundamentals bug.
-  Registers from `broker/schwab`. Do **not** speculatively build others; add EDGAR's
-  when EDGAR misbehaves (also validates the contract against a second, XBRL-shaped
-  source).
+- ✅ **DONE — R-store-5 (Tier-2 triage) — Schwab-fundamentals field inspector.**
+  `mycase raw inspect [symbol]` parses the newest archived Schwab `/instruments`
+  (`projection=fundamental`) body **exactly as production does** (`encoding/json` →
+  `InstrumentResponse`), reruns `mapSchwabFundamentals`, and renders each raw wire
+  field beside the `marketdata.Fundamentals` value it produced, plus diagnostics.
+  Purpose-built for the `pick 0/N` bug: because the mapper never zeros a nonzero
+  input, a mapped `MarketCap == 0` means the wire value didn't bind — the inspector
+  disambiguates the two ways that happens: **(A)** the wire genuinely sends
+  `marketCap: 0`/absent (a *data* issue), or **(B)** the value arrives under a key
+  the `Fundamental` struct doesn't declare (e.g. `marketCapInMillions`), which
+  `encoding/json` silently drops (a *code* issue, fixable by struct tag). It
+  surfaces (B) via a `map[string]json.RawMessage` cross-check that names any
+  unbound wire keys, and also reports the empty-instruments / null-fundamental
+  envelopes that make `FetchFundamentals` skip a ticker. Lives in
+  `pkg/broker/schwab/inspect.go` (with its source, importing the real mapper +
+  wire structs so the raw-vs-mapped comparison is truthful); `cmd/raw.go` wires it
+  (the composition root can import both the L4 store and the L2 source — no `pkg/`
+  package can). Hermetic tests cover healthy / zero-marketCap / renamed-key /
+  null-fundamental / empty-instruments / invalid-JSON. **Contract validation
+  against a second (XBRL) source is deferred to whenever EDGAR misbehaves**, per the
+  R-store-5 note. `make check-deps`/`test`/`build`/`cleanup` green.
 - ⬜ **R-store-6 (optional) — Verdict-driven early deletion.** Only if clean captures
   start crowding out interesting ones. Needs a *run + outcome* primitive: keep-floor
   (recent + flagged-broken runs pinned) vs prune-ceiling (plausibly-fine old runs
@@ -350,15 +365,17 @@ the lost evidence was. This reframes the feature.
   deleting the wrong thing; defer until demonstrably needed.
 
 
-- **Fix `pick` `0 / N` — Schwab fundamentals mapping** ⬜ **TODO**: `MarketCap`
-  (and likely other fields) land as `0` despite 200 responses (confirmed in logs), so
-  the size filter (`isEligible`, `pkg/stockpicker/filters.go`) eliminates every US
-  constituent at the market-cap gate. This is a parse/mapping bug in
-  `pkg/broker/schwab/market.go` downstream of a successful fetch — not auth, not
-  fetch. `marketfmt` fixed the *label*, not the zero values. Capture/replay have
-  landed; triage offline via `MYCASE_CAPTURE=1` then `MYCASE_REPLAY=1`, and the
-  Schwab-fundamentals field inspector (R-store-5 above) is the purpose-built tool to
-  localize this — raw-wire `MarketCap` vs what `mapSchwabFundamentals` produced.
+- **Fix `pick` `0 / N` — Schwab fundamentals mapping** ⬜ **TODO (tooling ready)**:
+  `MarketCap` (and likely other fields) land as `0` despite 200 responses (confirmed
+  in logs), so the size filter (`isEligible`, `pkg/stockpicker/filters.go`)
+  eliminates every US constituent at the market-cap gate. This is a parse/mapping
+  issue downstream of a successful fetch — not auth, not fetch. **The purpose-built
+  diagnostic is now landed (R-store-5):** capture a real run (default `MYCASE_CAPTURE`
+  is on) then `mycase raw inspect <ticker>` shows raw-wire `marketCap` vs the mapped
+  `MarketCap` and names any unbound wire keys — this resolves in one look whether the
+  wire is genuinely zero (data issue) or the JSON key differs from `json:"marketCap"`
+  (code issue, fix the struct tag in `pkg/broker/schwab/types.go`). Remaining step is
+  running it against a live-captured body and applying the indicated fix.
 - **Fix `pick` report/CSV naming** ⬜ **TODO**: name artifacts from the actual
   `--index`/`--method`, not config/golden-copy defaults. This session a
   `--index sp500 --method us_quality_momentum` run filed under
