@@ -8,6 +8,24 @@
 
 ---
 
+## ⏭️ Next up (operator TODO)
+
+> **Run the first EDGAR-enabled S&P 500 pick with fresh data** (deferred to get a clean, fully-settled US EOD rather than a cold run tonight):
+>
+> ```bash
+> make run ARGS="pick --index sp500 --method us_quality_momentum --top 20 --force"
+> ```
+>
+> - Run it after the prior US session has settled (NYSE close 16:00 ET ≈ 01:30–02:30 IST next morning), so the EOD-settlement freshness picks up the latest data.
+> - Keep `--force`: an earlier same-day snapshot (the pre-EDGAR `0/N` result) would otherwise short-circuit the recompute.
+> - **This run will make live Schwab + EDGAR calls** — it is the cold-cache first fetch (~500 prices + ~500 fundamentals + ~500 EDGAR companyfacts). It *populates* the DuckDB cache as it goes (`source="schwab"` / `"schwab+edgar"`), so every same-day re-run after it is warm (zero Schwab/EDGAR calls).
+> - Expected result now that EDGAR is enabled: real FCF values, so `us_quality_momentum`'s positive-FCF hard filter passes real names instead of eliminating the whole index (`0/N`).
+> - Sanity-check EDGAR is live on the run: `data/raw/` should start showing files after the CIK-map download, and the funnel should no longer report every ticker as "FCF ≤ 0".
+>
+> _Context: EDGAR was enabled and verified live (commit `3d774d8`, Phase 10c/10e). Remove this note once the first successful run is done._
+
+---
+
 ## Table of Contents
 
 1. [Philosophy](#1-philosophy)
