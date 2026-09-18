@@ -14,6 +14,10 @@ import (
 // and returns data in the same format as marketdata.HistoricalData.
 // rangeStr supports: "1mo", "3mo", "6mo", "1y", "2y", "5y", "10y", "max"
 func (c *Client) FetchHistoricalDataWithTimestamps(ctx context.Context, symbol string, rangeStr string) (*marketdata.HistoricalData, error) {
+	if hist, ok := checkPriceCache(ctx, symbol, rangeStr); ok {
+		return hist, nil
+	}
+
 	periodType, period := mapRangeToPeriod(rangeStr)
 
 	params := url.Values{
@@ -53,11 +57,16 @@ func (c *Client) FetchHistoricalDataWithTimestamps(ctx context.Context, symbol s
 		hist.Volumes[i] = c.Volume
 	}
 
+	storePriceCache(ctx, symbol, rangeStr, hist)
 	return hist, nil
 }
 
 // FetchHistoricalByDateRange retrieves daily price history between two dates.
 func (c *Client) FetchHistoricalByDateRange(ctx context.Context, symbol string, from, to time.Time) (*marketdata.HistoricalData, error) {
+	if hist, ok := checkDateRangeCache(ctx, symbol, from, to); ok {
+		return hist, nil
+	}
+
 	params := url.Values{
 		"symbol":        {symbol},
 		"periodType":    {"month"},
@@ -95,6 +104,7 @@ func (c *Client) FetchHistoricalByDateRange(ctx context.Context, symbol string, 
 		hist.Volumes[i] = candle.Volume
 	}
 
+	storeDateRangeCache(ctx, symbol, from, to, hist)
 	return hist, nil
 }
 

@@ -602,7 +602,7 @@ CREATE TABLE cache_meta (
 
 Historical date-range keys never expire because stock prices for past dates do not change. This is the key optimization for backtesting: a 5-year backtest across 15 tickers fetches each ticker once and never re-fetches unless the cache is manually cleared.
 
-> **Provenance gap**: the cache records *when* a value was fetched but not *which source* produced it. There is no `source` column, so we cannot audit whether a number came from Schwab, Yahoo, or (planned) SEC EDGAR, nor invalidate one source selectively. Adding provenance is part of roadmap Phase 10 — see `docs/datasources.md` §7. The expiry policy above is also India/Yahoo-framed (15:30 IST market close); the planned EDGAR path uses filing-based freshness (facts stable until the next quarterly filing).
+> **Provenance** (Phase 10 / R17, shipped): the `prices` and `fundamentals` tables carry a `source` column recording which provider produced each row (`"yahoo"`, `"schwab"`, `"schwab+edgar"`), so a value's origin is auditable. Both providers are cache-first: the Yahoo path via `pkg/yfinance/duckdbcache.go`, the Schwab path via `pkg/broker/schwab/duckdbcache.go` (prices) and `pkg/datafetcher/fundcache.go` (US fundamentals, cached post-EDGAR-merge in the Router so a warm hit skips both Schwab and EDGAR). Freshness is now market-aware, not India-only: `marketcal.ClockForTicker` judges `US:`/`NYSE:`/`NASDAQ:` tickers against the NYSE clock (16:00 ET) and everything else against NSE (15:30/21:00 IST). Remaining gap: rows are not yet *selectively* invalidatable by source. The EDGAR facts themselves use filing-based freshness (stable until the next quarterly filing) in their own `edgar_facts` table.
 
 ### File Cache (`data/.cache/`)
 

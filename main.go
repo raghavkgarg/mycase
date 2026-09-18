@@ -8,6 +8,7 @@ import (
 	"log/slog"
 
 	mycmd "github.com/raghavkgarg/mycase/cmd"
+	"github.com/raghavkgarg/mycase/pkg/broker/schwab"
 	"github.com/raghavkgarg/mycase/pkg/cache"
 	"github.com/raghavkgarg/mycase/pkg/config"
 	"github.com/raghavkgarg/mycase/pkg/logging"
@@ -32,6 +33,7 @@ func main() {
 	if c, err := cache.Open(config.DataPath("mycase.db")); err == nil {
 		cache.SetGlobal(c)
 		yfinance.SetCache(c)
+		schwab.SetCache(c)
 		defer c.Close()
 	}
 
