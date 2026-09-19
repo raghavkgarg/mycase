@@ -28,7 +28,7 @@ func hasDiagnostic(diags []string, substr string) bool {
 
 func TestInspectFundamentals_Healthy(t *testing.T) {
 	body := []byte(`{"instruments":[{"symbol":"AAPL","fundamental":{
-		"symbol":"AAPL","marketCap":3000000,"revenueTTM":400000000000,
+		"symbol":"AAPL","marketCap":3e12,"revenueTTM":400000000000,
 		"netProfitMarginTTM":25,"sharesOutstanding":15000000000,"peRatio":30,
 		"returnOnEquity":150,"beta":1.2}}]}`)
 
@@ -43,10 +43,10 @@ func TestInspectFundamentals_Healthy(t *testing.T) {
 		t.Errorf("symbol = %q, want AAPL", insp.Symbol)
 	}
 
-	// marketCap 3,000,000 (millions) → 3e12 mapped.
+	// marketCap 3e12 (absolute dollars) → 3e12 mapped (no scaling).
 	mc := findField(t, insp.Fields, "MarketCap")
-	if mc.WireValue != "3e+06" {
-		t.Errorf("MarketCap wire = %q, want 3e+06", mc.WireValue)
+	if mc.WireValue != "3e+12" {
+		t.Errorf("MarketCap wire = %q, want 3e+12", mc.WireValue)
 	}
 	if mc.MappedValue != "3e+12" {
 		t.Errorf("MarketCap mapped = %q, want 3e+12", mc.MappedValue)

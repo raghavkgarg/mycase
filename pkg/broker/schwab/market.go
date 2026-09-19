@@ -199,12 +199,13 @@ func mapSchwabFundamentals(f *Fundamental) marketdata.Fundamentals {
 	netIncome := (f.NetProfitMarginTTM / 100.0) * f.RevenueTTM
 
 	// Derive RegularPrice from market cap ÷ shares outstanding. The fundamental
-	// endpoint carries no last/quote price; market cap (reported in millions)
-	// over share count reconstructs it well enough for the ADV liquidity filter
-	// and price-based checks. EPS×PE is avoided because EPS can be negative.
+	// endpoint carries no last/quote price; market cap over share count
+	// reconstructs it well enough for the ADV liquidity filter and price-based
+	// checks. EPS×PE is avoided because EPS can be negative. Schwab reports
+	// marketCap in absolute dollars (verified against live wire), so no scaling.
 	var regularPrice float64
 	if f.SharesOutstanding > 0 {
-		regularPrice = (f.MarketCap * 1_000_000) / f.SharesOutstanding
+		regularPrice = f.MarketCap / f.SharesOutstanding
 	}
 
 	return marketdata.Fundamentals{
@@ -213,8 +214,8 @@ func mapSchwabFundamentals(f *Fundamental) marketdata.Fundamentals {
 		ForwardPE:        f.PeRatio,                // closest available (trailing PE)
 		OperatingMargins: f.OperatingMarginTTM / 100.0,
 		PBRatio:          f.PbRatio,
-		MarketCap:        f.MarketCap * 1_000_000, // Schwab reports in millions
-		AverageVolume:    f.Vol3MonthAvg,
+		MarketCap:        f.MarketCap, // Schwab reports absolute dollars (verified against live wire)
+		AverageVolume:    f.Avg3MonthVolume,
 		FreeCashflow:     f.FreeCashFlowPerShare * f.SharesOutstanding,
 		DebtToEquity:     f.TotalDebtToEquity,
 		TTMRevenue:       f.RevenueTTM,

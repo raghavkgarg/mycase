@@ -80,8 +80,8 @@ func TestMapSchwabFundamentals(t *testing.T) {
 		PeRatio:              20.0,
 		OperatingMarginTTM:   30.0, // 30%
 		PbRatio:              5.0,
-		MarketCap:            2500000.0, // $2.5 trillion in millions
-		Vol3MonthAvg:         50000000,
+		MarketCap:            2.5e12, // $2.5 trillion in absolute dollars (Schwab does NOT report millions)
+		Avg3MonthVolume:      50000000,
 		FreeCashFlowPerShare: 6.0,
 		SharesOutstanding:    15000000000,
 		TotalDebtToEquity:    1.2,
@@ -100,8 +100,11 @@ func TestMapSchwabFundamentals(t *testing.T) {
 	if result.OperatingMargins != 0.30 {
 		t.Errorf("OperatingMargins = %v, want 0.30", result.OperatingMargins)
 	}
-	if result.MarketCap != 2500000.0*1_000_000 {
-		t.Errorf("MarketCap = %v, want %v", result.MarketCap, 2500000.0*1_000_000)
+	if result.MarketCap != 2.5e12 {
+		t.Errorf("MarketCap = %v, want %v (absolute dollars, no scaling)", result.MarketCap, 2.5e12)
+	}
+	if result.AverageVolume != 50000000 {
+		t.Errorf("AverageVolume = %v, want 50000000 (from avg3MonthVolume)", result.AverageVolume)
 	}
 	expectedFCF := 6.0 * 15000000000
 	if result.FreeCashflow != expectedFCF {
@@ -112,8 +115,8 @@ func TestMapSchwabFundamentals(t *testing.T) {
 	if result.NetIncome != expectedNetIncome {
 		t.Errorf("NetIncome = %v, want %v (0.25 * revenueTTM)", result.NetIncome, expectedNetIncome)
 	}
-	// Derived RegularPrice = MarketCap(×1e6) / SharesOutstanding (Phase 10a)
-	expectedPrice := (2500000.0 * 1_000_000) / 15000000000.0
+	// Derived RegularPrice = MarketCap / SharesOutstanding (absolute dollars, no scaling)
+	expectedPrice := 2.5e12 / 15000000000.0
 	if result.RegularPrice != expectedPrice {
 		t.Errorf("RegularPrice = %v, want %v (marketCap/shares)", result.RegularPrice, expectedPrice)
 	}

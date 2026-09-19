@@ -148,7 +148,7 @@ func compareFields(f *Fundamental, m marketdata.Fundamentals) []FieldComparison 
 		{MappedField: "DividendYield", WireKey: "divYield", WireValue: num(f.DivYield), MappedValue: num(m.DividendYield)},
 		{MappedField: "DebtToEquity", WireKey: "totalDebtToEquity", WireValue: num(f.TotalDebtToEquity), MappedValue: num(m.DebtToEquity)},
 		{MappedField: "Beta", WireKey: "beta", WireValue: num(f.Beta), MappedValue: num(m.Beta)},
-		{MappedField: "AverageVolume", WireKey: "vol3MonthAvg", WireValue: num(f.Vol3MonthAvg), MappedValue: num(m.AverageVolume)},
+		{MappedField: "AverageVolume", WireKey: "avg3MonthVolume", WireValue: num(f.Avg3MonthVolume), MappedValue: num(m.AverageVolume)},
 		{MappedField: "FreeCashflow", WireKey: "freeCashFlowPerShare×sharesOutstanding", WireValue: num(f.FreeCashFlowPerShare), MappedValue: num(m.FreeCashflow)},
 		{MappedField: "NetIncome", WireKey: "— (netProfitMarginTTM×revenueTTM)", WireValue: "—", MappedValue: num(m.NetIncome)},
 		{MappedField: "RegularPrice", WireKey: "— (marketCap÷sharesOutstanding)", WireValue: num(f.SharesOutstanding), MappedValue: num(m.RegularPrice)},
@@ -196,6 +196,7 @@ func knownFundamentalKeys() map[string]struct{} {
 		"returnOnEquity", "returnOnAssets", "operatingMarginTTM", "netProfitMarginTTM",
 		"grossMarginTTM", "quickRatio", "currentRatio", "debtToCapital",
 		"totalDebtToEquity", "epsTTM", "revenueTTM", "vol10DayAvg", "vol3MonthAvg",
+		"avg3MonthVolume",
 		"beta", "sharesOutstanding", "bookValuePerShare", "freeCashFlowPerShare",
 	}
 	m := make(map[string]struct{}, len(keys))

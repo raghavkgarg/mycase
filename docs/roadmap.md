@@ -124,7 +124,7 @@ Automation eliminates all four. The system runs quarterly, follows its rules, an
 | Debt | Location | Impact | Fix effort |
 |------|----------|--------|-----------|
 | ~~Schwab fundamentals mapper drops derivable fields~~ | ~~`pkg/broker/schwab/market.go` `mapSchwabFundamentals`~~ | **PARTLY RESOLVED (Phase 10a)** — `NetIncome` + `RegularPrice` now derived; `Sector` backfilled from constituents CSV via `stockpicker.InjectSectors` | 🟧 sector-via-CSV done, EDGAR statements → 10c |
-| `pick` eliminates all constituents at the market-cap gate (`0 / N`) | `pkg/stockpicker/filters.go` `isEligible` (size check) ← `pkg/broker/schwab/market.go` fundamentals mapper | **OPEN (2026-09-15)** — for US runs `Fundamentals.MarketCap` is `0` for every ticker, so `0 < MinMarketCap` eliminates all. The fundamentals endpoint returns **200** (confirmed in logs), so this is a **parse/mapping bug downstream of a successful fetch**, not auth/fetch. `marketfmt` (this session) fixed the band *label* (`$5.0B–$5.0T`), not the zero values. Triage offline via saved responses. | 🟥 needs raw-capture first |
+| `pick` eliminates all constituents (`0 / N`) | `pkg/stockpicker/filters.go` `isEligible` ← `pkg/broker/schwab/market.go` fundamentals mapper | **RESOLVED (2026-09-18)** — root cause was three mapping bugs (MarketCap ×1e6 inflation, RegularPrice ×1e6, AverageVolume bound to `vol3MonthAvg`=0 instead of `avg3MonthVolume`), zeroing ADV → failing the *liquidity* gate for every ticker (not the size gate as first hypothesized). Fixed + verified via `raw inspect` on live-captured bodies. See Phase 11. | ✅ done |
 | `pick` report dir/CSV naming ignores `--index` / `--method` flags | report/basket writers | **OPEN (2026-09-15)** — ran `--index sp500 --method us_quality_momentum` but artifacts filed under `us_microsmall_multibagger/` and the report said "Multibagger Preset". Naming derives from config/golden-copy, not the actual flags. | 🟧 |
 | Two divergent cache DBs coexist | `data/cache.db` (Sep 8, `source=NULL`, 507 tickers, tax tables) vs `data/mycase.db` (newer schema) | **OPEN (2026-09-15)** — `cache.db` looks like a stale pre-refactor artifact; confirm no live reader and retire. | 🟧 |
 | `data/` + `report/` are deeply nested with path-encoded identity | `data/**`, `report/**`; writers in `selectiontracker`, proposal/backup/monitor paths | **OPEN (2026-09-15)** — flatten to a single `data/` tree (+ disposable `data/raw/`) with a filename naming convention. See `docs/plans/data-report-flatten.md`. | 🟧 |
@@ -384,17 +384,84 @@ the lost evidence was. This reframes the feature.
   deleting the wrong thing; defer until demonstrably needed.
 
 
-- **Fix `pick` `0 / N` — Schwab fundamentals mapping** ⬜ **TODO (tooling ready)**:
-  `MarketCap` (and likely other fields) land as `0` despite 200 responses (confirmed
-  in logs), so the size filter (`isEligible`, `pkg/stockpicker/filters.go`)
-  eliminates every US constituent at the market-cap gate. This is a parse/mapping
-  issue downstream of a successful fetch — not auth, not fetch. **The purpose-built
-  diagnostic is now landed (R-store-5):** capture a real run (default `MYCASE_CAPTURE`
-  is on) then `mycase raw inspect <ticker>` shows raw-wire `marketCap` vs the mapped
-  `MarketCap` and names any unbound wire keys — this resolves in one look whether the
-  wire is genuinely zero (data issue) or the JSON key differs from `json:"marketCap"`
-  (code issue, fix the struct tag in `pkg/broker/schwab/types.go`). Remaining step is
-  running it against a live-captured body and applying the indicated fix.
+- **Fix `pick` `0 / N` — Schwab fundamentals mapping** ✅ **DONE (2026-09-18)**:
+  root-caused via `mycase raw inspect` against the Sep-17 live-captured
+  `/instruments` bodies (~1005 tickers in `data/raw/`). The `0/N` was **not** the
+  hypothesized market-cap-gate zero — it was the **ADV liquidity gate** zeroing out.
+  Three mapping bugs in `mapSchwabFundamentals` / the `Fundamental` struct
+  (`pkg/broker/schwab/market.go` + `types.go`), all disproven by the raw wire:
+  (1) **`MarketCap` was multiplied by `1_000_000`** on a wrong "reported in millions"
+  assumption — Schwab sends absolute dollars (`marketCap:4.84e12` for AAPL), so the
+  scale inflated it to `4.84e18`; (2) **`RegularPrice`** inherited the same ×1e6
+  inflation ($331M/share instead of $331); (3) **`AverageVolume` bound the wrong wire
+  key** — the struct read `vol3MonthAvg` (Schwab sends `0.0`) instead of
+  `avg3MonthVolume` (the real 52.3M for AAPL). Bugs (1)+(3) together made
+  `ADV = AverageVolume × RegularPrice = 0`, failing the `min_adv` $50M gate for
+  **every** US constituent → `0/N`. Fix: dropped both ×1e6 scalings, added the
+  `Avg3MonthVolume` struct field + bound it, corrected the misleading `// in millions`
+  comments, and updated the `raw inspect` field map + known-keys set. Verified with
+  the inspector on real data: AAPL now maps MarketCap $4.84T, ADV ≈ $17B (passes),
+  RegularPrice $331.34. `RevenueTTM` remains 0 (Schwab genuinely omits it on the
+  wire — a real data gap EDGAR fills, not a mapping bug). Tests updated
+  (`market_test.go`, `inspect_test.go`, `datafetcher/router_test.go`);
+  `make test`/`check-deps`/`cleanup`/`build` green. Remaining operator step is a
+  fresh live `pick` run (see "Next up") to confirm a non-zero funnel end-to-end.
+- **Fix EDGAR FCF binding — capex tag breadth + tag-shadow fall-through** ✅ **DONE (2026-09-18)**:
+  the first EDGAR-enabled `pick` still eliminated **118** cash-rich names as
+  `FCF $0M ≤ 0`. Root-caused offline against the cached companyfacts blobs: the
+  XBRL concept mapper (`pkg/edgar/concepts.go`) tried a **single** capex tag
+  (`PaymentsToAcquirePropertyPlantAndEquipment`), but many large filers report capex
+  under alternatives — verified distribution across the 118: `PaymentsToAcquireProductiveAssets`
+  (62 — Visa/Qualcomm/Verizon/Chevron/Home Depot), `PaymentsForCapitalImprovements`
+  (10 — REITs), plus O&G-property and other-productive-asset variants. Two fixes:
+  (1) expanded `tagsCapEx` to 7 candidates; (2) fixed a **tag-shadow bug** — the old
+  `firstPresentTag` locked onto the first candidate that merely *existed* as a key,
+  so a present-but-empty tag (FTNT/PANW/ISRG/SRE/HPQ declare the classic capex tag
+  with zero FY facts) shadowed a later populated one. `annualSeries`/`latestValue`
+  now iterate all candidates and skip empties. Verified via production `mapFacts`
+  against real blobs: Visa FCF $21.58B, PANW $4.11B, ISRG $2.49B (all were 0). Tests
+  added; `make test`/`cleanup`/`build` green.
+- **Sector-aware FCF exemption (Financials + Real Estate)** ✅ **DONE (2026-09-18)**:
+  banks/insurers/REITs (~23 of the FCF=0 eliminations — JPM, BAC, MS, WFC, PLD…) do
+  not report capex in the industrial sense, so authoritative OCF−capex FCF is
+  structurally 0/undefined for them; a positive-FCF gate wrongly eliminated the whole
+  sleeve. Added `isFCFExemptSector` (`pkg/stockpicker/scoring_us.go`, covers
+  `yfinance.IsFinancialSector` + "Real Estate") that skips **only** the FCF gate in
+  `ApplyUSHardFilters`; exempt names still face the market-cap + ADV gates and full
+  scoring (they earn 0 on the 20%-weight FCF-yield factor, competing on the other
+  80%). Tests added.
+- **Fix bad EDGAR CIK mapping (XOM)** ✅ **DONE (2026-09-18)**: SEC's own
+  `company_tickers.json` (and the constituents CSV's CIK column) map `XOM` to a
+  2024-registered "Exxon Mobil Corporation" shell (CIK 2115436, **0 FY facts**), not
+  the real 42-year filer (CIK 34088, OCF $51.97B / capex $28.36B → FCF ≈ $23.6B), so
+  the EDGAR overlay silently no-oped and XOM degraded to Schwab-only → FCF gate. Added
+  a small, documented, evidence-based `cikOverrides` map in `pkg/edgar/cik.go`
+  (`{"XOM": 34088}`), applied at the top of `CIK()` so it wins over the upstream file.
+  The other 18 "missing-facts" tickers were **not** bugs: most (APO, BG, BLK, CEG,
+  FERG, GEV, KVUE, RDDT, TKO, VLTO, SW, SNDK, SOLV) have correct CIKs and just weren't
+  cached in the incomplete first pass (self-heal on re-run); the rest (HONA, FDXF, Q,
+  GEHC) are genuinely new 2025–26 spinoffs/IPOs with no/thin filings. Test added.
+- **Guard nonsensical ROE from negative book equity** ✅ **DONE (2026-09-18)**:
+  heavy-buyback firms (MAS, MCK, BKNG) carry **negative book equity** (P/B < 0),
+  making Schwab's reported ROE economically meaningless (MAS +5862%, MCK −490%). ROE
+  feeds scoring only via `computeROIC`'s last-resort fallback, but a single such
+  outlier would blow out the cross-sectional min-max ROIC normalization and squash
+  every other stock's ROIC score. Fixes in `pkg/stockpicker/scoring_us.go`:
+  `computeROIC` uses the ROE fallback only when `PBRatio > 0` (else returns 0, no
+  signal); new `clampROIC` bounds all capital-efficiency ratios to ±100% on every
+  path; the transparency driver string now prints `n/m (neg. book equity)` instead of
+  an absurd percentage. Tests added.
+- **`edgar_facts` blob bloat — store extracted facts, not raw companyfacts** 🟧 **IN PROGRESS (2026-09-18)**:
+  the post-run DB ballooned to **3.6 GB on disk** (~1.9 GB logical in `edgar_facts`
+  alone — 479 raw SEC companyfacts JSON blobs, avg ~3.9 MB, max 9.2 MB — plus ~1.7 GB
+  dead pages from upsert/delete churn that `CHECKPOINT` doesn't reclaim). Each blob
+  carries every XBRL concept a company ever filed, while `mapFacts` extracts only
+  ~11. Fix: persist the compact **extracted** facts (the mapped `marketdata.Fundamentals`
+  fields EDGAR supplies + a small margin of extra attributes) instead of the full
+  blob — `data/raw/` already owns full-body retention with its own pruning, so the DB
+  need not duplicate it. Then rebuild the DB file to reclaim dead space. Sequence:
+  dump sample blobs → catalogue needed fields → design compact `edgar_facts` schema →
+  migrate. (Design in progress this session.)
 - **Fix `pick` report/CSV naming** ⬜ **TODO**: name artifacts from the actual
   `--index`/`--method`, not config/golden-copy defaults. This session a
   `--index sp500 --method us_quality_momentum` run filed under

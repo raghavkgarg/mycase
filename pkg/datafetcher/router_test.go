@@ -143,8 +143,8 @@ func TestRouterFetchFundamentalsUSToSchwab(t *testing.T) {
 					Symbol: "AAPL",
 					Fundamental: &schwab.Fundamental{
 						Symbol:             "AAPL",
-						MarketCap:          3_000_000, // millions → 3e12
-						ReturnOnEquity:     42.0,      // percent
+						MarketCap:          3e12, // absolute dollars (Schwab does NOT report millions)
+						ReturnOnEquity:     42.0, // percent
 						PeRatio:            28.0,
 						NetProfitMarginTTM: 25.0,
 						RevenueTTM:         400_000_000_000,
@@ -166,7 +166,7 @@ func TestRouterFetchFundamentalsUSToSchwab(t *testing.T) {
 	if !ok {
 		t.Fatalf("US:AAPL missing from fundamentals result")
 	}
-	if f.MarketCap != 3_000_000*1_000_000 {
+	if f.MarketCap != 3e12 {
 		t.Errorf("MarketCap = %v, want 3e12", f.MarketCap)
 	}
 	// ROE is percent→decimal converted by the Schwab mapper.

@@ -30,8 +30,24 @@ var (
 	tagsGrossProfit        = []string{"GrossProfit"}
 	tagsNetPPE             = []string{"PropertyPlantAndEquipmentNet"}
 	tagsAccountsReceivable = []string{"AccountsReceivableNetCurrent"}
-	tagsCapEx              = []string{"PaymentsToAcquirePropertyPlantAndEquipment"}
-	tagsInterestExpense    = []string{"InterestExpense", "InterestExpenseDebt"}
+	// Capex tag varies widely by filer/industry. The classic tag is
+	// PaymentsToAcquirePropertyPlantAndEquipment, but many large filers report
+	// under alternatives (verified against the S&P 500 companyfacts): Visa/Qualcomm/
+	// Verizon/Chevron use PaymentsToAcquireProductiveAssets; REITs use
+	// PaymentsForCapitalImprovements; oil & gas use the O&G-property tags. Ordered
+	// most-specific-usable first; the first present tag with FY facts wins. Without
+	// this breadth, capex fails to bind → FCF=0 → the FCF hard filter wrongly
+	// eliminates cash-rich quality names (see docs/roadmap.md Phase 10 follow-up).
+	tagsCapEx = []string{
+		"PaymentsToAcquirePropertyPlantAndEquipment",
+		"PaymentsToAcquireProductiveAssets",
+		"PaymentsForCapitalImprovements",
+		"PaymentsToAcquirePropertyPlantAndEquipmentAndIntangibleAssets",
+		"PaymentsToAcquireOtherProductiveAssets",
+		"PaymentsToAcquireOilAndGasProperty",
+		"PaymentsToExploreAndDevelopOilAndGasProperties",
+	}
+	tagsInterestExpense = []string{"InterestExpense", "InterestExpenseDebt"}
 )
 
 // FetchFundamentals returns the statement-level fundamentals EDGAR can supply
@@ -105,17 +121,6 @@ func mapFacts(cf *companyFacts) marketdata.Fundamentals {
 	return f
 }
 
-// firstPresentTag returns the concept data for the first candidate tag that
-// exists in the facts, plus the tag name used.
-func firstPresentTag(g map[string]conceptData, tags []string) (conceptData, bool) {
-	for _, t := range tags {
-		if cd, ok := g[t]; ok {
-			return cd, true
-		}
-	}
-	return conceptData{}, false
-}
-
 // usdFacts returns the USD-unit fact rows for a concept. EDGAR reports absolute
 // currency concepts under the "USD" unit key; per-share units (e.g. "USD/shares")
 // are intentionally ignored since we want absolute statement values.
@@ -123,28 +128,33 @@ func usdFacts(cd conceptData) []factValue {
 	return cd.Units["USD"]
 }
 
-// latestValue returns the most recently filed fact value for the first present
-// candidate tag, regardless of period type. Used for point-in-time-ish concepts.
+// latestValue returns the most recently filed fact value across candidate tags,
+// regardless of period type. It tries each candidate in order and returns the
+// first that carries USD rows — a tag that is present but empty does not shadow
+// a later tag that has data.
 func latestValue(g map[string]conceptData, tags []string) (float64, bool) {
-	cd, ok := firstPresentTag(g, tags)
-	if !ok {
-		return 0, false
-	}
-	rows := usdFacts(cd)
-	if len(rows) == 0 {
-		return 0, false
-	}
-	best := rows[0]
-	for _, r := range rows[1:] {
-		if r.Filed > best.Filed || (r.Filed == best.Filed && r.End > best.End) {
-			best = r
+	for _, t := range tags {
+		cd, ok := g[t]
+		if !ok {
+			continue
 		}
+		rows := usdFacts(cd)
+		if len(rows) == 0 {
+			continue
+		}
+		best := rows[0]
+		for _, r := range rows[1:] {
+			if r.Filed > best.Filed || (r.Filed == best.Filed && r.End > best.End) {
+				best = r
+			}
+		}
+		return best.Val, true
 	}
-	return best.Val, true
+	return 0, false
 }
 
 // latestAnnual returns the value of the most recent full-year (FY / 10-K) fact
-// for the first present candidate tag.
+// across candidate tags.
 func latestAnnual(g map[string]conceptData, tags []string) (float64, bool) {
 	series := annualSeries(g, tags)
 	if len(series) == 0 {
@@ -153,40 +163,47 @@ func latestAnnual(g map[string]conceptData, tags []string) (float64, bool) {
 	return series[len(series)-1].Value, true // series is ascending by year end
 }
 
-// annualSeries builds a deduped, ascending-by-period-end annual series for the
-// first present candidate tag. It keeps only full-year facts (fp == "FY", form
-// 10-K/10-K/A), and when a period end appears in multiple filings keeps the most
-// recently filed (restatements win). Returns nil when the concept is absent.
+// annualSeries builds a deduped, ascending-by-period-end annual series from the
+// first candidate tag that yields usable annual facts. It keeps only full-year
+// facts (fp == "FY", annual form), and when a period end appears in multiple
+// filings keeps the most recently filed (restatements win). A candidate tag that
+// is present but has no annual facts is skipped so it cannot shadow a later tag
+// that does (verified: FTNT/PANW/ISRG/SRE/HPQ declare the classic capex tag with
+// zero FY facts but report real capex under PaymentsToAcquireProductiveAssets).
+// Returns nil when no candidate yields annual facts.
 func annualSeries(g map[string]conceptData, tags []string) []marketdata.AnnualMetric {
-	cd, ok := firstPresentTag(g, tags)
-	if !ok {
-		return nil
-	}
-	rows := usdFacts(cd)
-	if len(rows) == 0 {
-		return nil
-	}
-
-	// Keep the most recently filed fact per period-end date.
-	byEnd := make(map[string]factValue)
-	for _, r := range rows {
-		if !isAnnual(r) || r.End == "" {
+	for _, t := range tags {
+		cd, ok := g[t]
+		if !ok {
 			continue
 		}
-		if prev, ok := byEnd[r.End]; !ok || r.Filed > prev.Filed {
-			byEnd[r.End] = r
+		rows := usdFacts(cd)
+		if len(rows) == 0 {
+			continue
 		}
-	}
-	if len(byEnd) == 0 {
-		return nil
-	}
 
-	out := make([]marketdata.AnnualMetric, 0, len(byEnd))
-	for end, r := range byEnd {
-		out = append(out, marketdata.AnnualMetric{Date: end, Value: r.Val})
+		// Keep the most recently filed fact per period-end date.
+		byEnd := make(map[string]factValue)
+		for _, r := range rows {
+			if !isAnnual(r) || r.End == "" {
+				continue
+			}
+			if prev, ok := byEnd[r.End]; !ok || r.Filed > prev.Filed {
+				byEnd[r.End] = r
+			}
+		}
+		if len(byEnd) == 0 {
+			continue // present but no annual facts — try the next candidate
+		}
+
+		out := make([]marketdata.AnnualMetric, 0, len(byEnd))
+		for end, r := range byEnd {
+			out = append(out, marketdata.AnnualMetric{Date: end, Value: r.Val})
+		}
+		sort.Slice(out, func(i, j int) bool { return out[i].Date < out[j].Date })
+		return out
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Date < out[j].Date })
-	return out
+	return nil
 }
 
 // isAnnual reports whether a fact is a full-year figure suitable for an annual

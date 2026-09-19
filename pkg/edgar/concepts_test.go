@@ -91,6 +91,50 @@ func TestFirstPresentTag_Order(t *testing.T) {
 	}
 }
 
+func TestFreeCashflow_AlternateCapexTag(t *testing.T) {
+	// Visa/Qualcomm pattern: capex reported under PaymentsToAcquireProductiveAssets
+	// rather than the classic PaymentsToAcquirePropertyPlantAndEquipment. FCF must
+	// still bind = OCF − capex.
+	g := map[string]conceptData{
+		"NetCashProvidedByUsedInOperatingActivities": {Units: map[string][]factValue{"USD": {
+			{End: "2025-09-30", Val: 23000, FP: "FY", Form: "10-K", Filed: "2025-11-01"},
+		}}},
+		"PaymentsToAcquireProductiveAssets": {Units: map[string][]factValue{"USD": {
+			{End: "2025-09-30", Val: 1500, FP: "FY", Form: "10-K", Filed: "2025-11-01"},
+		}}},
+	}
+	cf := &companyFacts{}
+	cf.Facts.USGAAP = g
+	f := mapFacts(cf)
+	if f.FreeCashflow != 23000-1500 {
+		t.Errorf("FreeCashflow: want %v via alternate capex tag, got %v", 23000-1500, f.FreeCashflow)
+	}
+}
+
+func TestFreeCashflow_EmptyClassicTagDoesNotShadow(t *testing.T) {
+	// FTNT/PANW/ISRG/SRE/HPQ pattern: the classic capex tag is *present* but carries
+	// no FY facts, while real capex lives under PaymentsToAcquireProductiveAssets.
+	// The empty classic tag must not shadow the populated alternate.
+	g := map[string]conceptData{
+		"NetCashProvidedByUsedInOperatingActivities": {Units: map[string][]factValue{"USD": {
+			{End: "2025-12-31", Val: 6000, FP: "FY", Form: "10-K", Filed: "2026-02-01"},
+		}}},
+		// Present but only quarterly / non-annual → no usable FY fact.
+		"PaymentsToAcquirePropertyPlantAndEquipment": {Units: map[string][]factValue{"USD": {
+			{End: "2025-03-31", Val: 200, FP: "Q1", Form: "10-Q", Filed: "2025-04-20"},
+		}}},
+		"PaymentsToAcquireProductiveAssets": {Units: map[string][]factValue{"USD": {
+			{End: "2025-12-31", Val: 900, FP: "FY", Form: "10-K", Filed: "2026-02-01"},
+		}}},
+	}
+	cf := &companyFacts{}
+	cf.Facts.USGAAP = g
+	f := mapFacts(cf)
+	if f.FreeCashflow != 6000-900 {
+		t.Errorf("FreeCashflow: want %v (empty classic tag should not shadow), got %v", 6000-900, f.FreeCashflow)
+	}
+}
+
 func TestFreeCashflow_RequiresBothConcepts(t *testing.T) {
 	// OCF present but capex absent → FCF left zero (merger falls back to Schwab).
 	g := map[string]conceptData{

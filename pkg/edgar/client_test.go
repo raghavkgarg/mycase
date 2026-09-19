@@ -122,6 +122,23 @@ func TestCIKLookup(t *testing.T) {
 	}
 }
 
+func TestCIKOverride(t *testing.T) {
+	srv := newTestServer(t)
+	defer srv.Close()
+	cl := newTestClient(t, srv, nil) // nil cache → network path
+
+	// XOM is absent from the test ticker file, so without the override it would
+	// resolve to (·, false). The cikOverrides entry must win and short-circuit to
+	// the real filer CIK 34088 → "0000034088", never touching the map/network.
+	cik, ok, err := cl.CIK(context.Background(), "US:XOM")
+	if err != nil {
+		t.Fatalf("CIK(XOM): unexpected err %v", err)
+	}
+	if !ok || cik != "0000034088" {
+		t.Errorf("CIK(US:XOM)=%q ok=%v, want 0000034088 true (override)", cik, ok)
+	}
+}
+
 func TestFetchFundamentals_EndToEnd(t *testing.T) {
 	srv := newTestServer(t)
 	defer srv.Close()

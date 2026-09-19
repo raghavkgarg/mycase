@@ -30,6 +30,23 @@ type companyTicker struct {
 	CIK    int64  `json:"cik_str"`
 }
 
+// cikOverrides maps tickers whose CIK in SEC's company_tickers.json (and the
+// constituents CSV) points at a non-filing shell/holding entity rather than the
+// operating company that files the 10-Ks we need. Verified against
+// data.sec.gov/api/xbrl/companyfacts: the shell CIK returns HTTP 200 but has
+// zero FY 10-K statement facts (no operating cash flow / capex), so EDGAR
+// enrichment silently no-ops and the ticker degrades to Schwab-only, tripping
+// the positive-FCF hard filter for an otherwise obvious quality name.
+//
+// Keep this list small and evidence-based — each entry is a documented data
+// bug in the upstream ticker file, not a convenience alias. CIKs are the numeric
+// form (padded on use). Re-verify if SEC corrects the source file.
+var cikOverrides = map[string]int64{
+	// SEC lists XOM under a 2024-registered "Exxon Mobil Corporation" shell
+	// (CIK 2115436, 0 FY facts); the real filer since 1957 is CIK 34088.
+	"XOM": 34088,
+}
+
 // CIK returns the 10-digit zero-padded CIK for a ticker (e.g. "AAPL" →
 // "0000320193"). It consults the DuckDB cache first (refreshing the whole map
 // when stale or empty), then looks up the ticker. Returns ("", false, nil) when
@@ -38,6 +55,11 @@ func (c *Client) CIK(ctx context.Context, ticker string) (string, bool, error) {
 	sym := strings.ToUpper(strings.TrimSpace(stripUSPrefix(ticker)))
 	if sym == "" {
 		return "", false, nil
+	}
+
+	// A known-bad upstream mapping wins over the fetched map (see cikOverrides).
+	if cik, ok := cikOverrides[sym]; ok {
+		return padCIK(cik), true, nil
 	}
 
 	if err := c.ensureCIKMap(ctx); err != nil {
