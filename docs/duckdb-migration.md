@@ -8,13 +8,17 @@ that completed work (schema, rationale, data-flow) — it is no longer an open p
 
 **What shipped vs. what was deferred**:
 - Phases A (schema), B (write path), D (CLI tooling: `history`/`show`/`diff`) — **done**.
-- Phase C: C1+C2 **done**. The literal C3/C4 line items ("selection tracker reads from
-  DB", "MergeGoldenCopy from DB") were marked deferred, **but the problem C3 existed to
-  solve is already resolved**: the selection tracker no longer parses its own previous
-  `.txt` report. Previous-run driver strings are sourced from the structured `selections`
-  history (`GetPreviousSelections`) and threaded in by the caller; the tracker only *writes*
-  a human-readable `.txt` report. The remaining deferred work (golden copy → DB) is gated on
-  the SwiftUI editing UI (roadmap Appendix B) and is intentionally still file-based.
+- Phase C: C1+C2 **done**, and the C3 `.txt` round-trip is now **fully retired** (2026-09-20).
+  The selection tracker's previous-run driver strings had already moved to the structured
+  `selections` history (`GetPreviousSelections`); the last remaining `.txt` dependency was
+  `csvloader.PrintComparisonReport` re-parsing `report/*_01_selection_reasons.txt` (via
+  `parseSelectionReport`) for prev/curr rank+score and guessing the previous run by filename
+  string-sort. Both are deleted: `PrintComparisonReport` now receives prev/curr rank+score as
+  caller-supplied `map[string]csvloader.RankScore` (autopilot from `GetPreviousSelections` +
+  `GetSelections(runID)`; pick from `GetPreviousSelections` + in-memory ranks), so "previous
+  run" comes from `LatestRun` (`started_at DESC`) not a filename. The C4 remaining deferred
+  work (golden copy → DB) is gated on the SwiftUI editing UI (roadmap Appendix B) and is
+  intentionally still file-based.
 
 **Depends on**: Existing `pkg/cache/` DuckDB infrastructure  
 **Blocked by**: Nothing

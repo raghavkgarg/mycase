@@ -6,7 +6,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -254,66 +253,27 @@ func ReadCSVWeights(path string) (map[string]float64, error) {
 	return weights, nil
 }
 
-type tickerRankScore struct {
-	rank  int
-	score float64
-}
-
-// parseSelectionReport parses a selection reasons report file and returns a map of ticker to rank/score.
-func parseSelectionReport(filePath string) map[string]tickerRankScore {
-	res := make(map[string]tickerRankScore)
-	f, err := os.Open(filePath)
-	if err != nil {
-		return res
-	}
-	defer f.Close()
-
-	r := csv.NewReader(f)
-	_ = r
-	// Read line by line
-	data, err := io.ReadAll(f)
-	if err != nil {
-		return res
-	}
-
-	lines := strings.Split(string(data), "\n")
-	inSelected := false
-
-	for _, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if strings.Contains(trimmed, "SELECTED STOCKS") {
-			inSelected = true
-			continue
-		}
-		if inSelected && strings.Contains(trimmed, "REMOVED ACTIVE HOLDINGS") {
-			inSelected = false
-			break
-		}
-		if inSelected && strings.Contains(line, "|") {
-			parts := strings.Split(line, "|")
-			if len(parts) >= 4 {
-				ticker := strings.TrimSpace(parts[0])
-				if ticker == "Ticker" || strings.HasPrefix(ticker, "---") || ticker == "" {
-					continue
-				}
-				scoreStr := strings.TrimSpace(parts[2])
-				rankStr := strings.TrimSpace(parts[3])
-
-				scoreVal, sErr := strconv.ParseFloat(scoreStr, 64)
-				rankVal, rErr := strconv.Atoi(rankStr)
-
-				if sErr == nil && rErr == nil {
-					res[ticker] = tickerRankScore{rank: rankVal, score: scoreVal}
-				}
-			}
-		}
-	}
-	return res
+// RankScore carries a ticker's selection rank and score for the portfolio
+// comparison report. It is supplied by callers (sourced from the structured
+// DuckDB selections history), replacing the former practice of re-parsing the
+// human-readable selection-reasons .txt report. Kept as a plain leaf DTO so
+// csvloader (an L0 leaf) needs no import of pkg/cache.
+type RankScore struct {
+	Rank  int
+	Score float64
 }
 
 // PrintComparisonReport compares a source candidate CSV with the destination golden copy CSV,
 // prints the report to stdout and saves a copy in the report/ directory.
-func PrintComparisonReport(src, dst, strategy string) {
+//
+// prevRanks / currRanks map ticker → {rank, score} for the previous and current
+// runs, supplied by the caller from the structured DuckDB selections history
+// (cache.GetPreviousSelections for previous; the in-memory pick result / freshly
+// inserted selections for current). Either may be nil (e.g. first run), in which
+// case action strings degrade to omitting the rank/score rationale. This replaces
+// the former re-parsing of report/*_01_selection_reasons.txt and the brittle
+// filename string-sort used to guess the previous run.
+func PrintComparisonReport(src, dst, strategy string, prevRanks, currRanks map[string]RankScore) {
 	prevWeights, err := ReadCSVWeights(dst)
 	if err != nil {
 		fmt.Printf("Warning: Could not read golden copy for comparison: %v\n", err)
@@ -328,31 +288,14 @@ func PrintComparisonReport(src, dst, strategy string) {
 	goldenBase := GetUniverseName(dst)
 	reportDir := filepath.Join("report", fmt.Sprintf("%s_%s", goldenBase, strategy), "executions")
 	dateStr := time.Now().Format("20060102")
-	todayReportPath := filepath.Join(reportDir, fmt.Sprintf("%s_01_selection_reasons.txt", dateStr))
 
-	currRanksScores := parseSelectionReport(todayReportPath)
-
-	// Locate previous selection report
-	var prevReportPath string
-	if entries, err := os.ReadDir(reportDir); err == nil {
-		var reportFiles []string
-		for _, entry := range entries {
-			if !entry.IsDir() && strings.HasSuffix(entry.Name(), "_01_selection_reasons.txt") {
-				reportFiles = append(reportFiles, filepath.Join(reportDir, entry.Name()))
-			}
-		}
-		sort.Strings(reportFiles)
-		for _, reportFile := range slices.Backward(reportFiles) {
-			if reportFile != todayReportPath {
-				prevReportPath = reportFile
-				break
-			}
-		}
+	currRanksScores := currRanks
+	if currRanksScores == nil {
+		currRanksScores = make(map[string]RankScore)
 	}
-
-	prevRanksScores := make(map[string]tickerRankScore)
-	if prevReportPath != "" {
-		prevRanksScores = parseSelectionReport(prevReportPath)
+	prevRanksScores := prevRanks
+	if prevRanksScores == nil {
+		prevRanksScores = make(map[string]RankScore)
 	}
 
 	// Calculate counts
@@ -416,14 +359,14 @@ func PrintComparisonReport(src, dst, strategy string) {
 		var action string
 		if prevW > 0 && newW == 0 {
 			if hasPrev {
-				action = fmt.Sprintf("Remove Action (Prev Rank #%d)", pInfo.rank)
+				action = fmt.Sprintf("Remove Action (Prev Rank #%d)", pInfo.Rank)
 			} else {
 				action = "Remove Action"
 			}
 			removed++
 		} else if prevW == 0 && newW > 0 {
 			if hasCurr {
-				action = fmt.Sprintf("New Addition (Rank #%d, Score %.1f)", cInfo.rank, cInfo.score)
+				action = fmt.Sprintf("New Addition (Rank #%d, Score %.1f)", cInfo.Rank, cInfo.Score)
 			} else {
 				action = "New Addition"
 			}
@@ -431,14 +374,14 @@ func PrintComparisonReport(src, dst, strategy string) {
 		} else if prevW > 0 && newW > 0 {
 			if newW > prevW {
 				if hasPrev && hasCurr {
-					action = fmt.Sprintf("Increased weight (Rank #%d -> #%d, Score %.1f -> %.1f)", pInfo.rank, cInfo.rank, pInfo.score, cInfo.score)
+					action = fmt.Sprintf("Increased weight (Rank #%d -> #%d, Score %.1f -> %.1f)", pInfo.Rank, cInfo.Rank, pInfo.Score, cInfo.Score)
 				} else {
 					action = "Increased weight"
 				}
 				increased++
 			} else if newW < prevW {
 				if hasPrev && hasCurr {
-					action = fmt.Sprintf("Reduced weight (Rank #%d -> #%d, Score %.1f -> %.1f)", pInfo.rank, cInfo.rank, pInfo.score, cInfo.score)
+					action = fmt.Sprintf("Reduced weight (Rank #%d -> #%d, Score %.1f -> %.1f)", pInfo.Rank, cInfo.Rank, pInfo.Score, cInfo.Score)
 				} else {
 					action = "Reduced weight"
 				}

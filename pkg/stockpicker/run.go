@@ -341,7 +341,9 @@ func RunWithResult(ctx context.Context, opts *Options) (*PickResult, error) {
 	}
 
 	if opts.GoldenPath != "" && len(goldenWeights) > 0 {
-		csvloader.PrintComparisonReport(outPath, opts.GoldenPath, opts.Method)
+		prevRanks := loadPreviousRankScores(ctx, displayNameVal, opts.Method)
+		currRanks := currentRankScores(selectedKeys, tracker.RawRanks, scores)
+		csvloader.PrintComparisonReport(outPath, opts.GoldenPath, opts.Method, prevRanks, currRanks)
 	}
 
 	// Build result for callers that want structured data (e.g., DuckDB persistence).
@@ -395,6 +397,38 @@ func loadPreviousDriverStrings(ctx context.Context, portfolio, method string) ma
 	out := make(map[string]string, len(prev))
 	for _, s := range prev {
 		out[s.Ticker] = formatDriverStringFromMetrics(method, s)
+	}
+	return out
+}
+
+// loadPreviousRankScores returns the previous completed run's ticker → rank/score
+// for the golden-copy comparison report, sourced from the structured DuckDB
+// selections history (cache.GetPreviousSelections) rather than re-parsing the
+// prior text report. Returns nil when the cache is unavailable or there is no
+// prior run — PrintComparisonReport treats nil as "no previous run".
+func loadPreviousRankScores(ctx context.Context, portfolio, method string) map[string]csvloader.RankScore {
+	db := cache.GetDB()
+	if db == nil {
+		return nil
+	}
+	prev, err := db.GetPreviousSelections(ctx, portfolio, method)
+	if err != nil || len(prev) == 0 {
+		return nil
+	}
+	out := make(map[string]csvloader.RankScore, len(prev))
+	for _, s := range prev {
+		out[s.Ticker] = csvloader.RankScore{Rank: s.Rank, Score: s.Score}
+	}
+	return out
+}
+
+// currentRankScores builds the current run's ticker → rank/score for the
+// golden-copy comparison from in-memory selection state (the pick path has no
+// run_id of its own, so current values come from memory, not a DB round-trip).
+func currentRankScores(selectedKeys []string, ranks map[string]int, scores map[string]float64) map[string]csvloader.RankScore {
+	out := make(map[string]csvloader.RankScore, len(selectedKeys))
+	for _, k := range selectedKeys {
+		out[k] = csvloader.RankScore{Rank: ranks[k], Score: scores[k]}
 	}
 	return out
 }
