@@ -126,7 +126,7 @@ Automation eliminates all four. The system runs quarterly, follows its rules, an
 | ~~Schwab fundamentals mapper drops derivable fields~~ | ~~`pkg/broker/schwab/market.go` `mapSchwabFundamentals`~~ | **PARTLY RESOLVED (Phase 10a)** — `NetIncome` + `RegularPrice` now derived; `Sector` backfilled from constituents CSV via `stockpicker.InjectSectors` | 🟧 sector-via-CSV done, EDGAR statements → 10c |
 | `pick` eliminates all constituents (`0 / N`) | `pkg/stockpicker/filters.go` `isEligible` ← `pkg/broker/schwab/market.go` fundamentals mapper | **RESOLVED (2026-09-18)** — root cause was three mapping bugs (MarketCap ×1e6 inflation, RegularPrice ×1e6, AverageVolume bound to `vol3MonthAvg`=0 instead of `avg3MonthVolume`), zeroing ADV → failing the *liquidity* gate for every ticker (not the size gate as first hypothesized). Fixed + verified via `raw inspect` on live-captured bodies. See Phase 11. | ✅ done |
 | `pick` report dir/CSV naming ignores `--index` / `--method` flags | report/basket writers | **RESOLVED (2026-09-20)** — split identity: writer keyed off a `--file`-derived universe name (ignoring `--index`) and four call sites sanitized the `<name>_<method>` token differently. Fixed via a single `stockpicker` identity helper (`SanitizeName`/`DisplayName`/`PickIdentity`, `--name`>`--index`>file-name precedence) routed through writer + cached reader. See Phase 11. | ✅ done |
-| Two divergent cache DBs coexist | `data/cache.db` (Sep 8, `source=NULL`, 507 tickers, tax tables) vs `data/mycase.db` (newer schema) | **OPEN (2026-09-15)** — `cache.db` looks like a stale pre-refactor artifact; confirm no live reader and retire. | 🟧 |
+| Two divergent cache DBs coexist | `data/cache.db` (Sep 8, `source=NULL`, 507 tickers, tax tables) vs `data/mycase.db` (newer schema) | **RESOLVED (2026-09-20)** — verified no live reader (all of `cache`/`pithistory`/`themedb` default to `mycase.db`; only the on-demand `db migrate` reads `cache.db` read-only), and its only unique tables (`tax_lots`/`tax_transactions`/`realized_gains`) were all **empty** — `pkg/tax.Store` recreates them lazily in `mycase.db` via `cache.Conn()`. Backed up to `data/backups/cache_db_retired_20260920.tar.gz` and deleted. `mycase db stats` + `mycase tax status` verified green post-delete. | ✅ done |
 | `data/` + `report/` are deeply nested with path-encoded identity | `data/**`, `report/**`; writers in `selectiontracker`, proposal/backup/monitor paths | **OPEN (2026-09-15)** — flatten to a single `data/` tree (+ disposable `data/raw/`) with a filename naming convention. See `docs/plans/data-report-flatten.md`. | 🟧 |
 | `docs/` sprawl (28 md files, heavy overlap) | `docs/**` | **OPEN (2026-09-15)** — consolidate to a maintained core + `archive/`; add an index. See `docs/plans/docs-consolidation.md`. | 🟩 low |
 
@@ -535,10 +535,20 @@ the lost evidence was. This reframes the feature.
   proposal/basket/backup/monitoring/scuttlebutt writers, golden-copy CSV resolution.
   Destructive (deletes `report/` + old `data/**`) — needs sign-off; prefer clean
   cutover after new writers verified.
-- **Retire stale `data/cache.db`** ⬜ **TODO**: `cache.db` (Sep 8, `source=NULL`,
-  507 tickers, tax tables) looks like a pre-refactor artifact vs the newer
-  `data/mycase.db`. Confirm no live reader, back up, delete → single DB at
-  `data/mycase.db`.
+- **Retire stale `data/cache.db`** ✅ **DONE (2026-09-20)**: `cache.db` (Sep 8,
+  `source=NULL`) was a pre-consolidation artifact. Confirmed safe to delete: (1) no
+  live reader — `pkg/cache`, `pkg/pithistory`, and `pkg/themedb` all default to
+  `data/mycase.db`, and the only code referencing `cache.db` is the on-demand
+  `mycase db migrate` command (reads it read-only); (2) `mycase.db` is a strict
+  superset of `cache.db`'s tables **except** `tax_lots`/`tax_transactions`/
+  `realized_gains`, all of which were **empty** in `cache.db` and are recreated
+  lazily in `mycase.db` by `pkg/tax.Store` (via `cache.Conn()`, "domains own their
+  persistence"); (3) `cache.db`'s populated data (stale Sep-8 `prices`/`fundamentals`/
+  `cache_meta`) is re-fetchable market cache already superseded by fresher rows in
+  `mycase.db`. Backed up to `data/backups/cache_db_retired_20260920.tar.gz` (gitignored,
+  untracked) then deleted. Post-delete verification: `mycase db stats` reports all 19
+  tables ONLINE; `mycase tax status` ran clean and recreated the three tax tables in
+  `mycase.db`. Single DB at `data/mycase.db`.
 - **Docs consolidation** ⬜ **TODO**: `docs/` has 28 md files with heavy overlap and
   no index. Reduce to a maintained canonical core (`roadmap`, `architecture`,
   `runbook`, `principles`, `datasources`) + `strategies/` (per-method specs) +
