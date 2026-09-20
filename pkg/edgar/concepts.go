@@ -74,10 +74,10 @@ func (c *Client) FetchFundamentals(ctx context.Context, tickers []string) (map[s
 			c.logger.WarnContext(ctx, "edgar.facts_failed", "ticker", ticker, "cik", cik, "err", err)
 			continue
 		}
-		if !ok || facts == nil {
+		if !ok {
 			continue
 		}
-		result[ticker] = mapFacts(facts)
+		result[ticker] = facts
 	}
 	return result, nil
 }

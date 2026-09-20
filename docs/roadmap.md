@@ -451,17 +451,26 @@ the lost evidence was. This reframes the feature.
   signal); new `clampROIC` bounds all capital-efficiency ratios to ±100% on every
   path; the transparency driver string now prints `n/m (neg. book equity)` instead of
   an absurd percentage. Tests added.
-- **`edgar_facts` blob bloat — store extracted facts, not raw companyfacts** 🟧 **IN PROGRESS (2026-09-18)**:
-  the post-run DB ballooned to **3.6 GB on disk** (~1.9 GB logical in `edgar_facts`
-  alone — 479 raw SEC companyfacts JSON blobs, avg ~3.9 MB, max 9.2 MB — plus ~1.7 GB
-  dead pages from upsert/delete churn that `CHECKPOINT` doesn't reclaim). Each blob
-  carries every XBRL concept a company ever filed, while `mapFacts` extracts only
-  ~11. Fix: persist the compact **extracted** facts (the mapped `marketdata.Fundamentals`
-  fields EDGAR supplies + a small margin of extra attributes) instead of the full
-  blob — `data/raw/` already owns full-body retention with its own pruning, so the DB
-  need not duplicate it. Then rebuild the DB file to reclaim dead space. Sequence:
-  dump sample blobs → catalogue needed fields → design compact `edgar_facts` schema →
-  migrate. (Design in progress this session.)
+- **`edgar_facts` blob bloat — store extracted facts, not raw companyfacts** ✅ **DONE (2026-09-18)**:
+  the post-run DB had ballooned to **3.6 GB on disk** (~1.9 GB logical in `edgar_facts`
+  alone — 479 raw SEC companyfacts JSON blobs, avg ~3.9 MB, max 9.2 MB — plus dead
+  pages from upsert/delete churn). Each blob carried every XBRL concept a company ever
+  filed, while `mapFacts` extracts only ~11. Fix: `edgar_facts` now stores the compact
+  **extracted** `marketdata.Fundamentals` (`facts_json` + `entity_name` +
+  `schema_version`), not the raw blob — `data/raw/` already owns full-body retention.
+  `fetchFacts` parses+maps+stores compact internally and returns the mapped struct;
+  `schema_version` (const `factsSchemaVersion`) makes a future mapper change treat old
+  rows as a miss and re-derive. In-place migration `mycase db migrate-edgar-facts`
+  (`pkg/edgar/migrate.go` `MigrateFactsBlobs`) re-derives compact rows from the existing
+  blobs **with no EDGAR re-fetch** (idempotent), then `reclaimDBFile` rewrites the DB to
+  a fresh file (`ATTACH` + `COPY FROM DATABASE`, `.bak` kept) to reclaim dead space.
+  Verified on the live DB: **3599 MB → 18 MB**, all 479 rows + `entity_name` preserved,
+  FCF re-derived correctly (Visa $21.58B, AAPL $98.8B, NVDA $102.6B; JPM 0 = bank).
+  New reference doc **`docs/edgar-facts-reference.md`** catalogues the wider companyfacts
+  universe (fields we extract today + candidate facts/tags for future factors:
+  stockholders-equity→authoritative ROE, dividends+buybacks→shareholder yield,
+  D&A→EBITDA, EPS/shares, R&D, balance-sheet depth) to guide roadmap evolution.
+  Measured extracted-vs-raw compression: 437×–2115×. `make build`/`cleanup` green.
 - **Fix `pick` report/CSV naming** ⬜ **TODO**: name artifacts from the actual
   `--index`/`--method`, not config/golden-copy defaults. This session a
   `--index sp500 --method us_quality_momentum` run filed under

@@ -164,7 +164,7 @@ func TestFetchFundamentals_EndToEnd(t *testing.T) {
 	}
 }
 
-func TestFetchFacts_CachesBlob(t *testing.T) {
+func TestFetchFacts_CachesExtracted(t *testing.T) {
 	srv := newTestServer(t)
 	defer srv.Close()
 
@@ -184,13 +184,23 @@ func TestFetchFacts_CachesBlob(t *testing.T) {
 		t.Fatalf("CIK: %v", err)
 	}
 	facts, ok, err := cl.fetchFacts(context.Background(), "0000111111")
-	if err != nil || !ok || facts == nil {
+	if err != nil || !ok {
 		t.Fatalf("fetchFacts: ok=%v err=%v", ok, err)
 	}
+	if facts.FreeCashflow != 700 {
+		t.Errorf("fetchFacts FreeCashflow = %v, want 700", facts.FreeCashflow)
+	}
 
-	// Second call should be served from cache (raw blob present).
-	raw, cached := cl.cachedFacts(context.Background(), "0000111111")
-	if !cached || len(raw) == 0 {
-		t.Error("expected facts to be cached after first fetch")
+	// Second call is served from the compact cache and round-trips the extracted
+	// fundamentals (not a raw blob).
+	cached, ok := cl.cachedFacts(context.Background(), "0000111111")
+	if !ok {
+		t.Fatal("expected facts to be cached after first fetch")
+	}
+	if cached.FreeCashflow != facts.FreeCashflow {
+		t.Errorf("cached FreeCashflow = %v, want %v (round-trip)", cached.FreeCashflow, facts.FreeCashflow)
+	}
+	if len(cached.AnnualRevenue) != len(facts.AnnualRevenue) {
+		t.Errorf("cached AnnualRevenue len = %d, want %d", len(cached.AnnualRevenue), len(facts.AnnualRevenue))
 	}
 }

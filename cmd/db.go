@@ -8,8 +8,10 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/raghavkgarg/mycase/pkg/cache"
 	"github.com/raghavkgarg/mycase/pkg/config"
 	"github.com/raghavkgarg/mycase/pkg/csvloader"
+	"github.com/raghavkgarg/mycase/pkg/edgar"
 	"github.com/raghavkgarg/mycase/pkg/marketdata"
 	"github.com/raghavkgarg/mycase/pkg/pithistory"
 	"github.com/raghavkgarg/mycase/pkg/render"
@@ -26,6 +28,7 @@ var DBCommand = &cli.Command{
 		dbUpdateCmd,
 		dbStatusCmd,
 		dbMigrateCmd,
+		dbMigrateEdgarFactsCmd,
 	},
 }
 
@@ -304,4 +307,119 @@ var dbMigrateCmd = &cli.Command{
 		fmt.Println("\nDatabase consolidation completed successfully!")
 		return nil
 	},
+}
+
+var dbMigrateEdgarFactsCmd = &cli.Command{
+	Name:  "migrate-edgar-facts",
+	Usage: "Convert the legacy edgar_facts raw-blob cache to the compact extracted-facts schema (re-derives locally, no EDGAR re-fetch) and reclaim disk space",
+	Flags: []cli.Flag{
+		&cli.StringFlag{Name: "db", Value: "", Usage: "Path to mycase.db (default: <data>/mycase.db)"},
+		&cli.BoolFlag{Name: "no-reclaim", Usage: "Skip the file-rewrite that reclaims dead space (migrate rows only)"},
+	},
+	Action: func(ctx context.Context, c *cli.Command) error {
+		dbPath := c.String("db")
+		if dbPath == "" {
+			dbPath = config.DataPath("mycase.db")
+		}
+
+		before, _ := fileSize(dbPath)
+		fmt.Printf("Migrating edgar_facts in %s (%.0f MB)...\n", dbPath, float64(before)/(1024*1024))
+
+		// Row-level migration: re-derive compact facts from the stored blobs.
+		dc, err := cache.Open(dbPath)
+		if err != nil {
+			return fmt.Errorf("open db: %w", err)
+		}
+		ecl, err := edgar.NewClient("mycase-migrate/1.0 migrate@localhost", dc)
+		if err != nil {
+			dc.Close()
+			return fmt.Errorf("edgar client: %w", err)
+		}
+		res, err := ecl.MigrateFactsBlobs(ctx)
+		if err != nil {
+			dc.Close()
+			return fmt.Errorf("migrate rows: %w", err)
+		}
+		dc.Close()
+
+		if res.AlreadyCompact {
+			fmt.Println("edgar_facts is already the compact schema — nothing to migrate.")
+		} else {
+			fmt.Printf("Re-derived %d/%d rows (%d skipped: unparseable blob).\n", res.Migrated, res.Scanned, res.Skipped)
+		}
+
+		if c.Bool("no-reclaim") {
+			fmt.Println("Skipping space reclaim (--no-reclaim).")
+			return nil
+		}
+
+		// Reclaim dead pages by copying the whole DB to a fresh file, then
+		// atomically swapping it in (original kept as .bak).
+		reclaimed, err := reclaimDBFile(ctx, dbPath)
+		if err != nil {
+			return fmt.Errorf("reclaim space: %w", err)
+		}
+		after, _ := fileSize(dbPath)
+		fmt.Printf("Reclaimed: %.0f MB → %.0f MB (backup at %s).\n",
+			float64(before)/(1024*1024), float64(after)/(1024*1024), reclaimed)
+		return nil
+	},
+}
+
+// fileSize returns the size in bytes of a file.
+func fileSize(path string) (int64, error) {
+	fi, err := os.Stat(path)
+	if err != nil {
+		return 0, err
+	}
+	return fi.Size(), nil
+}
+
+// reclaimDBFile rewrites a DuckDB database into a fresh file (dropping dead
+// pages left by row rewrites), then swaps it in place. The original is preserved
+// as "<path>.bak". Returns the backup path.
+func reclaimDBFile(ctx context.Context, dbPath string) (string, error) {
+	freshPath := dbPath + ".compact"
+	_ = os.Remove(freshPath)
+
+	src, err := cache.Open(dbPath)
+	if err != nil {
+		return "", fmt.Errorf("open source: %w", err)
+	}
+	// DuckDB aliases the current database by its file-stem; COPY FROM DATABASE
+	// needs that alias. Resolve it as the single non-system attached database
+	// (the path column is normalized — e.g. /tmp → /private/tmp on macOS — so we
+	// don't match on the path string).
+	var srcAlias string
+	if err := src.Conn().QueryRowContext(ctx,
+		`SELECT database_name FROM duckdb_databases() WHERE database_name NOT IN ('system','temp') LIMIT 1`,
+	).Scan(&srcAlias); err != nil {
+		src.Close()
+		return "", fmt.Errorf("resolve source alias: %w", err)
+	}
+	if _, err := src.Conn().ExecContext(ctx, fmt.Sprintf(`ATTACH '%s' AS compact_target`, freshPath)); err != nil {
+		src.Close()
+		return "", fmt.Errorf("attach fresh db: %w", err)
+	}
+	if _, err := src.Conn().ExecContext(ctx, fmt.Sprintf(`COPY FROM DATABASE "%s" TO compact_target`, srcAlias)); err != nil {
+		src.Close()
+		return "", fmt.Errorf("copy database: %w", err)
+	}
+	if _, err := src.Conn().ExecContext(ctx, `DETACH compact_target`); err != nil {
+		src.Close()
+		return "", fmt.Errorf("detach: %w", err)
+	}
+	src.Close()
+
+	backupPath := dbPath + ".bak"
+	_ = os.Remove(backupPath)
+	if err := os.Rename(dbPath, backupPath); err != nil {
+		return "", fmt.Errorf("backup original: %w", err)
+	}
+	if err := os.Rename(freshPath, dbPath); err != nil {
+		// Best-effort restore.
+		_ = os.Rename(backupPath, dbPath)
+		return "", fmt.Errorf("swap fresh db in: %w", err)
+	}
+	return backupPath, nil
 }
