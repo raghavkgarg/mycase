@@ -125,7 +125,7 @@ Automation eliminates all four. The system runs quarterly, follows its rules, an
 |------|----------|--------|-----------|
 | ~~Schwab fundamentals mapper drops derivable fields~~ | ~~`pkg/broker/schwab/market.go` `mapSchwabFundamentals`~~ | **PARTLY RESOLVED (Phase 10a)** — `NetIncome` + `RegularPrice` now derived; `Sector` backfilled from constituents CSV via `stockpicker.InjectSectors` | 🟧 sector-via-CSV done, EDGAR statements → 10c |
 | `pick` eliminates all constituents (`0 / N`) | `pkg/stockpicker/filters.go` `isEligible` ← `pkg/broker/schwab/market.go` fundamentals mapper | **RESOLVED (2026-09-18)** — root cause was three mapping bugs (MarketCap ×1e6 inflation, RegularPrice ×1e6, AverageVolume bound to `vol3MonthAvg`=0 instead of `avg3MonthVolume`), zeroing ADV → failing the *liquidity* gate for every ticker (not the size gate as first hypothesized). Fixed + verified via `raw inspect` on live-captured bodies. See Phase 11. | ✅ done |
-| `pick` report dir/CSV naming ignores `--index` / `--method` flags | report/basket writers | **OPEN (2026-09-15)** — ran `--index sp500 --method us_quality_momentum` but artifacts filed under `us_microsmall_multibagger/` and the report said "Multibagger Preset". Naming derives from config/golden-copy, not the actual flags. | 🟧 |
+| `pick` report dir/CSV naming ignores `--index` / `--method` flags | report/basket writers | **RESOLVED (2026-09-20)** — split identity: writer keyed off a `--file`-derived universe name (ignoring `--index`) and four call sites sanitized the `<name>_<method>` token differently. Fixed via a single `stockpicker` identity helper (`SanitizeName`/`DisplayName`/`PickIdentity`, `--name`>`--index`>file-name precedence) routed through writer + cached reader. See Phase 11. | ✅ done |
 | Two divergent cache DBs coexist | `data/cache.db` (Sep 8, `source=NULL`, 507 tickers, tax tables) vs `data/mycase.db` (newer schema) | **OPEN (2026-09-15)** — `cache.db` looks like a stale pre-refactor artifact; confirm no live reader and retire. | 🟧 |
 | `data/` + `report/` are deeply nested with path-encoded identity | `data/**`, `report/**`; writers in `selectiontracker`, proposal/backup/monitor paths | **OPEN (2026-09-15)** — flatten to a single `data/` tree (+ disposable `data/raw/`) with a filename naming convention. See `docs/plans/data-report-flatten.md`. | 🟧 |
 | `docs/` sprawl (28 md files, heavy overlap) | `docs/**` | **OPEN (2026-09-15)** — consolidate to a maintained core + `archive/`; add an index. See `docs/plans/docs-consolidation.md`. | 🟩 low |
@@ -497,10 +497,31 @@ the lost evidence was. This reframes the feature.
   stockholders-equity→authoritative ROE, dividends+buybacks→shareholder yield,
   D&A→EBITDA, EPS/shares, R&D, balance-sheet depth) to guide roadmap evolution.
   Measured extracted-vs-raw compression: 437×–2115×. `make build`/`cleanup` green.
-- **Fix `pick` report/CSV naming** ⬜ **TODO**: name artifacts from the actual
-  `--index`/`--method`, not config/golden-copy defaults. This session a
-  `--index sp500 --method us_quality_momentum` run filed under
-  `us_microsmall_multibagger/` and labelled itself "Multibagger Preset".
+- **Fix `pick` report/CSV naming** ✅ **DONE (2026-09-20)**: report dir, index-picks
+  CSV, proposal CSV, incubator CSV, and PIT-snapshot filenames now derive from the
+  actual `--index`/`--method` (and `--name`) flags, not a `--file`-derived universe
+  name. Root cause was a split identity: the writer (`stockpicker.RunWithResult`)
+  keyed everything off `tickersSrc.Name` — which on the `--file` path is
+  `csvloader.GetUniverseName(csv)` (filename-derived, strips method words, ignores
+  `--index`), so `--index sp500 --method us_quality_momentum` run against a golden
+  `data/microsmall.csv` filed under `us_microsmall_multibagger/`. Compounding it,
+  four call sites sanitized the `<name>_<method>` token four different ways
+  (`SaveReport` lowercased+space→_; `snapshot.go` comma/space/^ ; run.go CSV paths
+  raw; the cached-run reader in `cmd/pick.go` its own), so writer and reader could
+  disagree on the path. Fix: new `pkg/stockpicker/identity.go` with the single
+  `SanitizeName` / `DisplayName(opts, loadedName)` / `PickIdentity(name, method)`
+  source of truth. `DisplayName` precedence is `--name` > `--index` > loaded
+  (file-derived) name, so an explicit index anchors the identity. `SaveReport` now
+  takes the caller-built identity token (keeps `selectiontracker` L0 — no import of
+  L3 `stockpicker`); `run.go`, `snapshot.go`, and `cmd/pick.go`'s cached reader all
+  route through `PickIdentity`/`SanitizeName` so writer and reader compose identical
+  paths. The "Strategy Preset:" label already rendered `opts.Method` verbatim and
+  `--method` already won over the config default (an earlier fix), so that half was
+  correct; this change fixes the index/display-name half. Tests added
+  (`identity_test.go`: sanitize, flag precedence, the exact `sp500` regression);
+  `make build`/`test`/`check-deps`/`cleanup` green. The `pipeline` path was already
+  correct (it sets `IndexName`/`DisplayName` = `src.name` and controls the CSV via
+  `OutputFile`) and stays consistent.
 - **Flatten `data/` + `report/`** ⬜ **TODO**: collapse both nested trees into one
   flat `data/` plus a single disposable `data/raw/`; `report/` goes away. Filename
   convention carries the identity the paths used to:

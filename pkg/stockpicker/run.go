@@ -72,10 +72,11 @@ func RunWithResult(ctx context.Context, opts *Options) (*PickResult, error) {
 	if err != nil {
 		return nil, fmt.Errorf("loading constituents: %w", err)
 	}
-	displayNameVal := tickersSrc.Name
-	if opts.DisplayName != "" {
-		displayNameVal = opts.DisplayName
-	}
+	// Resolve the run's identity honoring the flags the user passed: --name wins,
+	// else --index anchors it, else the loaded (file-derived) source name. This
+	// stops a --file CSV's filename from shadowing an explicit --index (the
+	// historical us_microsmall_multibagger mis-filing).
+	displayNameVal := DisplayName(opts, tickersSrc.Name)
 	basedOnStr := opts.BasedOn
 	if basedOnStr == "" {
 		if opts.AsOfDate != "" {
@@ -313,17 +314,18 @@ func RunWithResult(ctx context.Context, opts *Options) (*PickResult, error) {
 	}
 
 	prevDrivers := loadPreviousDriverStrings(ctx, displayNameVal, opts.Method)
-	if err := tracker.SaveReport(displayNameVal, opts.Method, goldenWeights, sectors, finalWeights, resultDates, prevDrivers); err != nil {
+	if err := tracker.SaveReport(PickIdentity(displayNameVal, opts.Method), displayNameVal, opts.Method, goldenWeights, sectors, finalWeights, resultDates, prevDrivers); err != nil {
 		slog.WarnContext(ctx, "pick.report_save_failed", "err", err)
 	}
 
 	outPath := opts.OutputFile
 	if outPath == "" {
+		identity := PickIdentity(displayNameVal, opts.Method)
 		if opts.FilePath != "" {
 			dateStr := time.Now().Format("20060102")
-			outPath = filepath.Join("data", "candidates", "proposals", fmt.Sprintf("%s_%s_%s.csv", dateStr, displayNameVal, opts.Method))
+			outPath = filepath.Join("data", "candidates", "proposals", fmt.Sprintf("%s_%s.csv", dateStr, identity))
 		} else {
-			outPath = filepath.Join("data", "candidates", "index_picks", fmt.Sprintf("%s_%s.csv", displayNameVal, opts.Method))
+			outPath = filepath.Join("data", "candidates", "index_picks", fmt.Sprintf("%s.csv", identity))
 		}
 	}
 	if err := SavePortfolioToCSV(selectedKeys, finalWeights, outPath); err != nil {
@@ -334,7 +336,7 @@ func RunWithResult(ctx context.Context, opts *Options) (*PickResult, error) {
 	// below the regime hurdle, ranked by hurdle gap + VCP tightness. Written on
 	// every earlymb run so pullback regimes still surface coiling setups.
 	if opts.Method == "earlymb" || opts.Method == "early_multibagger" {
-		incubatorPath := filepath.Join("data", "candidates", "index_picks", fmt.Sprintf("%s_%s_incubator.csv", displayNameVal, opts.Method))
+		incubatorPath := filepath.Join("data", "candidates", "index_picks", fmt.Sprintf("%s_incubator.csv", PickIdentity(displayNameVal, opts.Method)))
 		_, _ = GenerateIncubatorWatchlist(activeKeys, scores, fundamentals, fullHistory, tracker, incubatorPath)
 	}
 
