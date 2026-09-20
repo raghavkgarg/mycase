@@ -127,7 +127,7 @@ Automation eliminates all four. The system runs quarterly, follows its rules, an
 | `pick` eliminates all constituents (`0 / N`) | `pkg/stockpicker/filters.go` `isEligible` ← `pkg/broker/schwab/market.go` fundamentals mapper | **RESOLVED (2026-09-18)** — root cause was three mapping bugs (MarketCap ×1e6 inflation, RegularPrice ×1e6, AverageVolume bound to `vol3MonthAvg`=0 instead of `avg3MonthVolume`), zeroing ADV → failing the *liquidity* gate for every ticker (not the size gate as first hypothesized). Fixed + verified via `raw inspect` on live-captured bodies. See Phase 11. | ✅ done |
 | `pick` report dir/CSV naming ignores `--index` / `--method` flags | report/basket writers | **RESOLVED (2026-09-20)** — split identity: writer keyed off a `--file`-derived universe name (ignoring `--index`) and four call sites sanitized the `<name>_<method>` token differently. Fixed via a single `stockpicker` identity helper (`SanitizeName`/`DisplayName`/`PickIdentity`, `--name`>`--index`>file-name precedence) routed through writer + cached reader. See Phase 11. | ✅ done |
 | Two divergent cache DBs coexist | `data/cache.db` (Sep 8, `source=NULL`, 507 tickers, tax tables) vs `data/mycase.db` (newer schema) | **RESOLVED (2026-09-20)** — verified no live reader (all of `cache`/`pithistory`/`themedb` default to `mycase.db`; only the on-demand `db migrate` reads `cache.db` read-only), and its only unique tables (`tax_lots`/`tax_transactions`/`realized_gains`) were all **empty** — `pkg/tax.Store` recreates them lazily in `mycase.db` via `cache.Conn()`. Backed up to `data/backups/cache_db_retired_20260920.tar.gz` and deleted. `mycase db stats` + `mycase tax status` verified green post-delete. | ✅ done |
-| `data/` + `report/` are deeply nested with path-encoded identity | `data/**`, `report/**`; writers in `selectiontracker`, proposal/backup/monitor paths | **OPEN (2026-09-15)** — flatten to a single `data/` tree (+ disposable `data/raw/`) with a filename naming convention. See `docs/plans/data-report-flatten.md`. | 🟧 |
+| `data/` + `report/` are deeply nested with path-encoded identity | `data/**`, `report/**`; writers in `selectiontracker`, proposal/backup/monitor paths | **DEFERRED (2026-09-20)** — flatten to a single `data/` tree (+ disposable `data/raw/`) with a filename naming convention. Deferred deliberately: highest-effort + only destructive open item, no functional pressure; `stockpicker.PickIdentity` is groundwork for it. | 🟧 later |
 | `docs/` sprawl (28 md files, heavy overlap) | `docs/**` | **OPEN (2026-09-15)** — consolidate to a maintained core + `archive/`; add an index. See `docs/plans/docs-consolidation.md`. | 🟩 low |
 
 ---
@@ -522,7 +522,7 @@ the lost evidence was. This reframes the feature.
   `make build`/`test`/`check-deps`/`cleanup` green. The `pipeline` path was already
   correct (it sets `IndexName`/`DisplayName` = `src.name` and controls the CSV via
   `OutputFile`) and stays consistent.
-- **Flatten `data/` + `report/`** ⬜ **TODO**: collapse both nested trees into one
+- **Flatten `data/` + `report/`** ⬜ **DEFERRED (revisit later)**: collapse both nested trees into one
   flat `data/` plus a single disposable `data/raw/`; `report/` goes away. Filename
   convention carries the identity the paths used to:
   `<domain>__<portfolio>__<method>__<YYYYMMDD-HHMMSS>__<kind>.<ext>` (double-underscore
@@ -534,7 +534,10 @@ the lost evidence was. This reframes the feature.
   and readers glob identically. Writers to change: `selectiontracker.SaveReport`,
   proposal/basket/backup/monitoring/scuttlebutt writers, golden-copy CSV resolution.
   Destructive (deletes `report/` + old `data/**`) — needs sign-off; prefer clean
-  cutover after new writers verified.
+  cutover after new writers verified. **Deferred deliberately (2026-09-20)**: highest
+  effort + only destructive item left, and it's organizational cleanup with no
+  functional pressure. Groundwork already exists — `stockpicker.PickIdentity`/
+  `SanitizeName` (the #2 naming fix) is the centralized primitive this will build on.
 - **Retire stale `data/cache.db`** ✅ **DONE (2026-09-20)**: `cache.db` (Sep 8,
   `source=NULL`) was a pre-consolidation artifact. Confirmed safe to delete: (1) no
   live reader — `pkg/cache`, `pkg/pithistory`, and `pkg/themedb` all default to
