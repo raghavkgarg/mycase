@@ -382,6 +382,32 @@ the lost evidence was. This reframes the feature.
   deleted early). Lean entirely on cheap "broken" signals already emitted (`0/N`, empty
   report, high fetch-failure rate) — never attempt to define "correct". Highest risk of
   deleting the wrong thing; defer until demonstrably needed.
+- ⬜ **R-store-7 — Review the replay feature's design & usefulness.** The
+  capture + triage half of the raw-store has now proven itself in anger: the
+  2026-09-18 session root-caused **three** distinct data bugs (`pick` `0/N` Schwab
+  mapping, the 118 EDGAR `FCF=0` eliminations, the XOM shell-CIK) *entirely offline*
+  against captured/cached bodies, and verified the fixes by re-running the real
+  mappers over the same evidence — zero live API calls. **Replay
+  (`MYCASE_REPLAY`) delivered none of that** and was never invoked, exactly as the
+  R-store design note predicted ("replay is a distant third; it only pays off after
+  triage has localized a bug to *code*"). Before investing further, decide replay's
+  fate:
+  - **Is it earning its keep?** It adds a chokepoint branch + a synthetic-200 path in
+    every client (`schwab.replay_hit`, yfinance) and a `findLatest` glob contract that
+    must stay in lock-step with the capture filename convention — real surface area
+    and a coupling risk for a feature with no demonstrated use.
+  - **If kept**, define the concrete workflow it wins (e.g. deterministic regression
+    of a whole `pick`/pipeline run against a frozen fixture set; hermetic repro of a
+    reported bug) and add a test that exercises the end-to-end replayed run so it
+    can't silently rot. Note the gap this session exposed: EDGAR bodies are **not**
+    archived to `data/raw/` the way the Schwab/Yahoo chokepoints are (the incomplete
+    479/501 pass surfaced as "missing" rather than replayable), so a
+    replay-a-whole-pick story is currently only partial.
+  - **If dropped**, remove the `Replay`/`findLatest` machinery and the per-client
+    replay branches, keeping capture + triage (the proven value) — smaller, clearer,
+    one fewer contract to maintain.
+  Not urgent; schedule a deliberate keep-or-cut review rather than letting it drift as
+  untested dead-ish code.
 
 
 - **Fix `pick` `0 / N` — Schwab fundamentals mapping** ✅ **DONE (2026-09-18)**:
