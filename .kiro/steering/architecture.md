@@ -4,8 +4,8 @@ The `pkg/` graph is organized into layers. **Imports must always go strictly
 downward** — a package may import only packages at a lower layer, never the same
 layer or higher. This is enforced by `devtools/checkdeps` (run via `make check-deps`,
 and part of `make cleanup`). Go rejects import *cycles* at compile time; this guard
-additionally preserves the *direction* and *leaf-ness* that phase R16 established
-(see `docs/05-refactor.md`).
+additionally preserves the *direction* and *leaf-ness* the layering rule below
+establishes.
 
 ## The core rule: define OR consume, don't do both low in the stack
 

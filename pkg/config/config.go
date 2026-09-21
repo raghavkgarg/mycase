@@ -495,8 +495,8 @@ type UserDefaults struct {
 }
 
 // RawConfig holds retention settings for the raw-response archive (pkg/rawstore,
-// docs/03-roadmap.md R-store-3). Growth is bounded by pruning, not by declining to
-// capture — capture is ON by default (R-store-2). Two independent ceilings apply
+// docs/24-logging.md §2). Growth is bounded by pruning, not by declining to
+// capture — capture is ON by default. Two independent ceilings apply
 // (a file is pruned if it exceeds either):
 //
 //   - RetainDays: delete archives older than N days (0 or negative → disabled).

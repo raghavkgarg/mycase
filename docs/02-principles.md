@@ -1,8 +1,7 @@
 # Mycase — Architecture Principles
 
-**Status**: COMPLETE — durable principles fleshed out with concrete file references, §9 scored against evidence (branch `integration/main-ebm`, build + check-deps + test green as of this writing).
-**Purpose**: Codify the durable architectural principles the system is built on, so future changes (and merges from divergent branches, like the EBM integration) can be evaluated against a stable rubric rather than ad-hoc judgment.
-**Related**: `docs/04-architecture.md` (current design + D-decisions), `.kiro/steering/architecture.md` (enforced layering), `docs/07-datasources.md` (data-source design), `docs/05-refactor.md` (refactor history).
+**Purpose**: Codify the durable architectural principles the system is built on, so future changes (and merges from divergent branches) can be evaluated against a stable rubric rather than ad-hoc judgment.
+**Related**: `docs/04-architecture.md` (current design + D-decisions), `.kiro/steering/architecture.md` (enforced layering), `docs/07-datasources.md` (data-source design).
 
 ---
 

@@ -1,68 +1,85 @@
-# Testing Guide
+# Testing
 
-## Running Tests
+## The test pyramid
+
+Tests fall into three tiers, distinguished by build tag so the default `go test` stays
+fast and offline:
+
+```
+        ╱╲      E2E (few, tag: e2e)       — a full command via cli.Command.Run,
+       ╱  ╲                                 mock broker, temp DuckDB, fixture CSVs.
+      ╱────╲    Integration (tag:          — real network (Schwab/Yahoo/EDGAR),
+     ╱      ╲    integration)                skippable when creds/network absent.
+    ╱────────╲  Unit (many, default)       — pure logic, table-driven, no I/O.
+   ╱__________╲
+```
+
+The system is a pipeline of commands with data flowing through DuckDB and CSV. Unit tests
+cover the pure logic (scoring, filters, weights, metrics); integration tests exercise the
+live API client paths against real endpoints; end-to-end tests drive whole command chains
+in-process, since `main.go` builds a `*cli.Command` and the commands are exported
+(`PickCommand`, `PipelineCommand`, …) — a test constructs the same tree and calls
+`.Run(ctx, args)` with a mock broker and a `t.TempDir()` data dir.
+
+## Running tests
 
 | Command | What it runs |
 |---------|-------------|
-| `make test` | All unit tests (30s timeout) |
-| `make test-race` | All unit tests with Go race detector (60s timeout) |
-| `make test-verbose` | All unit tests with full output |
-| `make test-coverage` | Unit tests + generates `coverage.out` |
+| `make test` | All unit tests (30s timeout), no network |
+| `make test-race` | Unit tests with the Go race detector (60s timeout) |
+| `make test-verbose` | Unit tests with full output |
+| `make test-coverage` | Unit tests + `coverage.out` (+ HTML report) |
 | `make test-integration` | Network-dependent tests (`//go:build integration`, 120s timeout) |
 
-View coverage report: `go tool cover -html=coverage.out`
+View the coverage report: `go tool cover -html=coverage.out`.
 
-## Coverage by Package
+## Conventions
 
-All 11 packages pass `go test -race ./...` clean.
+- **No network in unit tests.** HTTP-dependent code goes behind `//go:build integration`
+  and runs only via `make test-integration`. Live tests skip cleanly when credentials or
+  network are absent.
+- **No writes to `data/`, `report/`, or `config/`** from tests — use `t.TempDir()` for all
+  temporary file I/O.
+- **Table-driven tests** for pure functions; `±ε` tolerances for floats (typically `1e-9`).
+- **Property tests** via `testing/quick` for invariants that must hold for any input
+  (weights sum to 1.0, RSI ∈ [0, 100]).
+- **Hand-written mocks, no mocking framework** — interfaces are the seams
+  (`broker.MockBroker` exists; a mock fetcher satisfies `datafetcher.Router`'s consumer
+  interfaces). This matches the minimal-dependencies constraint.
+- **Fixtures** live under `pkg/<pkg>/testdata/`.
+- **The race detector must pass** before merging concurrency-touching changes (daemon, SSE
+  broadcaster).
 
-| Package | Tests | What's covered |
-|---------|------:|---------------|
-| `cmd` | 9 | `parsePerfDate` (ISO/compact/empty/invalid); `cleanBasketArg` (leading dashes); `PipelineConfig.UnmarshalYAML` (defaults, explicit, negative tolerance) |
-| `pkg/backtest` | 22 | CAGR, MaxDrawdown, Sharpe, Sortino, Calmar, Beta, Alpha (edge cases); `Run` (no-rebalance, slippage, quarterly rebalance, invalid date range, missing ticker) |
-| `pkg/cache` | 21 | Schema idempotency; upsert/ON CONFLICT; int64/float64 round-trip; staleness (IST same-day, 24h fundamentals); range filtering; clear-ticker/clear-all |
-| `pkg/config` | 14 | `LoadMFSConfig` (missing file, unknown strategy, malformed JSON, valid); themes; config round-trip; `LoadAlertConfig` (missing, valid, zero threshold, no section, malformed) |
-| `pkg/costs` | 13 | STT/stamp/DP/SEBI components (buy/sell); zero qty/price guards; custom brokerage; cost ratio consistency; STCG/LTCG classification under Finance Act 2024 |
-| `pkg/csvloader` | 8 | `GetUniverseName` (table + property test); `ParseBasket` (valid, case-insensitive header, missing header, empty body, duplicate ticker, invalid weight) |
-| `pkg/daemon` | 10 | `CalculateDrift` (exact match, no holdings, partial drift, T+1/T+2 qty, single stock, bounded); `NextIST1545` (always future, correct time, within one day) |
-| `pkg/monitoring` | 8 | `GetCapStallSeverity` (boundary, negative growth); `RunSimulation` (determinism, insufficient history, empty portfolio, no NaN) |
-| `pkg/optimizer` | 26 | `CapWeights` (empty, all under, basic, multiple over, too-tight, single, sum invariant, quick-check property); math (mean, covariance, downside deviation, total return, daily returns, ulcer index); `OptimizeFreshBuy`; `FilterMicroTransactions`; `DetectExits` |
-| `pkg/stockpicker` | 10 | `IsAbove200DaySMA`; `NormalizeValue` (table + out-of-range clamping); `LoadLocalCSVConstituents`; `IsEligible`; `ApplyHysteresisSelection`; `ApplyRebalancingBand` |
-| `pkg/yfinance` | 18 | RSI (insufficient data, all-up, all-down, alternating, always-in-bounds); sales growth; DSO; volume breakout; `MapTickerToYahoo`; `CleanIntradayNoise` (nil, empty, old timestamp, today-after-close) |
+## Coverage by tier
 
-## Test Conventions
+Coverage is uneven by design — pure-logic packages are held to a high bar; I/O glue is
+covered by integration/E2E rather than chased for unit percentage. Representative numbers:
 
-- **No network calls in unit tests.** HTTP-dependent code uses `//go:build integration` — only runs via `make test-integration`.
-- **No writes to `data/`, `report/`, or `config/`** from tests. Use `t.TempDir()` for all temporary file I/O.
-- **Race detector must pass.** Run `make test-race` before merging. All packages currently pass clean.
-- **Table-driven tests** for pure math functions; use `±ε` tolerances for floats (typically `1e-9`).
-- **Property tests** via `testing/quick` for invariants that must hold for any input (weights sum to 1.0, RSI ∈ [0, 100]).
+| Tier | Packages (illustrative) |
+|------|-------------------------|
+| **Strong (≥85%)** | `portfolio`, `marketfmt`, `rawcapture`, `costs`, `rawstore`, `attribution`, `logging`, `printer`, `tax`, `render`, `marketcal` |
+| **Moderate (45–85%)** | `cache`, `datafetcher`, `csvloader`, `edgar`, `monitoring`, `themedb`, `backtest`, `config`, `broker/schwab` |
+| **Weak / priority targets** | `stockpicker`, `optimizer`, `yfinance`, `daemon`, `pithistory`, `marketdata`, `server`, `selectiontracker`, `autopilot` |
+| **Untested glue / dormant** | `alert`, `broker` iface, `market`, `excel`, `universe`, and the India-legacy `zerodha`/`kiteclient`/`kiteauth`/`themereturn` |
 
-## Coverage Gaps
+`pkg/stockpicker` (the scoring engine, architecture Layer 3) is the highest-value gap:
+its selection and scoring logic is pure and table-testable, and a regression there is a
+strategy regression. `optimizer` (sector-cap redistribution, inverse-vol weights,
+micro-transaction filter) is second.
 
-These packages have no tests yet. Highest-value targets:
+## Integration tests
 
-| Package | Approach |
-|---------|---------|
-| `pkg/server` | `httptest.NewRecorder` for handler unit tests; `httptest.NewServer` for SSE |
-| `pkg/alert` | Mock HTTP server via `httptest.NewServer` for Telegram and Discord alerters |
-| `pkg/performance` | Use `broker.MockBroker` directly — no network needed |
-| `pkg/report` | Table-driven unit tests on `BuildRationale` — pure text generation |
-| `pkg/broker/zerodha` | Mock HTTP server with fixture JSON responses |
+Integration tests hit real endpoints and are excluded from `make test`; they run only via
+`make test-integration` (`//go:build integration`). They exist for the EDGAR client
+(`pkg/edgar/edgar_integration_test.go`, live `data.sec.gov`) and the NSE delivery-data
+fetch path (`pkg/stockpicker/delivery_invariant_integration_test.go`). Per the API
+discipline rules, live tests are the exception — kept minimal, skippable when network or
+credentials are unavailable, and preferring recorded responses (`data/raw/`) where a
+fixture suffices.
 
-## Fuzz Targets (Planned)
+## Fuzz targets (candidates)
 
-| Target | Package | Invariant |
-|--------|---------|-----------|
-| `FuzzLoadBasketCSV` | `pkg/csvloader` | No panic; error OK on bad input |
-| `FuzzGetUniverseName` | `pkg/csvloader` | Returns non-empty string |
-| `FuzzParseFundamentalsJSON` | `pkg/yfinance` | No panic |
-| `FuzzPipelineConfigYAML` | `pkg/config` | No panic |
-
-Run a fuzz target: `go test -fuzz=FuzzLoadBasketCSV -fuzztime=60s ./pkg/csvloader/`
-
-## Integration Tests
-
-Integration tests require network access and Zerodha credentials. They are excluded from `make test` and only run via `make test-integration`. Set `MYCASE_SKIP_INTEGRATION=1` to skip individual tests when network is unavailable.
-
-No integration tests are currently implemented. When added, they go in `*_integration_test.go` files with `//go:build integration` at the top.
+Parsers are the natural fuzz targets — the invariant is "no panic, error is acceptable on
+bad input": `LoadBasketCSV` and `GetUniverseName` (`pkg/csvloader`), fundamentals JSON
+parsing (`pkg/yfinance`), and `PipelineConfig` YAML (`pkg/config`). Run one with, e.g.,
+`go test -fuzz=FuzzLoadBasketCSV -fuzztime=60s ./pkg/csvloader/`.

@@ -1,8 +1,8 @@
 # Mycase — Data Sources Reference
 
-**Status**: Reference annex (API shapes, provenance, gap analysis). The *implementation plan* lives in `docs/03-roadmap.md` **Phase 10** (feature framing) and `docs/05-refactor.md` **R17** (Router-bypass cleanup); the design principle is `docs/04-architecture.md` **D15**.
-**Updated**: September 2026
-**Scope**: US equity data (India/Yahoo paths are legacy — see `docs/03-roadmap.md` Phase 4 "Dropped")
+**Scope**: US equity data. The India/Yahoo paths are legacy from the earlier multi-market design.
+
+This chapter is the reference for how market data is sourced: the data model, the real API shapes, provenance, and the gap analysis. The design principle behind it — *source each data type from the most authoritative provider that can supply it* — is recorded as decision **D15** in `docs/04-architecture.md`.
 
 ---
 
@@ -32,7 +32,7 @@ The short answers:
 - Even the routed path degrades: Schwab's fundamentals are a **thin TTM snapshot** with no sector, no cash-flow statement, and no annual series. See [§5](#5-capability-matrix--gap-analysis).
 - Yahoo is **not the origin** of any of this. Prices originate at the **exchanges**; fundamentals originate at the **SEC** (XBRL filings); sector is a **classification standard** (GICS, licensed; SIC, free). Yahoo is a *free, pre-cleaned aggregator* that resells a data vendor's normalized snapshot. So is Schwab's fundamentals endpoint. See [§3](#3-provenance-where-financial-data-actually-originates).
 
-The goal is an architecture where **each data type is sourced from the most authoritative provider that can supply it**, with deterministic fallback when a provider is down, and where provenance is recorded so we can audit which source fed a given number. This document is the *reference*: the data model, the real API shapes, and the gap analysis. The *plan to get there* is tracked as roadmap **Phase 10** and refactor **R17**.
+The architecture **sources each data type from the most authoritative provider that can supply it**, with deterministic fallback when a provider is down, and records provenance so we can audit which source fed a given number. This chapter is the reference: the data model, the real API shapes, and the gap analysis.
 
 ---
 
@@ -181,11 +181,11 @@ Per data type, which source can supply it — and the honest quality.
 | Regular price (for ADV) | ⚠️ via quotes | ✅ | ❌ | ❌ | Schwab quotes (wire it) |
 | Earnings / result dates | ❌ | ✅ | ⚠️ 8-K parse | ❌ | Yahoo / EDGAR 8-K |
 
-### The three real gaps
+### Three fundamentals needs and how they're met
 
-1. ~~**Sector is empty for US**~~ **✅ FIXED (Phase 10a).** `mapSchwabFundamentals` still leaves `Sector: ""`, but the constituents CSV's GICS Sector column is now carried through `TickersSource.Sectors` and backfilled by `stockpicker.InjectSectors` (fill-if-empty, so Yahoo sectors survive). Routed US stocks get their GICS sector, so sector caps engage instead of collapsing to `"Unknown"`.
-2. **Operating cash flow & annual series are absent from Schwab.** ~~Earnings-quality degrades to an FCF proxy; ROIC always uses the ROA/ROE fallback instead of the preferred NOPAT/invested-capital calc.~~ **✅ FIXED (Phase 10c).** The `pkg/edgar` client sources operating cash flow, net income, authoritative free cash flow (OCF − capex), and the full annual series (operating income, assets, current liabilities, revenue, gross profit, PPE, receivables, capex, interest expense) from SEC EDGAR XBRL `companyfacts`, and the `datafetcher` merger overlays them onto Schwab's TTM ratios. Opt-in (`edgar.enabled` in `config/defaults.json`, default false).
-3. ~~**Two fields Schwab could supply but the mapper drops**~~ **✅ FIXED (Phase 10a).** `mapSchwabFundamentals` now derives `NetIncome` (`revenueTTM × netProfitMarginTTM/100`) and `RegularPrice` (`marketCap / sharesOutstanding`, guarded). These are *derived* values; authoritative statement-level figures still come from EDGAR in Phase 10c.
+1. **US sector.** `mapSchwabFundamentals` leaves `Sector: ""`, so the sector comes from the constituents CSV's GICS Sector column, carried through `TickersSource.Sectors` and backfilled by `stockpicker.InjectSectors` (fill-if-empty, so Yahoo sectors survive). Routed US stocks get their GICS sector, and sector caps engage instead of collapsing to `"Unknown"`.
+2. **Operating cash flow & annual series.** Schwab supplies neither, so the `pkg/edgar` client sources operating cash flow, net income, authoritative free cash flow (OCF − capex), and the full annual series (operating income, assets, current liabilities, revenue, gross profit, PPE, receivables, capex, interest expense) from SEC EDGAR XBRL `companyfacts`, and the `datafetcher` merger overlays them onto Schwab's TTM ratios. This lifts earnings-quality and ROIC off proxies onto real statement inputs. Gated by `edgar.enabled` in `config/defaults.json` (default `true`).
+3. **Derived fields Schwab reports indirectly.** `mapSchwabFundamentals` derives `NetIncome` (`revenueTTM × netProfitMarginTTM/100`) and `RegularPrice` (`marketCap / sharesOutstanding`, guarded). These are *derived*; authoritative statement-level figures come from EDGAR (gap 2).
 
 ---
 
@@ -230,7 +230,7 @@ The DuckDB cache now carries a `source VARCHAR` column on both `prices` and `fun
 
 ## 7. Architecture Direction & Rollout
 
-> The detailed phase breakdown, effort, and sequencing live in **`docs/03-roadmap.md` Phase 10** and **`docs/05-refactor.md` R17**; the design principle is **`docs/04-architecture.md` D15**. This section keeps only the durable design shapes those phases implement.
+> This section keeps the durable design shapes of the data-sourcing architecture. Design decision **D15** in `docs/04-architecture.md` records the rationale.
 
 ### Principle: source per data type, not per market
 
