@@ -16,10 +16,13 @@
 //     marketdata, cache, and selectiontracker can all consume it downward
 //     instead of each duplicating the settlement math. See
 //     .kiro/steering/architecture.md and devtools/internal/layers/layers.go.
-//   - The calculation is calendar-only: it handles weekends but NOT exchange
-//     holidays. Holiday-calendar awareness (NYSE/NSE holiday lists) is a
-//     deliberate future extension; today a holiday is treated as a normal
-//     trading day. This matches the pre-existing behavior it replaces.
+//   - The calculation is calendar-aware: it always handles weekends, and can
+//     additionally skip exchange holidays when a holiday set is attached to the
+//     Clock via WithHolidays. A bare Clock (NSE/NYSE package vars) has no
+//     holidays and treats every weekday as a trading day — the original
+//     behavior. Holiday data is *injected* from a higher layer (which loads it
+//     from config/holidays.json); this leaf never reads a file, preserving its
+//     zero-import, bottom-of-the-stack position.
 //   - Times are resolved via time.LoadLocation (DST-aware) with a fixed-offset
 //     fallback if the tz database is unavailable. India observes no DST so its
 //     behavior is identical to the previous FixedZone("IST", 5h30m) code; the
@@ -35,9 +38,48 @@ import (
 // market settles in, and the local hour (0–23) at which a trading day's EOD is
 // considered settled. A trading day is "settled" once local time reaches
 // CutoffHour:00 on that day.
+//
+// Holidays is an optional set of exchange holidays keyed by "2006-01-02" in the
+// clock's own timezone. When nil (the default for the NSE/NYSE package vars),
+// only weekends are treated as non-trading days. Populate it via WithHolidays.
 type Clock struct {
 	Loc        *time.Location
 	CutoffHour int
+	Holidays   map[string]bool
+}
+
+// WithHolidays returns a copy of the clock with the given holiday dates attached
+// (each formatted "2006-01-02", interpreted in the clock's timezone). It does
+// not mutate the receiver, so the shared NSE/NYSE package vars stay pristine —
+// a caller loads config/holidays.json at a higher layer and calls
+// marketcal.NYSE.WithHolidays(dates...) to get a holiday-aware clock. Passing no
+// dates returns an equivalent clock with an empty (non-nil) set.
+func (c Clock) WithHolidays(dates ...string) Clock {
+	set := make(map[string]bool, len(dates))
+	for _, d := range dates {
+		if d = strings.TrimSpace(d); d != "" {
+			set[d] = true
+		}
+	}
+	c.Holidays = set
+	return c
+}
+
+// isNonTradingDay reports whether local (already in the clock's tz) falls on a
+// weekend or an attached exchange holiday.
+func (c Clock) isNonTradingDay(local time.Time) bool {
+	if local.Weekday() == time.Saturday || local.Weekday() == time.Sunday {
+		return true
+	}
+	return c.Holidays[local.Format("2006-01-02")]
+}
+
+// IsTradingDay reports whether t's calendar date (in the clock's timezone) is a
+// trading day: a weekday that is not an attached exchange holiday. This is the
+// single authority for "is the market open today?" — daemon scheduling and the
+// autopilot trading-day gate both consult it.
+func (c Clock) IsTradingDay(t time.Time) bool {
+	return !c.isNonTradingDay(t.In(c.Loc))
 }
 
 func mustLoad(name string, fallbackOffsetSec int) *time.Location {
@@ -82,11 +124,11 @@ func (c Clock) atCutoff(d time.Time) time.Time {
 // LastSettledEOD returns the timestamp of the most recent completed EOD
 // settlement cutoff at or before t.
 //
-// The rule (expressed once, weekend-aware): interpret t in the market's
-// timezone; if it is before today's cutoff hour, today has not settled yet so
-// step back a day; then walk back over any weekend days (no settlement on
-// Saturday/Sunday) to the most recent weekday. The result is that weekday's
-// cutoff timestamp.
+// The rule (expressed once, weekend- and holiday-aware): interpret t in the
+// market's timezone; if it is before today's cutoff hour, today has not settled
+// yet so step back a day; then walk back over any non-trading days (weekends and
+// attached exchange holidays) to the most recent trading day. The result is that
+// day's cutoff timestamp.
 func (c Clock) LastSettledEOD(t time.Time) time.Time {
 	local := t.In(c.Loc)
 
@@ -94,8 +136,8 @@ func (c Clock) LastSettledEOD(t time.Time) time.Time {
 	if local.Hour() < c.CutoffHour {
 		local = local.AddDate(0, 0, -1)
 	}
-	// Walk back over weekend days (markets don't settle Sat/Sun).
-	for local.Weekday() == time.Saturday || local.Weekday() == time.Sunday {
+	// Walk back over non-trading days (weekends + holidays).
+	for c.isNonTradingDay(local) {
 		local = local.AddDate(0, 0, -1)
 	}
 	return c.atCutoff(local)
@@ -117,17 +159,18 @@ func (c Clock) SettlementDate(t time.Time) time.Time {
 
 // NextEODAvailable returns the timestamp at which the next EOD file will become
 // available (the next settlement cutoff strictly after the current one),
-// skipping weekends. If t is before today's cutoff on a weekday, that is today's
-// cutoff; otherwise it is the next trading day's cutoff.
+// skipping non-trading days (weekends and attached exchange holidays). If t is
+// before today's cutoff on a trading day, that is today's cutoff; otherwise it
+// is the next trading day's cutoff.
 func (c Clock) NextEODAvailable(t time.Time) time.Time {
 	local := t.In(c.Loc)
 
-	// Candidate is today's cutoff if we're still before it on a weekday;
+	// Candidate is today's cutoff if we're still before it on a trading day;
 	// otherwise advance to the next calendar day and search forward.
 	if local.Hour() >= c.CutoffHour {
 		local = local.AddDate(0, 0, 1)
 	}
-	for local.Weekday() == time.Saturday || local.Weekday() == time.Sunday {
+	for c.isNonTradingDay(local) {
 		local = local.AddDate(0, 0, 1)
 	}
 	return c.atCutoff(local)

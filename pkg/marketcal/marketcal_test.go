@@ -164,3 +164,83 @@ func TestClockForTicker(t *testing.T) {
 		}
 	}
 }
+
+
+func TestIsTradingDay_WeekendsAndHolidays(t *testing.T) {
+	ist := istZone()
+	// NSE with no holidays: only weekends are non-trading.
+	tests := []struct {
+		name string
+		clk  Clock
+		day  time.Time
+		want bool
+	}{
+		{"weekday, no holidays", NSE, time.Date(2026, 9, 15, 10, 0, 0, 0, ist), true},
+		{"saturday", NSE, time.Date(2026, 9, 12, 10, 0, 0, 0, ist), false},
+		{"sunday", NSE, time.Date(2026, 9, 13, 10, 0, 0, 0, ist), false},
+		{"weekday that is a holiday", NSE.WithHolidays("2026-10-02"), time.Date(2026, 10, 2, 10, 0, 0, 0, ist), false},
+		{"weekday not in holiday set", NSE.WithHolidays("2026-10-02"), time.Date(2026, 10, 1, 10, 0, 0, 0, ist), true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.clk.IsTradingDay(tc.day); got != tc.want {
+				t.Errorf("IsTradingDay(%v) = %v, want %v", tc.day, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestWithHolidays_Immutable proves WithHolidays does not mutate the shared
+// package var — the NSE var must stay holiday-free after deriving a copy.
+func TestWithHolidays_Immutable(t *testing.T) {
+	ist := istZone()
+	holiday := time.Date(2026, 10, 2, 10, 0, 0, 0, ist) // a Friday
+	withHol := NSE.WithHolidays("2026-10-02")
+
+	if withHol.IsTradingDay(holiday) {
+		t.Error("derived clock should treat 2026-10-02 as a holiday")
+	}
+	if !NSE.IsTradingDay(holiday) {
+		t.Error("shared NSE var must remain holiday-free (WithHolidays mutated the receiver)")
+	}
+	if NSE.Holidays != nil {
+		t.Errorf("NSE.Holidays should stay nil, got %v", NSE.Holidays)
+	}
+}
+
+// TestLastSettledEOD_SkipsHoliday proves the settlement walk-back steps over an
+// exchange holiday, not just weekends. With Oct 2 (Fri) a holiday, a query on
+// Oct 2 before/after cutoff and the following weekend all settle to Oct 1 (Thu).
+func TestLastSettledEOD_SkipsHoliday(t *testing.T) {
+	ist := istZone()
+	nse := NSE.WithHolidays("2026-10-02")
+	tests := []struct {
+		name     string
+		input    time.Time
+		wantDate string
+	}{
+		{"Fri Oct 2 22:00 (holiday, after cutoff) -> Thu Oct 1", time.Date(2026, 10, 2, 22, 0, 0, 0, ist), "2026-10-01"},
+		{"Sat Oct 3 10:00 -> Thu Oct 1 (skip Fri holiday + weekend)", time.Date(2026, 10, 3, 10, 0, 0, 0, ist), "2026-10-01"},
+		{"Mon Oct 5 10:00 (before cutoff) -> Thu Oct 1", time.Date(2026, 10, 5, 10, 0, 0, 0, ist), "2026-10-01"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := nse.SettlementDate(tc.input).Format("2006-01-02")
+			if got != tc.wantDate {
+				t.Errorf("SettlementDate(%v) = %s, want %s", tc.input, got, tc.wantDate)
+			}
+		})
+	}
+}
+
+// TestNextEODAvailable_SkipsHoliday proves the forward search skips a holiday.
+// After Thursday's cutoff, with Friday Oct 2 a holiday, the next EOD is Monday.
+func TestNextEODAvailable_SkipsHoliday(t *testing.T) {
+	ist := istZone()
+	nse := NSE.WithHolidays("2026-10-02")
+	// Thursday Oct 1 21:15 (after cutoff) -> next is Monday Oct 5 21:00.
+	got := nse.NextEODAvailable(time.Date(2026, 10, 1, 21, 15, 0, 0, ist)).Format("2006-01-02 15:04")
+	if got != "2026-10-05 21:00" {
+		t.Errorf("NextEODAvailable after Thu cutoff with Fri holiday = %s, want 2026-10-05 21:00", got)
+	}
+}
