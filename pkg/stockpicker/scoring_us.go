@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"math"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/raghavkgarg/mycase/pkg/config"
@@ -238,8 +239,16 @@ func SelectTopNUSQMWithCooldown(
 		if f.MarketCap > 0 && f.FreeCashflow > 0 {
 			fcfY = (f.FreeCashflow / f.MarketCap) * 100.0
 		}
-		driverStr := fmt.Sprintf("ROE: %.1f%%, FCF Yield: %.1f%%, OpMargin: %.1f%%",
-			f.ROE*100.0, fcfY, f.OperatingMargins*100.0)
+		// ROE display: negative book equity (P/B < 0, from heavy buybacks) makes
+		// the reported ROE economically meaningless, so label it rather than print
+		// an absurd percentage (e.g. +5862%). Scoring already ignores it (see
+		// computeROIC), this only keeps the transparency report honest.
+		roeStr := fmt.Sprintf("%.1f%%", f.ROE*100.0)
+		if f.PBRatio < 0 {
+			roeStr = "n/m (neg. book equity)"
+		}
+		driverStr := fmt.Sprintf("ROE: %s, FCF Yield: %.1f%%, OpMargin: %.1f%%",
+			roeStr, fcfY, f.OperatingMargins*100.0)
 		tracker.RecordAdditionDriver(t, driverStr)
 		// Momentum (12-mo skip-1-mo) and RSI (14-day) are recomputed here from
 		// price history so they persist to the selections table for transparency
@@ -362,8 +371,17 @@ func ApplyUSHardFilters(
 			}
 		}
 
-		// 3. Positive Free Cash Flow (hard requirement for quality)
-		if hardFilters.MinFCF != nil && f.FreeCashflow <= *hardFilters.MinFCF {
+		// 3. Positive Free Cash Flow (hard requirement for quality).
+		// Exempt Financials and Real Estate (REITs): they do not report capex in
+		// the industrial sense, so the authoritative OCF−capex FCF is structurally
+		// 0/undefined for them (verified against EDGAR — banks/insurers/REITs carry
+		// no PaymentsToAcquire* tag). Gating them on positive FCF would wrongly
+		// eliminate the entire financial/REIT sleeve. They remain subject to the
+		// market-cap and ADV gates and to full scoring (they simply earn no
+		// FCF-yield credit, which is fair given no meaningful FCF exists).
+		if isFCFExemptSector(f.Sector) {
+			slog.DebugContext(ctx, "filter.us_fcf_exempt", "ticker", t, "sector", f.Sector)
+		} else if hardFilters.MinFCF != nil && f.FreeCashflow <= *hardFilters.MinFCF {
 			tracker.RecordSafetyDrop(t, fmt.Sprintf("FCF $%.0fM ≤ 0", f.FreeCashflow/1e6))
 			eliminated++
 			continue
@@ -379,6 +397,20 @@ func ApplyUSHardFilters(
 
 	slog.InfoContext(ctx, "filter.us_hard_filters", "eliminated", eliminated, "remaining", len(passed))
 	return passed
+}
+
+// isFCFExemptSector reports whether a GICS sector should be exempt from the
+// positive-free-cash-flow hard filter. Financials (banks, insurers, capital
+// markets) and Real Estate (REITs) do not report capital expenditure in the
+// industrial sense, so the authoritative OCF−capex free-cash-flow figure is
+// structurally 0 or undefined for them. Applying a positive-FCF gate would
+// eliminate those entire sectors regardless of quality. Case-insensitive; also
+// accepts the "Financial Services" label variant via yfinance.IsFinancialSector.
+func isFCFExemptSector(sector string) bool {
+	if yfinance.IsFinancialSector(sector) {
+		return true
+	}
+	return strings.EqualFold(sector, "Real Estate")
 }
 
 // --- Helper functions for US scoring ---
@@ -400,17 +432,44 @@ func computeROIC(f *yfinance.Fundamentals) float64 {
 		if investedCapital > 0 {
 			// Approximate NOPAT as EBIT * (1 - assumed 21% US corporate tax rate)
 			nopat := latestEBIT * 0.79
-			return nopat / investedCapital
+			return clampROIC(nopat / investedCapital)
 		}
 	}
 
-	// Fallback: use ReturnOnAssets if available (better proxy than ROE for ROIC)
+	// Fallback: use ReturnOnAssets if available (better proxy than ROE for ROIC).
+	// ROA is not distorted by capital structure, so it stays meaningful even for
+	// heavy-buyback firms whose book equity has gone negative.
 	if f.ReturnOnAssets > 0 {
-		return f.ReturnOnAssets
+		return clampROIC(f.ReturnOnAssets)
 	}
 
-	// Last resort: use ROE (incorporates leverage, but still informative for ranking)
-	return f.ROE
+	// Last resort: ROE — but ONLY when book equity is positive. Firms with
+	// negative book value (e.g. Masco, McKesson, Booking: massive buybacks push
+	// equity below zero) report economically meaningless ROE — a tiny/negative
+	// denominator yields absurd values (MAS +5862%, MCK −490%). Feeding those
+	// into the min-max ROIC normalization would blow out the range and squash
+	// every other stock's ROIC score. A negative P/B is the tell for negative
+	// book equity; in that case ROE is unusable, so return a neutral 0 (no ROIC
+	// signal) rather than an outlier.
+	if f.PBRatio > 0 {
+		return clampROIC(f.ROE)
+	}
+	return 0
+}
+
+// clampROIC bounds a capital-efficiency ratio to a sane band. Real firms almost
+// never sustain ROIC/ROA/ROE beyond ±100%; values outside that are data
+// artifacts (negative/near-zero denominators). Clamping keeps a single bad input
+// from dominating the cross-sectional min-max normalization.
+func clampROIC(v float64) float64 {
+	const lo, hi = -1.0, 1.0
+	if v < lo {
+		return lo
+	}
+	if v > hi {
+		return hi
+	}
+	return v
 }
 
 // computeMomentumSkip1Mo calculates 12-month price return excluding the most recent month.

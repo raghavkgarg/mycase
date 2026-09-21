@@ -1,8 +1,8 @@
 // Package edgar is a low-level client for SEC EDGAR's public data API
 // (data.sec.gov / www.sec.gov), used to source authoritative US fundamentals
 // (operating cash flow, net income, and annual statement series) that Schwab's
-// thin TTM fundamentals endpoint cannot supply. See docs/edgar-design.md and
-// docs/datasources.md §4.3.
+// thin TTM fundamentals endpoint cannot supply. See docs/08-edgar-design.md and
+// docs/07-datasources.md §4.3.
 //
 // Layering: this is a Layer-1 package. It imports only the leaf packages
 // marketdata (the shared Fundamentals DTO it populates) and cache (for its own

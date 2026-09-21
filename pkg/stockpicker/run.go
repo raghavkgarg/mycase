@@ -72,10 +72,11 @@ func RunWithResult(ctx context.Context, opts *Options) (*PickResult, error) {
 	if err != nil {
 		return nil, fmt.Errorf("loading constituents: %w", err)
 	}
-	displayNameVal := tickersSrc.Name
-	if opts.DisplayName != "" {
-		displayNameVal = opts.DisplayName
-	}
+	// Resolve the run's identity honoring the flags the user passed: --name wins,
+	// else --index anchors it, else the loaded (file-derived) source name. This
+	// stops a --file CSV's filename from shadowing an explicit --index (the
+	// historical us_microsmall_multibagger mis-filing).
+	displayNameVal := DisplayName(opts, tickersSrc.Name)
 	basedOnStr := opts.BasedOn
 	if basedOnStr == "" {
 		if opts.AsOfDate != "" {
@@ -313,17 +314,18 @@ func RunWithResult(ctx context.Context, opts *Options) (*PickResult, error) {
 	}
 
 	prevDrivers := loadPreviousDriverStrings(ctx, displayNameVal, opts.Method)
-	if err := tracker.SaveReport(displayNameVal, opts.Method, goldenWeights, sectors, finalWeights, resultDates, prevDrivers); err != nil {
+	if err := tracker.SaveReport(PickIdentity(displayNameVal, opts.Method), displayNameVal, opts.Method, goldenWeights, sectors, finalWeights, resultDates, prevDrivers); err != nil {
 		slog.WarnContext(ctx, "pick.report_save_failed", "err", err)
 	}
 
 	outPath := opts.OutputFile
 	if outPath == "" {
+		identity := PickIdentity(displayNameVal, opts.Method)
 		if opts.FilePath != "" {
 			dateStr := time.Now().Format("20060102")
-			outPath = filepath.Join("data", "candidates", "proposals", fmt.Sprintf("%s_%s_%s.csv", dateStr, displayNameVal, opts.Method))
+			outPath = filepath.Join("data", "candidates", "proposals", fmt.Sprintf("%s_%s.csv", dateStr, identity))
 		} else {
-			outPath = filepath.Join("data", "candidates", "index_picks", fmt.Sprintf("%s_%s.csv", displayNameVal, opts.Method))
+			outPath = filepath.Join("data", "candidates", "index_picks", fmt.Sprintf("%s.csv", identity))
 		}
 	}
 	if err := SavePortfolioToCSV(selectedKeys, finalWeights, outPath); err != nil {
@@ -334,12 +336,14 @@ func RunWithResult(ctx context.Context, opts *Options) (*PickResult, error) {
 	// below the regime hurdle, ranked by hurdle gap + VCP tightness. Written on
 	// every earlymb run so pullback regimes still surface coiling setups.
 	if opts.Method == "earlymb" || opts.Method == "early_multibagger" {
-		incubatorPath := filepath.Join("data", "candidates", "index_picks", fmt.Sprintf("%s_%s_incubator.csv", displayNameVal, opts.Method))
+		incubatorPath := filepath.Join("data", "candidates", "index_picks", fmt.Sprintf("%s_incubator.csv", PickIdentity(displayNameVal, opts.Method)))
 		_, _ = GenerateIncubatorWatchlist(activeKeys, scores, fundamentals, fullHistory, tracker, incubatorPath)
 	}
 
 	if opts.GoldenPath != "" && len(goldenWeights) > 0 {
-		csvloader.PrintComparisonReport(outPath, opts.GoldenPath, opts.Method)
+		prevRanks := loadPreviousRankScores(ctx, displayNameVal, opts.Method)
+		currRanks := currentRankScores(selectedKeys, tracker.RawRanks, scores)
+		csvloader.PrintComparisonReport(outPath, opts.GoldenPath, opts.Method, prevRanks, currRanks)
 	}
 
 	// Build result for callers that want structured data (e.g., DuckDB persistence).
@@ -393,6 +397,38 @@ func loadPreviousDriverStrings(ctx context.Context, portfolio, method string) ma
 	out := make(map[string]string, len(prev))
 	for _, s := range prev {
 		out[s.Ticker] = formatDriverStringFromMetrics(method, s)
+	}
+	return out
+}
+
+// loadPreviousRankScores returns the previous completed run's ticker → rank/score
+// for the golden-copy comparison report, sourced from the structured DuckDB
+// selections history (cache.GetPreviousSelections) rather than re-parsing the
+// prior text report. Returns nil when the cache is unavailable or there is no
+// prior run — PrintComparisonReport treats nil as "no previous run".
+func loadPreviousRankScores(ctx context.Context, portfolio, method string) map[string]csvloader.RankScore {
+	db := cache.GetDB()
+	if db == nil {
+		return nil
+	}
+	prev, err := db.GetPreviousSelections(ctx, portfolio, method)
+	if err != nil || len(prev) == 0 {
+		return nil
+	}
+	out := make(map[string]csvloader.RankScore, len(prev))
+	for _, s := range prev {
+		out[s.Ticker] = csvloader.RankScore{Rank: s.Rank, Score: s.Score}
+	}
+	return out
+}
+
+// currentRankScores builds the current run's ticker → rank/score for the
+// golden-copy comparison from in-memory selection state (the pick path has no
+// run_id of its own, so current values come from memory, not a DB round-trip).
+func currentRankScores(selectedKeys []string, ranks map[string]int, scores map[string]float64) map[string]csvloader.RankScore {
+	out := make(map[string]csvloader.RankScore, len(selectedKeys))
+	for _, k := range selectedKeys {
+		out[k] = csvloader.RankScore{Rank: ranks[k], Score: scores[k]}
 	}
 	return out
 }

@@ -67,7 +67,7 @@ type Instrument struct {
 // Fundamental holds fundamental data from Schwab's instrument search.
 type Fundamental struct {
 	Symbol               string  `json:"symbol"`
-	MarketCap            float64 `json:"marketCap"` // in millions
+	MarketCap            float64 `json:"marketCap"` // absolute dollars (NOT millions — verified against live wire)
 	PeRatio              float64 `json:"peRatio"`
 	PegRatio             float64 `json:"pegRatio"`
 	PbRatio              float64 `json:"pbRatio"`
@@ -82,9 +82,10 @@ type Fundamental struct {
 	DebtToCapital        float64 `json:"debtToCapital"`
 	TotalDebtToEquity    float64 `json:"totalDebtToEquity"`
 	EpsTTM               float64 `json:"epsTTM"`
-	RevenueTTM           float64 `json:"revenueTTM"` // total revenue TTM
+	RevenueTTM           float64 `json:"revenueTTM"` // total revenue TTM (often absent on the wire → 0; EDGAR fills it)
 	Vol10DayAvg          float64 `json:"vol10DayAvg"`
-	Vol3MonthAvg         float64 `json:"vol3MonthAvg"`
+	Vol3MonthAvg         float64 `json:"vol3MonthAvg"`    // Schwab sends 0 here; real value is in Avg3MonthVolume
+	Avg3MonthVolume      float64 `json:"avg3MonthVolume"` // actual 3-month average daily share volume
 	Beta                 float64 `json:"beta"`
 	SharesOutstanding    float64 `json:"sharesOutstanding"`
 	BookValuePerShare    float64 `json:"bookValuePerShare"`

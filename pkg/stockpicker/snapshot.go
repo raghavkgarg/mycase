@@ -44,7 +44,7 @@ func SaveRunSnapshot(snap *PITRunSnapshot) (string, error) {
 	if err := os.MkdirAll(PITSnapshotDir, 0755); err != nil {
 		return "", err
 	}
-	cleanIndex := strings.NewReplacer(",", "_", " ", "_", "^", "").Replace(snap.IndexName)
+	cleanIndex := SanitizeName(snap.IndexName)
 	fileName := fmt.Sprintf("%s_%s_%s.json", cleanIndex, snap.Method, snap.AsOfDate)
 	filePath := filepath.Join(PITSnapshotDir, fileName)
 
@@ -62,7 +62,7 @@ func LoadPreviousSnapshot(indexName, method, currentDateStr string) (*PITRunSnap
 	if err := os.MkdirAll(PITSnapshotDir, 0755); err != nil {
 		return nil, err
 	}
-	cleanIndex := strings.NewReplacer(",", "_", " ", "_", "^", "").Replace(indexName)
+	cleanIndex := SanitizeName(indexName)
 	prefix := fmt.Sprintf("%s_%s_", cleanIndex, method)
 
 	entries, err := os.ReadDir(PITSnapshotDir)

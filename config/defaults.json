@@ -13,9 +13,13 @@
     "retain_days": 14
   },
   "edgar": {
-    "enabled": false,
-    "user_agent": "mycase/1.0 (set-your-contact@example.com)",
+    "enabled": true,
+    "user_agent": "mycase/1.0 (gkgarg24@yahoo.com)",
     "facts_ttl_days": 80,
     "cik_ttl_days": 7
+  },
+  "raw": {
+    "retain_days": 14,
+    "max_size_mb": 512
   }
 }

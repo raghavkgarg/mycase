@@ -4,7 +4,7 @@ import "github.com/raghavkgarg/mycase/pkg/marketdata"
 
 // mergeFundamentals composes a US ticker's fundamentals from a Schwab base and
 // an EDGAR statement overlay, per the Phase 10c source-of-record precedence
-// (docs/edgar-design.md §4):
+// (docs/08-edgar-design.md §4):
 //
 //  1. Schwab TTM ratios (ROE, ROA, margins, P/E, P/B, beta, market cap, div
 //     yield, shares/volume) are the base — Schwab is fine for these.

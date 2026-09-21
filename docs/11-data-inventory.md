@@ -14,7 +14,6 @@ This document provides a comprehensive, file-by-file and directory-by-directory 
 ```
 data/
 ├── mycase.db                           # [REQUIRED] Consolidated DuckDB master database
-├── cache.db                            # [OBSOLETE] Legacy cache database (migrated to mycase.db)
 ├── pit_history.db                      # [OBSOLETE] Legacy PIT database (migrated to mycase.db)
 │
 ├── aitheme.csv                         # [REQUIRED] Golden theme copy (Theme AI Advice)
@@ -86,11 +85,11 @@ data/
   - PIT scores are repopulated by running `mycase pit update`.
   - Theme rebalances are synced from proposal files via `mycase theme sync`.
 
-#### `data/cache.db` (49.2 MB)
-* **Status**: **OBSOLETE / SAFE TO DELETE**
-* **What it is**: The old standalone cache database used prior to database consolidation.
-* **Why it is redundant**: 100% of its contents (`prices`, `fundamentals`, `cache_meta`, `pipeline_runs`, `index_picks`, `proposals`, `selections`) have been migrated into `data/mycase.db`. All Go code and server routes have been redirected to `mycase.db`.
-* **Recreation**: Not needed. All data already exists inside `data/mycase.db`.
+#### `data/cache.db` — RETIRED (2026-09-20)
+* **Status**: **DELETED** — retired on 2026-09-20; backed up to `data/backups/cache_db_retired_20260920.tar.gz`.
+* **What it was**: The old standalone cache database used prior to database consolidation.
+* **Why it was redundant**: 100% of its contents (`prices`, `fundamentals`, `cache_meta`, `pipeline_runs`, `index_picks`, `proposals`, `selections`) had been migrated into `data/mycase.db`. Its only unique tables (`tax_lots`, `tax_transactions`, `realized_gains`) were empty and are recreated lazily in `mycase.db` by `pkg/tax.Store`. All Go code and server routes read `mycase.db`; only the on-demand `mycase db migrate` command ever opened `cache.db` (read-only).
+* **Recreation**: Not needed. Market cache is re-fetchable; all state lives in `data/mycase.db`.
 
 #### `data/pit_history.db` (4.4 MB)
 * **Status**: **OBSOLETE / SAFE TO DELETE**

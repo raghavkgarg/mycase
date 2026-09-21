@@ -5,7 +5,7 @@
 ## Feature 1: Tax-Optimized Rebalancing & FIFO Capital Gains Engine
 
 ### Overview
-This specification details the design for **Tax-Optimized Rebalancing** as outlined in [`docs/vision.md`](file:///Users/raghavgarg/Projects/myGo/mycase/docs/vision.md).
+This specification details the design for **Tax-Optimized Rebalancing** as outlined in [`docs/01-vision.md`](file:///Users/raghavgarg/Projects/myGo/mycase/docs/01-vision.md).
 
 While the `mycase basket` command provides general tax warnings, broker APIs do not expose historical tax lots. This feature introduces:
 1. Zerodha Console Tradebook CSV parsing.

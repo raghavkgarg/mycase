@@ -6,6 +6,7 @@ import (
 
 	"github.com/urfave/cli/v3"
 
+	"github.com/raghavkgarg/mycase/pkg/broker/schwab"
 	"github.com/raghavkgarg/mycase/pkg/cache"
 	"github.com/raghavkgarg/mycase/pkg/config"
 	"github.com/raghavkgarg/mycase/pkg/server"
@@ -29,6 +30,7 @@ var ServeCommand = &cli.Command{
 		var dc *cache.Cache
 		if cc, err := cache.Open(config.DataPath("mycase.db")); err == nil {
 			yfinance.SetCache(cc)
+			schwab.SetCache(cc)
 			dc = cc
 			defer dc.Close()
 		}

@@ -15,6 +15,7 @@ import (
 
 	"github.com/raghavkgarg/mycase/pkg/config"
 	"github.com/raghavkgarg/mycase/pkg/marketdata"
+	"github.com/raghavkgarg/mycase/pkg/marketfmt"
 	"github.com/raghavkgarg/mycase/pkg/yfinance"
 )
 
@@ -42,11 +43,15 @@ func PrintHeader(displayName, method string, topN int, rangeStr, filePath string
 }
 
 // PrintSafetyFilterSummary renders the stats from applying hard filters.
-func PrintSafetyFilterSummary(hardFilters *config.HardFilters, stats FilterStats, method string, remaining, total int) {
+func PrintSafetyFilterSummary(hardFilters *config.HardFilters, stats FilterStats, method string, remaining, total int, mkt marketfmt.Market) {
+	maxCapLabel := "no cap"
+	if hardFilters.MaxMarketCap > 0 {
+		maxCapLabel = marketfmt.CompactNum(hardFilters.MaxMarketCap, mkt)
+	}
 	fmt.Printf("\nApplying Hard Filters defined in mfs.json to %d constituents...\n", total)
 	fmt.Printf("Hard Filter Summary:\n")
-	fmt.Printf("- Market Cap (%.0fCr - %.0fCr) eliminated: %d stocks\n", hardFilters.MinMarketCap/1e7, hardFilters.MaxMarketCap/1e7, stats.EliminatedSize)
-	fmt.Printf("- ADV (< %.0fCr) eliminated:               %d stocks\n", hardFilters.MinADV/1e7, stats.EliminatedLiquidity)
+	fmt.Printf("- Market Cap (%s - %s) eliminated: %d stocks\n", marketfmt.CompactNum(hardFilters.MinMarketCap, mkt), maxCapLabel, stats.EliminatedSize)
+	fmt.Printf("- ADV (< %s) eliminated:               %d stocks\n", marketfmt.CompactNum(hardFilters.MinADV, mkt), stats.EliminatedLiquidity)
 	fmt.Printf("- Cash Flow Quality eliminated:            %d stocks\n", stats.EliminatedCashFlow)
 	fmt.Printf("- Declining Earnings Trend eliminated:    %d stocks\n", stats.EliminatedEarningsTrend)
 	fmt.Printf("- Low Promoter Stake (< %.0f%%) eliminated:  %d stocks\n", hardFilters.MinPromoterPercent*100.0, stats.EliminatedPromoter)

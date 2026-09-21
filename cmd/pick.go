@@ -200,16 +200,19 @@ func runPickWithOpts(ctx context.Context, opts *stockpicker.Options) error {
 
 // displayCachedRunOutput loads and renders the previous run's results without any network I/O.
 func displayCachedRunOutput(ctx context.Context, pitDB *pithistory.DB, opts *stockpicker.Options, basedOnStr string) {
-	displayNameVal := opts.IndexName
-	if opts.DisplayName != "" {
-		displayNameVal = opts.DisplayName
+	// Resolve the same identity the writer used so we read from the directory the
+	// run was actually filed under (honors --name/--index over a --file name).
+	loadedName := opts.IndexName
+	if opts.FilePath != "" {
+		loadedName = stockpicker.GetUniverseName(opts.FilePath)
 	}
+	displayNameVal := stockpicker.DisplayName(opts, loadedName)
+	identity := stockpicker.PickIdentity(displayNameVal, opts.Method)
 
 	cleanIndex := strings.NewReplacer(",", "_", " ", "_", "^", "").Replace(opts.IndexName)
 
 	// 1. Try loading and printing the saved selection explanation report file
-	safeName := strings.ReplaceAll(strings.ToLower(cleanIndex), " ", "_")
-	reportDir := filepath.Join("report", fmt.Sprintf("%s_%s", safeName, opts.Method), "executions")
+	reportDir := filepath.Join("report", identity, "executions")
 	dateStr := strings.ReplaceAll(opts.AsOfDate, "-", "")
 
 	matches, _ := filepath.Glob(filepath.Join(reportDir, fmt.Sprintf("%s_*_selection_reasons.txt", dateStr)))
@@ -245,11 +248,11 @@ func displayCachedRunOutput(ctx context.Context, pitDB *pithistory.DB, opts *sto
 			stockpicker.PrintHeader(displayNameVal, opts.Method, opts.TopN, opts.RangeStr, opts.FilePath, basedOnStr)
 			fmt.Print(reportText)
 			fmt.Printf("\nSelection explanation report loaded from %s\n", latestReport)
-			portfolioPath := filepath.Join("data", "candidates", "index_picks", fmt.Sprintf("%s_%s.csv", cleanIndex, opts.Method))
+			portfolioPath := filepath.Join("data", "candidates", "index_picks", fmt.Sprintf("%s.csv", identity))
 			if _, pErr := os.Stat(portfolioPath); pErr == nil {
 				fmt.Printf("Portfolio CSV: %s\n", portfolioPath)
 			}
-			incubatorPath := filepath.Join("data", "candidates", "index_picks", fmt.Sprintf("%s_%s_incubator.csv", cleanIndex, opts.Method))
+			incubatorPath := filepath.Join("data", "candidates", "index_picks", fmt.Sprintf("%s_incubator.csv", identity))
 			if _, iErr := os.Stat(incubatorPath); iErr == nil {
 				fmt.Printf("Incubator Watchlist: %s\n", incubatorPath)
 			}

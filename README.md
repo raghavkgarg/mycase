@@ -117,6 +117,6 @@ Or run `mycase auth` to generate the access token from your API key and request 
 
 ## Docs
 
-- [`docs/architecture.md`](docs/architecture.md) — algorithms, subtle implementation details, design decisions
-- [`docs/runbook.md`](docs/runbook.md) — usage guide, common workflows, all flags
-- [`docs/refactor.md`](docs/refactor.md) — implementation history and phase notes
+- [`docs/04-architecture.md`](docs/04-architecture.md) — algorithms, subtle implementation details, design decisions
+- [`docs/18-runbook.md`](docs/18-runbook.md) — usage guide, common workflows, all flags
+- [`docs/05-refactor.md`](docs/05-refactor.md) — implementation history and phase notes

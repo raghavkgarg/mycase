@@ -167,68 +167,89 @@ func (r *Router) FetchFundamentals(ctx context.Context, tickers []string) (map[s
 	}
 
 	// US: Schwab (or Yahoo fallback), optionally overlaid with EDGAR statements.
+	// A DuckDB cache short-circuit sits in front: any US ticker with a fresh
+	// cached (already-merged) blob skips BOTH the Schwab and EDGAR calls, so a
+	// re-run of the same universe on the same day costs zero live US calls.
 	if len(usTickers) > 0 {
-		if r.schwabClient != nil {
-			schwabFund, err := r.schwabClient.FetchFundamentals(ctx, usTickers)
-			if err != nil {
-				// Fallback to Yahoo
-				slog.WarnContext(ctx, "datafetcher.fundamentals_schwab_fallback",
-					"source", "yahoo", "reason", "schwab_error",
-					"count", len(usTickers), "err", err)
-				yfFund, yfErr := yfinance.FetchFundamentals(ctx, usTickers)
-				if yfErr != nil {
+		var toFetch []string
+		for _, t := range usTickers {
+			if f, ok := checkFundamentalsCache(ctx, t); ok {
+				result[t] = f
+			} else {
+				toFetch = append(toFetch, t)
+			}
+		}
+		if len(usTickers) > len(toFetch) {
+			slog.DebugContext(ctx, "datafetcher.fundamentals_cache_hits",
+				"cached", len(usTickers)-len(toFetch), "to_fetch", len(toFetch))
+		}
+
+		if len(toFetch) > 0 {
+			if r.schwabClient != nil {
+				schwabFund, err := r.schwabClient.FetchFundamentals(ctx, toFetch)
+				if err != nil {
+					// Fallback to Yahoo
+					slog.WarnContext(ctx, "datafetcher.fundamentals_schwab_fallback",
+						"source", "yahoo", "reason", "schwab_error",
+						"count", len(toFetch), "err", err)
+					yfFund, yfErr := yfinance.FetchFundamentals(ctx, toFetch)
+					if yfErr != nil {
+						return nil, err
+					}
+					maps.Copy(result, yfFund)
+				} else {
+					slog.DebugContext(ctx, "datafetcher.fundamentals_served",
+						"source", "schwab", "count", len(toFetch))
+					r.overlayEDGARAndCache(ctx, toFetch, schwabFund)
+					maps.Copy(result, schwabFund)
+				}
+			} else {
+				slog.DebugContext(ctx, "datafetcher.fundamentals_served",
+					"source", "yahoo", "reason", "no_schwab_client", "count", len(toFetch))
+				yfFund, err := yfinance.FetchFundamentals(ctx, toFetch)
+				if err != nil {
 					return nil, err
 				}
 				maps.Copy(result, yfFund)
-			} else {
-				slog.DebugContext(ctx, "datafetcher.fundamentals_served",
-					"source", "schwab", "count", len(usTickers))
-				r.overlayEDGAR(ctx, usTickers, schwabFund)
-				maps.Copy(result, schwabFund)
 			}
-		} else {
-			slog.DebugContext(ctx, "datafetcher.fundamentals_served",
-				"source", "yahoo", "reason", "no_schwab_client", "count", len(usTickers))
-			yfFund, err := yfinance.FetchFundamentals(ctx, usTickers)
-			if err != nil {
-				return nil, err
-			}
-			maps.Copy(result, yfFund)
 		}
 	}
 
 	return result, nil
 }
 
-// overlayEDGAR enriches Schwab-sourced US fundamentals in place with EDGAR
-// statement facts (operating cash flow, net income, annual series, authoritative
-// FCF) via the field-level, non-destructive merger. A nil EDGAR source or an
-// EDGAR fetch error leaves the Schwab fundamentals untouched — EDGAR is a strict
-// enrichment, never a regression (fail-gracefully per the API rules).
-func (r *Router) overlayEDGAR(ctx context.Context, usTickers []string, schwabFund map[string]yfinance.Fundamentals) {
-	if r.edgarSource == nil {
-		return
+// overlayEDGARAndCache enriches Schwab-sourced US fundamentals in place with
+// EDGAR statement facts (operating cash flow, net income, annual series,
+// authoritative FCF) via the field-level, non-destructive merger, then persists
+// each ticker's final blob to the DuckDB cache so a re-run serves it warm and
+// skips both the Schwab and EDGAR calls. A nil EDGAR source or an EDGAR fetch
+// error leaves the Schwab fundamentals untouched — EDGAR is a strict
+// enrichment, never a regression (fail-gracefully per the API rules) — but the
+// Schwab-only values are still cached (source "schwab").
+func (r *Router) overlayEDGARAndCache(ctx context.Context, usTickers []string, schwabFund map[string]yfinance.Fundamentals) {
+	var edgarFund map[string]yfinance.Fundamentals
+	if r.edgarSource != nil {
+		ef, err := r.edgarSource.FetchFundamentals(ctx, usTickers)
+		if err != nil {
+			slog.WarnContext(ctx, "datafetcher.edgar_overlay_failed",
+				"count", len(usTickers), "err", err, "action", "keeping_schwab")
+		} else {
+			edgarFund = ef
+		}
 	}
-	edgarFund, err := r.edgarSource.FetchFundamentals(ctx, usTickers)
-	if err != nil {
-		slog.WarnContext(ctx, "datafetcher.edgar_overlay_failed",
-			"count", len(usTickers), "err", err, "action", "keeping_schwab")
-		return
-	}
-	if len(edgarFund) == 0 {
-		return
-	}
+
 	merged := 0
 	for ticker, base := range schwabFund {
 		partial, ok := edgarFund[ticker]
-		m, _ := mergeFundamentals(base, partial, true, ok)
+		m, prov := mergeFundamentals(base, partial, true, ok)
 		schwabFund[ticker] = m
+		storeFundamentalsCache(ctx, ticker, m, prov)
 		if ok {
 			merged++
 		}
 	}
-	slog.DebugContext(ctx, "datafetcher.edgar_overlay_applied",
-		"source", "schwab+edgar", "us_tickers", len(usTickers), "edgar_matched", merged)
+	slog.DebugContext(ctx, "datafetcher.fundamentals_merged_cached",
+		"us_tickers", len(usTickers), "edgar_matched", merged)
 }
 
 // FetchIntradayData fetches 1-minute intraday OHLC for a ticker over a range.

@@ -5,10 +5,10 @@
 
 This document tracks **work still to be done**. For anything already shipped:
 
-- **System design, algorithms, data flow** → `docs/architecture.md` (incl. design decisions D1–D12)
-- **Test coverage, conventions, gaps** → `docs/testing.md` (created by R15)
-- **Operator/CLI usage** → `docs/runbook.md`
-- **Phase status & roadmap** → `docs/roadmap.md`
+- **System design, algorithms, data flow** → `docs/04-architecture.md` (incl. design decisions D1–D12)
+- **Test coverage, conventions, gaps** → `docs/21-testing.md` (created by R15)
+- **Operator/CLI usage** → `docs/18-runbook.md`
+- **Phase status & roadmap** → `docs/03-roadmap.md`
 
 A one-line ledger of completed refactor phases is kept at the bottom for git-archaeology; the durable details of each now live in the docs above.
 
@@ -362,7 +362,7 @@ Two structural gaps:
 1. **`pkg/stockpicker` at 9.5%** — this is Layer 2 of the architecture (the scoring engine). The core selection logic is effectively untested.
 2. **No end-to-end tests.** The system is a pipeline of commands (`pick → optimize → basket`, `autopilot run`, `tax import → status → harvest`) with data flowing through DuckDB and CSV. Unit tests never exercise a full command path. A regression in stage wiring (e.g., R13's DataFetcher injection) would pass all unit tests yet break the pipeline.
 
-`docs/testing.md` does not yet exist — R15 creates it as the canonical test guide.
+`docs/21-testing.md` does not yet exist — R15 creates it as the canonical test guide.
 
 ### Test pyramid for mycase
 
@@ -387,7 +387,7 @@ Priority order by risk × current gap:
 | `selectiontracker` | 0% → 60% | Cross-run diff, driver-metric extraction. |
 | `autopilot` | 0% → 50% | Proposal model, scheduling math, alert formatting — with mock broker + mock fetcher. |
 
-Convention (already in use, formalize in `docs/testing.md`): **table-driven tests**, fixtures under `pkg/<pkg>/testdata/`, no network in default `go test`.
+Convention (already in use, formalize in `docs/21-testing.md`): **table-driven tests**, fixtures under `pkg/<pkg>/testdata/`, no network in default `go test`.
 
 ### Layer 2 — Integration tests (build tag `integration`)
 
@@ -458,7 +458,7 @@ E2E tests double as logging-integration checks: assert that a full command run p
 
 ### Deliverables
 
-- `docs/testing.md` — canonical test guide: pyramid, conventions, fixture layout, how to run each tier, coverage targets per package.
+- `docs/21-testing.md` — canonical test guide: pyramid, conventions, fixture layout, how to run each tier, coverage targets per package.
 - Unit test backfill, priority `stockpicker` first (9.5% → 70%).
 - Testability seams: injectable data dir, injectable broker, mock fetcher wiring.
 - `e2e` build tag + `make test-e2e` + the 5 scenario tests above.
@@ -475,7 +475,7 @@ E2E tests double as logging-integration checks: assert that a full command run p
 
 ## Phase R17 — Router-Bypass Cleanup — DONE
 
-**Status**: ✅ **Done** (this is roadmap **Phase 10b**; the feature framing and full data-source rationale live in `docs/roadmap.md` Phase 10 and `docs/datasources.md`).
+**Status**: ✅ **Done** (this is roadmap **Phase 10b**; the feature framing and full data-source rationale live in `docs/03-roadmap.md` Phase 10 and `docs/07-datasources.md`).
 
 **What shipped**:
 - `datafetcher.Router` threaded into all seven bypass paths — `cmd/report.go`, `cmd/monitor.go`, `cmd/optimize.go`, `pkg/server/handlers.go`, `pkg/executor/executor.go`, `pkg/backtest/valuation.go`, `pkg/autopilot/schedule.go` — replacing direct `yfinance.*` fetch calls. `cmd/*` paths build the Router via the existing `newDataRouter()` factory; `pkg/server` gained a `MarketDataFetcher` consumer interface + `WithRouter` option; `pkg/backtest` (L2, below datafetcher) and `pkg/autopilot/schedule` define **consumer-side interfaces** (`PriceProvider`, `benchmarkFetcher`) over the leaf `marketdata` DTOs so no upward import is introduced — layering stays intact (`make check-deps` green).
@@ -558,7 +558,7 @@ Half-finished or orphaned pieces discovered during Phase 5b. None are urgent, bu
 
 ## Completed Phases (ledger)
 
-Durable design/algorithm details live in `docs/architecture.md`; this is a chronological index for git archaeology.
+Durable design/algorithm details live in `docs/04-architecture.md`; this is a chronological index for git archaeology.
 
 | Phase | Summary | Commit(s) |
 |-------|---------|-----------|
@@ -578,7 +578,7 @@ Durable design/algorithm details live in `docs/architecture.md`; this is a chron
 | **R10.1** | Package cleanup — 25 → 21 packages (removed portfolio/kiteclient, merged report/performance) | — |
 | **R9** | Schwab API integration — OAuth2, HTTP client, market data, US broker, transaction history; ticker routing; US cost model | — |
 | **R11** | Broker factory & market abstraction — `MarketConfig`, `CostModelForBroker`, removed hardcoded India assumptions; `pkg/schwab` → `pkg/broker/schwab`; Go → 1.27.0 | — |
-| **R12** | CLI rendering layer — `pkg/render` (tabwriter tables, formatters, TTY-aware color, panic-safe). See `docs/render.md` | — |
+| **R12** | CLI rendering layer — `pkg/render` (tabwriter tables, formatters, TTY-aware color, panic-safe). See `docs/06-render.md` | — |
 | **R12.5** | Render adoption (closes L1) — made `pkg/render` interface-first (`Renderer`: Section/Banner/KV/Table/Writer + swappable default impl), added `Footer`/`Border` table opts + `PnL`/`PnLPct`; adopted across all `cmd/*` and `pkg/{printer,executor}`; rebuilt `pkg/printer` as a thin domain-report layer over `render` (deleted all hand-rolled padding/table code). One primitives layer standard: cmd/executor → printer → render | — |
 | **R13** | Stockpicker `DataFetcher` injection — interface seam, router wiring, `runPickWithOpts` collapsed. See architecture D10 | — |
 | **Phase 4** | Tax-loss harvesting — `pkg/tax` (FIFO, TLH, sequencing), Schwab transactions, DuckDB tax tables, `mycase tax`, dashboard Tax tab. See architecture D11–D12 | — |

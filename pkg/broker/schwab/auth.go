@@ -7,6 +7,7 @@ import (
 	"crypto/tls"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -25,6 +26,13 @@ const (
 	tokenURL     = "https://api.schwabapi.com/v1/oauth/token"
 	callbackPath = "/callback"
 )
+
+// ErrCodeExpired signals that Schwab rejected the authorization code as
+// invalid, already used, or expired (400 invalid_grant / unsupported_token_type).
+// This is recoverable by re-running the browser flow to obtain a fresh code —
+// the most common cause is a slow click-through of the local certificate
+// warning, since codes expire in ~30 seconds. RunAuthFlow retries once on this.
+var ErrCodeExpired = errors.New("schwab authorization code invalid, used, or expired")
 
 // AppConfig holds Schwab OAuth2 application credentials.
 type AppConfig struct {
@@ -192,6 +200,12 @@ func RefreshToken(ctx context.Context, clientID, clientSecret, refreshToken stri
 // RunAuthFlow performs the full OAuth2 authorization_code flow interactively.
 // It starts a local HTTPS server, opens the browser to Schwab's auth page,
 // captures the callback code, exchanges it for tokens, and saves them.
+//
+// Because Schwab authorization codes expire in ~30 seconds and the local
+// callback's self-signed cert forces a browser warning click-through, a slow
+// user can miss the window (400 invalid_grant). The flow therefore retries the
+// browser round-trip ONCE on that specific recoverable error — obtaining a fresh
+// code rather than uselessly re-submitting the expired one.
 func RunAuthFlow(ctx context.Context, app *AppConfig, tokenPath string) error {
 	callbackURL, err := url.Parse(app.CallbackURL)
 	if err != nil {
@@ -203,29 +217,92 @@ func RunAuthFlow(ctx context.Context, app *AppConfig, tokenPath string) error {
 		port = "8443"
 	}
 
-	// Channel to receive the auth code from the callback handler
-	codeCh := make(chan string, 1)
-	errCh := make(chan error, 1)
-
-	mux := http.NewServeMux()
-	mux.HandleFunc(callbackPath, func(w http.ResponseWriter, r *http.Request) {
-		code := r.URL.Query().Get("code")
-		if code == "" {
-			errMsg := r.URL.Query().Get("error")
-			errCh <- fmt.Errorf("auth callback received error: %s — %s", errMsg, r.URL.Query().Get("error_description"))
-			http.Error(w, "Authentication failed. Check terminal.", http.StatusBadRequest)
-			return
-		}
-		codeCh <- code
-		w.Header().Set("Content-Type", "text/html")
-		fmt.Fprint(w, `<html><body><h2>✅ Authentication successful!</h2><p>You can close this tab and return to the terminal.</p></body></html>`)
-	})
-
-	// Generate self-signed TLS cert for local callback
+	// Generate self-signed TLS cert for local callback (reused across attempts).
 	tlsCert, err := generateSelfSignedCert()
 	if err != nil {
 		return fmt.Errorf("failed to generate TLS cert: %w", err)
 	}
+
+	// Build authorization URL (constant across attempts).
+	authURL := fmt.Sprintf("%s?client_id=%s&redirect_uri=%s&response_type=code",
+		authBaseURL,
+		url.QueryEscape(app.ClientID),
+		url.QueryEscape(app.CallbackURL),
+	)
+
+	const maxAttempts = 2
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		if attempt > 1 {
+			fmt.Printf("\n⏳ The authorization code expired before it could be exchanged "+
+				"(this happens when the browser warning takes too long to clear).\n"+
+				"   Retrying (%d/%d) — please move through the browser prompts quickly this time.\n", attempt, maxAttempts)
+		}
+
+		token, err := runAuthAttempt(ctx, app, authURL, port, tlsCert)
+		if err == nil {
+			if serr := SaveToken(tokenPath, token); serr != nil {
+				return fmt.Errorf("failed to save token: %w", serr)
+			}
+			fmt.Printf("✓ Tokens saved to %s\n", tokenPath)
+			fmt.Printf("  Access token expires: %s\n", time.Unix(token.ExpiresAt, 0).Format(time.RFC3339))
+			fmt.Printf("  Refresh token expires: %s\n", time.Unix(token.RefreshExpiresAt, 0).Format(time.RFC3339))
+			return nil
+		}
+
+		// Only an expired/used code is worth retrying — everything else
+		// (bad credentials, timeout, server error) is terminal.
+		if errors.Is(err, ErrCodeExpired) && attempt < maxAttempts {
+			continue
+		}
+		if errors.Is(err, ErrCodeExpired) {
+			fmt.Printf("\n❌ The authorization code kept expiring before it could be exchanged.\n" +
+				"   Re-run 'mycase auth --broker schwab' and clear the browser certificate warning as fast\n" +
+				"   as possible (Safari: Show Details → visit this website; Chrome: Advanced → Proceed),\n" +
+				"   without reloading the success page.\n\n")
+			return fmt.Errorf("schwab auth failed after %d attempts: %w", maxAttempts, err)
+		}
+		return err
+	}
+	return fmt.Errorf("authentication failed after %d attempts", maxAttempts)
+}
+
+// runAuthAttempt performs a single browser round-trip: start the local HTTPS
+// callback server, open the browser, wait for the authorization code, and
+// exchange it for a token. The caller handles persistence and retry policy.
+func runAuthAttempt(ctx context.Context, app *AppConfig, authURL, port string, tlsCert tls.Certificate) (*Token, error) {
+	// Channel to receive the auth code from the callback handler
+	codeCh := make(chan string, 1)
+	errCh := make(chan error, 1)
+
+	// The browser can hit the callback more than once (a self-signed cert
+	// triggers retries, and browsers also probe /favicon.ico etc.). Schwab
+	// authorization codes are single-use and short-lived, so a duplicate hit
+	// that captured a second (or empty) code would race the real one and yield
+	// a 400 invalid_grant at exchange. Latch on the FIRST request that carries
+	// a real code and ignore every later invocation.
+	var once sync.Once
+	mux := http.NewServeMux()
+	mux.HandleFunc(callbackPath, func(w http.ResponseWriter, r *http.Request) {
+		code := r.URL.Query().Get("code")
+		if code == "" {
+			// A callback with no code is either an explicit auth error or a
+			// browser probe. Only surface it as an error if Schwab actually
+			// reported one; otherwise ignore (do not poison errCh on a favicon
+			// or reload).
+			if errMsg := r.URL.Query().Get("error"); errMsg != "" {
+				once.Do(func() {
+					errCh <- fmt.Errorf("auth callback received error: %s — %s", errMsg, r.URL.Query().Get("error_description"))
+				})
+				http.Error(w, "Authentication failed. Check terminal.", http.StatusBadRequest)
+			}
+			return
+		}
+		once.Do(func() {
+			codeCh <- code
+			w.Header().Set("Content-Type", "text/html")
+			fmt.Fprint(w, `<html><body><h2>✅ Authentication successful!</h2><p>You can close this tab and return to the terminal.</p></body></html>`)
+		})
+	})
 
 	server := &http.Server{
 		Addr:    "127.0.0.1:" + port,
@@ -238,7 +315,7 @@ func RunAuthFlow(ctx context.Context, app *AppConfig, tokenPath string) error {
 	// Start server in background
 	ln, err := net.Listen("tcp", server.Addr)
 	if err != nil {
-		return fmt.Errorf("failed to listen on %s: %w", server.Addr, err)
+		return nil, fmt.Errorf("failed to listen on %s: %w", server.Addr, err)
 	}
 	tlsLn := tls.NewListener(ln, server.TLSConfig)
 
@@ -247,17 +324,21 @@ func RunAuthFlow(ctx context.Context, app *AppConfig, tokenPath string) error {
 			errCh <- err
 		}
 	}()
-	defer server.Shutdown(ctx)
-
-	// Build authorization URL
-	authURL := fmt.Sprintf("%s?client_id=%s&redirect_uri=%s&response_type=code",
-		authBaseURL,
-		url.QueryEscape(app.ClientID),
-		url.QueryEscape(app.CallbackURL),
-	)
+	// Ensure the listener is fully released before this attempt returns, so a
+	// retry can re-bind the same port without "address already in use".
+	defer func() {
+		server.Close()
+		tlsLn.Close()
+	}()
 
 	fmt.Printf("\n🔐 Opening browser for Schwab authentication...\n")
 	fmt.Printf("   If the browser doesn't open, visit:\n   %s\n\n", authURL)
+	fmt.Printf("⚠️  Your browser will warn that the connection to 127.0.0.1 is \"not private\"\n")
+	fmt.Printf("   (the local callback uses a self-signed certificate — this is expected and safe).\n")
+	fmt.Printf("   Proceed through it QUICKLY — Schwab authorization codes expire in ~30 seconds:\n")
+	fmt.Printf("     • Safari:  Show Details → \"visit this website\"\n")
+	fmt.Printf("     • Chrome:  Advanced → \"Proceed to 127.0.0.1 (unsafe)\"\n")
+	fmt.Printf("   Do NOT reload the success page after it appears.\n\n")
 	openBrowser(authURL)
 
 	// Wait for callback or timeout
@@ -266,24 +347,18 @@ func RunAuthFlow(ctx context.Context, app *AppConfig, tokenPath string) error {
 		fmt.Printf("✓ Authorization code received, exchanging for tokens...\n")
 		token, err := exchangeCode(ctx, app, code)
 		if err != nil {
-			return fmt.Errorf("code exchange failed: %w", err)
+			return nil, err
 		}
-		if err := SaveToken(tokenPath, token); err != nil {
-			return fmt.Errorf("failed to save token: %w", err)
-		}
-		fmt.Printf("✓ Tokens saved to %s\n", tokenPath)
-		fmt.Printf("  Access token expires: %s\n", time.Unix(token.ExpiresAt, 0).Format(time.RFC3339))
-		fmt.Printf("  Refresh token expires: %s\n", time.Unix(token.RefreshExpiresAt, 0).Format(time.RFC3339))
-		return nil
+		return token, nil
 
 	case err := <-errCh:
-		return err
+		return nil, err
 
 	case <-time.After(5 * time.Minute):
-		return fmt.Errorf("authentication timed out after 5 minutes — no callback received")
+		return nil, fmt.Errorf("authentication timed out after 5 minutes — no callback received")
 
 	case <-ctx.Done():
-		return ctx.Err()
+		return nil, ctx.Err()
 	}
 }
 
@@ -311,7 +386,18 @@ func exchangeCode(ctx context.Context, app *AppConfig, code string) (*Token, err
 	if resp.StatusCode != http.StatusOK {
 		var errBody map[string]any
 		json.NewDecoder(resp.Body).Decode(&errBody)
-		return nil, fmt.Errorf("code exchange returned %d: %v", resp.StatusCode, errBody)
+		errCode, _ := errBody["error"].(string)
+		switch errCode {
+		case "invalid_client":
+			return nil, fmt.Errorf("code exchange returned %d (invalid_client): Schwab rejected the app credentials. "+
+				"Check client_id/client_secret in config/schwab.json for typos and confirm the app is 'Ready For Use' in the developer portal. Raw: %v",
+				resp.StatusCode, errBody)
+		case "invalid_grant", "unsupported_token_type":
+			return nil, fmt.Errorf("%w: code exchange returned %d (%s). Raw: %v",
+				ErrCodeExpired, resp.StatusCode, errCode, errBody)
+		default:
+			return nil, fmt.Errorf("code exchange returned %d: %v", resp.StatusCode, errBody)
+		}
 	}
 
 	return parseTokenResponse(resp)

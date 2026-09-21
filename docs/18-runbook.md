@@ -87,6 +87,74 @@ mycase auth
 
 Dry-run mode works without credentials — commands fall back to `MockBroker` silently when run without `--live`.
 
+### Authenticate with Schwab (US market, live mode only)
+
+Schwab involves **two completely separate logins** — this is the most common point
+of confusion, so keep them straight:
+
+| | Developer Portal | `mycase auth --broker schwab` |
+|---|---|---|
+| **Log in as** | Your *developer* account (e.g. `you@example.com`) | Your *real Schwab brokerage* account |
+| **Purpose** | Register/configure the **app** — issues the App Key (`client_id`) + App Secret (`client_secret`) | Authorize *your app* to act on *your brokerage account*; produces OAuth tokens |
+| **Used by** | You, in a browser, rarely (setup + secret rotation) | The `mycase` binary, whenever tokens expire (~weekly) |
+| **Lives at** | developer.schwab.com | `config/schwab_token.json` (auto-written) |
+
+The App Key/Secret prove **which application** is asking. Your brokerage login proves
+**who owns the data**. Both are required, at different steps of the OAuth flow.
+
+**Setup:**
+
+1. Register an app at developer.schwab.com. Set the callback URL to
+   `https://127.0.0.1:8443/callback` and wait until the app status is
+   **"Ready For Use"** (a pending app fails with `invalid_client`).
+2. Copy the App Key and App Secret into `config/schwab.json`
+   (see `config/schwab.json.example`):
+   ```json
+   {
+     "client_id": "your_schwab_app_key",
+     "client_secret": "your_schwab_app_secret",
+     "callback_url": "https://127.0.0.1:8443/callback"
+   }
+   ```
+3. Run the auth flow:
+   ```bash
+   mycase auth --broker schwab
+   ```
+4. The browser opens Schwab's login. **Log in with your real brokerage account**
+   and select the account(s) to authorize. The local callback server captures the
+   code, exchanges it for tokens, and writes `config/schwab_token.json`.
+
+> [!IMPORTANT]
+> Your browser will warn about the local callback's self-signed certificate
+> ("unknown certificate"). This is expected — the callback server is `127.0.0.1`
+> only. Click through the warning (**Advanced → proceed to 127.0.0.1**) **quickly
+> and do not reload the success page**. Schwab authorization codes are single-use
+> and expire in seconds; a slow click-through or a page reload will fail the
+> exchange with `invalid_grant`.
+
+> [!NOTE]
+> Schwab access tokens expire in 30 minutes and refresh automatically. The
+> **refresh token expires in ~7 days**, so plan to re-run `mycase auth --broker
+> schwab` roughly weekly. `config/schwab.json` and `config/schwab_token.json` are
+> both gitignored — never commit them.
+
+**Troubleshooting the OAuth exchange** (the error appears *after* `✓ Authorization
+code received`, on the server-to-server token exchange — it is unrelated to which
+brokerage accounts you selected, and unrelated to the local TLS "unknown
+certificate" log line, which is harmless):
+
+| Error at exchange | Meaning | Fix |
+|---|---|---|
+| `401 invalid_client` | Schwab rejected the **app** credentials | Check `client_id`/`client_secret` in `config/schwab.json` for a **typo** (a single wrong/missing character in the secret does this); confirm the pair matches the portal and the app is "Ready For Use" |
+| `400 invalid_grant` / `unsupported_token_type` | The **authorization code** was invalid, already used, or expired | The flow **auto-retries the browser round-trip once** to fetch a fresh code. If it still fails, re-run `mycase auth --broker schwab` and clear the cert warning faster (codes expire in ~30s); don't reload the callback page |
+
+> [!NOTE]
+> `config/schwab_token.json` is a **separate file** from `config/schwab.json`.
+> The app credentials live in `schwab.json`; the OAuth tokens are written to
+> `schwab_token.json` by the auth flow. Tokens are never read from `schwab.json`.
+> If you see `no valid token found: open .../config/schwab_token.json: no such
+> file`, you simply haven't completed `mycase auth --broker schwab` yet.
+
 ### Edit `config/pipeline.yaml`
 
 ```yaml

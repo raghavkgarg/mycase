@@ -376,8 +376,20 @@ func Run(ctx context.Context, rc RunConfig) (*RunResult, error) {
 	reportPath := filepath.Join("report", fmt.Sprintf("%s_%s", goldenBase, cfg.Strategy), "executions", fmt.Sprintf("%s_03_portfolio_report.txt", dateStr))
 	_ = runTimestamp // available for report naming if needed
 
-	// Print comparison report (writes to report/ dir and stdout)
-	csvloader.PrintComparisonReport(sourceCSV, cfg.GoldenCopyPath, cfg.Strategy)
+	// Print comparison report (writes to report/ dir and stdout). Rank/score
+	// rationale is sourced from the structured DuckDB selections history — the
+	// previous completed run and this run's freshly-inserted selections — instead
+	// of re-parsing the human-readable .txt report.
+	var prevRanks, currRanks map[string]csvloader.RankScore
+	if db != nil {
+		if prev, err := db.GetPreviousSelections(ctx, goldenBase, cfg.Strategy); err == nil {
+			prevRanks = rankScoresFromSelections(prev)
+		}
+		if curr, err := db.GetSelections(ctx, runID); err == nil {
+			currRanks = rankScoresFromSelections(curr)
+		}
+	}
+	csvloader.PrintComparisonReport(sourceCSV, cfg.GoldenCopyPath, cfg.Strategy, prevRanks, currRanks)
 
 	// --- Step 5: Compute rebalance orders ---
 	fmt.Printf("[autopilot] Computing rebalance orders...\n")
@@ -675,6 +687,21 @@ func indexSelectionsByTicker(sels []cache.Selection) map[string]cache.Selection 
 	m := make(map[string]cache.Selection, len(sels))
 	for _, s := range sels {
 		m[s.Ticker] = s
+	}
+	return m
+}
+
+// rankScoresFromSelections projects DuckDB selections to the ticker → rank/score
+// map the golden-copy comparison report consumes, replacing the former re-parse
+// of the selection-reasons .txt. Returns nil for an empty input so
+// PrintComparisonReport treats it as "no data".
+func rankScoresFromSelections(sels []cache.Selection) map[string]csvloader.RankScore {
+	if len(sels) == 0 {
+		return nil
+	}
+	m := make(map[string]csvloader.RankScore, len(sels))
+	for _, s := range sels {
+		m[s.Ticker] = csvloader.RankScore{Rank: s.Rank, Score: s.Score}
 	}
 	return m
 }

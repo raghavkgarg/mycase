@@ -4,7 +4,7 @@
 //
 // The layering rule: a pkg/ package may import only packages at a STRICTLY
 // LOWER layer. Layer 0 packages are leaves; a subset (MustBeLeaf) must have
-// zero internal imports. See docs/refactor.md R16 and
+// zero internal imports. See docs/05-refactor.md R16 and
 // .kiro/steering/architecture.md.
 //
 // When adding or re-tiering a package, edit Layers here — both the checker and
@@ -48,6 +48,8 @@ var Layers = map[string]int{
 	"logging":          0,
 	"market":           0,
 	"marketdata":       0,
+	"marketfmt":        0, // market-aware currency/magnitude formatting (₹ Cr/L, $ K/M/B/T) — pure, zero-import
+	"rawcapture":       0, // raw API response archive for offline replay/triage — pure, zero-import (env-gated)
 	"render":           0,
 	"selectiontracker": 0,
 	"universe":         0,
@@ -79,6 +81,7 @@ var Layers = map[string]int{
 	"daemon":     4, // alert, broker, config, csvloader
 	"executor":   4, // broker, config, market, printer, render, yfinance
 	"pithistory": 4, // stockpicker
+	"rawstore":   4, // config, rawcapture — filesystem impl of rawcapture.Sink; owns data dir + archive filename convention
 
 	// L5 — top composition (below cmd/main, which live outside pkg/).
 	"autopilot": 5,
@@ -101,6 +104,7 @@ var MustBeLeaf = map[string]bool{
 	"render":       true,
 	"logging":      true,
 	"alert":        true,
+	"rawcapture":   true,
 }
 
 // Pkg is the subset of `go list -json` output both commands consume.

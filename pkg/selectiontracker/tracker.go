@@ -318,13 +318,18 @@ func (t *Tracker) RecordResultDates(ticker, dates string) {
 
 // SaveReport generates a structured selection reasons report in the report/ folder.
 //
+// identity is the canonical "<name>_<method>" path token (built by the caller via
+// stockpicker.PickIdentity) that names the report directory; keeping its
+// construction in the caller means the writer here and the cached-run reader in
+// the command layer always agree on the path. displayName is the human-facing
+// label printed in the report header ("Index/File:").
+//
 // prevDrivers maps ticker → previous-run driver summary string, sourced by the
 // caller from the structured DuckDB selections history (cache.GetPreviousSelections)
 // rather than by re-parsing the prior text report. It may be nil (e.g. first run),
 // in which case cross-run driver deltas degrade to showing current values only.
-func (t *Tracker) SaveReport(displayName, method string, existingHoldings map[string]float64, sectors map[string]string, weights map[string]float64, resultDates map[string]string, prevDrivers map[string]string) error {
-	safeName := strings.ReplaceAll(strings.ToLower(displayName), " ", "_")
-	reportDir := filepath.Join("report", fmt.Sprintf("%s_%s", safeName, method), "executions")
+func (t *Tracker) SaveReport(identity, displayName, method string, existingHoldings map[string]float64, sectors map[string]string, weights map[string]float64, resultDates map[string]string, prevDrivers map[string]string) error {
+	reportDir := filepath.Join("report", identity, "executions")
 	if err := os.MkdirAll(reportDir, 0755); err != nil {
 		return fmt.Errorf("failed to create report directory: %w", err)
 	}

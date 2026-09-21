@@ -7,11 +7,15 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
+	"slices"
+	"strings"
 	"time"
 
 	"golang.org/x/time/rate"
 
 	"github.com/raghavkgarg/mycase/pkg/logging"
+	"github.com/raghavkgarg/mycase/pkg/rawcapture"
 )
 
 const (
@@ -95,6 +99,12 @@ func (c *Client) GetMarketData(ctx context.Context, path string) (*http.Response
 
 // doRequest performs an authenticated HTTP request with auto-refresh on 401.
 func (c *Client) doRequest(ctx context.Context, method, url string, body io.Reader) (*http.Response, error) {
+	// Offline replay: serve a recorded body from the archive and skip token
+	// fetch, rate limiter, and network entirely (no-op unless MYCASE_REPLAY).
+	if resp, ok := c.replay(ctx, url); ok {
+		return resp, nil
+	}
+
 	token, err := c.tokenMgr.GetAccessToken(ctx)
 	if err != nil {
 		return nil, err
@@ -160,7 +170,64 @@ func (c *Client) executeRequest(ctx context.Context, method, url string, body io
 		return nil, err
 	}
 	logging.LogResponse(ctx, slog.Default(), method, url, resp.StatusCode, time.Since(start))
+
+	// Archive the raw body for offline replay/triage (no-op unless MYCASE_CAPTURE
+	// is set). Only 2xx bodies are captured; error bodies flow to parseAPIError.
+	// Token/auth responses never reach here (they use auth.go's tokenURL path),
+	// so no credentials are archived.
+	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		endpoint, symbol := captureLabels(url)
+		resp.Body = rawcapture.Capture("schwab", endpoint, symbol, resp.Body)
+	}
 	return resp, nil
+}
+
+// replay serves a recorded response body for url from the raw archive, as a
+// synthetic 200 response. Returns ok=false when replay is disabled or no
+// matching archive file exists (caller then proceeds with a live request).
+func (c *Client) replay(ctx context.Context, url string) (*http.Response, bool) {
+	endpoint, symbol := captureLabels(url)
+	bodyRC, ok := rawcapture.Replay("schwab", endpoint, symbol)
+	if !ok {
+		return nil, false
+	}
+	slog.InfoContext(ctx, "schwab.replay_hit", "endpoint", endpoint, "symbol", symbol)
+	req, _ := http.NewRequestWithContext(ctx, "GET", url, nil)
+	return &http.Response{
+		StatusCode: http.StatusOK,
+		Status:     "200 OK (replay)",
+		Header:     http.Header{"Content-Type": []string{"application/json"}},
+		Body:       bodyRC,
+		Request:    req,
+	}, true
+}
+
+// captureLabels derives a short endpoint name and primary symbol from a Schwab
+// request URL, for the raw-capture archive filename. Best-effort: on any parse
+// issue it falls back to a generic label.
+func captureLabels(rawURL string) (endpoint, symbol string) {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return "request", ""
+	}
+	// Last non-empty path segment is the logical endpoint
+	// (e.g. .../marketdata/v1/quotes → "quotes",
+	//       .../instruments → "instruments").
+	segs := strings.Split(strings.Trim(u.Path, "/"), "/")
+	endpoint = "request"
+	for _, seg := range slices.Backward(segs) {
+		if seg != "" {
+			endpoint = seg
+			break
+		}
+	}
+	q := u.Query()
+	// Schwab uses "symbol" (instruments/fundamentals) and "symbols" (quotes).
+	symbol = q.Get("symbol")
+	if symbol == "" {
+		symbol = q.Get("symbols")
+	}
+	return endpoint, symbol
 }
 
 // parseAPIError extracts error details from a non-2xx response.

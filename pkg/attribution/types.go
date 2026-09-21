@@ -2,7 +2,7 @@
 // benchmark: a daily NAV series and vs-benchmark metrics (alpha, beta,
 // information ratio, tracking error).
 //
-// Design (see docs/refactor.md Phase 5):
+// Design (see docs/05-refactor.md Phase 5):
 //   - Sources price series through a PriceFetcher (satisfied by
 //     *datafetcher.Router), so US tickers route to Schwab and others to Yahoo.
 //   - Reuses pkg/backtest metric formulas (RF-parameterized variants) rather
