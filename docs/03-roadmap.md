@@ -277,13 +277,17 @@ The open questions have been decided:
 **Dependency**: the `marketcal` holiday calendar (#4) is the enabling prerequisite;
 EOD extraction (#3) unblocks scheduler dispatch of cadence (a). Independent of Phase 10/11.
 
-**Progress**: the holiday calendar (#4, first slice) is **shipped** — `marketcal.Clock`
-gained an injectable holiday set (`WithHolidays`) and a first-class `IsTradingDay`, with
-the weekend rollback loops now holiday-aware; holiday data lives in a hand-maintained
+**Progress**: the holiday calendar (#4) is **shipped and unified**. `marketcal.Clock` gained
+an injectable holiday set (`WithHolidays`) and a first-class `IsTradingDay`, with the
+weekend rollback loops now holiday-aware; holiday data lives in a hand-maintained
 `config/holidays.json` (NYSE + NSE), loaded by `config.LoadHolidays` (which returns raw
-date lists so the `config` leaf stays zero-import — a higher layer attaches them to a
-clock). Remaining: unify the daemon/autopilot trading-day notions onto it (#4 cont.), EOD
-extraction (#3), then the scheduler itself.
+date lists so the `config` leaf stays zero-import). `broker.TradingClock()` (L1, the one
+place that legally composes `config` + `marketcal`) assembles the active market's
+holiday-aware clock, and **both** former trading-day notions now consult it: the drift
+daemon skips weekends/holidays instead of firing every calendar day, and autopilot's
+`IsTradingDay` uses the calendar as its authority (keeping the live benchmark probe only
+as a secondary cross-check for an unlisted holiday). Remaining: EOD extraction (#3), then
+the scheduler itself.
 
 ---
 

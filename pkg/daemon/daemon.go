@@ -98,6 +98,7 @@ func RunLoop(ctx context.Context, b broker.Broker, cfg config.AlertConfig, portf
 	defer os.Remove(PIDFile)
 
 	mktCfg := broker.LoadMarketConfig()
+	clock := broker.TradingClock()
 
 	for {
 		next := nextMarketClose(mktCfg)
@@ -108,6 +109,14 @@ func RunLoop(ctx context.Context, b broker.Broker, cfg config.AlertConfig, portf
 		case <-ctx.Done():
 			return nil
 		case <-time.After(time.Until(next)):
+		}
+
+		// Skip weekends and exchange holidays — the market didn't move, so a
+		// drift check is noise. The loop still reschedules for the next day.
+		if !clock.IsTradingDay(time.Now()) {
+			slog.InfoContext(ctx, "daemon.check_skipped_non_trading_day",
+				"date", time.Now().In(clock.Loc).Format("2006-01-02"))
+			continue
 		}
 
 		result, err := RunCheck(ctx, b, cfg, portfolioFile)

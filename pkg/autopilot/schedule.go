@@ -18,43 +18,43 @@ type benchmarkFetcher interface {
 	NormalizeBenchmarkSymbol(symbol string) string
 }
 
-// IsTradingDay checks if today is a trading day by attempting to fetch
-// a recent benchmark price and checking if the latest candle is from today.
-// The fetcher routes the benchmark probe through the same provider chain the
-// pipeline uses (Schwab for US, Yahoo otherwise). A nil fetcher means "can't
-// check" and the function optimistically returns true.
+// IsTradingDay reports whether today is a trading day for the active market.
+//
+// The authority is the holiday-aware market calendar (broker.TradingClock →
+// marketcal): weekends and the exchange holidays in config/holidays.json are
+// non-trading days. Before 09:00 local the market has not opened, so it returns
+// false (the same early guard as before). The fetcher is an optional secondary
+// probe: if the calendar says it's a trading day but a benchmark candle is
+// available and its latest date is not today (e.g. an unlisted holiday the
+// hand-maintained calendar missed), it defers to that live signal. A nil fetcher
+// or a fetch error simply trusts the calendar.
 func IsTradingDay(ctx context.Context, fetcher benchmarkFetcher) bool {
-	mktCfg := broker.LoadMarketConfig()
-	loc, err := time.LoadLocation(mktCfg.Timezone)
-	if err != nil {
-		loc = time.UTC
-	}
-	now := time.Now().In(loc)
+	clock := broker.TradingClock()
+	now := time.Now().In(clock.Loc)
 
-	// Only check during/after trading hours
+	// Before the open, the market hasn't traded yet today.
 	if now.Hour() < 9 {
 		return false
 	}
 
-	if fetcher == nil {
-		// No fetcher wired — assume trading day and let the pipeline try.
-		return true
+	// Calendar is the primary authority — weekends + configured holidays.
+	if !clock.IsTradingDay(now) {
+		return false
 	}
 
-	benchmark := fetcher.NormalizeBenchmarkSymbol(mktCfg.Benchmark)
+	// Optional live cross-check: catch a holiday the calendar didn't list.
+	if fetcher == nil {
+		return true
+	}
+	benchmark := fetcher.NormalizeBenchmarkSymbol(broker.LoadMarketConfig().Benchmark)
 	data, err := fetcher.FetchHistoricalDataWithTimestamps(ctx, benchmark, "5d")
 	if err != nil || data == nil || len(data.Timestamps) == 0 {
-		// If we can't check, assume it's a trading day and let the pipeline try
+		// Can't confirm — trust the calendar.
 		return true
 	}
-
-	// Check if the latest timestamp is from today
 	lastTS := data.Timestamps[len(data.Timestamps)-1]
-	lastDate := time.Unix(lastTS, 0).In(loc)
-	today := now.Truncate(24 * time.Hour)
-	lastDay := lastDate.Truncate(24 * time.Hour)
-
-	return lastDay.Equal(today)
+	lastDay := time.Unix(lastTS, 0).In(clock.Loc).Truncate(24 * time.Hour)
+	return lastDay.Equal(now.Truncate(24 * time.Hour))
 }
 
 // NextQuarterDates returns the scheduled run dates for a quarterly frequency.
