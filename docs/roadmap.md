@@ -128,7 +128,7 @@ Automation eliminates all four. The system runs quarterly, follows its rules, an
 | `pick` report dir/CSV naming ignores `--index` / `--method` flags | report/basket writers | **RESOLVED (2026-09-20)** — split identity: writer keyed off a `--file`-derived universe name (ignoring `--index`) and four call sites sanitized the `<name>_<method>` token differently. Fixed via a single `stockpicker` identity helper (`SanitizeName`/`DisplayName`/`PickIdentity`, `--name`>`--index`>file-name precedence) routed through writer + cached reader. See Phase 11. | ✅ done |
 | Two divergent cache DBs coexist | `data/cache.db` (Sep 8, `source=NULL`, 507 tickers, tax tables) vs `data/mycase.db` (newer schema) | **RESOLVED (2026-09-20)** — verified no live reader (all of `cache`/`pithistory`/`themedb` default to `mycase.db`; only the on-demand `db migrate` reads `cache.db` read-only), and its only unique tables (`tax_lots`/`tax_transactions`/`realized_gains`) were all **empty** — `pkg/tax.Store` recreates them lazily in `mycase.db` via `cache.Conn()`. Backed up to `data/backups/cache_db_retired_20260920.tar.gz` and deleted. `mycase db stats` + `mycase tax status` verified green post-delete. | ✅ done |
 | `data/` + `report/` are deeply nested with path-encoded identity | `data/**`, `report/**`; writers in `selectiontracker`, proposal/backup/monitor paths | **DEFERRED (2026-09-20)** — flatten to a single `data/` tree (+ disposable `data/raw/`) with a filename naming convention. Deferred deliberately: highest-effort + only destructive open item, no functional pressure; `stockpicker.PickIdentity` is groundwork for it. | 🟧 later |
-| `docs/` sprawl (28 md files, heavy overlap) | `docs/**` | **RESOLVED (2026-09-20)** — added [`docs/README.md`](docs/README.md) index (grouped: start-here / design / strategies / testing / archive); moved 9 point-in-time notes (resolved bug tracker, one-off audit, completed impl plan, setup how-tos, India-legacy theme docs) to `docs/archive/` via `git mv` (history preserved); fixed the inter-doc links. Kept code/steering-referenced docs at top level to avoid breaking source comments. | ✅ done |
+| `docs/` sprawl (28 md files, heavy overlap) | `docs/**` | **RESOLVED (2026-09-20)** — consolidated 29 → 24 flat docs with a [`docs/README.md`](docs/README.md) index (start-here / design & subsystems / strategy specs / India-legacy / testing). Merged the two theme docs into one `themes.md`; deleted 5 point-in-time *process artifacts* (resolved bug tracker, one-off audit, completed impl plan, one-off prompt, generic git how-to) whose durable substance already lives in the feature docs (`earlyMB.md`/`value.md`) + git history. Kept every doc that documents running code (incl. India-legacy `themes.md`, `staticip.md`). | ✅ done |
 
 ---
 
@@ -552,26 +552,32 @@ the lost evidence was. This reframes the feature.
   untracked) then deleted. Post-delete verification: `mycase db stats` reports all 19
   tables ONLINE; `mycase tax status` ran clean and recreated the three tax tables in
   `mycase.db`. Single DB at `data/mycase.db`.
-- **Docs consolidation** ✅ **DONE (2026-09-20)**: `docs/` had 29 md files with
-  heavy overlap and no index. Added [`docs/README.md`](README.md) as the navigable
-  index (grouped: start-here / design & subsystems / strategy specs / testing /
-  diagrams / archive) — the highest-value deliverable. Created `docs/archive/` and
-  `git mv`'d 9 point-in-time notes into it (history preserved): `Bugs_EMB.md`
-  (resolved bug tracker), `DataAudit.md` (one-off audit), `value_impl.md` (completed
-  impl plan), `executorError.md` (RCA note), `embPrompt.md` (one-off prompt),
-  `ThemeBasedReturn.md` + `ThemeDatabase.md` (India-legacy theme docs), `git-sync-guide.md`
-  + `StaticIP.md` (setup how-tos); fixed the inter-doc links (earlyMB/multibagger →
-  `archive/`). **Deviation from the original sketch**: did *not* introduce
-  `strategies/` or `design/` subdirectories or fold subsystem docs into
-  architecture/runbook — many docs (`edgar-design`, `datasources`, `refactor`,
-  `architecture`, `roadmap`, `edgar-facts-reference`) are hard-referenced by
-  `docs/…md` path from Go source comments and `.kiro/steering/*`, so moving them
-  would break those references for marginal benefit. The index + archive split
-  captures the value (navigable, sprawl contained) without the breakage; the
-  finer-grained regrouping can happen alongside the deferred data/report flatten if
-  ever warranted. Roadmap remains the single home for status/plans (this doc); no
-  satellite plan docs spawned. The stale `docs/plans/docs-consolidation.md` reference
-  in the debt table was never created and is now moot.
+- **Docs consolidation** ✅ **DONE (2026-09-20)**: consolidated `docs/` from 29 md
+  files with heavy overlap + no index down to **24 flat, indexed docs**. Added
+  [`docs/README.md`](README.md) as the navigable index (start-here / design &
+  subsystems / strategy specs / India-legacy subsystems / testing / diagrams).
+  Consolidation actions:
+  - **Merged** the two theme docs (`ThemeBasedReturn.md` + `ThemeDatabase.md`) into a
+    single `themes.md` covering the lifecycle DB (`pkg/themedb`) and exact-return
+    engine (`pkg/themereturn`).
+  - **Deleted 5 point-in-time process artifacts** whose durable substance already
+    lives in the feature docs + git history: `Bugs_EMB.md` (resolved bug tracker →
+    `earlyMB.md` §27), `DataAudit.md` (one-off audit → `earlyMB.md` §26 +
+    `multibagger.md`), `value_impl.md` (completed impl plan; `value.md` is the
+    spec-of-record), `embPrompt.md` (one-off operator prompt), `git-sync-guide.md`
+    (generic git how-to, no project code). Fixed the earlyMB/multibagger cross-links
+    that had pointed at the deleted audit/bug docs (now inline "§26/§27" references).
+  - **Kept every doc that documents running code**, incl. India-legacy: promoted
+    `executorError.md` → `executor-retry.md` (`pkg/executor`/`cmd/retry`), and kept
+    `staticip.md` (documents the staticip.in proxy `pkg/yfinance` actively bypasses).
+  - Governing rule going forward (in the index): **one doc per feature/subsystem, not
+    per implementation step** — plans/progress go in this roadmap; don't spawn
+    per-feature bug trackers / impl plans / audit snapshots as standalone docs.
+  - Did **not** introduce `strategies/`/`design/` subdirectories: several docs
+    (`edgar-design`, `datasources`, `refactor`, `architecture`, `roadmap`,
+    `edgar-facts-reference`) are hard-referenced by `docs/…md` path from Go source
+    comments and `.kiro/steering/*`, so a flat tree avoids breaking those refs. The
+    stale `docs/plans/docs-consolidation.md` reference was never created and is moot.
 
 ---
 

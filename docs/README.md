@@ -1,12 +1,12 @@
 # Mycase Docs Index
 
 Map of the `docs/` tree. **`roadmap.md` is the single home for status and plans** —
-what's done, in progress, and next. Don't spawn satellite plan docs; record plans and
-progress there.
+what's done, in progress, and next. Don't spawn satellite plan or per-feature process
+docs (impl plans, bug trackers, one-off audits); record plans/progress in the roadmap,
+and document a *feature or subsystem* in its own doc below. Point-in-time process
+artifacts are intentionally not kept — git history preserves them.
 
-Docs are grouped below by role. Point-in-time notes (resolved bug trackers, one-off
-audits, completed implementation plans, setup how-tos) live under [`archive/`](#archive)
-and are kept for provenance, not maintained.
+Docs are grouped by role.
 
 ## Start here
 
@@ -20,7 +20,8 @@ and are kept for provenance, not maintained.
 
 ## Design & subsystems
 
-Durable design references for specific subsystems (kept current as the code evolves).
+Durable design references for specific subsystems (kept current as the code evolves —
+one doc per subsystem, not per implementation step).
 
 | Doc | Subsystem |
 |-----|-----------|
@@ -30,6 +31,7 @@ Durable design references for specific subsystems (kept current as the code evol
 | [`duckdb-migration.md`](duckdb-migration.md) | Intermediate pipeline data → DuckDB (Phase 7); what shipped vs deferred |
 | [`DataFile.md`](DataFile.md) | `data/` directory inventory — every file/dir, provenance, keep/delete status |
 | [`render.md`](render.md) | CLI rendering layer (`pkg/render`) — tables, formatters, TTY-aware color |
+| [`executor-retry.md`](executor-retry.md) | Order-execution rate limiting & failure recovery (`pkg/executor`, `cmd/retry`) |
 | [`feature.md`](feature.md) | Feature specs — tax-optimized rebalancing (FIFO), options overlay |
 | [`refactor.md`](refactor.md) | Refactor history + phase ledger (R-numbered). Referenced by steering + code |
 
@@ -40,7 +42,7 @@ Per-method scoring/selection specifications.
 | Doc | Strategy |
 |-----|----------|
 | [`multibagger.md`](multibagger.md) | Multibagger — India micro/small/mid-cap, 11 hard filters + 100-pt scoring |
-| [`earlyMB.md`](earlyMB.md) | Early Multibagger (`earlymb`) — regime-gated pre-breakout engine (VCP/RVOL/pocket-pivot/delivery) |
+| [`earlyMB.md`](earlyMB.md) | Early Multibagger (`earlymb`) — regime-gated pre-breakout engine (VCP/RVOL/pocket-pivot/delivery); includes the data-integrity audit + bug-resolution ledger |
 | [`value.md`](value.md) | Large-cap Value — EPV-based, dual-path BFSI/industrial filters |
 | [`screener.md`](screener.md) | NSE `nselib` + Screener.in integration (India enrichment) |
 | [`scuttlebutt.md`](scuttlebutt.md) | Scuttlebutt qualitative research reporting pipeline |
@@ -48,7 +50,16 @@ Per-method scoring/selection specifications.
 
 > **Note**: US Quality-Momentum (the active strategy) is specced inline in
 > `architecture.md` + `roadmap.md` rather than a standalone doc; the India strategies
-> above are legacy from the earlier multi-market design.
+> above are legacy from the earlier multi-market design but their code still runs.
+
+## India-legacy subsystems
+
+Documented because the code still runs, though not part of the active US strategy.
+
+| Doc | Subsystem |
+|-----|-----------|
+| [`themes.md`](themes.md) | Theme lifecycle DB (`pkg/themedb`) + exact-return engine (`pkg/themereturn`, `mycase returns`) |
+| [`staticip.md`](staticip.md) | Zerodha Kite static-IP (staticip.in) setup — the proxy `pkg/yfinance` bypasses for Yahoo |
 
 ## Testing
 
@@ -60,20 +71,3 @@ Per-method scoring/selection specifications.
 
 - `architecture-overview.d2` / `architecture-overview.svg` — layer/package overview
   (text-to-diagram source + rendered SVG).
-
-## Archive
-
-Point-in-time notes — resolved bug trackers, one-off audits, completed implementation
-plans, and setup how-tos. Kept for provenance; **not maintained**.
-
-| Doc | What it was |
-|-----|-------------|
-| [`archive/Bugs_EMB.md`](archive/Bugs_EMB.md) | EarlyMB bug tracker (Bugs 001–007, all resolved) |
-| [`archive/DataAudit.md`](archive/DataAudit.md) | One-time system-wide data-integrity audit |
-| [`archive/value_impl.md`](archive/value_impl.md) | Completed implementation plan for the Value strategy |
-| [`archive/executorError.md`](archive/executorError.md) | Order-execution rate-limit / retry RCA note |
-| [`archive/embPrompt.md`](archive/embPrompt.md) | One-off prompt template for logging an earlymb run |
-| [`archive/ThemeBasedReturn.md`](archive/ThemeBasedReturn.md) | India-legacy theme-return engine design/plan |
-| [`archive/ThemeDatabase.md`](archive/ThemeDatabase.md) | India-legacy theme lifecycle DB + daily-sync design |
-| [`archive/git-sync-guide.md`](archive/git-sync-guide.md) | Generic git sync / conflict-resolution how-to |
-| [`archive/StaticIP.md`](archive/StaticIP.md) | Zerodha Kite static-IP (staticip.in) setup how-to (India legacy) |

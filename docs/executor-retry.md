@@ -1,4 +1,4 @@
-# Order Execution Rate Limiting & Failure Recovery Architecture (`executorError.md`)
+# Order Execution Rate Limiting & Failure Recovery Architecture
 
 This document outlines the root cause analysis, architecture, implementation details, and operational commands for handling order placement errors, API rate-limiting, split logging, and automated retry management in `mycase`.
 
@@ -55,7 +55,7 @@ flowchart TD
 
 ### Component Breakdown
 
-#### 1. Core Executor ([pkg/executor/executor.go](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/executor/executor.go))
+#### 1. Core Executor ([pkg/executor/executor.go](../pkg/executor/executor.go))
 - **`placeOrderWithRetry` & `placeGTTWithRetry`**: Wraps broker order calls with a 3-attempt loop and 500ms backoff.
 - **`ExecuteBasketOrders`**: Iterates through basket orders with `200ms` throttling. Splits results into `successLines` and `failedSpecs`. Prompts user for immediate interactive retry if errors occur.
 - **`SaveSuccessLog`**: Writes success reports to `Order/Order_<timestamp>.txt`.
@@ -63,11 +63,11 @@ flowchart TD
 - **`ExecuteRetryPayload`**: Loads `.json` error payloads, fetches real-time prices via `yfinance.FetchQuotes` or Zerodha, re-submits orders with rate limiting, logs success, and deletes `.json` upon 100% completion.
 - **`FindLatestErrorPayload`**: Scans `Error/` directory and picks the newest `.json` payload automatically.
 
-#### 2. CLI Command ([cmd/retry.go](file:///Users/raghavgarg/Projects/myGo/mycase/cmd/retry.go))
+#### 2. CLI Command ([cmd/retry.go](../cmd/retry.go))
 - Registers `mycase retry [path/to/Order_*.json]` with `--live` flag support.
 - If no argument is provided, automatically calls `FindLatestErrorPayload()` to resolve `--latest`.
 
-#### 3. Web Dashboard Integration ([pkg/server/handlers.go](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/server/handlers.go))
+#### 3. Web Dashboard Integration ([pkg/server/handlers.go](../pkg/server/handlers.go))
 - `handleExecute` (`POST /api/portfolio/{name}/execute`): Emits split logs to `Order/` and `Error/`.
 - `handleRetry` (`POST /api/portfolio/{name}/retry`): Triggers async execution of the latest retry payload.
 
