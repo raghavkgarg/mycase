@@ -1,7 +1,7 @@
 # Logging Conventions (slog)
 
 Structured logging is built on stdlib `log/slog` via the `pkg/logging` package
-(see `docs/refactor.md` Phase R14). Follow these rules when adding or converting
+(see `docs/05-refactor.md` Phase R14). Follow these rules when adding or converting
 diagnostic output.
 
 ## The two-channel rule (most important)

@@ -5,7 +5,7 @@ downward** — a package may import only packages at a lower layer, never the sa
 layer or higher. This is enforced by `devtools/checkdeps` (run via `make check-deps`,
 and part of `make cleanup`). Go rejects import *cycles* at compile time; this guard
 additionally preserves the *direction* and *leaf-ness* that phase R16 established
-(see `docs/refactor.md`).
+(see `docs/05-refactor.md`).
 
 ## The core rule: define OR consume, don't do both low in the stack
 

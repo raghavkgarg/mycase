@@ -77,6 +77,6 @@ docs/             Architecture, roadmap, runbook
 - Minimal external deps — prefer stdlib
 
 ## Documentation
-- `docs/roadmap.md` — phased plan, what's done, what's next
-- `docs/architecture.md` — system design, algorithms, data flow
-- `docs/runbook.md` — operator manual, CLI usage examples
+- `docs/03-roadmap.md` — phased plan, what's done, what's next
+- `docs/04-architecture.md` — system design, algorithms, data flow
+- `docs/18-runbook.md` — operator manual, CLI usage examples

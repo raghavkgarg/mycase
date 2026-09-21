@@ -495,7 +495,7 @@ type UserDefaults struct {
 }
 
 // RawConfig holds retention settings for the raw-response archive (pkg/rawstore,
-// docs/roadmap.md R-store-3). Growth is bounded by pruning, not by declining to
+// docs/03-roadmap.md R-store-3). Growth is bounded by pruning, not by declining to
 // capture — capture is ON by default (R-store-2). Two independent ceilings apply
 // (a file is pruned if it exceeds either):
 //

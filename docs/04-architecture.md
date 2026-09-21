@@ -2,7 +2,7 @@
 
 **Module**: `github.com/raghavkgarg/mycase` | **Go**: 1.27.0 | **Binary**: `mycase`
 
-> **Design-review rubric**: the durable architectural principles this design is built on — and how the current solution scores against them — live in [`docs/principles.md`](./principles.md). Evaluate changes and cross-branch merges against that rubric. The mechanically-enforced subset is in `.kiro/steering/` (`architecture.md` = layering, `logging.md` = the two-channel rule, `api-rules.md` = network discipline).
+> **Design-review rubric**: the durable architectural principles this design is built on — and how the current solution scores against them — live in [`docs/02-principles.md`](02-principles.md). Evaluate changes and cross-branch merges against that rubric. The mechanically-enforced subset is in `.kiro/steering/` (`architecture.md` = layering, `logging.md` = the two-channel rule, `api-rules.md` = network discipline).
 
 ---
 
@@ -43,7 +43,7 @@ Each step is a `mycase` subcommand that can run independently or as part of `myc
 
 ## 2. Inputs: Where Data Comes From
 
-Data is sourced **per data type from the most authoritative provider that can supply it**, selected at runtime by `pkg/datafetcher/Router` on the ticker prefix (`US:`/`NYSE:`/`NASDAQ:` → Schwab; everything else → Yahoo). The full source-by-source API shapes, provenance chain (exchanges vs SEC vs classification standards), and the resilient-architecture plan live in **`docs/datasources.md`**; this section is the summary.
+Data is sourced **per data type from the most authoritative provider that can supply it**, selected at runtime by `pkg/datafetcher/Router` on the ticker prefix (`US:`/`NYSE:`/`NASDAQ:` → Schwab; everything else → Yahoo). The full source-by-source API shapes, provenance chain (exchanges vs SEC vs classification standards), and the resilient-architecture plan live in **`docs/07-datasources.md`**; this section is the summary.
 
 | Data type | Current US source | India source | Origin |
 |-----------|-------------------|--------------|--------|
@@ -54,11 +54,11 @@ Data is sourced **per data type from the most authoritative provider that can su
 | Holdings / transactions / orders | Schwab | Zerodha | Broker |
 | Index constituents | CSV (S&P 500 dataset) | CSV (NSE) | Index provider |
 
-> **Known drift**: Schwab's fundamentals are a thin TTM snapshot — no cash-flow statement, no annual series (US sector is now backfilled from the constituents CSV, and `NetIncome`/`RegularPrice` are derived in the mapper, per **Phase 10a**) — and seven command paths (`report`, `monitor`, `optimize`, `serve`, `executor`, `backtest`, `autopilot-schedule`) still bypass the Router and hit Yahoo directly for US data. The remaining remediation is tracked as **roadmap Phase 10b–c** (data-source resilience) and **refactor R17** (Router-bypass cleanup). See `docs/datasources.md`.
+> **Known drift**: Schwab's fundamentals are a thin TTM snapshot — no cash-flow statement, no annual series (US sector is now backfilled from the constituents CSV, and `NetIncome`/`RegularPrice` are derived in the mapper, per **Phase 10a**) — and seven command paths (`report`, `monitor`, `optimize`, `serve`, `executor`, `backtest`, `autopilot-schedule`) still bypass the Router and hit Yahoo directly for US data. The remaining remediation is tracked as **roadmap Phase 10b–c** (data-source resilience) and **refactor R17** (Router-bypass cleanup). See `docs/07-datasources.md`.
 
 ### Schwab Market Data API (US primary)
 
-US price history (`/pricehistory`), batch quotes (`/quotes`), and per-ticker fundamentals (`/instruments?projection=fundamental`) via `pkg/broker/schwab/`. OAuth2, 120 req/min ceiling. Fundamentals are TTM ratios only — see the drift note above and `docs/datasources.md` §5 for the gap analysis. See also D13.
+US price history (`/pricehistory`), batch quotes (`/quotes`), and per-ticker fundamentals (`/instruments?projection=fundamental`) via `pkg/broker/schwab/`. OAuth2, 120 req/min ceiling. Fundamentals are TTM ratios only — see the drift note above and `docs/07-datasources.md` §5 for the gap analysis. See also D13.
 
 ### Yahoo Finance (India primary, US fallback)
 
@@ -699,4 +699,4 @@ Routing today is **market-keyed** (`datafetcher.Router` sends US→Schwab, India
 - **Fundamentals** are *composed*, not single-sourced: Schwab TTM ratios + SEC EDGAR statement facts (operating cash flow, net income, annual series — the authoritative XBRL origin) + sector from the constituents CSV, with Yahoo as the whole-record fallback when the merge is too sparse to score.
 - **Benchmark** → Schwab `US:SPY` (the honest "you-could-have-bought-this" baseline), Yahoo `^GSPC` fallback.
 
-Rationale: Yahoo is a free aggregator reselling a vendor's parse of SEC filings; SEC EDGAR is the filing itself. We accept the XBRL parsing cost for authoritative, license-clean, quarterly-stable data. Fallbacks become an explicit chain with `slog` visibility (degraded runs are observable, not silently swallowed), and the cache gains a `source` column so every number is auditable — consistent with the "no black boxes" design constraint. Full design, API shapes, and gap analysis: `docs/datasources.md`.
+Rationale: Yahoo is a free aggregator reselling a vendor's parse of SEC filings; SEC EDGAR is the filing itself. We accept the XBRL parsing cost for authoritative, license-clean, quarterly-stable data. Fallbacks become an explicit chain with `slog` visibility (degraded runs are observable, not silently swallowed), and the cache gains a `source` column so every number is auditable — consistent with the "no black boxes" design constraint. Full design, API shapes, and gap analysis: `docs/07-datasources.md`.

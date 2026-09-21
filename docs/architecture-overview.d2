@@ -2,7 +2,7 @@
 #
 # A hand-authored "architecture at a glance" diagram (unlike dist/arch.svg,
 # which is the auto-generated package dependency graph). This one abstracts the
-# ~40 pkg/ packages into the conceptual pipeline described in docs/architecture.md
+# ~40 pkg/ packages into the conceptual pipeline described in docs/04-architecture.md
 # §1 and implemented by pkg/autopilot.Run.
 #
 # Render (D2's TALA engine is purpose-built for this kind of architecture layout):
@@ -30,7 +30,7 @@ sources: "Data sources" {
 
   schwab: "Schwab Trader API\n(US prices + broker)" { shape: cylinder; style.fill: "#ffffff" }
   yahoo: "Yahoo Finance\n(fallback / India legacy)" { shape: cylinder; style.fill: "#ffffff" }
-  edgar: "SEC EDGAR\n(fundamentals — Phase 10c)" { shape: cylinder; style.fill: "#f5f5f5"; style.stroke-dash: 4 }
+  edgar: "SEC EDGAR\n(fundamentals — Phase 10c)" { shape: cylinder; style.fill: "#ffffff" }
 }
 
 router: "datafetcher.Router\nUS: → Schwab · else → Yahoo" {
@@ -99,11 +99,22 @@ serve: "serve\nweb dashboard (SSE)" {
 }
 
 # ─────────────────────────────────────────────────────────────
+# Autonomous scheduler (Phase 12 — design, not yet built)
+# One L6 orchestrator owning all three cadences; dashed = planned.
+# ─────────────────────────────────────────────────────────────
+scheduler: "scheduler  (Phase 12 — planned)\ndaily EOD · drift · quarterly rebalance\ntrading-day + holiday aware" {
+  shape: queue
+  style.fill: "#f5f5f5"
+  style.stroke: "#616161"
+  style.stroke-dash: 4
+}
+
+# ─────────────────────────────────────────────────────────────
 # Edges — the data flow
 # ─────────────────────────────────────────────────────────────
 sources.schwab -> router
 sources.yahoo -> router
-sources.edgar -> router: "planned" { style.stroke-dash: 4 }
+sources.edgar -> router: "merge (10c)"
 router -> cache: "cache-first"
 cache -> pipeline.pick: "prices + fundamentals"
 
@@ -120,3 +131,8 @@ audit.monitoring -> serve
 audit.daemon -> serve: "drift alerts"
 audit.daemon -> confirm: "rebalance trigger" { style.stroke-dash: 4 }
 cache -> audit.attribution
+
+# scheduler drives the three cadences (Phase 12, planned — all dashed)
+scheduler -> cache: "daily EOD update" { style.stroke-dash: 4 }
+scheduler -> pipeline.pick: "quarterly rebalance" { style.stroke-dash: 4 }
+scheduler -> audit.daemon: "drift check" { style.stroke-dash: 4 }

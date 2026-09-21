@@ -1,8 +1,8 @@
 # Mycase — Data Sources Reference
 
-**Status**: Reference annex (API shapes, provenance, gap analysis). The *implementation plan* lives in `docs/roadmap.md` **Phase 10** (feature framing) and `docs/refactor.md` **R17** (Router-bypass cleanup); the design principle is `docs/architecture.md` **D15**.
+**Status**: Reference annex (API shapes, provenance, gap analysis). The *implementation plan* lives in `docs/03-roadmap.md` **Phase 10** (feature framing) and `docs/05-refactor.md` **R17** (Router-bypass cleanup); the design principle is `docs/04-architecture.md` **D15**.
 **Updated**: September 2026
-**Scope**: US equity data (India/Yahoo paths are legacy — see `docs/roadmap.md` Phase 4 "Dropped")
+**Scope**: US equity data (India/Yahoo paths are legacy — see `docs/03-roadmap.md` Phase 4 "Dropped")
 
 ---
 
@@ -38,7 +38,7 @@ The goal is an architecture where **each data type is sourced from the most auth
 
 ## 2. The Data Model We Populate
 
-All sources normalize into two leaf DTOs in `pkg/marketdata/marketdata.go` (zero-import leaf; see `docs/architecture.md` layering). These are the shapes every provider must satisfy.
+All sources normalize into two leaf DTOs in `pkg/marketdata/marketdata.go` (zero-import leaf; see `docs/04-architecture.md` layering). These are the shapes every provider must satisfy.
 
 ### `HistoricalData` (daily OHLCV series)
 
@@ -230,7 +230,7 @@ The DuckDB cache now carries a `source VARCHAR` column on both `prices` and `fun
 
 ## 7. Architecture Direction & Rollout
 
-> The detailed phase breakdown, effort, and sequencing live in **`docs/roadmap.md` Phase 10** and **`docs/refactor.md` R17**; the design principle is **`docs/architecture.md` D15**. This section keeps only the durable design shapes those phases implement.
+> The detailed phase breakdown, effort, and sequencing live in **`docs/03-roadmap.md` Phase 10** and **`docs/05-refactor.md` R17**; the design principle is **`docs/04-architecture.md` D15**. This section keeps only the durable design shapes those phases implement.
 
 ### Principle: source per data type, not per market
 

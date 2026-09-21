@@ -1,6 +1,6 @@
 # DuckDB Migration — Intermediate Pipeline Data
 
-**Status**: ✅ **Done** — shipped as Phase 7 (see [roadmap](roadmap.md) alpha-source appendix).  
+**Status**: ✅ **Done** — shipped as Phase 7 (see [roadmap](03-roadmap.md) alpha-source appendix).  
 The pipeline no longer passes intermediate state via `data/candidates/` CSVs: runs,
 proposals, and selections live in DuckDB (`pkg/cache`), and `mycase pipeline
 history|show|diff` read them back. This document is retained as the **design record** for
@@ -192,7 +192,7 @@ CREATE TABLE golden_portfolio (
 
 ### Tax tables (Phase 4 — shipped)
 
-Phase 4 (Tax-Loss Harvesting) added three tables to the same DuckDB file, following the conventions here (BIGINT epoch timestamps, DOUBLE money, composite PKs, no FK constraints): `tax_transactions` (source of truth, idempotent on Schwab `activityId`), `tax_lots`, and `realized_gains` (both derived — full-replace projections rebuilt from transactions on each import). Methods live in `pkg/cache/tax.go`. See `docs/architecture.md` D11 and `docs/runbook.md` §7b.
+Phase 4 (Tax-Loss Harvesting) added three tables to the same DuckDB file, following the conventions here (BIGINT epoch timestamps, DOUBLE money, composite PKs, no FK constraints): `tax_transactions` (source of truth, idempotent on Schwab `activityId`), `tax_lots`, and `realized_gains` (both derived — full-replace projections rebuilt from transactions on each import). Methods live in `pkg/cache/tax.go`. See `docs/04-architecture.md` D11 and `docs/18-runbook.md` §7b.
 
 ---
 

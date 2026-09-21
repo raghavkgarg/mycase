@@ -91,5 +91,5 @@ Historically automated post-market at 21:00 IST via a `scripts/daily_sync.sh`
 LaunchAgent that authenticated Zerodha, fetched trades into `myportfolio`, then ran
 `mycase db update` (warms cache → PIT screening → theme sync). That script is stale
 (machine-specific, hard-coded 2026 NSE holiday list). The unified EOD update it invoked
-survives as `mycase db update` (aliases `eod`/`daily`); see `docs/roadmap.md` Phase 11
+survives as `mycase db update` (aliases `eod`/`daily`); see `docs/03-roadmap.md` Phase 11
 for the planned Go-native scheduler that would replace the shell script.

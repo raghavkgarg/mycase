@@ -15,7 +15,7 @@ import (
 // changes. Cached rows written under an older version are treated as a miss and
 // re-derived (from EDGAR — the raw blob is no longer retained in the DB), so a
 // mapper change can't silently serve a stale-shape record. See
-// docs/edgar-facts-reference.md.
+// docs/09-edgar-facts-reference.md.
 const factsSchemaVersion = 1
 
 // factsDDL caches the COMPACT, extracted facts per CIK — the mapped

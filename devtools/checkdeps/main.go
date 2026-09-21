@@ -10,7 +10,7 @@
 //
 // Go already rejects import cycles at compile time; this guard is about
 // preserving the *direction* and *leaf-ness* the refactor established, which the
-// compiler does not enforce. See docs/refactor.md R16 and
+// compiler does not enforce. See docs/05-refactor.md R16 and
 // .kiro/steering/architecture.md.
 //
 // The layer map itself lives in devtools/internal/layers — the single source of

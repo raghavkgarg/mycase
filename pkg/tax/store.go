@@ -8,7 +8,7 @@ import (
 
 // taxDDL creates the tax persistence tables. Owned by this package (not
 // pkg/cache) so the dependency direction stays domain → cache, not the inverse
-// (see docs/refactor.md R16, problem P4). Timestamps are Unix epoch seconds in
+// (see docs/05-refactor.md R16, problem P4). Timestamps are Unix epoch seconds in
 // BIGINT columns, per the cache-wide convention. Lots and realized gains are
 // derived state (recomputed from transactions via FIFO) and use full-replace
 // semantics; transactions are idempotent on txn_id.

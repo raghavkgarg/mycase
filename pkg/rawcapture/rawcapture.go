@@ -1,5 +1,5 @@
 // Package rawcapture is the zero-import hook half of the raw-response archive
-// that enforces the API rule "fetch once, analyze offline" (see docs/roadmap.md
+// that enforces the API rule "fetch once, analyze offline" (see docs/03-roadmap.md
 // Phase 11).
 //
 // It hooks the single HTTP chokepoint in each API client. On a 2xx response the
@@ -75,7 +75,7 @@ const (
 	// case-insensitive) disables it. Any other value (including unset or a
 	// truthy value) leaves capture on. The default-on stance is deliberate: the
 	// failure it guards against is evidence loss — the surprising run is the one
-	// you didn't think to arm (see docs/roadmap.md R-store-2).
+	// you didn't think to arm (see docs/03-roadmap.md R-store-2).
 	captureEnv = "MYCASE_CAPTURE"
 	// replayEnv, when truthy, enables offline replay: API-client chokepoints
 	// serve archived bodies from the Sink instead of hitting the network.

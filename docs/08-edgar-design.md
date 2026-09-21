@@ -2,7 +2,7 @@
 
 **Status**: ✅ IMPLEMENTED (Phase 10c shipped). This document records the design as built; see `pkg/edgar`, `pkg/datafetcher/merger.go`, and the Router `WithEDGAR` wiring.
 **Scope**: `pkg/edgar` client + XBRL concept mapper + `datafetcher.FundamentalsMerger`
-**References**: `docs/roadmap.md` Phase 10c, `docs/datasources.md` §4.3/§7, `docs/architecture.md` layering (R16), `docs/api-rules.md`
+**References**: `docs/03-roadmap.md` Phase 10c, `docs/07-datasources.md` §4.3/§7, `docs/04-architecture.md` layering (R16), `docs/api-rules.md`
 
 ---
 
@@ -178,6 +178,6 @@ The five decisions below were resolved in review before implementation; kept her
 - [x] `devtools/internal/layers/layers.go` — register `edgar` at L1
 - [x] `config/defaults.json` + `pkg/config` — `edgar` block, UA, TTLs, `enabled`
 - [x] `.kiro/steering/architecture.md` layer table — `edgar` L1 (also synced `themedb`/`portfolio`/`themereturn`)
-- [x] `docs/datasources.md` §5/§6/§7 — 10c marked done; `docs/roadmap.md` Phase 10c → done
+- [x] `docs/07-datasources.md` §5/§6/§7 — 10c marked done; `docs/03-roadmap.md` Phase 10c → done
 - [x] `make cleanup` + `make test` green; `make check-deps` intact
 - [x] wired opt-in into `cmd/broker.go` + `pkg/autopilot` router factories (`MYCASE_EDGAR_USER_AGENT` env override)

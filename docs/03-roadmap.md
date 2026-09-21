@@ -105,15 +105,15 @@ Automation eliminates all four. The system runs quarterly, follows its rules, an
 
 | Component | Spec location | Blocking? |
 |-----------|---------------|-----------|
-| Tax-optimized rebalancing (FIFO engine) | `docs/feature.md` Feature 1 | ✅ Built for US (`pkg/tax`) — India variant still specced only |
-| Options overlay | `docs/feature.md` Feature 2 | No — post-maturity optimization |
-| Screener.in deep integration (QoQ, shareholding, CWIP) | `docs/screener.md` | No — enrichment |
+| Tax-optimized rebalancing (FIFO engine) | `docs/19-feature-specs.md` Feature 1 | ✅ Built for US (`pkg/tax`) — India variant still specced only |
+| Options overlay | `docs/19-feature-specs.md` Feature 2 | No — post-maturity optimization |
+| Screener.in deep integration (QoQ, shareholding, CWIP) | `docs/17-screener.md` | No — enrichment |
 
 ### What's missing entirely
 
 | Gap | Impact |
 |-----|--------|
-| Authoritative US fundamentals (SEC EDGAR) | Schwab fundamentals are thin TTM only — no cash-flow statement, no annual series; US scoring degrades to proxies (see `docs/datasources.md`) |
+| Authoritative US fundamentals (SEC EDGAR) | Schwab fundamentals are thin TTM only — no cash-flow statement, no annual series; US scoring degrades to proxies (see `docs/07-datasources.md`) |
 | US sector classification | ✅ **Addressed (Phase 10a)** — `Fundamentals.Sector` backfilled from the constituents CSV's GICS Sector column, so US sector caps engage instead of collapsing to "Unknown" |
 | Data-source provenance in cache | Cannot audit which source produced a number, or invalidate one source selectively |
 
@@ -134,13 +134,13 @@ Automation eliminates all four. The system runs quarterly, follows its rules, an
 
 ## 3. Architecture Vision
 
-The system is a 6-layer responsibility stack (market data → strategy → portfolio construction → execution & tax → autopilot → audit & attribution), US-only via Schwab. For the system design — conceptual layers, the concrete `cmd/pkg/` package breakdown, data flow, ticker routing (`US:`→Schwab, else→Yahoo), and design decisions — see **`docs/architecture.md`** §2 (Inputs), §4 (System Design), and §11 (Design Decisions). This roadmap covers only *what* is being built and *when*.
+The system is a 6-layer responsibility stack (market data → strategy → portfolio construction → execution & tax → autopilot → audit & attribution), US-only via Schwab. For the system design — conceptual layers, the concrete `cmd/pkg/` package breakdown, data flow, ticker routing (`US:`→Schwab, else→Yahoo), and design decisions — see **`docs/04-architecture.md`** §2 (Inputs), §4 (System Design), and §11 (Design Decisions). This roadmap covers only *what* is being built and *when*.
 
 ---
 
 ## 4. Phased Roadmap
 
-Completed and dropped phases have been removed from this roadmap; their design detail lives in `docs/architecture.md` (design decisions), `docs/refactor.md` (Completed Phases ledger), and `docs/duckdb-migration.md`. Only active and planned work remains below.
+Completed and dropped phases have been removed from this roadmap; their design detail lives in `docs/04-architecture.md` (design decisions), `docs/05-refactor.md` (Completed Phases ledger), and `docs/10-duckdb-migration.md`. Only active and planned work remains below.
 
 ### Carried-over follow-ups (non-blocking)
 
@@ -153,7 +153,7 @@ Small items left open by shipped phases:
 
 ### Phase 10: Data Source Resilience
 
-**What**: Source each data type from the most authoritative provider that can supply it, with deterministic logged fallback, and record provenance. Today the clean `pick`/autopilot pipeline routes US data through Schwab, but seven other command paths bypass the router and hit Yahoo directly, Schwab's fundamentals are a thin TTM snapshot (no sector, no cash-flow statement, no annual series), and the benchmark is always Yahoo `^GSPC`. Full design, API shapes, provenance chain, and gap analysis live in **`docs/datasources.md`**.
+**What**: Source each data type from the most authoritative provider that can supply it, with deterministic logged fallback, and record provenance. Today the clean `pick`/autopilot pipeline routes US data through Schwab, but seven other command paths bypass the router and hit Yahoo directly, Schwab's fundamentals are a thin TTM snapshot (no sector, no cash-flow statement, no annual series), and the benchmark is always Yahoo `^GSPC`. Full design, API shapes, provenance chain, and gap analysis live in **`docs/07-datasources.md`**.
 
 **Why**: Yahoo is a free aggregator reselling a vendor's parse of SEC filings — it is neither authoritative nor stable (unofficial endpoints, legally a scrape). The real origins are: **exchanges** for prices (Schwab is broker-direct, closer than Yahoo), **SEC EDGAR XBRL** for fundamentals (the filing itself), and **GICS/constituents-CSV** for sector. Sourcing authoritatively removes a fragile dependency, fixes silently-broken US sector caps, and upgrades the earnings-quality and ROIC factors from proxies to real inputs. This directly serves the "no black boxes / transparency" design constraint.
 
@@ -173,7 +173,7 @@ Small items left open by shipped phases:
 - `source` provenance column in the price + fundamentals cache with per-source freshness (Phase 10b/10c)
 - `US:SPY`-via-Schwab benchmark with Yahoo fallback (Phase 10b)
 
-**Effort**: ~2–3 weeks total across the four sub-phases. The hard part is Phase 10c's XBRL parsing — filers use custom taxonomy extensions and tags drift over time, so the concept mapper must try an ordered list of candidate tags per concept. The open question (see `docs/datasources.md` §10) is whether to parse EDGAR ourselves or pay a commercial fundamentals vendor to skip it.
+**Effort**: ~2–3 weeks total across the four sub-phases. The hard part is Phase 10c's XBRL parsing — filers use custom taxonomy extensions and tags drift over time, so the concept mapper must try an ordered list of candidate tags per concept. The open question (see `docs/07-datasources.md` §10) is whether to parse EDGAR ourselves or pay a commercial fundamentals vendor to skip it.
 
 **Dependency**: Phase 10a and 10b are independent and both shipped. Phase 10c (shipped) depended on 10b (the merger plugs into the routed path). Phase 10d depends on 10c.
 
@@ -492,7 +492,7 @@ the lost evidence was. This reframes the feature.
   a fresh file (`ATTACH` + `COPY FROM DATABASE`, `.bak` kept) to reclaim dead space.
   Verified on the live DB: **3599 MB → 18 MB**, all 479 rows + `entity_name` preserved,
   FCF re-derived correctly (Visa $21.58B, AAPL $98.8B, NVDA $102.6B; JPM 0 = bank).
-  New reference doc **`docs/edgar-facts-reference.md`** catalogues the wider companyfacts
+  New reference doc **`docs/09-edgar-facts-reference.md`** catalogues the wider companyfacts
   universe (fields we extract today + candidate facts/tags for future factors:
   stockholders-equity→authoritative ROE, dividends+buybacks→shareholder yield,
   D&A→EBITDA, EPS/shares, R&D, balance-sheet depth) to guide roadmap evolution.
@@ -883,5 +883,5 @@ This is fragile: wrong column deleted, accidental formatting, no context while e
 
 Data-source resilience (Phase 10) is higher priority — it improves the correctness of inputs the strategy depends on; the UI doesn't. The CSV workflow is ugly but works for quarterly rebalance (4×/year). Defer until:
 - The system is stable enough that UX is the bottleneck, not the strategy
-- The golden copy can move to DuckDB (the pipeline migration is done — see `docs/duckdb-migration.md`)
+- The golden copy can move to DuckDB (the pipeline migration is done — see `docs/10-duckdb-migration.md`)
 - Swift Charts and DuckDB Swift bindings are mature enough for production use

@@ -70,7 +70,7 @@ func (c *Cache) Close() error {
 // Conn returns the underlying *sql.DB so that domain packages can own their
 // persistence (define their own tables + queries) without pkg/cache importing
 // them. This keeps the dependency direction one-way: domain → cache, never
-// cache → domain (see docs/refactor.md R16, problem P4). Callers must use
+// cache → domain (see docs/05-refactor.md R16, problem P4). Callers must use
 // CREATE TABLE IF NOT EXISTS and treat the single-writer connection accordingly.
 func (c *Cache) Conn() *sql.DB { return c.db }
 
