@@ -581,7 +581,112 @@ the lost evidence was. This reframes the feature.
 
 ---
 
-### Phase 6: Options Overlay (Post-Maturity)
+### Phase 12: Autonomous Scheduler (design — not yet built)
+
+**Goal**: the system runs itself at the right cadence without a human remembering to
+invoke commands — while preserving the investor-in-the-loop rule for anything that
+places orders. Today three natural cadences exist but are unevenly automated and
+uncoordinated (see "Current state" below). This phase designs a single Go-native
+orchestrator that owns all three.
+
+> **Status: design draft for review.** No code yet. The sub-sections below are the
+> proposal to iterate on; once agreed, they become the implementation checklist.
+
+#### Current state (what exists)
+
+| Cadence | Mechanism today | Automated? | Gap |
+|---|---|---|---|
+| **(a) Daily post-market EOD update** — `mycase db update` (warms cache → PIT screening → theme sync) | only the stale `scripts/daily_sync.sh` | **No (broken)** — script hard-codes another machine's path, India-only, no repo-shipped launchd/cron unit; logic trapped in `cmd/db.go` `RunDBUpdateDirect` | Biggest gap: no Go-native scheduling, no installer |
+| **(b) Drift monitoring** — `pkg/daemon` | `daemon.RunLoop` self-timed loop (fires 15 min after market close), installed via launchd `KeepAlive` / systemd `Type=simple` | **Yes** (once installed) | Fires *every calendar day* (weekend/holiday-blind); alerts only; `drift_trigger_pct` config exists but is unused |
+| **(c) Quarterly rebalance** — `pkg/autopilot` | `autopilot install` → launchd `StartCalendarInterval` / systemd `.timer`, Jan/Apr/Jul/Oct 2nd @ 10:00 | **Yes** (once installed), execution manual | Human-in-the-loop by design: `run` produces a proposal; confirm/execute is dashboard-only. `auto_execute` config exists but no code path honors it |
+
+Cross-cutting problems: **no single orchestrator** (three separate installers/OS units,
+no ordering — e.g. EOD update should finish before a drift check reads the cache);
+**three inconsistent "is it a trading day?" notions** (daemon = every day; autopilot =
+live benchmark probe; `marketcal` = weekend-only); **no holiday calendar** anywhere in
+Go (only a hard-coded 2026 list in the dead shell script).
+
+#### Design decisions (proposed)
+
+1. **One long-lived scheduler process, not N OS units.** Replace the per-feature
+   launchd/systemd installers with a single `mycase scheduler` daemon that owns a tick
+   loop and dispatches all three cadences. One install (`mycase scheduler install`),
+   one PID, one log. Rationale: coordination (ordering + shared "is it a trading day?"
+   answer) is impossible across three independent OS-fired one-shots; it's trivial
+   inside one process. The drift daemon's existing self-timed-loop model (L4
+   `daemon.RunLoop`) is the proven pattern to generalize.
+
+2. **Layering: new `pkg/scheduler` at L6 (beside `server`).** It must invoke
+   `autopilot.Run` (L5) and the EOD update, so it sits above autopilot. `cmd/scheduler.go`
+   (composition root) wires it. This respects strictly-downward imports; a lower-layer
+   scheduler can't call autopilot.
+
+3. **Extract EOD logic out of `cmd/`.** `RunDBUpdateDirect` moves from `cmd/db.go`
+   into a `pkg/` package (candidate: a new `pkg/eod` at L4, or fold into an existing
+   domain) so the scheduler can call it without importing `cmd`. `cmd/db.go` becomes a
+   thin wrapper (same pattern as the rest of `cmd/`).
+
+4. **One trading-day authority — extend `marketcal` with a holiday calendar.** Collapse
+   the three notions into `marketcal` (the L-1 pure floor). Add an exchange-holiday set
+   per `Clock` (NSE, NYSE), sourced from a small committed data file (JSON/CSV under
+   `config/`), so `IsTradingDay`/settlement math become holiday-aware. Autopilot's live
+   benchmark probe and the daemon's every-calendar-day firing both switch to this. This
+   is the prerequisite that unblocks correct scheduling around holidays.
+
+5. **Cadence schema in config, one block.** A single `scheduler:` block in
+   `config/defaults.json` (or the pipeline YAML) with per-cadence entries:
+   `eod` (enabled, at = market-close + offset), `drift` (enabled, at, `drift_trigger_pct`
+   — finally consumed), `rebalance` (enabled, `frequency`, `day`, `auto_execute`). Reuse
+   the existing `config.ScheduleConfig`/`AlertConfig`; precedence flag > env > config >
+   default as elsewhere.
+
+6. **Preserve investor-in-the-loop.** The scheduler may run pick/optimize/propose and
+   send the proposal alert automatically, but **must not place orders** unless
+   `rebalance.auto_execute = true` *and* `--live`. Default off. When off, the quarterly
+   tick produces a proposal + notification exactly like today; confirm/execute stays
+   the dashboard action. `auto_execute` (currently dead config) gets its first real
+   consumer here, gated hard.
+
+7. **Drift-triggered rebalance (optional, later).** Once the orchestrator spans L6, a
+   drift breach can *propose* a rebalance (not just alert) by invoking autopilot — the
+   layering that made this impossible for the L4 daemon is resolved by the L6 placement.
+   Still proposal-only unless `auto_execute`.
+
+#### Open questions (to iterate on)
+
+- **OS integration**: keep a thin launchd/systemd unit that just keeps the one
+  `scheduler` process alive (`KeepAlive`), vs. a fully in-process `time.Timer` tick with
+  no OS dependency? (Leaning: thin keep-alive unit + in-process tick loop — survives
+  reboot, but all cadence logic stays in Go.)
+- **Holiday calendar source**: hand-maintained committed file vs. fetch/scrape (NSE +
+  NYSE publish annual calendars). Hand-maintained is simplest and offline-safe; needs a
+  yearly update. Where does it live and who updates it?
+- **Coordination semantics**: should the daily EOD update *block* the same day's drift
+  check until it completes (fresh cache), and should a rebalance day imply an EOD update
+  first? (Leaning: yes — the orchestrator sequences EOD → drift, and rebalance depends
+  on a completed EOD.)
+- **Catch-up on missed ticks**: if the machine was asleep at market close, run the
+  missed EOD update on wake? (launchd/systemd `Persistent=true` semantics vs. in-process
+  detection of a stale last-run.)
+- **Overlap with the deferred `scripts/daily_sync.sh`**: retire the shell script
+  entirely once `pkg/eod` + scheduler exist, or keep it as a manual fallback?
+
+#### Deliverables (once design is agreed)
+
+- `pkg/scheduler/` (L6) — tick loop + cadence dispatch + coordination/ordering.
+- `pkg/eod/` (or equivalent) — EOD-update logic lifted out of `cmd/db.go`.
+- `marketcal` holiday calendar (NSE + NYSE) + committed holiday data; unify the three
+  trading-day notions onto it.
+- `mycase scheduler {run,status,install,uninstall}` CLI + one OS keep-alive unit,
+  replacing the separate `daemon install` / `autopilot install` units.
+- `scheduler:` config block; first real consumer of `auto_execute` / `drift_trigger_pct`.
+
+**Dependency**: the `marketcal` holiday calendar (#4) is the enabling prerequisite;
+EOD extraction (#3) unblocks scheduler dispatch of cadence (a). Independent of Phase 10/11.
+
+---
+
+
 
 
 **What**: Once the portfolio is stable and well-tracked (6+ months live), add an options overlay for income generation and tail-risk hedging.
@@ -609,6 +714,7 @@ Active and planned phases only (completed/dropped phases removed):
 |-------|--------|------------|---------------------|--------|
 | 10. Data Source Resilience | Q4 2026 | Phase 2 (Schwab) | Authoritative US data (SEC EDGAR), Schwab everywhere, provenance | 🟧 10a+10b+10c done, 10d pending |
 | 11. Data & observability hygiene | Q4 2026 | none | Raw-response capture/replay (done); raw-store split + capture-by-default + retention + triage; pick `0/N` fix | 🟧 in progress |
+| 12. Autonomous Scheduler | Q1 2027 | `marketcal` holiday calendar | One Go-native orchestrator for all three cadences (EOD / drift / rebalance); investor-in-the-loop preserved | 📐 design draft |
 | 6. Options Overlay | H2 2027 | 6mo live data | Income optimization | ⬜ |
 
 ---
