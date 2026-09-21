@@ -3,9 +3,9 @@
 This is the book-form table of contents for `docs/`. Each document is a **chapter**;
 chapters are grouped into **modules** and ordered so the guide reads front-to-back —
 from *why the system exists* through *how it's built*, *what it does*, and *how to run
-it*, ending with legacy material. **Status and plans are not part of the reading spine**
-— they live in the Roadmap (Ch. 3), which is the one appendix-like chapter you consult
-rather than read straight through.
+it*, ending with the India-Path material. **Status and plans are not part of the reading
+spine** — they live in the Roadmap (Ch. 3), which is the one appendix-like chapter you
+consult rather than read straight through.
 
 > **This structure is a working draft (Pass 1).** The module grouping and chapter
 > titles below are the source of truth for how the book reads; the *filenames*
@@ -93,8 +93,8 @@ change-logs. Apply them to every chapter, new or edited:
 | 17 | [Screener / nselib Integration](17-screener.md) | NSE `nselib` + Screener.in enrichment (India) |
 
 > The active strategy, **US Quality-Momentum**, is specced inline in Ch. 4
-> (Architecture) rather than a standalone chapter. The India strategies above are legacy
-> from the earlier multi-market design, but their code still runs.
+> (Architecture) rather than a standalone chapter. The India strategies above belong to the
+> **India-Path** — the other supported market path, distinct from the current US focus.
 
 ## Module E — Execution & Operations
 
@@ -107,9 +107,10 @@ change-logs. Apply them to every chapter, new or edited:
 | 20 | [Order Execution & Retry](20-executor-retry.md) | Rate limiting & failure recovery (`pkg/executor`, `cmd/retry`) |
 | 21 | [Testing](21-testing.md) | The test pyramid, conventions, coverage, how to run each tier |
 
-## Module F — India-Legacy Subsystems
+## Module F — India-Path Subsystems
 
-*Documented because the code still runs, though not part of the active US strategy.*
+*The India market path: the subsystems that run when the India-Path is used. Distinct from
+the active US-Path focus.*
 
 | Ch. | Chapter | Subsystem |
 |----:|---------|-----------|

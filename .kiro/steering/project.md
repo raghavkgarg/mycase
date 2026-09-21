@@ -8,7 +8,7 @@ Automated US equity factor-tilt system (Go). Single binary, quarterly rebalance,
 - **urfave/cli/v3** — command framework
 - **DuckDB** — local price/fundamentals cache
 - **Schwab Trader API** — US market data + brokerage
-- **Yahoo Finance** — fallback data source (India legacy, US fallback)
+- **Yahoo Finance** — fallback data source (US fallback + India-Path primary)
 
 ## Build, Test & Lint (use Makefile)
 ```bash
@@ -47,7 +47,7 @@ pkg/
 ├── broker/       Broker interface, MarketConfig, cost helpers
 │   ├── types/    Broker DTOs (Holding, Order, MarketConfig) — zero-import leaf
 │   ├── schwab/   Schwab API client (auth, market data, broker)
-│   └── zerodha/  Zerodha/Kite broker (India legacy)
+│   └── zerodha/  Zerodha/Kite broker (India-Path)
 ├── brokerfactory/ Creates broker from config/defaults.json
 ├── stockpicker/  Scoring, hard filters, hysteresis, selection
 ├── optimizer/    Inverse-volatility, MFS weights, sector caps

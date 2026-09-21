@@ -1,7 +1,8 @@
-# Theme Subsystem — Lifecycle DB + Exact Returns (India legacy)
+# Theme Subsystem — Lifecycle DB + Exact Returns (India-Path)
 
-> **Status: India legacy.** Themes belong to the earlier multi-market design and the
-> Zerodha/`portfolio.db` integration. They are not part of the active US strategy.
+> **Part of the India-Path.** Themes belong to the multi-market design and the
+> Zerodha/`portfolio.db` integration — the India market path, distinct from the active US
+> focus.
 > This is the consolidated reference for the two theme concerns — the lifecycle
 > database (`theme_rebalances`/`theme_history` in `data/mycase.db`) and the
 > exact-return engine (`pkg/themereturn`). Historical implementation-plan detail lives

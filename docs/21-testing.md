@@ -60,7 +60,7 @@ covered by integration/E2E rather than chased for unit percentage. Representativ
 | **Strong (≥85%)** | `portfolio`, `marketfmt`, `rawcapture`, `costs`, `rawstore`, `attribution`, `logging`, `printer`, `tax`, `render`, `marketcal` |
 | **Moderate (45–85%)** | `cache`, `datafetcher`, `csvloader`, `edgar`, `monitoring`, `themedb`, `backtest`, `config`, `broker/schwab` |
 | **Weak / priority targets** | `stockpicker`, `optimizer`, `yfinance`, `daemon`, `pithistory`, `marketdata`, `server`, `selectiontracker`, `autopilot` |
-| **Untested glue / dormant** | `alert`, `broker` iface, `market`, `excel`, `universe`, and the India-legacy `zerodha`/`kiteclient`/`kiteauth`/`themereturn` |
+| **Untested glue / dormant** | `alert`, `broker` iface, `market`, `excel`, `universe`, and the dormant India-Path `zerodha`/`kiteclient`/`kiteauth`/`themereturn` |
 
 `pkg/stockpicker` (the scoring engine, architecture Layer 3) is the highest-value gap:
 its selection and scoring logic is pure and table-testable, and a regression there is a

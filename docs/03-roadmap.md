@@ -4,7 +4,10 @@
 
 **Updated**: September 2026
 
-**Target investor**: US-based individual investor using Schwab. The India market components exist as legacy code from an earlier multi-market design but are not part of the active strategy.
+**Target investor**: US-based individual investor using Schwab. The system supports two
+**market paths** — the **US-Path** (Schwab + SEC EDGAR, the active strategy focus) and the
+**India-Path** (Zerodha + NSE/Yahoo, from the earlier multi-market design). The
+market-parameterized design (`marketcal`, `pkg/eod`, the strategy engine) runs either path.
 
 ---
 
@@ -97,7 +100,7 @@ the guide (see `docs/README.md`).
 | Structured logging + raw-response capture/triage | Ch. 24 Logging & Observability |
 | CLI rendering layer (`pkg/render`) | Ch. 6 Rendering |
 | Hysteresis / anti-churn cooldown; market-aware EOD settlement; standardized rate limiting; home-relative config resolution | Ch. 2, Ch. 4 |
-| **India-legacy (code still runs):** Multibagger, Early Multibagger, Value, MFS, Zerodha execution, India cost model, Screener/nselib, Themes | Module D, Module F |
+| **India-Path:** Multibagger, Early Multibagger, Value, MFS, Zerodha execution, India cost model, Screener/nselib, Themes | Module D, Module F |
 
 ### Specced but not built
 

@@ -165,7 +165,6 @@ func TestClockForTicker(t *testing.T) {
 	}
 }
 
-
 func TestIsTradingDay_WeekendsAndHolidays(t *testing.T) {
 	ist := istZone()
 	// NSE with no holidays: only weekends are non-trading.

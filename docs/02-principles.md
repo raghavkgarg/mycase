@@ -289,7 +289,7 @@ Ordered by severity against the principles.
 2. **`rsi`/`momentum_1y` persist zero (§5).** Assign both in the three `RecordDriverMetrics` call sites (`scoring.go` ×2, `scoring_us.go`); the columns and end-to-end wiring already exist. Small, well-scoped fix. Restores "explainable from output."
 3. **No config schema validation / migration story (§3).** Add optional range/required-field validation at the `pkg/config` load boundary (preserving degrade-to-default for optional blocks) and a `schema_version` + forward-migration path if a breaking change ever lands.
 4. **Remaining diagnostic `fmt` sites (§2).** Audit for `fmt.Print*` diagnostics that should be slog; keep only genuine user-facing results / interactive UX on stdout.
-5. **Zerodha/Kite residual code (§8).** The named `kiteclient` was removed (R10.1); what survives is the live-but-India-legacy Zerodha broker (`pkg/broker/zerodha`). Decide explicitly: keep as a real fallback broker or mark for removal. Currently kept.
+5. **Zerodha/Kite residual code (§8).** The named `kiteclient` was removed (R10.1); what survives is the live India-Path Zerodha broker (`pkg/broker/zerodha`). Decide explicitly: keep as a real fallback broker or mark for removal. Currently kept.
 6. **Dropped delivery column (§8).** `pkg/printer/printer.go` no longer renders main's delivery-% column (dropped during merge). The data still exists (`yfinance.FetchNselibDeliveryData*`, PIT `delivery_delta`); revisit if the EBM UI wants it back on the render layer.
 
 **Resolved this session:** the PIT-snapshot-vs-`selections` "two audit trails" question — confirmed complementary (different grain/keys/DBs/consumers), not duplicative; keep both (§6).

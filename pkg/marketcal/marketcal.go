@@ -7,8 +7,8 @@
 // and "when will the next EOD file be available?". Both live markets are
 // supported:
 //
-//   - NSE  (India legacy) — Asia/Kolkata, 21:00 IST cutoff.
-//   - NYSE (US)           — America/New_York, 16:00 ET regular close.
+//   - NSE  (India-Path) — Asia/Kolkata, 21:00 IST cutoff.
+//   - NYSE (US-Path)     — America/New_York, 16:00 ET regular close.
 //
 // Design notes:
 //   - This package imports only the standard library (time, strings). It sits

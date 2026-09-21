@@ -1,6 +1,6 @@
 # Mycase — Data Sources Reference
 
-**Scope**: US equity data. The India/Yahoo paths are legacy from the earlier multi-market design.
+**Scope**: US equity data. The India/Yahoo paths belong to the India-Path (the earlier multi-market design).
 
 This chapter is the reference for how market data is sourced: the data model, the real API shapes, provenance, and the gap analysis. The design principle behind it — *source each data type from the most authoritative provider that can supply it* — is recorded as decision **D15** in `docs/04-architecture.md`.
 
