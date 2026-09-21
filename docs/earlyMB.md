@@ -1243,7 +1243,7 @@ Evaluating relief rules in shadow mode to accumulate empirical evidence before l
 
 ### 1. The Comprehensive Data Integrity Audit & Root Causes
 
-A deep-dive investigation into anomalous signals—triggered by `NSE:DIACABS` displaying a `+13.4%` delivery delta despite having zero confirmed trading bars in September and failing ROCE while carrying negative operating cash flow—led to a full-system audit of all data sources, transformations, and filters across Go and Python components (formally cataloged in [`docs/DataAudit.md`](file:///Users/raghavgarg/Projects/myGo/mycase/docs/DataAudit.md)).
+A deep-dive investigation into anomalous signals—triggered by `NSE:DIACABS` displaying a `+13.4%` delivery delta despite having zero confirmed trading bars in September and failing ROCE while carrying negative operating cash flow—led to a full-system audit of all data sources, transformations, and filters across Go and Python components (formally cataloged in [`docs/archive/DataAudit.md`](archive/DataAudit.md)).
 
 The audit uncovered four major systemic data vulnerabilities:
 
@@ -1378,7 +1378,7 @@ Following the complete database purge of stale fundamentals, caches, and deliver
 
 ## 27. System-Wide Quantitative Hardening, Historical Recalibration Backfill & Bug Fixes (Sep 14, 2026)
 
-Following live production execution, data reconciliation, and audit of the Stage-1 elimination funnel and Point-in-Time analytics, seven high-priority systemic issues were resolved and validated across Go and Python codebases (formally tracked in [`docs/Bugs_EMB.md`](file:///Users/raghavgarg/Projects/myGo/mycase/docs/Bugs_EMB.md)). In addition, the Point-in-Time history was fully restored and 100% recalibrated.
+Following live production execution, data reconciliation, and audit of the Stage-1 elimination funnel and Point-in-Time analytics, seven high-priority systemic issues were resolved and validated across Go and Python codebases (formally tracked in [`docs/archive/Bugs_EMB.md`](archive/Bugs_EMB.md)). In addition, the Point-in-Time history was fully restored and 100% recalibrated.
 
 ### 1. Full Historical Recalibration Backfill & Sep 10 Snapshot Restoration
 1. **Restoration of Sep 10 Snapshot**:
@@ -1391,7 +1391,7 @@ Following live production execution, data reconciliation, and audit of the Stage
 
 ---
 
-### 2. Resolution of Bugs 001 through 007 (`docs/Bugs_EMB.md`)
+### 2. Resolution of Bugs 001 through 007 (`docs/archive/Bugs_EMB.md`)
 
 #### Bug-001: Score Shift Partitioning & Methodology Discontinuity Guard (Section 5)
 - **Problem**: Threshold `|diff| >= 4.0` without partitioning dumped dozens of rows to the console. Furthermore, comparing uncalibrated with calibrated runs falsely presented methodology upgrades as technical breakdowns.

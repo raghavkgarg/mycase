@@ -128,7 +128,7 @@ Automation eliminates all four. The system runs quarterly, follows its rules, an
 | `pick` report dir/CSV naming ignores `--index` / `--method` flags | report/basket writers | **RESOLVED (2026-09-20)** — split identity: writer keyed off a `--file`-derived universe name (ignoring `--index`) and four call sites sanitized the `<name>_<method>` token differently. Fixed via a single `stockpicker` identity helper (`SanitizeName`/`DisplayName`/`PickIdentity`, `--name`>`--index`>file-name precedence) routed through writer + cached reader. See Phase 11. | ✅ done |
 | Two divergent cache DBs coexist | `data/cache.db` (Sep 8, `source=NULL`, 507 tickers, tax tables) vs `data/mycase.db` (newer schema) | **RESOLVED (2026-09-20)** — verified no live reader (all of `cache`/`pithistory`/`themedb` default to `mycase.db`; only the on-demand `db migrate` reads `cache.db` read-only), and its only unique tables (`tax_lots`/`tax_transactions`/`realized_gains`) were all **empty** — `pkg/tax.Store` recreates them lazily in `mycase.db` via `cache.Conn()`. Backed up to `data/backups/cache_db_retired_20260920.tar.gz` and deleted. `mycase db stats` + `mycase tax status` verified green post-delete. | ✅ done |
 | `data/` + `report/` are deeply nested with path-encoded identity | `data/**`, `report/**`; writers in `selectiontracker`, proposal/backup/monitor paths | **DEFERRED (2026-09-20)** — flatten to a single `data/` tree (+ disposable `data/raw/`) with a filename naming convention. Deferred deliberately: highest-effort + only destructive open item, no functional pressure; `stockpicker.PickIdentity` is groundwork for it. | 🟧 later |
-| `docs/` sprawl (28 md files, heavy overlap) | `docs/**` | **OPEN (2026-09-15)** — consolidate to a maintained core + `archive/`; add an index. See `docs/plans/docs-consolidation.md`. | 🟩 low |
+| `docs/` sprawl (28 md files, heavy overlap) | `docs/**` | **RESOLVED (2026-09-20)** — added [`docs/README.md`](docs/README.md) index (grouped: start-here / design / strategies / testing / archive); moved 9 point-in-time notes (resolved bug tracker, one-off audit, completed impl plan, setup how-tos, India-legacy theme docs) to `docs/archive/` via `git mv` (history preserved); fixed the inter-doc links. Kept code/steering-referenced docs at top level to avoid breaking source comments. | ✅ done |
 
 ---
 
@@ -552,13 +552,26 @@ the lost evidence was. This reframes the feature.
   untracked) then deleted. Post-delete verification: `mycase db stats` reports all 19
   tables ONLINE; `mycase tax status` ran clean and recreated the three tax tables in
   `mycase.db`. Single DB at `data/mycase.db`.
-- **Docs consolidation** ⬜ **TODO**: `docs/` has 28 md files with heavy overlap and
-  no index. Reduce to a maintained canonical core (`roadmap`, `architecture`,
-  `runbook`, `principles`, `datasources`) + `strategies/` (per-method specs) +
-  `design/` (durable subsystem docs) + `archive/` (point-in-time bug/impl notes).
-  Add `docs/README.md` index first (highest value); fold small subsystem docs into
-  `architecture.md`/`runbook.md` sections; update steering-file cross-refs. **Keep
-  roadmap the single home for status/plans — do not spawn satellite plan docs.**
+- **Docs consolidation** ✅ **DONE (2026-09-20)**: `docs/` had 29 md files with
+  heavy overlap and no index. Added [`docs/README.md`](README.md) as the navigable
+  index (grouped: start-here / design & subsystems / strategy specs / testing /
+  diagrams / archive) — the highest-value deliverable. Created `docs/archive/` and
+  `git mv`'d 9 point-in-time notes into it (history preserved): `Bugs_EMB.md`
+  (resolved bug tracker), `DataAudit.md` (one-off audit), `value_impl.md` (completed
+  impl plan), `executorError.md` (RCA note), `embPrompt.md` (one-off prompt),
+  `ThemeBasedReturn.md` + `ThemeDatabase.md` (India-legacy theme docs), `git-sync-guide.md`
+  + `StaticIP.md` (setup how-tos); fixed the inter-doc links (earlyMB/multibagger →
+  `archive/`). **Deviation from the original sketch**: did *not* introduce
+  `strategies/` or `design/` subdirectories or fold subsystem docs into
+  architecture/runbook — many docs (`edgar-design`, `datasources`, `refactor`,
+  `architecture`, `roadmap`, `edgar-facts-reference`) are hard-referenced by
+  `docs/…md` path from Go source comments and `.kiro/steering/*`, so moving them
+  would break those references for marginal benefit. The index + archive split
+  captures the value (navigable, sprawl contained) without the breakage; the
+  finer-grained regrouping can happen alongside the deferred data/report flatten if
+  ever warranted. Roadmap remains the single home for status/plans (this doc); no
+  satellite plan docs spawned. The stale `docs/plans/docs-consolidation.md` reference
+  in the debt table was never created and is now moot.
 
 ---
 
