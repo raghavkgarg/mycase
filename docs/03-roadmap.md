@@ -286,8 +286,11 @@ place that legally composes `config` + `marketcal`) assembles the active market'
 holiday-aware clock, and **both** former trading-day notions now consult it: the drift
 daemon skips weekends/holidays instead of firing every calendar day, and autopilot's
 `IsTradingDay` uses the calendar as its authority (keeping the live benchmark probe only
-as a secondary cross-check for an unlisted holiday). Remaining: EOD extraction (#3), then
-the scheduler itself.
+as a secondary cross-check for an unlisted holiday). The EOD update is **extracted**:
+`pkg/eod` (L5) holds the daily screening + self-heal + theme-sync logic, lifted out of
+`cmd/db.go` (now a thin wrapper), with the market calendar injected as a `marketcal.Clock`
+(so the same run works for India or the US) and the data router injected as a
+`stockpicker.DataFetcher`; progress is slog, not stdout. Remaining: the scheduler itself.
 
 ---
 

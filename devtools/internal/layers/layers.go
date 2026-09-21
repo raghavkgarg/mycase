@@ -85,6 +85,7 @@ var Layers = map[string]int{
 
 	// L5 — top composition (below cmd/main, which live outside pkg/).
 	"autopilot": 5,
+	"eod":       5, // stockpicker, pithistory, themedb, config, csvloader, marketcal — daily EOD update (extracted from cmd/db)
 
 	// L6 — server embeds autopilot + most domains.
 	"server": 6,

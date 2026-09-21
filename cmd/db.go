@@ -4,18 +4,14 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"strings"
 	"text/tabwriter"
-	"time"
 
+	"github.com/raghavkgarg/mycase/pkg/broker"
 	"github.com/raghavkgarg/mycase/pkg/cache"
 	"github.com/raghavkgarg/mycase/pkg/config"
-	"github.com/raghavkgarg/mycase/pkg/csvloader"
 	"github.com/raghavkgarg/mycase/pkg/edgar"
-	"github.com/raghavkgarg/mycase/pkg/marketdata"
-	"github.com/raghavkgarg/mycase/pkg/pithistory"
+	"github.com/raghavkgarg/mycase/pkg/eod"
 	"github.com/raghavkgarg/mycase/pkg/render"
-	"github.com/raghavkgarg/mycase/pkg/stockpicker"
 	"github.com/raghavkgarg/mycase/pkg/themedb"
 	"github.com/urfave/cli/v3"
 )
@@ -91,124 +87,34 @@ func runDBUpdate(ctx context.Context, c *cli.Command) error {
 }
 
 // RunDBUpdateDirect executes the unified EOD database update programmatically.
+// It is a thin CLI wrapper over pkg/eod: it builds the EOD config (injecting the
+// data router and the active market's holiday-aware clock), renders the dry-run
+// preview as user-facing output, and delegates the real work to eod.Run.
 func RunDBUpdateDirect(ctx context.Context, all bool, indexName, method string, topN int, dryRun bool, dbPath string, force ...bool) error {
+	_ = all // accepted for CLI compatibility; the EOD run screens the given index.
 	isForce := len(force) > 0 && force[0]
-	now := time.Now()
-	targetEOD := marketdata.EODSettlementDate(now)
-	targetDateStr := targetEOD.Format("2006-01-02")
-	nextAvailable := marketdata.NextEODAvailableDate(now)
 
-	render.Banner(os.Stdout, "MYCASE UNIFIED EOD DATABASE UPDATE (data/mycase.db)")
-	fmt.Printf("Execution Time: %s | Target As-Of Date: %s\n\n", now.Format("2006-01-02 15:04:05 MST"), targetDateStr)
+	cfg := eod.Config{
+		Fetcher:   newDataRouter(),
+		Clock:     broker.TradingClock(),
+		IndexName: indexName,
+		Method:    method,
+		DBPath:    dbPath,
+		TopN:      topN,
+		Force:     isForce,
+	}
 
 	if dryRun {
+		render.Banner(os.Stdout, "MYCASE UNIFIED EOD DATABASE UPDATE — DRY RUN")
 		fmt.Println("🔍 DRY RUN MODE ACTIVE — No database changes will be committed.")
-		fmt.Println("1. [Dry Run] Check database schema & connections (data/mycase.db)")
-		fmt.Printf("2. [Dry Run] Daily PIT Research Screening for %s (%s, Top %d)\n", indexName, method, topN)
-		fmt.Println("3. [Dry Run] Automated constituent self-healing retry pass")
-		fmt.Println("4. [Dry Run] Synchronize theme lifecycle, exits, and return intelligence across all themes")
+		for _, step := range cfg.DryRunPlan() {
+			fmt.Println(step)
+		}
 		fmt.Println("\nDry run completed successfully.")
 		return nil
 	}
 
-	// 1. Verify / open data/mycase.db
-	db, err := themedb.Open(dbPath)
-	if err != nil {
-		return fmt.Errorf("opening mycase.db: %w", err)
-	}
-	defer db.Close()
-
-	// 2. Stage 1 & 2: Daily Point-in-Time Screening & Factor Scoring
-	fmt.Printf("▶ STAGE 1/3: Point-in-Time Research Screening [%s | %s]...\n", indexName, method)
-	pitDB, pErr := pithistory.Open(dbPath)
-	var hasRun bool
-	if pErr == nil {
-		hasRun, _ = pitDB.HasRun(ctx, targetDateStr, indexName, method)
-		pitDB.Close()
-	}
-
-	if hasRun && !isForce {
-		targetDayStr := marketdata.FormatOrdinalDay(targetEOD.Day())
-		nextDayStr := marketdata.FormatOrdinalDay(nextAvailable.Day())
-		nextMonthStr := nextAvailable.Format("Jan")
-		fmt.Printf("✓ File available for %s. Latest file is of %s and %s file will be available after 21:00 PM %s %s.\n",
-			targetDateStr, targetDayStr, nextDayStr, nextDayStr, nextMonthStr)
-		fmt.Println("Skipping redundant PIT screening calculation.")
-	} else {
-		opts := &stockpicker.Options{
-			IndexName:          indexName,
-			Method:             method,
-			TopN:               topN,
-			RangeStr:           "1y",
-			RebalanceTolerance: 0.10,
-			AsOfDate:           targetDateStr,
-		}
-		if err := runPickWithOpts(ctx, opts); err != nil {
-			fmt.Printf("⚠️  Warning during PIT update: %v (continuing with self-healing pass)\n", err)
-		}
-
-		// Self-healing retry pass for any transient dropouts
-		fmt.Printf("\n▶ STAGE 2/3: Verifying Snapshot Completeness & Self-Healing...\n")
-		if snap, sErr := stockpicker.RetryFailedSnapshotCandidates(ctx, indexName, method, targetDateStr); sErr == nil && snap != nil {
-			if pitDB, pErr := pithistory.Open(dbPath); pErr == nil {
-				_ = pitDB.SaveRunSnapshot(ctx, snap)
-				pitDB.Close()
-			}
-		} else if sErr != nil {
-			fmt.Printf("Notice on self-healing retry: %v\n", sErr)
-		}
-
-		// Pre-flight Data Integrity Check on the newly committed snapshot
-		if pitDB, pErr := pithistory.Open(dbPath); pErr == nil {
-			if integrity, iErr := pitDB.CheckDataIntegrity(ctx, indexName, method); iErr == nil && integrity.TotalCandidates > 0 {
-				if integrity.FailurePct >= 5.0 {
-					fmt.Printf("\n⚠️  [DATA INTEGRITY WARNING]: %d / %d candidates (%.1f%%) in latest run have unverified or missing fundamentals!\n",
-						integrity.FailedCandidates, integrity.TotalCandidates, integrity.FailurePct)
-					if len(integrity.FlaggedTickers) > 0 {
-						fmt.Printf("   Flagged candidates sample: %s\n", strings.Join(integrity.FlaggedTickers, ", "))
-					}
-					fmt.Printf("   Verify data feeds before interpreting marginal scores or executing trades.\n\n")
-				} else {
-					fmt.Printf("   ✓ Data Integrity Verified: %d / %d candidates clean (0 unverified).\n",
-						integrity.TotalCandidates-integrity.FailedCandidates, integrity.TotalCandidates)
-				}
-			}
-			pitDB.Close()
-		}
-	}
-
-	// 3. Stage 3: Theme Lifecycle, Exit Detection & Return Auditing
-	fmt.Printf("\n▶ STAGE 3/3: Synchronizing Theme Lifecycles & Return Intelligence...\n")
-	themes, tErr := config.LoadThemes(config.Path("themes.json"))
-	if tErr == nil {
-		for _, tc := range themes {
-			uName := csvloader.GetUniverseName(tc.CSVPath)
-			kw := strings.ToLower(tc.Prefix)
-			if strings.Contains(strings.ToLower(tc.Name), "microsmall") {
-				kw = "microsmall"
-			}
-			syncOpts := themedb.SyncThemeOptions{
-				ThemeName:     uName,
-				GoldenCSVPath: tc.CSVPath,
-				ProposalsDir:  config.DataPath("candidates", "proposals"),
-				Keyword:       kw,
-			}
-			if err := db.SyncThemeFromProposals(ctx, syncOpts); err != nil {
-				// Non-fatal if a theme has no local files yet (e.g. hydrogen)
-				continue
-			}
-			v, _ := db.GetLatestVersion(ctx, uName)
-			active, _ := db.GetActiveHoldings(ctx, uName)
-			exited, _ := db.GetExitedHoldings(ctx, uName)
-			fmt.Printf("  • Theme '%s' (%s): v%d | %d Active | %d Exited\n", tc.Name, uName, v, len(active), len(exited))
-		}
-	}
-
-	fmt.Println()
-	render.Banner(os.Stdout, "EOD DATABASE UPDATE COMPLETED SUCCESSFULLY")
-	fmt.Println("data/mycase.db is 100% updated and cached for today.")
-	fmt.Println("All queries ('returns', 'theme show', 'pit stats', web dashboard) are now instant & offline.")
-	return nil
+	return eod.Run(ctx, cfg)
 }
 
 var dbStatusCmd = &cli.Command{
