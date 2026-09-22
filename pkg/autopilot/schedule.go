@@ -117,6 +117,35 @@ func nextMonthlyDate(now time.Time, daySpec string) time.Time {
 	return time.Date(now.Year(), now.Month()+2, 1, 10, 0, 0, 0, loc)
 }
 
+// IsScheduledRunDate reports whether the given day is a scheduled rebalance day
+// for the configured frequency (quarterly/monthly). Unlike NextRunDate (which
+// answers "when is the next run, strictly in the future" against the wall clock),
+// this evaluates a specific day — the scheduler uses it to decide whether *today*
+// is a rebalance day. Drift-triggered frequency has no fixed calendar day and
+// returns false. The day is evaluated in its own location and the comparison is
+// calendar-date only (time-of-day ignored), so the caller controls the timezone
+// via the time it passes.
+func IsScheduledRunDate(day time.Time, cfg config.ScheduleConfig) bool {
+	loc := day.Location()
+	d := day
+	var scheduled time.Time
+	switch cfg.Frequency {
+	case "monthly":
+		scheduled = applyDaySpec(time.Date(d.Year(), d.Month(), 1, 10, 0, 0, 0, loc), cfg.Day)
+	case "quarterly":
+		// Only the quarter-start months (Jan/Apr/Jul/Oct) host a run.
+		switch d.Month() {
+		case time.January, time.April, time.July, time.October:
+			scheduled = applyDaySpec(time.Date(d.Year(), d.Month(), 2, 10, 0, 0, 0, loc), cfg.Day)
+		default:
+			return false
+		}
+	default:
+		return false
+	}
+	return scheduled.Year() == d.Year() && scheduled.YearDay() == d.YearDay()
+}
+
 // applyDaySpec adjusts a date based on the day specification string.
 func applyDaySpec(base time.Time, daySpec string) time.Time {
 	loc := scheduleLocation()

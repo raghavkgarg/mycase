@@ -88,7 +88,8 @@ var Layers = map[string]int{
 	"eod":       5, // stockpicker, pithistory, themedb, config, csvloader, marketcal — daily EOD update (extracted from cmd/db)
 
 	// L6 — server embeds autopilot + most domains.
-	"server": 6,
+	"server":    6,
+	"scheduler": 6, // autopilot, eod, daemon, broker, config, marketcal — autonomous orchestrator (Phase 12)
 }
 
 // MustBeLeaf lists packages that must never acquire ANY internal import — the
