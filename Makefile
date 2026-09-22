@@ -1,5 +1,6 @@
 .PHONY: build build-linux-arm64 build-linux-amd64 build-darwin-arm64 build-darwin-amd64
 .PHONY: install install-gopath uninstall run test test-verbose test-race test-integration test-coverage cleanup analyze clean fetch-echarts check-deps deps-graph arch-graph overview-graph help
+.PHONY: use-us use-india scheduler-install scheduler-uninstall scheduler-status
 
 # Pinned advisory-analysis tool versions (run via `go run` — no global install needed).
 # Bump deliberately; keep reproducible per the project's determinism convention.
@@ -205,6 +206,35 @@ overview-graph:
 		echo "Install D2 (https://d2lang.com) to render docs/architecture-overview.d2"; \
 	fi
 
+# --- Market path & scheduler ---
+#
+# The active market path (US vs India) is selected by config/defaults.json — one
+# file that drives the broker, market clock, EOD index/method, and pipeline YAML.
+# `use-us` / `use-india` copy the committed preset over it; re-run scheduler-install
+# afterward so the launchd fire time + pipeline pick up the change.
+
+use-us:
+	@cp config/defaults.us.json config/defaults.json
+	@echo "Active path: US (Schwab / NYSE / sp500 / us_quality_momentum / pipeline_us.yaml)"
+	@echo "Re-run 'make scheduler-install' to update the installed timer."
+
+use-india:
+	@cp config/defaults.india.json config/defaults.json
+	@echo "Active path: India (Zerodha / NSE / niftytotalmarket / multibagger / pipeline.yaml)"
+	@echo "Re-run 'make scheduler-install' to update the installed timer."
+
+# scheduler-install builds, then installs/reloads the one-shot OS timer that fires
+# `mycase scheduler tick` daily at the active market's close+offset (in local time).
+# Idempotent: safe to re-run after switching paths or rebuilding.
+scheduler-install: build
+	@./dist/mycase scheduler install
+
+scheduler-uninstall:
+	@./dist/mycase scheduler uninstall
+
+scheduler-status:
+	@./dist/mycase scheduler status
+
 clean:
 	@rm -f dist/mycase dist/mycase-arm64 dist/mycase-amd64 dist/mycase-darwin-arm64 dist/mycase-darwin-amd64 dist/deps.dot dist/deps.svg dist/deps.d2 dist/arch.svg
 	@echo "Cleaned"
@@ -237,5 +267,10 @@ help:
 	@echo "  deps-graph         - Render pkg/ dependency graph to dist/deps.svg (Graphviz, layer-colored)"
 	@echo "  arch-graph         - Render pkg/ architecture diagram to dist/arch.svg (D2/TALA, transitive-reduced; REDUCE=0 for full)"
 	@echo "  overview-graph     - Re-render docs/architecture-overview.svg (hand-authored high-level view, D2/TALA)"
+	@echo "  use-us             - Switch active path to US (copies config/defaults.us.json -> defaults.json)"
+	@echo "  use-india          - Switch active path to India (copies config/defaults.india.json -> defaults.json)"
+	@echo "  scheduler-install  - Build + install/reload the daily OS timer (mycase scheduler tick)"
+	@echo "  scheduler-uninstall- Remove the installed scheduler timer"
+	@echo "  scheduler-status   - Show last completed EOD / drift / rebalance day"
 	@echo "  clean              - Remove build artifacts"
 	@echo "  fetch-echarts      - Download ECharts 5.6.0 into pkg/server/static/vendor/"

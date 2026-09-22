@@ -20,8 +20,11 @@
 package eod
 
 import (
+	"bufio"
 	"context"
 	"fmt"
+	"io"
+	"os"
 	"strings"
 	"time"
 
@@ -50,6 +53,13 @@ type Config struct {
 	DBPath    string // DuckDB path; "" → pithistory/themedb defaults (data/mycase.db)
 	TopN      int    // number of selections
 	Force     bool   // recompute even if a snapshot for today already exists
+
+	// QuietStdout redirects the user-facing pick banner/funnel tables that
+	// stockpicker writes to os.Stdout into slog (Debug) instead, keeping stdout
+	// clean. Set by operational callers (the scheduler, whose stdout is the
+	// keep-alive/log channel); left false by the interactive `db update` command
+	// where the investor is meant to see that output.
+	QuietStdout bool
 }
 
 // clock returns the configured clock, defaulting to NSE when unset (preserves the
@@ -124,7 +134,19 @@ func runScreening(ctx context.Context, cfg Config, targetDateStr string) error {
 		RebalanceTolerance: 0.10,
 		AsOfDate:           targetDateStr,
 	}
-	if err := runPick(ctx, cfg.DBPath, opts); err != nil {
+	// stockpicker.RunWithResult prints the pick banner + funnel tables to stdout
+	// (user-facing `pick` output). For an operational caller (QuietStdout — e.g.
+	// the scheduler, whose stdout is the log/keep-alive channel) redirect it into
+	// slog (debug) per the two-channel rule; the interactive `db update` leaves it
+	// on stdout for the investor.
+	run := func() error { return runPick(ctx, cfg.DBPath, opts) }
+	var err error
+	if cfg.QuietStdout {
+		err = withCapturedStdout(ctx, run)
+	} else {
+		err = run()
+	}
+	if err != nil {
 		// Non-fatal: continue to the self-healing pass, which may recover dropouts.
 		slog.WarnContext(ctx, "eod.pit_warning", "err", err, "recovery", "self_heal")
 	}
@@ -243,4 +265,43 @@ func runPick(ctx context.Context, dbPath string, opts *stockpicker.Options) erro
 		slog.InfoContext(ctx, "eod.snapshot_persisted", "as_of", opts.AsOfDate)
 	}
 	return nil
+}
+
+// withCapturedStdout runs fn with os.Stdout redirected into a pipe whose lines are
+// forwarded to slog at Debug level (event "eod.pick_output"), then restores
+// os.Stdout. This keeps the user-facing `pick` banner/tables that
+// stockpicker.RunWithResult writes to stdout out of the scheduler's stdout/log
+// channel while preserving them (at debug) for troubleshooting. On any pipe setup
+// failure it falls back to running fn with stdout untouched, so EOD never fails
+// merely because capture could not be established.
+func withCapturedStdout(ctx context.Context, fn func() error) error {
+	r, w, pipeErr := os.Pipe()
+	if pipeErr != nil {
+		return fn()
+	}
+	orig := os.Stdout
+	os.Stdout = w
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		sc := bufio.NewScanner(r)
+		sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+		for sc.Scan() {
+			line := strings.TrimRight(sc.Text(), " \t")
+			if line == "" {
+				continue
+			}
+			slog.DebugContext(ctx, "eod.pick_output", "line", line)
+		}
+		_, _ = io.Copy(io.Discard, r) // drain any remainder after a scan error
+	}()
+
+	runErr := fn()
+
+	os.Stdout = orig
+	_ = w.Close()
+	<-done
+	_ = r.Close()
+	return runErr
 }

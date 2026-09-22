@@ -677,39 +677,94 @@ mycase --index niftytotalmarket --method earlymb --analysis
 ## 11. Autonomous Scheduler (`scheduler`)
 
 The autonomous **scheduler** replaces manual daily terminal commands and the old
-`daily_sync.sh` shell script. One long-lived process owns all three operating cadences and
-coordinates them; install it once:
+`daily_sync.sh` shell script. A single OS timer fires `mycase scheduler tick` once per
+trading day at the market close (+ offset); that one process runs all three cadences in
+order and exits. It **replaces the separate `daemon install` and `autopilot install`
+units** — if either is installed, uninstall it to avoid duplicate runs.
+
+### Choosing a market path (US or India)
+
+The active market path is selected by **one file — `config/defaults.json`** — which drives
+the broker, the market clock (NYSE vs NSE), the daily EOD index/method, and which pipeline
+YAML the rebalance/drift cadences use. Two committed presets make switching a one-liner:
 
 ```bash
-mycase scheduler install     # launchd keep-alive service on macOS (systemd unit printed on Linux)
-mycase scheduler run --live  # or run in the foreground (blocks)
-mycase scheduler status      # last completed trading day per cadence
+make use-us       # Schwab / NYSE / sp500 / us_quality_momentum / pipeline_us.yaml
+make use-india    # Zerodha / NSE / niftytotalmarket / multibagger / pipeline.yaml
+```
+
+Each copies `config/defaults.<path>.json` over `config/defaults.json`. After switching,
+re-run the install so the timer's fire time and pipeline pick up the change.
+
+### Install / status / uninstall
+
+```bash
+make scheduler-install     # build + install/reload the daily OS timer (idempotent)
+make scheduler-status      # last completed EOD / drift / rebalance day
+make scheduler-uninstall   # remove the timer
+
+# equivalently, on the binary directly:
+mycase scheduler install
+mycase scheduler status
 mycase scheduler uninstall
 ```
 
-It **replaces the separate `daemon install` and `autopilot install` units** — if either is
-installed, uninstall it to avoid duplicate runs.
+On macOS, `install` writes `~/Library/LaunchAgents/com.mycase.scheduler.plist` (a
+`StartCalendarInterval` LaunchAgent) and loads it with `launchctl bootstrap gui/$UID`;
+`uninstall` uses `launchctl bootout`. On Linux it prints a systemd `oneshot` service + a
+daily `OnCalendar` timer to install manually. The committed template is
+`scripts/com.mycase.scheduler.plist.tmpl` (the authoritative copy is embedded in the
+binary at `cmd/scheduler_plist.tmpl`).
 
-### Cadences (coordinated in one process):
-1. **Daily EOD update** — after the market close cutoff + offset, refreshes the DuckDB
-   cache/snapshot (screening + self-heal + theme sync, via `pkg/eod`).
+The install computes the fire time from the **active market's** close cutoff + offset and
+converts it to the **machine's local wall-clock time** (what launchd/systemd expect). For a
+machine in US Eastern time: US path fires 16:15 ET (NYSE 16:00 + 15m); India path fires
+11:45 ET (NSE 21:00 IST + 15m, converted). Re-run `make scheduler-install` after a DST
+change so the fixed local time stays aligned.
+
+### Why a one-shot, not a resident daemon
+
+launchd/systemd own *when* to fire and handle sleep/wake correctly (a job missed while the
+laptop slept fires on wake); the `tick` process owns *what* runs and in what order. Because
+the ordered EOD → drift → rebalance pass is a single process doing sequential calls, the
+one-shot preserves all cross-cadence coordination while dropping the fragile in-process
+`time.After` loop. `mycase scheduler run` (the older keep-alive loop) remains available for
+a future intraday-reactive case but is no longer what `install` uses.
+
+### Cadences (coordinated in one `tick` pass)
+
+1. **Daily EOD update** — refreshes the DuckDB cache/snapshot (screening + self-heal +
+   theme sync, via `pkg/eod`). Its user-facing pick banner/tables are redirected to the log
+   at debug level so the scheduler's stdout/log stays clean.
 2. **Daily drift check** — runs *after* the same day's EOD (so it reads a fresh cache);
    alerts if the portfolio has drifted beyond threshold.
 3. **Quarterly/monthly rebalance** — produces an autopilot proposal; a rebalance day forces
    an EOD first. **Investor-in-the-loop:** it never places orders unless `auto_execute` is
-   set in `pipeline.yaml` *and* the run is `--live`; otherwise you confirm via the dashboard.
+   set in the pipeline YAML *and* the run is `--live`; otherwise you confirm via the
+   dashboard.
 
-### Trading-day awareness:
+### Trading-day awareness & catch-up
+
 Every cadence is gated on the holiday-aware market calendar (`marketcal` + the active
 market's clock), so weekends and the exchange holidays in `config/holidays.json` are skipped
-uniformly — no hand-maintained holiday list in a shell script. On startup the scheduler runs
-a **catch-up** EOD if the machine was asleep at the last close.
+uniformly — no hand-maintained holiday list in a shell script. Each `tick` first runs a
+**catch-up** EOD if a close was missed (machine asleep), guarded by `scheduler_state.json`
+so a cadence never double-runs on the same trading day.
 
-### Configuration:
+### Configuration
+
 Cadence toggles live in the `scheduler` block of `config/defaults.json`
 (`enable_eod` / `enable_drift` / `enable_rebalance` / `close_offset_min`); the rebalance
-schedule (`frequency` / `day` / `auto_execute`) stays in the `schedule:` block of
-`pipeline.yaml`. Diagnostics stream to `data/scheduler.log`.
+schedule (`frequency` / `day` / `auto_execute`) stays in the `schedule:` block of the
+active pipeline YAML. Diagnostics stream to `data/scheduler.log`.
+
+### Quick start (US path on this machine)
+
+```bash
+make use-us && make scheduler-install
+make scheduler-status          # verify (all "never" until the first fire)
+launchctl list | grep mycase   # macOS: confirm com.mycase.scheduler is loaded
+```
 
 ---
 

@@ -156,6 +156,31 @@ func (s *Scheduler) Run(ctx context.Context) error {
 	}
 }
 
+// RunOnce performs a single sequenced dispatch pass and returns, instead of
+// blocking in a tick loop. It is the entry point for the launchd/systemd
+// one-shot model (`scheduler tick`): the OS scheduler owns *when* to fire (a
+// StartCalendarInterval / OnCalendar timer at market-close+offset, which handles
+// sleep/wake correctly), and this owns *what* runs and in what order.
+//
+// It first runs the same catch-up check as the keep-alive loop (so a close missed
+// while the machine slept is still processed on the next fire), then, if today is
+// a trading day, runs the ordered EOD → drift → rebalance pass for the current
+// settled day. All ordering and cross-cadence coordination is preserved because
+// it is still a single process running sequential calls — the loop was never what
+// provided the ordering. State (scheduler_state.json) prevents double-runs across
+// invocations exactly as it does across loop ticks.
+func (s *Scheduler) RunOnce(ctx context.Context) error {
+	slog.InfoContext(ctx, "scheduler.tick_once_started",
+		"eod", s.cfg.EnableEOD, "drift", s.cfg.EnableDrift, "rebalance", s.cfg.EnableRebalance,
+		"auto_execute", s.cfg.AutoExecute, "live", s.cfg.Live)
+
+	s.catchUp(ctx)
+	s.tick(ctx, time.Now())
+
+	slog.InfoContext(ctx, "scheduler.tick_once_completed")
+	return nil
+}
+
 // nextTick returns the next daily dispatch time: the market close cutoff plus the
 // configured offset, rolled forward to the next trading day.
 func (s *Scheduler) nextTick(from time.Time) time.Time {
@@ -192,12 +217,15 @@ func (s *Scheduler) tick(ctx context.Context, now time.Time) {
 	rebalanceDue := s.cfg.EnableRebalance && s.rebalanceDue(now)
 
 	// EOD first. A rebalance day forces an EOD even if the EOD cadence is off, so
-	// the proposal is built on fresh data.
-	if s.cfg.EnableEOD || rebalanceDue {
+	// the proposal is built on fresh data. Guard against a same-day double-run so
+	// catch-up (which may have just run today's EOD) and this tick don't run it
+	// twice within one RunOnce invocation.
+	if (s.cfg.EnableEOD || rebalanceDue) && s.state.lastRun(CadenceEOD) != day {
 		s.runCadence(ctx, CadenceEOD, day, s.runner.RunEOD)
 	}
-	// Drift after EOD (fresh cache).
-	if s.cfg.EnableDrift {
+	// Drift after EOD (fresh cache). Depends on today's EOD being done, not on it
+	// running in this pass — so it still runs when EOD was completed by catch-up.
+	if s.cfg.EnableDrift && s.state.lastRun(CadenceDrift) != day {
 		s.runCadence(ctx, CadenceDrift, day, s.runner.RunDrift)
 	}
 	// Rebalance last.

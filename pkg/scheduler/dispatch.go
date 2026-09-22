@@ -29,6 +29,9 @@ func (r *defaultRunner) RunEOD(ctx context.Context) error {
 		Method:    r.cfg.EODMethod,
 		DBPath:    r.cfg.DBPath,
 		TopN:      r.cfg.EODTopN,
+		// Operational caller: keep the pick banner/tables out of stdout (the
+		// scheduler's log channel); they go to slog at debug instead.
+		QuietStdout: true,
 		// Fetcher left nil: eod/stockpicker falls back to the direct path. The
 		// composition root may set a router on the Config in a later refinement;
 		// keeping it nil here avoids the scheduler importing datafetcher.

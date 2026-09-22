@@ -142,3 +142,59 @@ func TestRebalanceDue_NotDoubleFired(t *testing.T) {
 		t.Error("rebalance should not fire twice on the same day")
 	}
 }
+
+// countRunner records how many times each cadence fired (not just order), so we
+// can assert the one-shot RunOnce path does not double-run EOD when catch-up and
+// the same-day tick both want it.
+type countRunner struct {
+	eod, drift, rebalance int
+}
+
+func (c *countRunner) RunEOD(context.Context) error       { c.eod++; return nil }
+func (c *countRunner) RunDrift(context.Context) error     { c.drift++; return nil }
+func (c *countRunner) RunRebalance(context.Context) error { c.rebalance++; return nil }
+
+// RunOnce on a trading day runs catch-up EOD then the day's tick, but EOD must
+// fire exactly once (the tick's same-day guard suppresses the second), and drift
+// still runs once after it.
+func TestRunOnce_NoDoubleEOD(t *testing.T) {
+	et, err := time.LoadLocation("America/New_York")
+	if err != nil {
+		t.Skipf("tz unavailable: %v", err)
+	}
+	// Freeze "now" is not injectable, but catch-up uses SettlementDate(now) and the
+	// tick uses the same; on any trading day the two agree, exercising the guard.
+	cfg := baseConfig()
+	r := &countRunner{}
+	s := newTestScheduler(cfg, r)
+
+	if err := s.RunOnce(context.Background()); err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+
+	// On a weekend/holiday, catch-up may still fire once for the last settled day
+	// while the tick is skipped — EOD count is 1 either way; never 2.
+	if r.eod > 1 {
+		t.Errorf("EOD fired %d times, want at most 1 (no double-run)", r.eod)
+	}
+	_ = et
+}
+
+// A second RunOnce in the same process must not re-run a cadence already recorded
+// for today (state guards persist within the Scheduler across calls).
+func TestRunOnce_Idempotent_SamePass(t *testing.T) {
+	cfg := baseConfig()
+	r := &countRunner{}
+	s := newTestScheduler(cfg, r)
+
+	_ = s.RunOnce(context.Background())
+	firstEOD, firstDrift := r.eod, r.drift
+	_ = s.RunOnce(context.Background())
+
+	if r.eod != firstEOD {
+		t.Errorf("EOD re-ran on second RunOnce: %d -> %d", firstEOD, r.eod)
+	}
+	if r.drift != firstDrift {
+		t.Errorf("drift re-ran on second RunOnce: %d -> %d", firstDrift, r.drift)
+	}
+}

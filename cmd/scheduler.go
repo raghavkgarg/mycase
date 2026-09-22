@@ -2,30 +2,36 @@ package cmd
 
 import (
 	"context"
+	_ "embed"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"text/template"
+	"time"
 
 	"github.com/urfave/cli/v3"
 
 	"github.com/raghavkgarg/mycase/pkg/broker"
 	"github.com/raghavkgarg/mycase/pkg/config"
+	"github.com/raghavkgarg/mycase/pkg/marketcal"
 	"github.com/raghavkgarg/mycase/pkg/render"
 	"github.com/raghavkgarg/mycase/pkg/scheduler"
 )
 
-// SchedulerCommand is the autonomous orchestrator (Phase 12): one long-lived
-// process that owns the daily EOD update, the daily drift check, and the
-// quarterly/monthly rebalance proposal — replacing the separate `daemon install`
-// and `autopilot install` units with a single keep-alive service.
+// SchedulerCommand is the autonomous orchestrator (Phase 12): it owns the daily
+// EOD update, the daily drift check, and the quarterly/monthly rebalance proposal
+// as one sequenced pass — replacing the separate `daemon install` and `autopilot
+// install` units with a single OS timer. The installed model is a one-shot
+// (`scheduler tick` fired daily by launchd/systemd); `scheduler run` keeps the
+// older keep-alive loop available for a future intraday-reactive case.
 var SchedulerCommand = &cli.Command{
 	Name:  "scheduler",
 	Usage: "Autonomous orchestrator for EOD / drift / rebalance cadences",
 	Commands: []*cli.Command{
 		schedulerRunCmd,
+		schedulerTickCmd,
 		schedulerStatusCmd,
 		schedulerInstallCmd,
 		schedulerUninstallCmd,
@@ -34,13 +40,24 @@ var SchedulerCommand = &cli.Command{
 
 var schedulerRunCmd = &cli.Command{
 	Name:  "run",
-	Usage: "Run the scheduler loop (blocks until stopped; use install for a system service)",
+	Usage: "Run the keep-alive tick loop (blocks; for the intraday-reactive case — install uses `tick`)",
 	Flags: []cli.Flag{
 		&cli.BoolFlag{Name: "live", Usage: "Use the live broker API (default: mock)"},
-		&cli.StringFlag{Name: "config", Value: config.Path("pipeline.yaml"), Usage: "Pipeline config file"},
+		&cli.StringFlag{Name: "config", Value: defaultPipelineConfig(), Usage: "Pipeline config file"},
 		&cli.StringFlag{Name: "file", Usage: "Portfolio CSV for the drift check (overrides config)"},
 	},
 	Action: runScheduler,
+}
+
+var schedulerTickCmd = &cli.Command{
+	Name:  "tick",
+	Usage: "Run one sequenced pass (catch-up + today's EOD/drift/rebalance) and exit — invoked by the OS timer",
+	Flags: []cli.Flag{
+		&cli.BoolFlag{Name: "live", Usage: "Use the live broker API (default: mock)"},
+		&cli.StringFlag{Name: "config", Value: defaultPipelineConfig(), Usage: "Pipeline config file"},
+		&cli.StringFlag{Name: "file", Usage: "Portfolio CSV for the drift check (overrides config)"},
+	},
+	Action: runSchedulerTick,
 }
 
 var schedulerStatusCmd = &cli.Command{
@@ -59,6 +76,17 @@ var schedulerUninstallCmd = &cli.Command{
 	Name:   "uninstall",
 	Usage:  "Remove the installed scheduler service",
 	Action: runSchedulerUninstall,
+}
+
+// defaultPipelineConfig returns the pipeline YAML the scheduler should use,
+// sourced from defaults.json's pipeline_config so the market path (US vs India)
+// is a single-file switch. Falls back to config/pipeline.yaml when unset.
+func defaultPipelineConfig() string {
+	defaults := config.LoadUserDefaults(config.Path("defaults.json"))
+	if defaults.PipelineConfig != "" {
+		return config.Path(filepath.Base(defaults.PipelineConfig))
+	}
+	return config.Path("pipeline.yaml")
 }
 
 // buildSchedulerConfig assembles a scheduler.Config from defaults.json (cadence
@@ -116,6 +144,17 @@ func runScheduler(ctx context.Context, c *cli.Command) error {
 	return scheduler.New(cfg).Run(ctx)
 }
 
+// runSchedulerTick runs a single sequenced pass and exits. This is the entry
+// point the installed OS timer (launchd StartCalendarInterval / systemd
+// OnCalendar) invokes once per trading day at market-close+offset.
+func runSchedulerTick(ctx context.Context, c *cli.Command) error {
+	cfg, err := buildSchedulerConfig(c, c.Bool("live"))
+	if err != nil {
+		return err
+	}
+	return scheduler.New(cfg).RunOnce(ctx)
+}
+
 func runSchedulerStatus(_ context.Context, _ *cli.Command) error {
 	state, err := scheduler.LoadState()
 	if err != nil {
@@ -137,38 +176,49 @@ func lastRunOrNever(state scheduler.State, c scheduler.Cadence) string {
 	return state.LastRun[string(c)]
 }
 
-// launchd plist for the scheduler: a keep-alive process (all cadence timing is
-// in-process), mirroring the daemon plist it replaces.
-var schedulerPlistTmpl = `<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-	<key>Label</key>
-	<string>com.mycase.scheduler</string>
-	<key>ProgramArguments</key>
-	<array>
-		<string>{{.BinaryPath}}</string>
-		<string>scheduler</string>
-		<string>run</string>
-		<string>--live</string>
-	</array>
-	<key>WorkingDirectory</key>
-	<string>{{.WorkDir}}</string>
-	<key>KeepAlive</key>
-	<true/>
-	<key>RunAtLoad</key>
-	<true/>
-	<key>StandardOutPath</key>
-	<string>{{.WorkDir}}/data/scheduler.log</string>
-	<key>StandardErrorPath</key>
-	<string>{{.WorkDir}}/data/scheduler.log</string>
-</dict>
-</plist>
-`
+const (
+	schedulerPlistLabel = "com.mycase.scheduler"
+	schedulerPlistPath  = schedulerPlistLabel + ".plist"
+)
 
-const schedulerPlistPath = "com.mycase.scheduler.plist"
+//go:embed scheduler_plist.tmpl
+var schedulerPlistTemplate string
 
-func runSchedulerInstall(_ context.Context, _ *cli.Command) error {
+// schedulerPlistData fills the committed plist template. Hour/Minute are in the
+// LOCAL (machine) timezone — launchd's StartCalendarInterval fires on wall-clock
+// local time — computed by converting the active market's close+offset into local
+// time (see localFireTime).
+type schedulerPlistData struct {
+	BinaryPath string
+	WorkDir    string
+	Hour       int
+	Minute     int
+}
+
+// localFireTime converts the active market's daily fire moment (close cutoff +
+// offset, in the market's own timezone) into the machine's local wall-clock
+// Hour:Minute, which is what launchd's StartCalendarInterval expects. Example:
+// NYSE close 16:00 ET + 15m = 16:15 ET → 20:15 IST for a machine in Kolkata.
+//
+// It anchors on today's date so the conversion uses the DST offset currently in
+// effect on both sides. A StartCalendarInterval is a fixed local wall-clock time,
+// so when either zone crosses a DST boundary the installed fire time drifts by up
+// to an hour until the next `scheduler install`; anchoring on "now" keeps it
+// correct for the current season, which is the best a fixed local time can do.
+func localFireTime(clk marketcal.Clock, offset time.Duration) (hour, minute int) {
+	loc := clk.Loc
+	if loc == nil {
+		loc = time.UTC
+	}
+	now := time.Now()
+	// Anchor on today's date in the market zone; only the resulting clock time
+	// matters for a daily calendar fire.
+	base := time.Date(now.Year(), now.Month(), now.Day(), clk.CutoffHour, 0, 0, 0, loc).Add(offset)
+	local := base.In(now.Location())
+	return local.Hour(), local.Minute()
+}
+
+func runSchedulerInstall(_ context.Context, c *cli.Command) error {
 	binPath, err := os.Executable()
 	if err != nil {
 		return fmt.Errorf("finding binary path: %w", err)
@@ -178,8 +228,12 @@ func runSchedulerInstall(_ context.Context, _ *cli.Command) error {
 		return fmt.Errorf("getting working directory: %w", err)
 	}
 
+	clk := broker.TradingClock()
+	offset := time.Duration(schedulerCloseOffsetMin()) * time.Minute
+	hour, minute := localFireTime(clk, offset)
+
 	if runtime.GOOS != "darwin" {
-		printSchedulerSystemdUnit(binPath, wd)
+		printSchedulerSystemdUnit(binPath, wd, hour, minute)
 		return nil
 	}
 
@@ -199,13 +253,25 @@ func runSchedulerInstall(_ context.Context, _ *cli.Command) error {
 	}
 	defer f.Close()
 
-	tmpl := template.Must(template.New("plist").Parse(schedulerPlistTmpl))
-	if err := tmpl.Execute(f, plistData{BinaryPath: binPath, WorkDir: wd}); err != nil {
+	tmpl := template.Must(template.New("plist").Parse(schedulerPlistTemplate))
+	data := schedulerPlistData{BinaryPath: binPath, WorkDir: wd, Hour: hour, Minute: minute}
+	if err := tmpl.Execute(f, data); err != nil {
 		return fmt.Errorf("writing plist: %w", err)
 	}
 
-	fmt.Printf("Installed: %s\n", plistFile)
-	fmt.Printf("To load now: launchctl load %s\n", plistFile)
+	// Load (or reload) with the modern launchctl bootstrap API. bootout first so a
+	// reinstall picks up a changed fire time; ignore its error (nothing loaded yet).
+	domain := fmt.Sprintf("gui/%d", os.Getuid())
+	exec.Command("launchctl", "bootout", domain+"/"+schedulerPlistLabel).Run() //nolint:errcheck
+	if out, bErr := exec.Command("launchctl", "bootstrap", domain, plistFile).CombinedOutput(); bErr != nil {
+		fmt.Printf("Installed %s but launchctl bootstrap failed: %v\n%s\n", plistFile, bErr, out)
+		fmt.Printf("Load it manually with: launchctl bootstrap %s %s\n", domain, plistFile)
+		return nil
+	}
+
+	fmt.Printf("Installed and loaded: %s\n", plistFile)
+	fmt.Printf("Fires daily at %02d:%02d local (%s close +%dm).\n",
+		hour, minute, clk.Loc, schedulerCloseOffsetMin())
 	fmt.Println("The scheduler owns the EOD, drift, and rebalance cadences — it replaces")
 	fmt.Println("the separate 'daemon install' and 'autopilot install' units. If either of")
 	fmt.Println("those is installed, uninstall it to avoid duplicate runs.")
@@ -214,7 +280,7 @@ func runSchedulerInstall(_ context.Context, _ *cli.Command) error {
 
 func runSchedulerUninstall(_ context.Context, _ *cli.Command) error {
 	if runtime.GOOS != "darwin" {
-		fmt.Println("Uninstall is only supported on macOS. Remove the systemd unit manually.")
+		fmt.Println("Uninstall is only supported on macOS. Remove the systemd unit/timer manually.")
 		return nil
 	}
 	home, err := os.UserHomeDir()
@@ -222,7 +288,8 @@ func runSchedulerUninstall(_ context.Context, _ *cli.Command) error {
 		return fmt.Errorf("getting home directory: %w", err)
 	}
 	plistFile := filepath.Join(home, "Library", "LaunchAgents", schedulerPlistPath)
-	exec.Command("launchctl", "unload", plistFile).Run() //nolint:errcheck
+	domain := fmt.Sprintf("gui/%d", os.Getuid())
+	exec.Command("launchctl", "bootout", domain+"/"+schedulerPlistLabel).Run() //nolint:errcheck
 	if err := os.Remove(plistFile); err != nil {
 		if os.IsNotExist(err) {
 			fmt.Println("No scheduler service installed.")
@@ -234,25 +301,41 @@ func runSchedulerUninstall(_ context.Context, _ *cli.Command) error {
 	return nil
 }
 
-func printSchedulerSystemdUnit(binPath, wd string) {
-	fmt.Printf(`# Save as ~/.config/systemd/user/mycase-scheduler.service
+// schedulerCloseOffsetMin returns the configured post-close offset (minutes),
+// defaulting to 15 when unset — mirrors scheduler.Config.closeOffset().
+func schedulerCloseOffsetMin() int {
+	sc := config.LoadUserDefaults(defaultsPath()).Scheduler
+	if sc.CloseOffsetMin <= 0 {
+		return 15
+	}
+	return sc.CloseOffsetMin
+}
+
+func printSchedulerSystemdUnit(binPath, wd string, hour, minute int) {
+	fmt.Printf(`# One-shot service + timer. Save the .service and .timer under
+# ~/.config/systemd/user/ then: systemctl --user enable --now mycase-scheduler.timer
+
+# ── mycase-scheduler.service ──
 [Unit]
-Description=Mycase autonomous scheduler (EOD / drift / rebalance)
+Description=Mycase autonomous scheduler tick (EOD / drift / rebalance)
 After=network.target
 
 [Service]
-Type=simple
-ExecStart=%s scheduler run --live
+Type=oneshot
+ExecStart=%s scheduler tick --live
 WorkingDirectory=%s
-Restart=on-failure
 StandardOutput=append:%s/data/scheduler.log
 StandardError=append:%s/data/scheduler.log
 
-[Install]
-WantedBy=default.target
+# ── mycase-scheduler.timer ──
+[Unit]
+Description=Fire the mycase scheduler tick daily at market close+offset
 
-# Enable and start:
-#   systemctl --user enable mycase-scheduler
-#   systemctl --user start  mycase-scheduler
-`, binPath, wd, wd, wd)
+[Timer]
+OnCalendar=*-*-* %02d:%02d:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+`, binPath, wd, wd, wd, hour, minute)
 }
