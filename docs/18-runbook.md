@@ -70,6 +70,43 @@ and set `MYCASE_HOME` (a standalone binary there can't auto-resolve `config/`).
 > auto-resolve `config/`. Either use `make install` (symlink) or set
 > `MYCASE_HOME=/path/to/mycase` in your shell profile.
 
+### Versioning
+
+`mycase --version` reports the build's version, commit, build date, and runtime:
+
+```
+mycase version v1.2.0-4-gabc1234 (commit: abc1234, built: 2026-09-22T18:20:10Z, go1.27.0 darwin/arm64)
+```
+
+The version string is stamped at build time via `-ldflags -X` into the exported
+`main.Version` / `main.GitCommit` / `main.BuildDate` vars (see the Makefile
+`LDFLAGS`). `Version` is derived by `scripts/version.sh` (POSIX sh + git only):
+
+1. **`git describe --tags --dirty`** once annotated tags exist —
+   `v1.2.0` on a tag, `v1.2.0-4-gabc1234` four commits past it, `-dirty` appended
+   when the tree has uncommitted changes.
+2. **Pre-first-tag fallback:** `0.0.0-<commit-count>-g<sha>[-dirty]` — monotonic
+   (the commit count only grows), so dev builds stay distinguishable instead of
+   all reporting a static `0.0.0-dev`.
+3. **Non-git fallback:** `0.0.0-unknown` (tarball/CI build with no `.git`).
+
+`GitCommit` and `BuildDate` are always `git rev-parse --short HEAD` and a UTC
+timestamp. Override the whole string for a release build with
+`make build VERSION=v1.2.0`.
+
+**Cut a release** (tags are `vMAJOR.MINOR.PATCH`, semver, always `v`-prefixed):
+
+```bash
+git tag -a v1.2.0 -m "v1.2.0"
+git push --tags
+make install            # rebuild + reinstall; --version now reads v1.2.0
+```
+
+> [!NOTE]
+> This scheme (exported vars + `scripts/version.sh` + the LDFLAGS block) is the
+> intended standard across the sibling Go projects; `scripts/version.sh` is the
+> copy-paste unit. Roll it out per-repo deliberately.
+
 ### Authenticate with Zerodha (live mode only)
 
 Run the interactive authentication utility to link your Zerodha Kite Connect account:

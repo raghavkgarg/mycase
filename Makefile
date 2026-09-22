@@ -17,12 +17,19 @@ else
   ARM64_CXX ?= aarch64-linux-gnu-g++
 endif
 
-VERSION    ?= $(shell git describe --tags 2>/dev/null || echo "0.0.0-dev")
+# Version stamping (project convention — see scripts/version.sh + docs).
+# VERSION precedence: explicit `make VERSION=... ` > scripts/version.sh, which is
+#   1. git describe --tags --dirty  → v1.2.0 / v1.2.0-4-gabc1234 / ...-dirty
+#   2. pre-first-tag fallback: 0.0.0-<commit-count>-g<sha>[-dirty] (monotonic)
+#   3. non-git fallback: 0.0.0-unknown
+# Injected into the exported main.{Version,GitCommit,BuildDate} vars.
+# Tag a release:  git tag -a v1.2.0 -m "v1.2.0" && git push --tags
+VERSION    ?= $(shell sh scripts/version.sh 2>/dev/null || echo "0.0.0-unknown")
 GIT_COMMIT := $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 BUILD_DATE := $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
-LDFLAGS    := -X github.com/raghavkgarg/mycase/cmd.Version=$(VERSION) \
-              -X github.com/raghavkgarg/mycase/cmd.GitCommit=$(GIT_COMMIT) \
-              -X github.com/raghavkgarg/mycase/cmd.BuildDate=$(BUILD_DATE)
+LDFLAGS    := -X main.Version=$(VERSION) \
+              -X main.GitCommit=$(GIT_COMMIT) \
+              -X main.BuildDate=$(BUILD_DATE)
 
 # Install location for `make install`. The installed entry is a SYMLINK back to
 # the built dist/mycase in this project tree — mycase resolves its config/ and

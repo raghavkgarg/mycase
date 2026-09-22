@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"runtime"
 
 	"log/slog"
 
@@ -21,6 +22,16 @@ import (
 var Version = "0.0.0-dev"
 var GitCommit = "unknown"
 var BuildDate = "unknown"
+
+// versionString is the value shown by `mycase --version`. It combines the
+// build-stamped Version/GitCommit/BuildDate (injected via -ldflags -X from
+// scripts/version.sh; see the Makefile) with the runtime Go/OS/arch, so a
+// distributed binary self-reports exactly what it is and where it can run.
+func versionString() string {
+	return fmt.Sprintf("%s (commit: %s, built: %s, %s %s/%s)",
+		Version, GitCommit, BuildDate,
+		runtime.Version(), runtime.GOOS, runtime.GOARCH)
+}
 
 // appLogger holds the process logger so the After hook can close its file.
 var appLogger *logging.Logger
@@ -40,7 +51,7 @@ func main() {
 	app := &cli.Command{
 		Name:    "mycase",
 		Usage:   "Portfolio basket & rebalancing engine",
-		Version: fmt.Sprintf("%s (commit: %s, built: %s)", Version, GitCommit, BuildDate),
+		Version: versionString(),
 		Flags: []cli.Flag{
 			&cli.StringFlag{
 				Name:    "log-level",
