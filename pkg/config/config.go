@@ -482,16 +482,32 @@ func LoadCSVLinks(filename string) (map[string]string, error) {
 // UserDefaults holds user-level preference defaults loaded from config/defaults.json.
 // These provide convenience defaults for CLI flags; explicit flags always override.
 type UserDefaults struct {
-	Broker         string        `json:"broker"`
-	Market         string        `json:"market"`
-	Index          string        `json:"index"`
-	Method         string        `json:"method"`
-	Range          string        `json:"range"`
-	PipelineConfig string        `json:"pipeline_config"`
-	Logging        LoggingConfig `json:"logging"`
-	EDGAR          EDGARConfig   `json:"edgar"`
-	Raw            RawConfig     `json:"raw"`
-	TopN           int           `json:"top_n"`
+	Broker         string          `json:"broker"`
+	Market         string          `json:"market"`
+	Index          string          `json:"index"`
+	Method         string          `json:"method"`
+	Range          string          `json:"range"`
+	PipelineConfig string          `json:"pipeline_config"`
+	Logging        LoggingConfig   `json:"logging"`
+	EDGAR          EDGARConfig     `json:"edgar"`
+	Raw            RawConfig       `json:"raw"`
+	Scheduler      SchedulerConfig `json:"scheduler"`
+	TopN           int             `json:"top_n"`
+}
+
+// SchedulerConfig configures the autonomous scheduler (pkg/scheduler, Phase 12):
+// which of the three cadences run and when. It is the operator's on/off switches
+// for the single orchestrator process; the rebalance schedule itself (frequency,
+// day, auto_execute) still lives in pipeline.yaml's schedule: block, which the
+// scheduler reads for the rebalance cadence.
+//
+// A zero value (block absent) leaves every cadence disabled, so installing the
+// scheduler is an explicit opt-in per cadence.
+type SchedulerConfig struct {
+	EnableEOD       bool `json:"enable_eod"`       // run the daily EOD cache/snapshot update
+	EnableDrift     bool `json:"enable_drift"`     // run the daily portfolio drift check (after EOD)
+	EnableRebalance bool `json:"enable_rebalance"` // run the quarterly/monthly rebalance proposal
+	CloseOffsetMin  int  `json:"close_offset_min"` // minutes after market close to fire daily cadences (default 15)
 }
 
 // RawConfig holds retention settings for the raw-response archive (pkg/rawstore,
