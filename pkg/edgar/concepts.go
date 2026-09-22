@@ -37,7 +37,7 @@ var (
 	// PaymentsForCapitalImprovements; oil & gas use the O&G-property tags. Ordered
 	// most-specific-usable first; the first present tag with FY facts wins. Without
 	// this breadth, capex fails to bind → FCF=0 → the FCF hard filter wrongly
-	// eliminates cash-rich quality names (see docs/03-roadmap.md Phase 10 follow-up).
+	// eliminates cash-rich quality names (see docs/07-datasources.md §4.3).
 	tagsCapEx = []string{
 		"PaymentsToAcquirePropertyPlantAndEquipment",
 		"PaymentsToAcquireProductiveAssets",

@@ -5,6 +5,7 @@ import (
 
 	"github.com/raghavkgarg/mycase/pkg/broker/types"
 	"github.com/raghavkgarg/mycase/pkg/config"
+	"github.com/raghavkgarg/mycase/pkg/marketcal"
 )
 
 // MarketConfig is the market-defaults DTO; it lives in pkg/broker/types (a
@@ -76,6 +77,42 @@ func DeliveryProduct(exchange string) string {
 // IsUSBroker returns true if the broker name implies US market.
 func IsUSBroker(brokerName string) bool {
 	return brokerName == "schwab"
+}
+
+// marketExchangeName maps a MarketConfig.Market to the exchange key used in
+// config/holidays.json and the marketcal clock selection.
+func marketExchangeName(market string) string {
+	if strings.EqualFold(market, "us") {
+		return "NYSE"
+	}
+	return "NSE"
+}
+
+// TradingClock returns the holiday-aware settlement clock for the active market
+// (from config/defaults.json). It selects the NYSE clock for the US market and
+// NSE otherwise, then attaches exchange holidays loaded from
+// config/holidays.json. This is the single authority every scheduler/daemon path
+// should consult for "is the market open today?" (clock.IsTradingDay) and EOD
+// settlement timing — replacing the daemon's every-calendar-day loop and the
+// autopilot's live-price probe.
+//
+// broker (L1) is the natural home: it already owns MarketConfig + config access,
+// and both the daemon (L4) and autopilot (L5) import it, so the holiday-clock
+// assembly lives in one place rather than being duplicated per consumer.
+func TradingClock() marketcal.Clock {
+	return TradingClockForMarket(LoadMarketConfig().Market)
+}
+
+// TradingClockForMarket is TradingClock for an explicit market name ("us" /
+// "india"), so callers that already know the market avoid re-reading defaults.
+func TradingClockForMarket(market string) marketcal.Clock {
+	exchange := marketExchangeName(market)
+	base := marketcal.NSE
+	if exchange == "NYSE" {
+		base = marketcal.NYSE
+	}
+	holidays := config.LoadHolidays(config.Path("holidays.json"))
+	return base.WithHolidays(holidays.For(exchange)...)
 }
 
 // BrokerName returns the configured broker name from defaults.

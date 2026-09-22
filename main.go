@@ -117,6 +117,7 @@ func main() {
 			mycmd.CacheCommand,
 			mycmd.RawCommand,
 			mycmd.DaemonCommand,
+			mycmd.SchedulerCommand,
 			mycmd.BacktestCommand,
 			mycmd.CalibrateCommand,
 			mycmd.PitCommand,

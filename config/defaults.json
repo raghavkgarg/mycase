@@ -21,5 +21,11 @@
   "raw": {
     "retain_days": 14,
     "max_size_mb": 512
+  },
+  "scheduler": {
+    "enable_eod": true,
+    "enable_drift": true,
+    "enable_rebalance": true,
+    "close_offset_min": 15
   }
 }

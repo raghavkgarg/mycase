@@ -40,7 +40,7 @@ All of this runs as a single binary with no external services, no subscriptions,
 
 ### Near-term: US Market Access (Schwab Integration)
 
-The portfolio is 100% Indian equity — concentrated geographic and currency risk. Adding S&P 500 access via the Schwab API (OAuth2 auth, market data, order placement) is the single biggest diversification win. The spec is written (`docs/05-refactor.md` Phase R9); implementation is next.
+The system now trades US equity via the Schwab API (OAuth2 auth, market data, order placement), addressing the concentrated geographic and currency risk of an India-only portfolio. See `docs/07-datasources.md` and `docs/04-architecture.md`.
 
 ### Medium-term: Multi-Broker Support
 

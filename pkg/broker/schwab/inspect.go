@@ -10,7 +10,7 @@ import (
 )
 
 // This file is the Schwab half of the raw-response field inspector
-// (docs/03-roadmap.md Phase 11, R-store-5). The generic triage spine (cmd/raw.go +
+// (docs/24-logging.md §2). The generic triage spine (cmd/raw.go +
 // pkg/rawstore) is schema-blind — it can list and print any archived body but
 // cannot say what a body *meant* to the production mapper. This inspector closes
 // that gap for the one endpoint that motivated the whole feature: the Schwab

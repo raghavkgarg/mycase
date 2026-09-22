@@ -502,7 +502,7 @@ func findMissingTickers(tickers map[string]bool, holdings []brokertypes.Holding)
 	for _, h := range holdings {
 		// Index by both the raw symbol and its series-suffix-stripped base
 		// (e.g. "E2E-BE" -> "E2E") so group tickers written without the
-		// exchange series suffix still match. India-legacy robustness.
+		// exchange series suffix still match. India-Path robustness.
 		holdingSymbols[h.TradingSymbol] = true
 		holdingSymbols[portfolio.StripSeriesSuffix(h.TradingSymbol)] = true
 	}

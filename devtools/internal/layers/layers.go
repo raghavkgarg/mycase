@@ -4,7 +4,7 @@
 //
 // The layering rule: a pkg/ package may import only packages at a STRICTLY
 // LOWER layer. Layer 0 packages are leaves; a subset (MustBeLeaf) must have
-// zero internal imports. See docs/05-refactor.md R16 and
+// zero internal imports. See docs/04-architecture.md and
 // .kiro/steering/architecture.md.
 //
 // When adding or re-tiering a package, edit Layers here — both the checker and
@@ -44,7 +44,7 @@ var Layers = map[string]int{
 	"costs":            0,
 	"csvloader":        0,
 	"excel":            0,
-	"kiteauth":         0, // (India legacy) Kite auto-login/TOTP — zero internal imports; dormant, wired only via cmd
+	"kiteauth":         0, // (India-Path) Kite auto-login/TOTP — zero internal imports; dormant, wired only via cmd
 	"logging":          0,
 	"market":           0,
 	"marketdata":       0,
@@ -57,8 +57,8 @@ var Layers = map[string]int{
 	// L1 — stores / low-level impls over leaves.
 	"broker":     1, // broker/types, config, costs
 	"edgar":      1, // cache, marketdata — SEC EDGAR fundamentals client; owns its CIK-map + facts tables via cache.Conn()
-	"kiteclient": 1, // config (Zerodha/Kite low-level client, India legacy)
-	"portfolio":  1, // broker/types (India legacy) — dormant; string utils + Holding alias, consumed by optimizer/zerodha/themereturn
+	"kiteclient": 1, // config (Zerodha/Kite low-level client, India-Path)
+	"portfolio":  1, // broker/types (India-Path) — dormant; string utils + Holding alias, consumed by optimizer/zerodha/themereturn
 	"tax":        1, // broker/types
 	"themedb":    1, // cache — theme rebalance/history store; owns its DuckDB tables via cache.Conn()
 	"yfinance":   1, // cache, marketdata
@@ -75,7 +75,7 @@ var Layers = map[string]int{
 	"datafetcher": 3, // broker, broker/schwab, edgar, yfinance
 	"printer":     3, // broker/types, market, optimizer, portfolio, render
 	"stockpicker": 3, // config, csvloader, excel, optimizer, selectiontracker, yfinance
-	"themereturn": 3, // config, csvloader, portfolio, themedb (India legacy) — dormant; wired only via cmd/returns
+	"themereturn": 3, // config, csvloader, portfolio, themedb (India-Path) — dormant; wired only via cmd/returns
 
 	// L4 — orchestration / IO.
 	"daemon":     4, // alert, broker, config, csvloader
@@ -85,9 +85,11 @@ var Layers = map[string]int{
 
 	// L5 — top composition (below cmd/main, which live outside pkg/).
 	"autopilot": 5,
+	"eod":       5, // stockpicker, pithistory, themedb, config, csvloader, marketcal — daily EOD update (extracted from cmd/db)
 
 	// L6 — server embeds autopilot + most domains.
-	"server": 6,
+	"server":    6,
+	"scheduler": 6, // autopilot, eod, daemon, broker, config, marketcal — autonomous orchestrator (Phase 12)
 }
 
 // MustBeLeaf lists packages that must never acquire ANY internal import — the

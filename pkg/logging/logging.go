@@ -1,6 +1,6 @@
 // Package logging provides structured logging for mycase built on log/slog.
 //
-// Design (see docs/05-refactor.md R14):
+// Design (see docs/24-logging.md §1):
 //   - Two channels, never conflated: user output (pkg/render / fmt → stdout) is
 //     the product; diagnostic logs go here (slog → stderr text + JSON file).
 //   - A fanout handler writes machine-readable JSON to a daily rotating file and

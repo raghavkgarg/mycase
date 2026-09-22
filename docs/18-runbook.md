@@ -17,7 +17,7 @@ Practical usage guide: common workflows, every command with realistic examples, 
 8. [Unified Database Operations (`db`)](#8-unified-database-operations-db)
 9. [Theme Lifecycle & Versioning (`theme`)](#9-theme-lifecycle--versioning-theme)
 10. [Point-in-Time Quantitative Research (`pit`)](#10-point-in-time-quantitative-research-pit)
-11. [Automated Daily Sync (`daily_sync.sh`)](#11-automated-daily-sync-dailysyncsh)
+11. [Autonomous Scheduler (`scheduler`)](#11-autonomous-scheduler-scheduler)
 12. [Web Dashboard Server](#12-web-dashboard-server)
 13. [Command Reference](#13-command-reference)
 
@@ -674,17 +674,42 @@ mycase --index niftytotalmarket --method earlymb --analysis
 
 ---
 
-## 11. Automated Daily Sync (`daily_sync.sh`)
+## 11. Autonomous Scheduler (`scheduler`)
 
-To eliminate manual daily terminal commands, post-market updates are automated via `scripts/daily_sync.sh` scheduled via macOS LaunchAgent (`~/Library/LaunchAgents/com.mycase.daily_sync.plist`) at **21:00 IST (9:00 PM)** Monday through Friday. Running at 9:00 PM IST guarantees that NSE Bhavcopy, Security-wise Deliverable Positions (MTO), and Yahoo Finance settled daily candles are 100% available without race conditions.
+The autonomous **scheduler** replaces manual daily terminal commands and the old
+`daily_sync.sh` shell script. One long-lived process owns all three operating cadences and
+coordinates them; install it once:
 
-### Execution Flow:
-1. **Weekend & Holiday Guard**: Skips execution on Saturdays, Sundays, and NSE market holidays.
-2. **Broker Authentication**: Runs `mycase auth` to refresh or verify the Zerodha Kite session.
-3. **Trade Ingestion**: Navigates to `myportfolio` and runs `./dist/myportfolio fetch-trades` to pull today's broker fills into `portfolio.db`.
-4. **Unified Database Update**: Runs `./mycase db update --all --index niftytotalmarket --method earlymb --top 10` to warm caches, screen Nifty Total Market, and sync theme rebalances into `data/mycase.db`.
+```bash
+mycase scheduler install     # launchd keep-alive service on macOS (systemd unit printed on Linux)
+mycase scheduler run --live  # or run in the foreground (blocks)
+mycase scheduler status      # last completed trading day per cadence
+mycase scheduler uninstall
+```
 
-Logs stream with timestamps to `logs/pit_update.log`.
+It **replaces the separate `daemon install` and `autopilot install` units** — if either is
+installed, uninstall it to avoid duplicate runs.
+
+### Cadences (coordinated in one process):
+1. **Daily EOD update** — after the market close cutoff + offset, refreshes the DuckDB
+   cache/snapshot (screening + self-heal + theme sync, via `pkg/eod`).
+2. **Daily drift check** — runs *after* the same day's EOD (so it reads a fresh cache);
+   alerts if the portfolio has drifted beyond threshold.
+3. **Quarterly/monthly rebalance** — produces an autopilot proposal; a rebalance day forces
+   an EOD first. **Investor-in-the-loop:** it never places orders unless `auto_execute` is
+   set in `pipeline.yaml` *and* the run is `--live`; otherwise you confirm via the dashboard.
+
+### Trading-day awareness:
+Every cadence is gated on the holiday-aware market calendar (`marketcal` + the active
+market's clock), so weekends and the exchange holidays in `config/holidays.json` are skipped
+uniformly — no hand-maintained holiday list in a shell script. On startup the scheduler runs
+a **catch-up** EOD if the machine was asleep at the last close.
+
+### Configuration:
+Cadence toggles live in the `scheduler` block of `config/defaults.json`
+(`enable_eod` / `enable_drift` / `enable_rebalance` / `close_offset_min`); the rebalance
+schedule (`frequency` / `day` / `auto_execute`) stays in the `schedule:` block of
+`pipeline.yaml`. Diagnostics stream to `data/scheduler.log`.
 
 ---
 

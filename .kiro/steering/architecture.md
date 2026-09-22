@@ -4,8 +4,8 @@ The `pkg/` graph is organized into layers. **Imports must always go strictly
 downward** — a package may import only packages at a lower layer, never the same
 layer or higher. This is enforced by `devtools/checkdeps` (run via `make check-deps`,
 and part of `make cleanup`). Go rejects import *cycles* at compile time; this guard
-additionally preserves the *direction* and *leaf-ness* that phase R16 established
-(see `docs/05-refactor.md`).
+additionally preserves the *direction* and *leaf-ness* the layering rule below
+establishes.
 
 ## The core rule: define OR consume, don't do both low in the stack
 
@@ -32,9 +32,9 @@ and the rule going forward:
 |-------|----------|------|
 | **L-1 — pure algorithmic floor** | `marketcal` | Zero-import (stdlib only). Market-calendar / EOD-settlement time math. Sits below the L0 leaves so `marketdata`, `cache`, `selectiontracker` share one implementation instead of duplicating it. |
 | **L0 — leaves** | `alert`, `broker/types`, `cache`, `config`, `costs`, `csvloader`, `excel`, `kiteauth`, `logging`, `market`, `marketdata`, `marketfmt`, `rawcapture`, `render`, `selectiontracker`, `universe` | Pure types, config, generic stores, rendering primitives. Zero internal imports **except** the permitted downward import of `marketcal` (used by `cache`, `marketdata`, `selectiontracker`). (`marketfmt` = market-aware currency/magnitude formatting; `rawcapture` = zero-import hook half of the raw-response archive — declares the `Sink` interface + `SetSink`, delegates persistence to the injected `rawstore` at L4.) |
-| **L1 — stores/impls** | `broker`, `edgar`, `kiteclient`, `portfolio`, `tax`, `themedb`, `yfinance` | Thin layers over leaves. (`kiteclient` = Zerodha/Kite low-level client, India legacy; `edgar` = SEC EDGAR fundamentals client, owns its CIK-map + facts tables; `themedb` = theme rebalance/history store.) |
+| **L1 — stores/impls** | `broker`, `edgar`, `kiteclient`, `portfolio`, `tax`, `themedb`, `yfinance` | Thin layers over leaves. (`kiteclient` = Zerodha/Kite low-level client, India-Path; `edgar` = SEC EDGAR fundamentals client, owns its CIK-map + facts tables; `themedb` = theme rebalance/history store.) |
 | **L2 — domains/data** | `backtest`, `broker/schwab`, `broker/zerodha`, `monitoring`, `optimizer` | Strategy math, broker clients, data providers. |
-| **L3 — higher domains** | `attribution`, `datafetcher`, `printer`, `stockpicker`, `themereturn` | Compose L0–L2. (`themereturn` = India legacy theme-return matcher.) |
+| **L3 — higher domains** | `attribution`, `datafetcher`, `printer`, `stockpicker`, `themereturn` | Compose L0–L2. (`themereturn` = India-Path theme-return matcher.) |
 | **L4 — orchestration/IO** | `daemon`, `executor`, `pithistory`, `rawstore` | Long-running / order placement / PIT snapshot analytics (`pithistory` imports `stockpicker`). (`rawstore` = filesystem impl of `rawcapture.Sink`; owns the data dir via `config` + the archive filename convention.) |
 | **L5 — top composition** | `autopilot` | Wires the pipeline. |
 | **L6 — server** | `server` | Embeds autopilot + most domains. |

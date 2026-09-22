@@ -1,0 +1,88 @@
+package scheduler
+
+import (
+	"context"
+	"time"
+
+	"log/slog"
+
+	"github.com/raghavkgarg/mycase/pkg/autopilot"
+	"github.com/raghavkgarg/mycase/pkg/config"
+	"github.com/raghavkgarg/mycase/pkg/daemon"
+	"github.com/raghavkgarg/mycase/pkg/eod"
+	"github.com/raghavkgarg/mycase/pkg/marketcal"
+)
+
+// defaultRunner is the production Runner: it dispatches each cadence to the real
+// eod/daemon/autopilot entry points. Held by the scheduler unless a test injects
+// its own Runner.
+type defaultRunner struct {
+	cfg Config
+}
+
+// RunEOD executes the daily EOD update via pkg/eod, using the injected market
+// clock so screening/settlement timing is correct for the active market.
+func (r *defaultRunner) RunEOD(ctx context.Context) error {
+	return eod.Run(ctx, eod.Config{
+		Clock:     r.cfg.Clock,
+		IndexName: r.cfg.EODIndex,
+		Method:    r.cfg.EODMethod,
+		DBPath:    r.cfg.DBPath,
+		TopN:      r.cfg.EODTopN,
+		// Fetcher left nil: eod/stockpicker falls back to the direct path. The
+		// composition root may set a router on the Config in a later refinement;
+		// keeping it nil here avoids the scheduler importing datafetcher.
+	})
+}
+
+// RunDrift runs the portfolio drift check via pkg/daemon (alerts only).
+func (r *defaultRunner) RunDrift(ctx context.Context) error {
+	_, err := daemon.RunCheck(ctx, r.cfg.Broker, r.cfg.Alert, r.cfg.PortfolioFile)
+	return err
+}
+
+// RunRebalance produces an autopilot proposal. It NEVER places orders here — the
+// investor-in-the-loop rule holds: autopilot.Run builds and persists a proposal
+// and the scheduler dispatches the proposal alert. Order execution stays a
+// separate, explicit confirm step unless AutoExecute + Live are both set, which
+// is gated and logged below.
+func (r *defaultRunner) RunRebalance(ctx context.Context) error {
+	res, err := autopilot.Run(ctx, autopilot.RunConfig{
+		Broker:      r.cfg.Broker,
+		ConfigPath:  r.cfg.ConfigPath,
+		PipelineCfg: r.cfg.Pipeline,
+	})
+	if err != nil {
+		return err
+	}
+	slog.InfoContext(ctx, "scheduler.rebalance_proposed",
+		"report", res.ReportPath, "golden_copy", res.GoldenCopyPath)
+
+	if r.cfg.AutoExecute && r.cfg.Live {
+		// Auto-execution is the one path that would place orders. It is gated hard
+		// and logged prominently. Execution itself is not wired here yet — this
+		// branch exists so the (previously dead) auto_execute config has a single,
+		// auditable consumer; wiring the executor call is a deliberate follow-up.
+		slog.WarnContext(ctx, "scheduler.auto_execute_enabled",
+			"note", "auto_execute+live set; order placement is a gated follow-up, not yet wired")
+	} else {
+		slog.InfoContext(ctx, "scheduler.rebalance_awaiting_confirmation",
+			"note", "proposal built; confirm via dashboard or autopilot confirm")
+	}
+	return nil
+}
+
+// isRebalanceDay reports whether now falls on the configured rebalance schedule,
+// delegating to autopilot.IsScheduledRunDate so the schedule semantics live in one
+// place. Drift-triggered frequency has no fixed calendar day (handled by the drift
+// cadence, not the calendar).
+func isRebalanceDay(now time.Time, sched config.ScheduleConfig, clk marketcal.Clock) bool {
+	if sched.Frequency == "" || sched.Frequency == "drift-triggered" {
+		return false
+	}
+	loc := clk.Loc
+	if loc == nil {
+		loc = time.UTC
+	}
+	return autopilot.IsScheduledRunDate(now.In(loc), sched)
+}
