@@ -86,11 +86,13 @@ against `portfolio.db` trades, closed lots, dividends, and benchmark quotes:
 `CBR420`), `--db`, `--lifecycle`, `--detail/-d`, `--benchmark/-b` (default
 `NIFTY50_TRI`), `--format` (`table`|`json`).
 
-## 5. Daily sync (legacy)
+## 5. Daily sync
 
-Historically automated post-market at 21:00 IST via a `scripts/daily_sync.sh`
-LaunchAgent that authenticated Zerodha, fetched trades into `myportfolio`, then ran
-`mycase db update` (warms cache → PIT screening → theme sync). That script is stale
-(machine-specific, hard-coded 2026 NSE holiday list). The unified EOD update it invoked
-survives as `mycase db update` (aliases `eod`/`daily`); see `docs/03-roadmap.md` Phase 11
-for the planned Go-native scheduler that would replace the shell script.
+Post-market theme sync runs as **stage 3 of the daily EOD update** (`mycase db update`,
+aliases `eod`/`daily`), and is scheduled automatically by the autonomous scheduler
+(`mycase scheduler` — see `docs/18-runbook.md` §11), which owns the daily EOD cadence with
+holiday-aware skipping. The theme sync itself lives in `pkg/eod` stage 3
+(`SyncThemeFromProposals` per configured theme). The former machine-specific
+`scripts/daily_sync.sh` shell script has been retired — its weekend/holiday guard is now
+`marketcal.IsTradingDay` + `config/holidays.json`, and its `mycase db update` call is the
+scheduler's EOD cadence.
