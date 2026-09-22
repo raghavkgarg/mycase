@@ -251,8 +251,11 @@ func RunWithResult(ctx context.Context, opts *Options) (*PickResult, error) {
 	for _, s := range selectedKeys {
 		selectedSet[s] = true
 	}
-	failedSet := make(map[string]bool, len(failedKeys))
+	failedSet := make(map[string]bool, len(failedKeys)+len(tracker.FetchFailures))
 	for _, f := range failedKeys {
+		failedSet[f] = true
+	}
+	for f := range tracker.FetchFailures {
 		failedSet[f] = true
 	}
 	candidateMap := make(map[string]CandidateScoreDetail, len(combinedTickers))
@@ -260,7 +263,11 @@ func RunWithResult(ctx context.Context, opts *Options) (*PickResult, error) {
 		isFetchFailed := failedSet[t]
 		reason, isSafetyDrop := tracker.SafetyReasons[t]
 		if isFetchFailed {
-			reason = "DATA_FETCH_FAILED: historical price bars unavailable"
+			if fReason, ok := tracker.FetchFailures[t]; ok && fReason != "" {
+				reason = fReason
+			} else {
+				reason = "DATA_FETCH_FAILED: historical price bars unavailable"
+			}
 		}
 		rawScore, hasRaw := tracker.RawScores[t]
 		effScore, hasEff := tracker.EffectiveScores[t]
@@ -473,15 +480,10 @@ func fetchHistoricalPricesVia(ctx context.Context, fetcher DataFetcher, rawTicke
 
 // getBenchmarkAndSlicedPricesVia routes the benchmark fetch through the DataFetcher if available.
 func getBenchmarkAndSlicedPricesVia(ctx context.Context, fetcher DataFetcher, indexName string, activeKeys []string, fullHistory map[string]*yfinance.HistoricalData, rangeStr string) (map[string][]float64, []float64, error) {
-	if fetcher == nil {
-		return GetBenchmarkAndSlicedPrices(ctx, indexName, activeKeys, fullHistory, rangeStr)
-	}
-
 	benchSym := GetBenchmarkSymbolForIndex(indexName, activeKeys)
-	slog.InfoContext(ctx, "pick.benchmark_fetch", "symbol", benchSym, "range", rangeStr)
-	benchmarkPrices, err := fetcher.FetchHistoricalPrices(ctx, benchSym, rangeStr)
+	benchmarkPrices, err := FetchBenchmarkPricesResilient(ctx, fetcher, benchSym, rangeStr)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to fetch benchmark %s: %w", benchSym, err)
+		return nil, nil, err
 	}
 
 	slicedPriceHistory := make(map[string][]float64)

@@ -250,6 +250,10 @@ To guarantee that empirical reference bounds and weights are never overfitted in
 2. **Pillar 1 (Composite RS) Robustness**: Composite RS delivered a **$+0.0685$ Mean IC with a $77.8\%$ positive hit rate** across out-of-sample test periods.
 3. **Delivery Delta Reference Bound Accuracy**: The empirical training distribution for Delivery Delta settled at **$[-10.8\%, +30.3\%]$**, which matches our predefined theoretical bounds ($[-10\%, +30\%]$).
 
+> [!WARNING]
+> **Pillar 4 Calibration Pre-Dates Disjoint Baseline Migration**:
+> The Delivery Delta metrics above ($\text{Mean IC} = \mathbf{+0.0171}, \text{IR} = \mathbf{+0.160}, \text{Hit Rate} = \mathbf{55.6\%}$) were evaluated on the legacy arbitrary baseline ($\text{DeliveryPct} - 35\%$), which granted artificial subsidies to ~46% of the universe. In accordance with Section 17 and Section 27, all historical records using this legacy baseline are tagged `pillar4_uncalibrated = true` in `data/mycase.db`. Fresh IC/IR calibration on clean disjoint baseline records ($\overline{\text{Deliv}}_{5\text{D}} - \overline{\text{Deliv}}_{20\text{D Baseline}}$) will be re-run once sufficient post-migration trading sessions accumulate. Note that Setup Quality is mathematically insulated as it relies exclusively on Pillars 1 & 2.
+
 ---
 
 ## 7. Configuration Specification (`config/mfs.json`)
@@ -290,6 +294,26 @@ To guarantee that empirical reference bounds and weights are never overfitted in
   "score_weight_delivery_delta": 25.0
 }
 ```
+
+### Stage-1 Hard Gates & Fallback Architecture
+
+Before candidates reach the scoring engine, binary Stage-1 filters eliminate ~85–88% of constituents in [`pkg/stockpicker/filters.go:450-653`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/stockpicker/filters.go#L450-L653):
+
+1. **Cash Flow Quality Gate (`min_cfo_pat: 0.25`)**:
+   - Requires $\text{OperatingCashflow} > 0$ and $\frac{\text{OperatingCashflow}}{\text{NetIncome}} \ge 0.25$ (with $\text{FreeCashflow} > 0$ check when configured).
+   - Existing holdings enjoy a $20\%$ relaxation buffer ($\text{CFO} / \text{PAT} \ge 0.20$).
+   - **Empirical Dominance**: Accounts for **23%–25%+ of all eliminations** ("Weak Cash Conversion (CFO < PAT)"), serving as the single largest safety filter in the entire pipeline.
+
+2. **Capital Efficiency (ROCE) Hard Gate with 3-Year Fallback (`min_roce: 0.12`)**:
+   - Requires latest $\text{ROCE} \ge 12.0\%$ (or $7.0\%$ floor for cyclicals, capital goods, and recent listings).
+   - **3-Year Fallback (`Get3YearAvgROCE`)**: If latest single-year ROCE is depressed due to cyclicality or capex expansion, the engine evaluates average ROCE across the last 3 visible fiscal years (accounting for 45-day filing lag). If 3-year average $\ge 12.0\%$, candidate passes.
+   - Existing holdings buffer: $10.2\%$ ($15\%$ relaxation).
+
+3. **Financial Services (BFSI) Sector-Specific Substitution**:
+   - Standard ROCE is structurally distorted by bank/NBFC deposit liabilities. ROCE is dropped entirely and replaced with an **ROE Gate**: $\text{ROE} \ge 12.0\%$.
+
+4. **Cash Return on Invested Capital (CROIC) Gate with 3-Year Fallback (`min_croic: 0.06`)**:
+   - Evaluates $\text{CROIC} = \frac{\text{FCF}}{\text{Invested Capital}} \ge 6.0\%$, with 3-year average fallback via `Get3YearAvgCROIC` and a $4.8\%$ buffer for existing holdings.
 
 ---
 

@@ -883,7 +883,7 @@ func ApplySafetyFilters(
 	for _, t := range activeKeys {
 		f, ok := fundamentals[t]
 		if !ok {
-			tracker.RecordSafetyDrop(t, "Missing fundamental data")
+			tracker.RecordFetchFailure(t, "DATA_FETCH_FAILED: Missing fundamental data")
 			continue
 		}
 		hist := fullHistory[t]

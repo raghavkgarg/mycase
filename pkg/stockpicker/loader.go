@@ -1,9 +1,11 @@
 package stockpicker
 
 import (
+	"bytes"
 	"context"
 	"encoding/csv"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -13,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/raghavkgarg/mycase/pkg/cache"
 	"github.com/raghavkgarg/mycase/pkg/config"
 	"github.com/raghavkgarg/mycase/pkg/csvloader"
 	"github.com/raghavkgarg/mycase/pkg/excel"
@@ -191,27 +194,64 @@ func loadLocalCSVConstituents(filePath string) ([]string, map[string]string, err
 }
 
 func downloadConstituents(indexName, url string) ([]string, map[string]string, error) {
+	cleanIdx := strings.ToLower(strings.TrimSpace(indexName))
+	cleanIdx = strings.NewReplacer(",", "_", " ", "_", "^", "").Replace(cleanIdx)
+	cacheDir := filepath.Join("data", "cache", "constituents")
+	cachePath := filepath.Join(cacheDir, cleanIdx+".csv")
+
+	var records [][]string
+	var fetchErr error
+
 	client := &http.Client{Timeout: 15 * time.Second}
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
-		return nil, nil, err
+		fetchErr = err
+	} else {
+		req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+		resp, err := client.Do(req)
+		if err != nil {
+			fetchErr = fmt.Errorf("network error: %w", err)
+		} else {
+			defer resp.Body.Close()
+			if resp.StatusCode != http.StatusOK {
+				fetchErr = fmt.Errorf("HTTP status: %d", resp.StatusCode)
+			} else {
+				bodyBytes, rErr := io.ReadAll(resp.Body)
+				if rErr != nil {
+					fetchErr = rErr
+				} else {
+					reader := csv.NewReader(bytes.NewReader(bodyBytes))
+					rec, cErr := reader.ReadAll()
+					if cErr != nil {
+						fetchErr = cErr
+					} else {
+						records = rec
+						if len(records) > 1 {
+							if mErr := os.MkdirAll(cacheDir, 0755); mErr == nil {
+								_ = os.WriteFile(cachePath, bodyBytes, 0644)
+							}
+						}
+					}
+				}
+			}
+		}
 	}
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
 
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, nil, fmt.Errorf("network error: %w", err)
+	// Fallback to local air-gapped mirror if network fetch failed
+	if fetchErr != nil {
+		if cacheBytes, rErr := os.ReadFile(cachePath); rErr == nil && len(cacheBytes) > 0 {
+			reader := csv.NewReader(bytes.NewReader(cacheBytes))
+			if rec, cErr := reader.ReadAll(); cErr == nil && len(rec) > 1 {
+				slog.Warn("constituents.network_fetch_failed; using cached offline mirror",
+					"index", indexName, "path", cachePath, "err", fetchErr)
+				records = rec
+				fetchErr = nil
+			}
+		}
 	}
-	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
-		return nil, nil, fmt.Errorf("HTTP status: %d", resp.StatusCode)
-	}
-
-	reader := csv.NewReader(resp.Body)
-	records, err := reader.ReadAll()
-	if err != nil {
-		return nil, nil, err
+	if fetchErr != nil {
+		return nil, nil, fetchErr
 	}
 
 	symbolIdx := -1
@@ -265,7 +305,7 @@ func findTickerAndSectorColumns(header []string) (tickerIdx, sectorIdx int) {
 			if tickerIdx == -1 {
 				tickerIdx = i
 			}
-		case "gics sector", "sector":
+		case "gics sector", "sector", "industry":
 			if sectorIdx == -1 {
 				sectorIdx = i
 			}
@@ -473,7 +513,8 @@ retryLoop:
 	return fullHistory, activeKeys, failedKeys
 }
 
-// fetchHistoricalPricesWithFetcher is like FetchHistoricalPrices but routes through a DataFetcher.
+// fetchHistoricalPricesWithFetcher is like FetchHistoricalPrices but routes through a DataFetcher,
+// with multi-pass exponential backoff retries for failed tickers.
 func fetchHistoricalPricesWithFetcher(ctx context.Context, fetcher DataFetcher, rawTickers []string) (map[string]*yfinance.HistoricalData, []string, []string) {
 	slog.InfoContext(ctx, "prices.fetch_start", "range", "1y", "count", len(rawTickers), "source", "router")
 	type fetchJob struct {
@@ -485,53 +526,146 @@ func fetchHistoricalPricesWithFetcher(ctx context.Context, fetcher DataFetcher, 
 		ticker string
 	}
 
-	jobs := make(chan fetchJob, len(rawTickers))
-	results := make(chan fetchResult, len(rawTickers))
-	var wg sync.WaitGroup
+	runBatch := func(tickers []string, workerCount int) ([]fetchResult, []string) {
+		jobs := make(chan fetchJob, len(tickers))
+		results := make(chan fetchResult, len(tickers))
+		var wg sync.WaitGroup
 
-	workerCount := 15
-	for range workerCount {
-		wg.Go(func() {
-			for job := range jobs {
-				hist, err := fetcher.FetchHistoricalDataWithTimestamps(ctx, job.ticker, "1y")
-				results <- fetchResult{ticker: job.ticker, hist: hist, err: err}
+		for range workerCount {
+			wg.Go(func() {
+				for job := range jobs {
+					hist, err := fetcher.FetchHistoricalDataWithTimestamps(ctx, job.ticker, "1y")
+					results <- fetchResult{ticker: job.ticker, hist: hist, err: err}
+				}
+			})
+		}
+
+		for _, t := range tickers {
+			jobs <- fetchJob{ticker: t}
+		}
+		close(jobs)
+
+		go func() {
+			wg.Wait()
+			close(results)
+		}()
+
+		var succeeded []fetchResult
+		var failed []string
+		for res := range results {
+			if res.err == nil && res.hist != nil && len(res.hist.Closes) >= 2 {
+				succeeded = append(succeeded, res)
+			} else {
+				failed = append(failed, res.ticker)
 			}
-		})
+		}
+		return succeeded, failed
 	}
 
-	for _, t := range rawTickers {
-		jobs <- fetchJob{ticker: t}
-	}
-	close(jobs)
-
-	go func() {
-		wg.Wait()
-		close(results)
-	}()
-
+	// Initial concurrent pass (15 workers)
 	fullHistory := make(map[string]*yfinance.HistoricalData)
 	var activeKeys []string
-	var failedKeys []string
-	for res := range results {
-		if res.err == nil && res.hist != nil && len(res.hist.Closes) >= 2 {
+	succeeded, pendingRetries := runBatch(rawTickers, 15)
+	for _, res := range succeeded {
+		fullHistory[res.ticker] = res.hist
+		activeKeys = append(activeKeys, res.ticker)
+	}
+
+	// Retry passes with exponential backoff (up to 2 passes with smaller worker pool)
+	maxRetries := 2
+	backoffs := []time.Duration{1500 * time.Millisecond, 3000 * time.Millisecond}
+retryLoop:
+	for retry := 0; retry < maxRetries && len(pendingRetries) > 0; retry++ {
+		slog.WarnContext(ctx, "prices.retry", "pending", len(pendingRetries), "attempt", retry+1, "max", maxRetries, "backoff", backoffs[retry].String(), "source", "router")
+		select {
+		case <-ctx.Done():
+			break retryLoop
+		case <-time.After(backoffs[retry]):
+		}
+
+		retriedSucceeded, stillFailed := runBatch(pendingRetries, 5)
+		for _, res := range retriedSucceeded {
 			fullHistory[res.ticker] = res.hist
 			activeKeys = append(activeKeys, res.ticker)
-		} else {
-			failedKeys = append(failedKeys, res.ticker)
 		}
+		pendingRetries = stillFailed
 	}
+
+	failedKeys := pendingRetries
+	sort.Strings(activeKeys)
+	sort.Strings(failedKeys)
 
 	slog.InfoContext(ctx, "prices.fetch_complete", "active", len(activeKeys), "total", len(rawTickers), "source", "router")
 	return fullHistory, activeKeys, failedKeys
 }
 
+// FetchBenchmarkPricesResilient fetches benchmark prices with retry backoff and persistent database fallback.
+func FetchBenchmarkPricesResilient(ctx context.Context, fetcher DataFetcher, benchSym, rangeStr string) ([]float64, error) {
+	slog.InfoContext(ctx, "pick.benchmark_fetch", "symbol", benchSym, "range", rangeStr)
+	var benchmarkPrices []float64
+	var fetchErr error
+
+	backoffs := []time.Duration{1000 * time.Millisecond, 2000 * time.Millisecond, 4000 * time.Millisecond}
+	for attempt := 0; attempt < 3; attempt++ {
+		if fetcher != nil {
+			benchmarkPrices, fetchErr = fetcher.FetchHistoricalPrices(ctx, benchSym, rangeStr)
+		} else {
+			benchmarkPrices, fetchErr = yfinance.FetchHistoricalPrices(ctx, benchSym, rangeStr)
+		}
+		if fetchErr == nil && len(benchmarkPrices) >= 2 {
+			return benchmarkPrices, nil
+		}
+		if attempt < len(backoffs)-1 {
+			slog.WarnContext(ctx, "pick.benchmark_fetch_retry", "symbol", benchSym, "attempt", attempt+1, "err", fetchErr)
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(backoffs[attempt]):
+			}
+		}
+	}
+
+	// Fallback to DuckDB prices table
+	c := cache.GetDB()
+	var cacheOpened *cache.Cache
+	if c == nil {
+		if opened, err := cache.Open(config.DataPath("mycase.db")); err == nil {
+			c = opened
+			cacheOpened = opened
+		}
+	}
+	if cacheOpened != nil {
+		defer cacheOpened.Close()
+	}
+
+	if c != nil {
+		query := `SELECT close FROM prices WHERE ticker = ? ORDER BY date ASC`
+		rows, qErr := c.Conn().QueryContext(ctx, query, benchSym)
+		if qErr == nil {
+			defer rows.Close()
+			var closes []float64
+			for rows.Next() {
+				var cl float64
+				if err := rows.Scan(&cl); err == nil {
+					closes = append(closes, cl)
+				}
+			}
+			if len(closes) >= 2 {
+				slog.WarnContext(ctx, "pick.benchmark_fallback_db", "symbol", benchSym, "bars", len(closes), "network_err", fetchErr)
+				return closes, nil
+			}
+		}
+	}
+
+	return nil, fmt.Errorf("failed to fetch benchmark %s: %w", benchSym, fetchErr)
+}
+
 // GetBenchmarkAndSlicedPrices fetches benchmark prices and aligns stock prices with benchmark range.
 func GetBenchmarkAndSlicedPrices(ctx context.Context, indexName string, activeKeys []string, fullHistory map[string]*yfinance.HistoricalData, rangeStr string) (map[string][]float64, []float64, error) {
 	benchSym := GetBenchmarkSymbolForIndex(indexName, activeKeys)
-	slog.InfoContext(ctx, "pick.benchmark_fetch", "symbol", benchSym, "range", rangeStr)
-	benchmarkPrices, err := yfinance.FetchHistoricalPrices(ctx, benchSym, rangeStr)
+	benchmarkPrices, err := FetchBenchmarkPricesResilient(ctx, nil, benchSym, rangeStr)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to fetch benchmark %s: %w", benchSym, err)
+		return nil, nil, err
 	}
 
 	slicedPriceHistory := make(map[string][]float64)

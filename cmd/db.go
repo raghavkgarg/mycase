@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -119,61 +120,77 @@ func RunDBUpdateDirect(ctx context.Context, all bool, indexName, method string, 
 	defer db.Close()
 
 	// 2. Stage 1 & 2: Daily Point-in-Time Screening & Factor Scoring
-	fmt.Printf("▶ STAGE 1/3: Point-in-Time Research Screening [%s | %s]...\n", indexName, method)
-	pitDB, pErr := pithistory.Open(dbPath)
-	var hasRun bool
-	if pErr == nil {
-		hasRun, _ = pitDB.HasRun(ctx, targetDateStr, indexName, method)
-		pitDB.Close()
-	}
-
-	if hasRun && !isForce {
-		targetDayStr := marketdata.FormatOrdinalDay(targetEOD.Day())
-		nextDayStr := marketdata.FormatOrdinalDay(nextAvailable.Day())
-		nextMonthStr := nextAvailable.Format("Jan")
-		fmt.Printf("✓ File available for %s. Latest file is of %s and %s file will be available after 21:00 PM %s %s.\n",
-			targetDateStr, targetDayStr, nextDayStr, nextDayStr, nextMonthStr)
-		fmt.Println("Skipping redundant PIT screening calculation.")
-	} else {
-		opts := &stockpicker.Options{
-			IndexName:          indexName,
-			Method:             method,
-			TopN:               topN,
-			RangeStr:           "1y",
-			RebalanceTolerance: 0.10,
-			AsOfDate:           targetDateStr,
-		}
-		if err := runPickWithOpts(ctx, opts); err != nil {
-			fmt.Printf("⚠️  Warning during PIT update: %v (continuing with self-healing pass)\n", err)
+	methods := strings.Split(method, ",")
+	for _, mRaw := range methods {
+		meth := strings.TrimSpace(mRaw)
+		if meth == "" {
+			continue
 		}
 
-		// Self-healing retry pass for any transient dropouts
-		fmt.Printf("\n▶ STAGE 2/3: Verifying Snapshot Completeness & Self-Healing...\n")
-		if snap, sErr := stockpicker.RetryFailedSnapshotCandidates(ctx, indexName, method, targetDateStr); sErr == nil && snap != nil {
+		fmt.Printf("\n▶ STAGE 1/3: Point-in-Time Research Screening [%s | %s]...\n", indexName, meth)
+		pitDB, pErr := pithistory.Open(dbPath)
+		var hasRun bool
+		if pErr == nil {
+			hasRun, _ = pitDB.HasRun(ctx, targetDateStr, indexName, meth)
+			pitDB.Close()
+		}
+
+		if hasRun && !isForce {
+			targetDayStr := marketdata.FormatOrdinalDay(targetEOD.Day())
+			nextDayStr := marketdata.FormatOrdinalDay(nextAvailable.Day())
+			nextMonthStr := nextAvailable.Format("Jan")
+			fmt.Printf("✓ File available for %s. Latest file is of %s and %s file will be available after 21:00 PM %s %s.\n",
+				targetDateStr, targetDayStr, nextDayStr, nextDayStr, nextMonthStr)
+			fmt.Printf("Skipping redundant PIT screening calculation for %s.\n", meth)
+		} else {
+			opts := &stockpicker.Options{
+				IndexName:          indexName,
+				Method:             meth,
+				TopN:               topN,
+				RangeStr:           "1y",
+				RebalanceTolerance: 0.10,
+				AsOfDate:           targetDateStr,
+			}
+			if err := runPickWithOpts(ctx, opts); err != nil {
+				fmt.Printf("⚠️  Warning during PIT update for %s: %v (continuing with self-healing pass)\n", meth, err)
+			}
+
+			// Self-healing retry pass for any transient dropouts
+			fmt.Printf("\n▶ STAGE 2/3: Verifying Snapshot Completeness & Self-Healing [%s]...\n", meth)
+			if snap, sErr := stockpicker.RetryFailedSnapshotCandidates(ctx, indexName, meth, targetDateStr); sErr == nil && snap != nil {
+				if pitDB, pErr := pithistory.Open(dbPath); pErr == nil {
+					_ = pitDB.SaveRunSnapshot(ctx, snap)
+					pitDB.Close()
+				}
+			} else if sErr != nil {
+				fmt.Printf("Notice on self-healing retry for %s: %v\n", meth, sErr)
+			}
+
+			// Verify snapshot file actually exists on disk for target date
+			cleanIndex := strings.NewReplacer(",", "_", " ", "_", "^", "").Replace(indexName)
+			snapFileName := fmt.Sprintf("%s_%s_%s.json", cleanIndex, meth, targetDateStr)
+			snapFilePath := filepath.Join(stockpicker.PITSnapshotDir, snapFileName)
+			if _, statErr := os.Stat(snapFilePath); os.IsNotExist(statErr) {
+				return fmt.Errorf("❌ [EOD UPDATE FAILED]: Unable to generate fresh PIT snapshot for %s (%s, %s)", targetDateStr, indexName, meth)
+			}
+
+			// Pre-flight Data Integrity Check on the newly committed snapshot
 			if pitDB, pErr := pithistory.Open(dbPath); pErr == nil {
-				_ = pitDB.SaveRunSnapshot(ctx, snap)
+				if integrity, iErr := pitDB.CheckDataIntegrity(ctx, indexName, meth); iErr == nil && integrity.TotalCandidates > 0 {
+					if integrity.FailurePct >= 5.0 {
+						fmt.Printf("\n⚠️  [DATA INTEGRITY WARNING]: %d / %d candidates (%.1f%%) in latest run have unverified or missing fundamentals!\n",
+							integrity.FailedCandidates, integrity.TotalCandidates, integrity.FailurePct)
+						if len(integrity.FlaggedTickers) > 0 {
+							fmt.Printf("   Flagged candidates sample: %s\n", strings.Join(integrity.FlaggedTickers, ", "))
+						}
+						fmt.Printf("   Verify data feeds before interpreting marginal scores or executing trades.\n\n")
+					} else {
+						fmt.Printf("   ✓ Data Integrity Verified: %d / %d candidates clean (0 unverified).\n",
+							integrity.TotalCandidates-integrity.FailedCandidates, integrity.TotalCandidates)
+					}
+				}
 				pitDB.Close()
 			}
-		} else if sErr != nil {
-			fmt.Printf("Notice on self-healing retry: %v\n", sErr)
-		}
-
-		// Pre-flight Data Integrity Check on the newly committed snapshot
-		if pitDB, pErr := pithistory.Open(dbPath); pErr == nil {
-			if integrity, iErr := pitDB.CheckDataIntegrity(ctx, indexName, method); iErr == nil && integrity.TotalCandidates > 0 {
-				if integrity.FailurePct >= 5.0 {
-					fmt.Printf("\n⚠️  [DATA INTEGRITY WARNING]: %d / %d candidates (%.1f%%) in latest run have unverified or missing fundamentals!\n",
-						integrity.FailedCandidates, integrity.TotalCandidates, integrity.FailurePct)
-					if len(integrity.FlaggedTickers) > 0 {
-						fmt.Printf("   Flagged candidates sample: %s\n", strings.Join(integrity.FlaggedTickers, ", "))
-					}
-					fmt.Printf("   Verify data feeds before interpreting marginal scores or executing trades.\n\n")
-				} else {
-					fmt.Printf("   ✓ Data Integrity Verified: %d / %d candidates clean (0 unverified).\n",
-						integrity.TotalCandidates-integrity.FailedCandidates, integrity.TotalCandidates)
-				}
-			}
-			pitDB.Close()
 		}
 	}
 
