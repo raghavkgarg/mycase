@@ -11,6 +11,7 @@ import (
 
 	"github.com/urfave/cli/v3"
 
+	"github.com/raghavkgarg/mycase/pkg/broker"
 	"github.com/raghavkgarg/mycase/pkg/config"
 	"github.com/raghavkgarg/mycase/pkg/marketdata"
 	"github.com/raghavkgarg/mycase/pkg/pithistory"
@@ -47,17 +48,29 @@ func runPick(ctx context.Context, c *cli.Command) error {
 	}
 	opts := pickOptsFromCmd(c)
 
-	targetEOD := marketdata.EODSettlementDate(time.Now())
+	// The active market's holiday-aware settlement clock is the single authority
+	// for this run's trading-day decisions (as-of, next-available, based-on).
+	// Injected into opts so stockpicker shares the same clock (it cannot import
+	// broker itself — layering — so the aware clock rides in as a value).
+	clk := broker.TradingClock()
+	opts.Clock = clk
+
+	targetEOD := clk.SettlementDate(time.Now())
 	targetDateStr := targetEOD.Format("2006-01-02")
 	if opts.AsOfDate == "" {
 		opts.AsOfDate = targetDateStr
 	} else {
-		// If caller passed a weekend date (e.g. Saturday or Sunday), normalize to the last settled trading day
+		// Normalize a caller-supplied non-trading date (weekend OR exchange
+		// holiday) to the last settled trading day. The aware clock handles both
+		// in one call, replacing the old hand-rolled Saturday/Sunday-only check.
 		if parsed, err := time.Parse("2006-01-02", opts.AsOfDate); err == nil {
-			ist := time.FixedZone("IST", 5*3600+30*60)
-			parsedIST := time.Date(parsed.Year(), parsed.Month(), parsed.Day(), 21, 0, 0, 0, ist)
-			if parsedIST.Weekday() == time.Saturday || parsedIST.Weekday() == time.Sunday {
-				opts.AsOfDate = marketdata.EODSettlementDate(parsedIST).Format("2006-01-02")
+			loc := clk.Loc
+			if loc == nil {
+				loc = time.UTC
+			}
+			parsedLocal := time.Date(parsed.Year(), parsed.Month(), parsed.Day(), clk.CutoffHour, 0, 0, 0, loc)
+			if !clk.IsTradingDay(parsedLocal) {
+				opts.AsOfDate = clk.SettlementDate(parsedLocal).Format("2006-01-02")
 			}
 		}
 	}
@@ -78,19 +91,22 @@ func runPick(ctx context.Context, c *cli.Command) error {
 
 		// Skip guard for index runs when snapshot already exists: display cached run details without network I/O
 		if opts.FilePath == "" && opts.IndexName != "" && hasRun && !opts.Force {
-			nextAvailable := marketdata.NextEODAvailableDate(time.Now())
+			nextAvailable := clk.NextEODAvailable(time.Now())
 			targetDayStr := marketdata.FormatOrdinalDay(targetEOD.Day())
 			nextDayStr := marketdata.FormatOrdinalDay(nextAvailable.Day())
 			nextMonthStr := nextAvailable.Format("Jan")
 			if syncTime.IsZero() {
-				syncTime = marketdata.LastSettledEODTime(time.Now())
+				syncTime = clk.LastSettledEOD(time.Now())
 			}
-			ist := time.FixedZone("IST", 5*3600+30*60)
-			basedOnStr := fmt.Sprintf("%s EOD (Synced: %s)", opts.AsOfDate, syncTime.In(ist).Format("2006-01-02 15:04:05 MST"))
+			loc := clk.Loc
+			if loc == nil {
+				loc = time.UTC
+			}
+			basedOnStr := fmt.Sprintf("%s EOD (Synced: %s)", opts.AsOfDate, syncTime.In(loc).Format("2006-01-02 15:04:05 MST"))
 			fmt.Printf("✓ Snapshot for %s (%s, %s) is already present in DuckDB (%s).\n",
 				opts.AsOfDate, opts.IndexName, opts.Method, pithistory.DefaultDBPath)
 			fmt.Printf("  Based on:         %s\n", basedOnStr)
-			fmt.Printf("  Latest market data is of %s. Next market settlement file will be available after 21:00 PM %s %s.\n",
+			fmt.Printf("  Latest market data is of %s. Next market settlement file will be available after the %s %s cutoff.\n",
 				targetDayStr, nextDayStr, nextMonthStr)
 			fmt.Printf("  Displaying saved run details (no network fetch). Use --force to re-calculate.\n\n")
 
@@ -102,10 +118,13 @@ func runPick(ctx context.Context, c *cli.Command) error {
 	}
 
 	if syncTime.IsZero() {
-		syncTime = marketdata.LastSettledEODTime(time.Now())
+		syncTime = clk.LastSettledEOD(time.Now())
 	}
-	ist := time.FixedZone("IST", 5*3600+30*60)
-	opts.BasedOn = fmt.Sprintf("%s EOD (Synced: %s)", opts.AsOfDate, syncTime.In(ist).Format("2006-01-02 15:04:05 MST"))
+	loc := clk.Loc
+	if loc == nil {
+		loc = time.UTC
+	}
+	opts.BasedOn = fmt.Sprintf("%s EOD (Synced: %s)", opts.AsOfDate, syncTime.In(loc).Format("2006-01-02 15:04:05 MST"))
 
 	return runPickWithOpts(ctx, opts)
 }
@@ -177,6 +196,15 @@ func pickOptsFromCmd(c *cli.Command) *stockpicker.Options {
 func runPickWithOpts(ctx context.Context, opts *stockpicker.Options) error {
 	if opts.DataFetcher == nil {
 		opts.DataFetcher = newDataRouter()
+	}
+	// Ensure every cmd-originated pick shares the active market's holiday-aware
+	// settlement clock as its single trading-day authority. runPick sets this
+	// explicitly; the pipeline/pit callers build Options inline, so default it
+	// here (the one funnel into stockpicker from cmd) when unset. stockpicker
+	// treats a zero clock as bare NSE, so this is the composition root supplying
+	// the aware value it can legally assemble (broker) but stockpicker cannot.
+	if opts.Clock.Loc == nil {
+		opts.Clock = broker.TradingClock()
 	}
 	result, err := stockpicker.RunWithResult(ctx, opts)
 	if err != nil {

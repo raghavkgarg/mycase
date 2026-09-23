@@ -344,11 +344,31 @@ seam; `TradingClock()`/`TradingClockForMarket()` keep their signatures (they def
 env/config), so every existing call site is unchanged. `config` and `marketcal` stay
 zero-import leaves — the abstraction did not leak downward. Still open (deliberately, low
 priority): who seeds/maintains the `holidays` table and the yearly-refresh workflow; until
-someone runs on `holiday_source: db`, the file path remains the default. The package-level
-`marketdata` NSE helpers (`EODSettlementDate`, `NextEODAvailableDate`, `IsFreshEOD`,
-`IsNSEHoliday`) still intentionally use the **bare, holiday-unaware** `marketcal.NSE` —
-holiday-aware settlement remains available only through the injected clock
-(`broker.TradingClock()`), which the scheduler/daemon/autopilot use. The duplicate, unwired
+someone runs on `holiday_source: db`, the file path remains the default.
+
+**Holiday-awareness on the pick path (fixed).** The strategy pipeline's settlement
+decisions are now holiday-aware end to end, resolved the *sound* way — the holiday-aware
+`marketcal.Clock` flows in as an explicit value, never a global. `stockpicker.Options`
+gained a `Clock` field (with a `clock()` accessor defaulting a zero value to the bare
+`marketcal.NSE`, preserving prior behavior); `stockpicker`'s as-of / based-on decisions now
+read that one clock instead of calling the package-level bare `marketdata.*` helpers, so its
+settlement authority is a single injected value (it still cannot import `broker` — the clock
+arrives as data). The composition-root callers inject the active market's aware clock:
+`cmd/pick` and `cmd/pit` build it from `broker.TradingClock()` (the weekend-only IST
+normalization in `pick` is replaced by the clock's holiday-aware `IsTradingDay`/
+`SettlementDate`), `cmd`'s `runPickWithOpts` defaults `Options.Clock` from
+`broker.TradingClock()` for the pipeline/pit callers, and `pkg/eod` injects `cfg.clock()`.
+This collapsed the previous three ways stockpicker could pick an as-of date into one.
+
+What deliberately stays **bare**: the package-level `marketdata` NSE helpers still exist
+(`EODSettlementDate`, `NextEODAvailableDate`, `IsFreshEOD`, `IsNSEHoliday` — bound to
+`marketcal.NSE`) for the low layers that cannot reach the holiday source. Their only
+remaining live caller is `pkg/yfinance/prices.go` (legacy file `.cache` day-bucketing +
+freshness), which is at L1 and cannot import `broker`; cache **freshness** is
+holiday-insensitive (an entry is fresh until the next settlement cutoff regardless of an
+intervening holiday), so the bare clock is correct there. Making that legacy cache
+market-aware (NYSE vs NSE day bucketing via `marketcal.ClockForTicker`) is a separate,
+optional market-correctness cleanup — not a holiday concern. The duplicate, unwired
 `config/nse_holidays.json` was removed in favor of the single `config/holidays.json`.
 
 **Follow-up — scheduler run reporting (shipped).** The scheduler now appends a

@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/raghavkgarg/mycase/pkg/config"
+	"github.com/raghavkgarg/mycase/pkg/marketcal"
 	"github.com/raghavkgarg/mycase/pkg/optimizer"
 	"github.com/raghavkgarg/mycase/pkg/yfinance"
 )
@@ -36,9 +37,27 @@ type Options struct {
 	SkipScuttlebutt                     bool
 	CooldownDays                        int
 	CooldownBypassRank                  int
-	AsOfDate                            string // Target EOD market date (YYYY-MM-DD); if empty, defaults to EODSettlementDate(now)
+	AsOfDate                            string // Target EOD market date (YYYY-MM-DD); if empty, defaults to Clock.SettlementDate(now)
 	BasedOn                             string // Formatted based-on string e.g. "2026-09-11 EOD (Synced: 2026-09-11 21:15:00 IST)"
 	Force                               bool   // Force execution even if snapshot exists
+
+	// Clock is the market settlement/trading calendar used for the run's as-of /
+	// based-on date decisions. It is the single source of truth for "which
+	// trading day is this run for?" — the caller (cmd/eod) injects the active
+	// market's holiday-aware clock (broker.TradingClock()). A zero value defaults
+	// to the bare marketcal.NSE, preserving the historical India-only behavior for
+	// callers that don't set it. stockpicker cannot import broker (layering), so
+	// the aware clock arrives here as a value, never via a global.
+	Clock marketcal.Clock
+}
+
+// clock returns the configured settlement clock, defaulting to the bare
+// marketcal.NSE when unset (matches the pre-injection behavior).
+func (o Options) clock() marketcal.Clock {
+	if o.Clock.Loc == nil {
+		return marketcal.NSE
+	}
+	return o.Clock
 }
 
 // TickersSource encapsulates tickers list source info.

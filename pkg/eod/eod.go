@@ -174,6 +174,10 @@ func runScreening(ctx context.Context, cfg Config, targetDateStr string, res *Re
 		RangeStr:           "1y",
 		RebalanceTolerance: 0.10,
 		AsOfDate:           targetDateStr,
+		// Inject the run's holiday-aware settlement clock so stockpicker's
+		// as-of/based-on decisions share this single authority (targetDateStr was
+		// itself derived from it). No global; the clock rides in as a value.
+		Clock: cfg.clock(),
 	}
 	// stockpicker.RunWithResult prints the pick banner + funnel tables to stdout
 	// (user-facing `pick` output). For an operational caller (QuietStdout — e.g.

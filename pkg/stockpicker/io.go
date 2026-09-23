@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"github.com/raghavkgarg/mycase/pkg/config"
-	"github.com/raghavkgarg/mycase/pkg/marketdata"
 	"github.com/raghavkgarg/mycase/pkg/marketfmt"
 	"github.com/raghavkgarg/mycase/pkg/yfinance"
 )
@@ -36,7 +35,13 @@ func PrintHeader(displayName, method string, topN int, rangeStr, filePath string
 	if len(basedOn) > 0 && basedOn[0] != "" {
 		bOn = basedOn[0]
 	} else {
-		bOn = marketdata.LastSettledEODTime(time.Now()).Format("2006-01-02 15:04:05 MST")
+		// Every production caller supplies basedOn (computed from the run's
+		// injected settlement clock). This purely-presentational helper takes no
+		// Options/clock, so rather than recompute a possibly holiday-unaware date
+		// here (the old bare marketdata.LastSettledEODTime call), fall back to a
+		// neutral placeholder — the settlement decision lives with the caller's
+		// Clock, not in the banner.
+		bOn = "n/a"
 	}
 	fmt.Printf("Based on:         %s\n", bOn)
 	fmt.Printf("====================================================================\n")

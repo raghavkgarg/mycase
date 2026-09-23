@@ -288,7 +288,6 @@ func TestPlan_NonTradingDay_SkipsAll(t *testing.T) {
 	}
 }
 
-
 // reportingRunner returns populated StageResults so the end-to-end report wiring
 // (RunOnce → runCadence → record → flushReport) can be asserted against a file.
 type reportingRunner struct{}

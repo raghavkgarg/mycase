@@ -12,7 +12,6 @@ import (
 	"github.com/raghavkgarg/mycase/pkg/cache"
 	"github.com/raghavkgarg/mycase/pkg/config"
 	"github.com/raghavkgarg/mycase/pkg/csvloader"
-	"github.com/raghavkgarg/mycase/pkg/marketdata"
 	"github.com/raghavkgarg/mycase/pkg/selectiontracker"
 	"github.com/raghavkgarg/mycase/pkg/yfinance"
 )
@@ -82,7 +81,7 @@ func RunWithResult(ctx context.Context, opts *Options) (*PickResult, error) {
 		if opts.AsOfDate != "" {
 			basedOnStr = opts.AsOfDate + " 21:00:00 IST"
 		} else {
-			basedOnStr = marketdata.LastSettledEODTime(time.Now()).Format("2006-01-02 15:04:05 MST")
+			basedOnStr = opts.clock().LastSettledEOD(time.Now()).Format("2006-01-02 15:04:05 MST")
 		}
 	}
 	PrintHeader(displayNameVal, opts.Method, opts.TopN, rangeStr, opts.FilePath, basedOnStr)
@@ -239,7 +238,7 @@ func RunWithResult(ctx context.Context, opts *Options) (*PickResult, error) {
 	// imports stockpicker, so the reverse edge would be a cycle).
 	todayStr := opts.AsOfDate
 	if todayStr == "" {
-		todayStr = marketdata.EODSettlementDate(time.Now()).Format("2006-01-02")
+		todayStr = opts.clock().SettlementDate(time.Now()).Format("2006-01-02")
 	}
 	rRegime := 1.0
 	if tracker.RegimeMultiplier > 0 {
