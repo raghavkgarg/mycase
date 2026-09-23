@@ -2,6 +2,7 @@ package scheduler
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -196,5 +197,79 @@ func TestRunOnce_Idempotent_SamePass(t *testing.T) {
 	}
 	if r.drift != firstDrift {
 		t.Errorf("drift re-ran on second RunOnce: %d -> %d", firstDrift, r.drift)
+	}
+}
+
+func TestTradingDaysBehind(t *testing.T) {
+	et, err := time.LoadLocation("America/New_York")
+	if err != nil {
+		t.Skipf("tz unavailable: %v", err)
+	}
+	clk := marketcal.NYSE
+	// Wed Sep 16 2026 ~ after close.
+	now := time.Date(2026, 9, 16, 17, 0, 0, 0, et)
+
+	cases := []struct {
+		name    string
+		lastEOD string
+		want    int
+	}{
+		{"current (ran today)", "2026-09-16", 0},
+		{"one behind (ran Tue)", "2026-09-15", 1},
+		{"over a weekend (ran Fri Sep 11)", "2026-09-11", 3}, // Mon14,Tue15,Wed16
+		{"never run", "", 1},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			st := State{LastRun: map[string]string{}}
+			if tc.lastEOD != "" {
+				st.LastRun[string(CadenceEOD)] = tc.lastEOD
+			}
+			if got := TradingDaysBehind(st, clk, now); got != tc.want {
+				t.Errorf("TradingDaysBehind = %d, want %d", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestPlan_TradingDay_EODThenDrift(t *testing.T) {
+	et, err := time.LoadLocation("America/New_York")
+	if err != nil {
+		t.Skipf("tz unavailable: %v", err)
+	}
+	cfg := baseConfig()
+	cfg.Live = true
+	s := newTestScheduler(cfg, &fakeRunner{})
+	now := time.Date(2026, 9, 16, 17, 0, 0, 0, et) // Wed, trading day
+
+	p := s.Plan(now)
+	if !p.IsTradingDay {
+		t.Fatal("expected trading day")
+	}
+	if len(p.Cadences) != 2 || p.Cadences[0] != "eod" || p.Cadences[1] != "drift" {
+		t.Errorf("expected [eod drift], got %v", p.Cadences)
+	}
+	out := p.Render()
+	if !strings.Contains(out, "Dry run") || !strings.Contains(out, "LIVE") {
+		t.Errorf("render missing header/mode: %q", out)
+	}
+}
+
+func TestPlan_NonTradingDay_SkipsAll(t *testing.T) {
+	et, _ := time.LoadLocation("America/New_York")
+	cfg := baseConfig()
+	s := newTestScheduler(cfg, &fakeRunner{})
+	now := time.Date(2026, 9, 12, 12, 0, 0, 0, et) // Saturday
+
+	p := s.Plan(now)
+	if p.IsTradingDay {
+		t.Fatal("Saturday should not be a trading day")
+	}
+	// Catch-up may still list an EOD for the last settled day, but the normal
+	// trading-day cadences must not appear.
+	for _, c := range p.Cadences {
+		if c == "drift" || c == "rebalance" {
+			t.Errorf("non-trading day should not run %s; got %v", c, p.Cadences)
+		}
 	}
 }

@@ -714,7 +714,7 @@ mycase --index niftytotalmarket --method earlymb --analysis
 ## 11. Autonomous Scheduler (`scheduler`)
 
 The autonomous **scheduler** replaces manual daily terminal commands and the old
-`daily_sync.sh` shell script. A single OS timer fires `mycase scheduler tick` once per
+`daily_sync.sh` shell script. A single OS timer fires `mycase scheduler run-now` once per
 trading day at the market close (+ offset); that one process runs all three cadences in
 order and exits. It **replaces the separate `daemon install` and `autopilot install`
 units** — if either is installed, uninstall it to avoid duplicate runs.
@@ -733,11 +733,36 @@ make use-india    # Zerodha / NSE / niftytotalmarket / multibagger / pipeline.ya
 Each copies `config/defaults.<path>.json` over `config/defaults.json`. After switching,
 re-run the install so the timer's fire time and pipeline pick up the change.
 
+### Run manually / recover a missed day
+
+`run-now` does today's due work once and exits — it's what the OS timer invokes and what
+you run by hand to recover (e.g. the machine was off at the scheduled close):
+
+```bash
+mycase scheduler run-now              # live broker + real data (default)
+mycase scheduler run-now --dry-run    # preview which cadences would run; fetch/write nothing
+mycase scheduler run-now --mock       # non-live broker (drift/rebalance become meaningless)
+```
+
+`run-now` and the OS timer share `data/scheduler_state.json` and guard on it, so running
+manually while the timer is installed is safe — a cadence already completed for the day is
+skipped, not repeated. Use `--dry-run` first if you want to see the plan without side
+effects; it works even without valid live-broker tokens.
+
+**On a missed day:** the next `run-now` (timer-fired on wake, or manual) runs a single fresh
+EOD to get **current** — it does *not* backfill one run per missed day, by design. Prices
+self-heal (the range fetch pulls any missing daily bars), fundamentals only change on filing
+dates (a fresh fetch supersedes the miss), and a historical daily PIT snapshot *cannot* be
+faithfully reconstructed with today's fundamentals — so an honest gap is preferred over a
+fabricated one. Since the strategy rebalances quarterly, a one/two-day gap in daily
+snapshots does not affect decisions. `scheduler status` reports how many trading days the
+EOD is behind so you know to run once.
+
 ### Install / status / uninstall
 
 ```bash
 make scheduler-install     # build + install/reload the daily OS timer (idempotent)
-make scheduler-status      # last completed EOD / drift / rebalance day
+make scheduler-status      # last completed EOD / drift / rebalance day + staleness
 make scheduler-uninstall   # remove the timer
 
 # equivalently, on the binary directly:
@@ -745,6 +770,10 @@ mycase scheduler install
 mycase scheduler status
 mycase scheduler uninstall
 ```
+
+`scheduler status` prints the last completed day per cadence and, if the EOD is behind the
+latest settled trading day, a warning naming how many trading days behind plus the recovery
+command (`mycase scheduler run-now`).
 
 On macOS, `install` writes `~/Library/LaunchAgents/com.mycase.scheduler.plist` (a
 `StartCalendarInterval` LaunchAgent) and loads it with `launchctl bootstrap gui/$UID`;
@@ -762,13 +791,13 @@ change so the fixed local time stays aligned.
 ### Why a one-shot, not a resident daemon
 
 launchd/systemd own *when* to fire and handle sleep/wake correctly (a job missed while the
-laptop slept fires on wake); the `tick` process owns *what* runs and in what order. Because
-the ordered EOD → drift → rebalance pass is a single process doing sequential calls, the
-one-shot preserves all cross-cadence coordination while dropping the fragile in-process
-`time.After` loop. `mycase scheduler run` (the older keep-alive loop) remains available for
-a future intraday-reactive case but is no longer what `install` uses.
+laptop slept fires on wake); the `run-now` process owns *what* runs and in what order.
+Because the ordered EOD → drift → rebalance pass is a single process doing sequential calls,
+the one-shot preserves all cross-cadence coordination while dropping the fragile in-process
+`time.After` loop. `mycase scheduler daemon` (the older keep-alive loop) remains available
+for a future intraday-reactive case but is no longer what `install` uses.
 
-### Cadences (coordinated in one `tick` pass)
+### Cadences (coordinated in one `run-now` pass)
 
 1. **Daily EOD update** — refreshes the DuckDB cache/snapshot (screening + self-heal +
    theme sync, via `pkg/eod`). Its user-facing pick banner/tables are redirected to the log

@@ -13,8 +13,9 @@
 
   Model: a one-shot. launchd owns *when* (StartCalendarInterval, which also fires
   a missed job on wake if the machine slept through the scheduled time) and runs
-  `mycase scheduler tick` once per day; the tick process runs the sequenced
-  EOD -> drift -> rebalance pass and exits. The market path (US vs India) is
+  `mycase scheduler run-now` once per day; that process runs the sequenced
+  EOD -> drift -> rebalance pass and exits (live broker + real data by default).
+  The market path (US vs India) is
   selected by config/defaults.json, so the same install works for either — only
   the fire time (16:15 ET for NYSE vs 21:15 IST for NSE) and the pipeline differ.
 -->
@@ -26,8 +27,7 @@
 	<array>
 		<string>{{.BinaryPath}}</string>
 		<string>scheduler</string>
-		<string>tick</string>
-		<string>--live</string>
+		<string>run-now</string>
 	</array>
 	<key>WorkingDirectory</key>
 	<string>{{.WorkDir}}</string>

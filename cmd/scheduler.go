@@ -24,57 +24,64 @@ import (
 // EOD update, the daily drift check, and the quarterly/monthly rebalance proposal
 // as one sequenced pass — replacing the separate `daemon install` and `autopilot
 // install` units with a single OS timer. The installed model is a one-shot
-// (`scheduler tick` fired daily by launchd/systemd); `scheduler run` keeps the
-// older keep-alive loop available for a future intraday-reactive case.
+// (`scheduler run-now` fired daily by launchd/systemd); `scheduler daemon` keeps
+// the older keep-alive loop available for a future intraday-reactive case.
 var SchedulerCommand = &cli.Command{
 	Name:  "scheduler",
 	Usage: "Autonomous orchestrator for EOD / drift / rebalance cadences",
 	Commands: []*cli.Command{
-		schedulerRunCmd,
-		schedulerTickCmd,
+		schedulerRunNowCmd,
+		schedulerDaemonCmd,
 		schedulerStatusCmd,
 		schedulerInstallCmd,
 		schedulerUninstallCmd,
 	},
 }
 
-var schedulerRunCmd = &cli.Command{
-	Name:  "run",
-	Usage: "Run the keep-alive tick loop (blocks; for the intraday-reactive case — install uses `tick`)",
+// schedulerRunNowCmd runs today's due work once and exits. This is what the OS
+// timer invokes and what an operator runs to recover a missed day. It defaults to
+// the live broker + real data (the only fully-meaningful mode); use --dry-run for
+// a safe preview that touches nothing, or --mock for a non-live broker.
+var schedulerRunNowCmd = &cli.Command{
+	Name:  "run-now",
+	Usage: "Run today's due cadences (catch-up + EOD/drift/rebalance) once and exit",
 	Flags: []cli.Flag{
-		&cli.BoolFlag{Name: "live", Usage: "Use the live broker API (default: mock)"},
+		&cli.BoolFlag{Name: "dry-run", Usage: "Preview which cadences would run for today; fetch nothing, write nothing"},
+		&cli.BoolFlag{Name: "mock", Usage: "Use the mock broker instead of the live API (drift/rebalance become non-live)"},
 		&cli.StringFlag{Name: "config", Value: defaultPipelineConfig(), Usage: "Pipeline config file"},
 		&cli.StringFlag{Name: "file", Usage: "Portfolio CSV for the drift check (overrides config)"},
 	},
-	Action: runScheduler,
+	Action: runSchedulerRunNow,
 }
 
-var schedulerTickCmd = &cli.Command{
-	Name:  "tick",
-	Usage: "Run one sequenced pass (catch-up + today's EOD/drift/rebalance) and exit — invoked by the OS timer",
+// schedulerDaemonCmd runs the resident keep-alive tick loop (blocks). Retained for
+// a future intraday-reactive case; the installed timer uses `run-now` instead.
+var schedulerDaemonCmd = &cli.Command{
+	Name:  "daemon",
+	Usage: "Run the resident keep-alive loop (blocks; for the intraday-reactive case — install uses run-now)",
 	Flags: []cli.Flag{
-		&cli.BoolFlag{Name: "live", Usage: "Use the live broker API (default: mock)"},
+		&cli.BoolFlag{Name: "mock", Usage: "Use the mock broker instead of the live API"},
 		&cli.StringFlag{Name: "config", Value: defaultPipelineConfig(), Usage: "Pipeline config file"},
 		&cli.StringFlag{Name: "file", Usage: "Portfolio CSV for the drift check (overrides config)"},
 	},
-	Action: runSchedulerTick,
+	Action: runSchedulerDaemon,
 }
 
 var schedulerStatusCmd = &cli.Command{
 	Name:   "status",
-	Usage:  "Show the last completed trading day per cadence",
+	Usage:  "Show the last completed trading day per cadence and flag if behind",
 	Action: runSchedulerStatus,
 }
 
 var schedulerInstallCmd = &cli.Command{
 	Name:   "install",
-	Usage:  "Install the scheduler as a keep-alive service (launchd on macOS; systemd unit printed on Linux)",
+	Usage:  "Install the daily OS timer (launchd on macOS; systemd unit+timer printed on Linux)",
 	Action: runSchedulerInstall,
 }
 
 var schedulerUninstallCmd = &cli.Command{
 	Name:   "uninstall",
-	Usage:  "Remove the installed scheduler service",
+	Usage:  "Remove the installed scheduler timer",
 	Action: runSchedulerUninstall,
 }
 
@@ -134,23 +141,37 @@ func buildSchedulerConfig(c *cli.Command, live bool) (scheduler.Config, error) {
 	}, nil
 }
 
-func runScheduler(ctx context.Context, c *cli.Command) error {
-	cfg, err := buildSchedulerConfig(c, c.Bool("live"))
+func runSchedulerDaemon(ctx context.Context, c *cli.Command) error {
+	cfg, err := buildSchedulerConfig(c, !c.Bool("mock"))
 	if err != nil {
 		return err
 	}
-	fmt.Printf("Scheduler starting (EOD=%t drift=%t rebalance=%t, live=%t).\n",
+	fmt.Printf("Scheduler daemon starting (EOD=%t drift=%t rebalance=%t, live=%t).\n",
 		cfg.EnableEOD, cfg.EnableDrift, cfg.EnableRebalance, cfg.Live)
 	return scheduler.New(cfg).Run(ctx)
 }
 
-// runSchedulerTick runs a single sequenced pass and exits. This is the entry
+// runSchedulerRunNow runs a single sequenced pass and exits. This is the entry
 // point the installed OS timer (launchd StartCalendarInterval / systemd
-// OnCalendar) invokes once per trading day at market-close+offset.
-func runSchedulerTick(ctx context.Context, c *cli.Command) error {
-	cfg, err := buildSchedulerConfig(c, c.Bool("live"))
+// OnCalendar) invokes once per trading day at market-close+offset, and what an
+// operator runs to recover a missed day. Live by default; --mock for a non-live
+// broker; --dry-run to preview without touching anything.
+func runSchedulerRunNow(ctx context.Context, c *cli.Command) error {
+	dryRun := c.Bool("dry-run")
+	// A dry-run inspects state + clock only; it must not require a live broker
+	// (e.g. valid Schwab tokens), so force the mock broker for the preview.
+	live := !c.Bool("mock") && !dryRun
+	cfg, err := buildSchedulerConfig(c, live)
 	if err != nil {
 		return err
+	}
+	if dryRun {
+		// Report the intended live/mock mode of a real run, not the forced-mock
+		// preview broker, so the operator sees what run-now would actually use.
+		cfg.Live = !c.Bool("mock")
+		plan := scheduler.New(cfg).Plan(time.Now())
+		fmt.Print(plan.Render())
+		return nil
 	}
 	return scheduler.New(cfg).RunOnce(ctx)
 }
@@ -160,12 +181,32 @@ func runSchedulerStatus(_ context.Context, _ *cli.Command) error {
 	if err != nil {
 		return fmt.Errorf("reading scheduler state: %w", err)
 	}
+	clk := broker.TradingClock()
 	rows := []render.KVPair{
 		{Key: "Last EOD", Value: lastRunOrNever(state, scheduler.CadenceEOD)},
 		{Key: "Last drift check", Value: lastRunOrNever(state, scheduler.CadenceDrift)},
 		{Key: "Last rebalance", Value: lastRunOrNever(state, scheduler.CadenceRebalance)},
 	}
 	render.KV(os.Stdout, rows)
+
+	// Staleness: compare the EOD last-run against the most recent settled trading
+	// day. If behind, tell the operator exactly how to recover — a fresh run-now
+	// gets current (prices self-heal via the range fetch; we intentionally do not
+	// backfill per-day PIT snapshots — see the runbook).
+	behind := scheduler.TradingDaysBehind(state, clk, time.Now())
+	if behind > 0 {
+		last := lastRunOrNever(state, scheduler.CadenceEOD)
+		expected := clk.SettlementDate(time.Now()).Format("2006-01-02")
+		day := "day"
+		if behind > 1 {
+			day = "days"
+		}
+		fmt.Printf("\n⚠  EOD is %d trading %s behind (last: %s, latest settled: %s).\n",
+			behind, day, last, expected)
+		fmt.Println("   Recover with:  mycase scheduler run-now")
+	} else {
+		fmt.Println("\n✓  Up to date.")
+	}
 	return nil
 }
 
@@ -322,7 +363,7 @@ After=network.target
 
 [Service]
 Type=oneshot
-ExecStart=%s scheduler tick --live
+ExecStart=%s scheduler run-now
 WorkingDirectory=%s
 StandardOutput=append:%s/data/scheduler.log
 StandardError=append:%s/data/scheduler.log

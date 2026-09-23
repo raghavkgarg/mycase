@@ -215,12 +215,12 @@ calendar in Go** → `config/holidays.json` + `marketcal` holidays.
    `daemon.RunLoop`) is the proven pattern to generalize.
 
    > **Superseded in the as-built (see Progress below).** The shipped design keeps
-   > the single-process *coordination* (one `scheduler tick` runs the ordered pass)
+   > the single-process *coordination* (one `scheduler run-now` runs the ordered pass)
    > but drops the resident keep-alive loop in favor of an OS **one-shot** timer
-   > (`StartCalendarInterval` / `OnCalendar`) firing `mycase scheduler tick` daily.
+   > (`StartCalendarInterval` / `OnCalendar`) firing `mycase scheduler run-now` daily.
    > The "impossible across three one-shots" rationale held only for *three separate*
-   > units; **one** OS timer running the single sequenced tick keeps coordination while
-   > letting the OS own *when* (and sleep/wake). `scheduler run` (the loop) is retained
+   > units; **one** OS timer running the single sequenced pass keeps coordination while
+   > letting the OS own *when* (and sleep/wake). `scheduler daemon` (the loop) is retained
    > for a future intraday-reactive case.
 
 2. **Layering: new `pkg/scheduler` at L6 (beside `server`).** It must invoke
@@ -285,7 +285,7 @@ The open questions have been decided:
 - `pkg/eod/` (or equivalent) — EOD-update logic lifted out of `cmd/db.go`.
 - `marketcal` holiday calendar (NSE + NYSE) + committed holiday data; unify the three
   trading-day notions onto it.
-- `mycase scheduler {run,status,install,uninstall}` CLI + one OS keep-alive unit,
+- `mycase scheduler {run-now,daemon,status,install,uninstall}` CLI + one OS timer,
   replacing the separate `daemon install` / `autopilot install` units.
 - `scheduler:` config block; first real consumer of `auto_execute` / `drift_trigger_pct`.
 
@@ -308,11 +308,11 @@ as a secondary cross-check for an unlisted holiday). The EOD update is **extract
 pass with the coordination and catch-up described below, gated on the holiday-aware clock.
 The installed model is a **one-shot** — `mycase scheduler install` writes a launchd
 `StartCalendarInterval` LaunchAgent (systemd `oneshot` + `OnCalendar` timer on Linux) that
-fires `mycase scheduler tick` once per trading day at the active market's close+offset (in
+fires `mycase scheduler run-now` once per trading day at the active market's close+offset (in
 local time); the process runs the sequenced pass and exits. This replaced the original
 keep-alive tick-loop (letting the OS own *when*, and sleep/wake handling, while Go keeps the
-ordering); `scheduler run` remains available for a future intraday-reactive case.
-`mycase scheduler {tick,run,status,install,uninstall}` installs a single unit that replaces
+ordering); `scheduler daemon` remains available for a future intraday-reactive case.
+`mycase scheduler {run-now,daemon,status,install,uninstall}` installs a single unit that replaces
 the separate daemon + autopilot units. The market path (US vs India) is a single-file switch
 in `config/defaults.json` (committed `defaults.us.json` / `defaults.india.json` presets +
 `make use-us` / `make use-india`); `config/defaults.json` gained a `scheduler` block; the
