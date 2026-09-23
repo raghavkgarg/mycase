@@ -115,8 +115,8 @@ func Run(ctx context.Context, cfg Config) error {
 	}
 	defer db.Close()
 
-	methods := strings.Split(cfg.Method, ",")
-	for _, mRaw := range methods {
+	methods := strings.SplitSeq(cfg.Method, ",")
+	for mRaw := range methods {
 		meth := strings.TrimSpace(mRaw)
 		if meth == "" {
 			continue

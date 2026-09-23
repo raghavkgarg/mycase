@@ -185,14 +185,14 @@ LIMIT 260;
 		// SMA50 & SMA200
 		if len(closes) >= 50 {
 			var sum50 float64
-			for i := 0; i < 50; i++ {
+			for i := range 50 {
 				sum50 += closes[i]
 			}
 			res.SMA50 = sum50 / 50.0
 		}
 		if len(closes) >= 200 {
 			var sum200 float64
-			for i := 0; i < 200; i++ {
+			for i := range 200 {
 				sum200 += closes[i]
 			}
 			res.SMA200 = sum200 / 200.0

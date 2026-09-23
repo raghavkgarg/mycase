@@ -318,6 +318,31 @@ in `config/defaults.json` (committed `defaults.us.json` / `defaults.india.json` 
 `make use-us` / `make use-india`); `config/defaults.json` gained a `scheduler` block; the
 previously-dead `auto_execute` is now consumed (gated) and `scripts/daily_sync.sh` is retired.
 
+**Follow-up — pluggable `HolidayProvider` (open).** Holiday dates are currently loaded
+from `config/holidays.json` (`config.LoadHolidays`) and injected into a `marketcal.Clock`
+via `WithHolidays` at the `broker.TradingClock()` composition point — the injection seam
+already exists and `marketcal` stays a zero-import leaf. What's missing is a *provider
+abstraction* so the source is pluggable rather than file-only:
+
+```go
+type HolidayProvider interface {
+    Holidays(exchange string) []string // ["2006-01-02", ...]
+}
+```
+
+with a `FileHolidayProvider` (wraps today's loader) and a `DBHolidayProvider`
+(`SELECT date FROM holidays WHERE exchange = ?` against `mycase.db`, following the
+domains-own-their-tables pattern like `attribution.Store`/`tax.Store`), selected by a
+config switch (`holiday_source: file|db`). Open questions to decide deliberately: where the
+`holidays` table is seeded from (a one-time import of `holidays.json`?), who maintains it,
+and the yearly-refresh workflow. Until then, the package-level `marketdata` NSE helpers
+(`EODSettlementDate`, `NextEODAvailableDate`, `IsFreshEOD`, `IsNSEHoliday`) intentionally use
+the **bare, holiday-unaware** `marketcal.NSE` — holiday-aware settlement is available only
+through the injected clock (`broker.TradingClock()`), which the scheduler/daemon/autopilot
+already use. (This is why those leaf helpers' tests assert weekend/cutoff behavior only, not
+holiday rollback.) The duplicate, unwired `config/nse_holidays.json` was removed in favor of
+the single `config/holidays.json`.
+
 ---
 
 
