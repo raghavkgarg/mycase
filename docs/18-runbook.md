@@ -775,6 +775,27 @@ mycase scheduler uninstall
 latest settled trading day, a warning naming how many trading days behind plus the recovery
 command (`mycase scheduler run-now`).
 
+### Run history — the maintenance log
+
+Each pass appends a human-readable block to `data/logs/scheduler-runs.log` (opt-in via
+`scheduler.enable_report` in `defaults.json`, on by default; override the path with
+`scheduler.report_path`). This is the fast "did last night's run work?" view — distinct from
+the JSONL slog file (`data/logs/mycase-*.jsonl`), which is the machine-readable diagnostic
+channel. One dated block per pass, one indented line per cadence with counts + duration,
+`⚠` for non-fatal warnings, and a final `✓ SUCCESS in <dur>` or `✗ FAILED — <cadence>:
+<err>`:
+
+```
+──── Wed 2026-09-23 20:15 ────
+  [eod]     3 method(s) screened; 2/500 integrity flags; 4 theme(s) synced in 5m12s
+  [drift]   drift index 0.0830; portfolio 512340.00 across 20 holdings in 1.4s
+  ✓ SUCCESS in 5m14s
+```
+
+A failing cadence is logged and swallowed (one bad stage never blocks the others), but its
+error still appears in the block and flips the summary to `✗ FAILED`. Reporting never fails
+the run: a write error is logged and ignored, and an empty catch-up tick writes nothing.
+
 On macOS, `install` writes `~/Library/LaunchAgents/com.mycase.scheduler.plist` (a
 `StartCalendarInterval` LaunchAgent) and loads it with `launchctl bootstrap gui/$UID`;
 `uninstall` uses `launchctl bootout`. On Linux it prints a systemd `oneshot` service + a

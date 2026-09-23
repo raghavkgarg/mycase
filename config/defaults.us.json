@@ -26,6 +26,9 @@
     "enable_eod": true,
     "enable_drift": true,
     "enable_rebalance": true,
-    "close_offset_min": 15
-  }
+    "close_offset_min": 15,
+    "enable_report": true,
+    "report_path": ""
+  },
+  "holiday_source": "file"
 }

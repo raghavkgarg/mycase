@@ -91,6 +91,15 @@ type Config struct {
 	// Live indicates a real (non-dry) run; combined with AutoExecute it is the
 	// only path that would place orders. The proposal/alert flow runs regardless.
 	Live bool
+
+	// EnableReport turns on the human-readable maintenance-log block appended per
+	// pass (data/logs/scheduler-runs.log by default). Default off — an explicit
+	// opt-in like the cadence toggles. Empty ReportPath uses the default location.
+	EnableReport bool
+
+	// ReportPath overrides the maintenance-log file path. Empty → the default
+	// under the data log dir (data/logs/scheduler-runs.log).
+	ReportPath string
 }
 
 // closeOffset returns the configured post-close offset, defaulting to 15 minutes.
@@ -103,11 +112,13 @@ func (c Config) closeOffset() time.Duration {
 
 // Runner executes a single cadence. Split out so the tick loop is testable with
 // fakes and the real dispatch (eod.Run / daemon.RunCheck / autopilot.Run) lives
-// in dispatch.go.
+// in dispatch.go. Each method returns a StageResult carrying the human-readable
+// detail lines + warnings for the maintenance-log report, alongside the error
+// that gates success.
 type Runner interface {
-	RunEOD(ctx context.Context) error
-	RunDrift(ctx context.Context) error
-	RunRebalance(ctx context.Context) error
+	RunEOD(ctx context.Context) (StageResult, error)
+	RunDrift(ctx context.Context) (StageResult, error)
+	RunRebalance(ctx context.Context) (StageResult, error)
 }
 
 // Scheduler owns the tick loop and per-cadence last-run state (for catch-up).
@@ -138,7 +149,10 @@ func (s *Scheduler) Run(ctx context.Context) error {
 		"eod", s.cfg.EnableEOD, "drift", s.cfg.EnableDrift, "rebalance", s.cfg.EnableRebalance,
 		"auto_execute", s.cfg.AutoExecute, "live", s.cfg.Live)
 
-	s.catchUp(ctx)
+	startNow := time.Now()
+	startRep := newRunReport(startNow, s.cfg.Clock.SettlementDate(startNow).Format("2006-01-02"), s.cfg.Live, s.cfg.ReportPath)
+	s.catchUp(ctx, startRep)
+	s.flushReport(ctx, startRep)
 
 	for {
 		next := s.nextTick(time.Now())
@@ -152,7 +166,10 @@ func (s *Scheduler) Run(ctx context.Context) error {
 		case <-time.After(time.Until(next)):
 		}
 
-		s.tick(ctx, time.Now())
+		now := time.Now()
+		rep := newRunReport(now, s.cfg.Clock.SettlementDate(now).Format("2006-01-02"), s.cfg.Live, s.cfg.ReportPath)
+		s.tick(ctx, now, rep)
+		s.flushReport(ctx, rep)
 	}
 }
 
@@ -174,11 +191,30 @@ func (s *Scheduler) RunOnce(ctx context.Context) error {
 		"eod", s.cfg.EnableEOD, "drift", s.cfg.EnableDrift, "rebalance", s.cfg.EnableRebalance,
 		"auto_execute", s.cfg.AutoExecute, "live", s.cfg.Live)
 
-	s.catchUp(ctx)
-	s.tick(ctx, time.Now())
+	now := time.Now()
+	rep := newRunReport(now, s.cfg.Clock.SettlementDate(now).Format("2006-01-02"), s.cfg.Live, s.cfg.ReportPath)
+	s.catchUp(ctx, rep)
+	s.tick(ctx, now, rep)
+	s.flushReport(ctx, rep)
 
 	slog.InfoContext(ctx, "scheduler.tick_once_completed")
 	return nil
+}
+
+// flushReport appends the maintenance-log block for a completed pass, unless
+// reporting is disabled (Config.EnableReport false) or the report is empty (a
+// keep-alive catch-up pass that ran nothing — no need to log "nothing due" on
+// every daemon tick). A write failure is logged and swallowed: reporting must
+// never fail the run.
+func (s *Scheduler) flushReport(ctx context.Context, rep *RunReport) {
+	if rep == nil || !s.cfg.EnableReport || len(rep.stages) == 0 {
+		return
+	}
+	if err := rep.Flush(); err != nil {
+		slog.WarnContext(ctx, "scheduler.report_write_failed", "err", err, "path", rep.reportPath())
+		return
+	}
+	slog.InfoContext(ctx, "scheduler.report_written", "path", rep.reportPath(), "stages", len(rep.stages))
 }
 
 // nextTick returns the next daily dispatch time: the market close cutoff plus the
@@ -205,7 +241,7 @@ func (s *Scheduler) nextTick(from time.Time) time.Time {
 // tick runs one daily dispatch: EOD → drift, plus rebalance when due. It is
 // skipped entirely on a non-trading day (defensive — nextTick already lands on a
 // trading day, but a catch-up or clock skew could call this off-day).
-func (s *Scheduler) tick(ctx context.Context, now time.Time) {
+func (s *Scheduler) tick(ctx context.Context, now time.Time, rep *RunReport) {
 	if !s.cfg.Clock.IsTradingDay(now) {
 		slog.InfoContext(ctx, "scheduler.tick_skipped_non_trading_day",
 			"date", now.In(s.cfg.Clock.Loc).Format("2006-01-02"))
@@ -221,36 +257,41 @@ func (s *Scheduler) tick(ctx context.Context, now time.Time) {
 	// catch-up (which may have just run today's EOD) and this tick don't run it
 	// twice within one RunOnce invocation.
 	if (s.cfg.EnableEOD || rebalanceDue) && s.state.lastRun(CadenceEOD) != day {
-		s.runCadence(ctx, CadenceEOD, day, s.runner.RunEOD)
+		s.runCadence(ctx, CadenceEOD, day, s.runner.RunEOD, rep)
 	}
 	// Drift after EOD (fresh cache). Depends on today's EOD being done, not on it
 	// running in this pass — so it still runs when EOD was completed by catch-up.
 	if s.cfg.EnableDrift && s.state.lastRun(CadenceDrift) != day {
-		s.runCadence(ctx, CadenceDrift, day, s.runner.RunDrift)
+		s.runCadence(ctx, CadenceDrift, day, s.runner.RunDrift, rep)
 	}
 	// Rebalance last.
 	if rebalanceDue {
-		s.runCadence(ctx, CadenceRebalance, day, s.runner.RunRebalance)
+		s.runCadence(ctx, CadenceRebalance, day, s.runner.RunRebalance, rep)
 	}
 }
 
-// runCadence executes one cadence, records its last-run day, and logs the outcome.
-// A cadence failure is logged and swallowed so one failing cadence never stops the
-// loop or blocks the others.
-func (s *Scheduler) runCadence(ctx context.Context, c Cadence, day string, fn func(context.Context) error) {
+// runCadence executes one cadence, times it, records its last-run day, logs the
+// outcome, and appends its result to the run report. A cadence failure is logged
+// and swallowed so one failing cadence never stops the loop or blocks the others;
+// the failure is still recorded in the report (which drives the FAILED summary).
+func (s *Scheduler) runCadence(ctx context.Context, c Cadence, day string, fn func(context.Context) (StageResult, error), rep *RunReport) {
 	slog.InfoContext(ctx, "scheduler.cadence_started", "cadence", string(c), "trading_day", day)
-	if err := fn(ctx); err != nil {
-		slog.ErrorContext(ctx, "scheduler.cadence_failed", "cadence", string(c), "err", err)
+	start := time.Now()
+	res, err := fn(ctx)
+	dur := time.Since(start)
+	rep.record(c, res, dur, err)
+	if err != nil {
+		slog.ErrorContext(ctx, "scheduler.cadence_failed", "cadence", string(c), "err", err, "ms", dur.Milliseconds())
 		return
 	}
 	s.state.markRun(c, day)
 	_ = SaveState(s.state)
-	slog.InfoContext(ctx, "scheduler.cadence_completed", "cadence", string(c), "trading_day", day)
+	slog.InfoContext(ctx, "scheduler.cadence_completed", "cadence", string(c), "trading_day", day, "ms", dur.Milliseconds())
 }
 
 // catchUp runs a missed EOD if the machine was asleep at the last close: if the
 // most recent settled trading day has no recorded EOD run, dispatch one now.
-func (s *Scheduler) catchUp(ctx context.Context) {
+func (s *Scheduler) catchUp(ctx context.Context, rep *RunReport) {
 	if !s.cfg.EnableEOD {
 		return
 	}
@@ -265,7 +306,7 @@ func (s *Scheduler) catchUp(ctx context.Context) {
 	}
 	slog.InfoContext(ctx, "scheduler.catchup_eod",
 		"missed_for", lastSettled, "last_run", s.state.lastRun(CadenceEOD))
-	s.runCadence(ctx, CadenceEOD, lastSettled, s.runner.RunEOD)
+	s.runCadence(ctx, CadenceEOD, lastSettled, s.runner.RunEOD, rep)
 }
 
 // rebalanceDue reports whether today matches the configured rebalance schedule

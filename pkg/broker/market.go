@@ -105,14 +105,24 @@ func TradingClock() marketcal.Clock {
 
 // TradingClockForMarket is TradingClock for an explicit market name ("us" /
 // "india"), so callers that already know the market avoid re-reading defaults.
+// Holidays are sourced through the configured HolidayProvider (file|db).
 func TradingClockForMarket(market string) marketcal.Clock {
+	return TradingClockWithSource(market, "")
+}
+
+// TradingClockWithSource is TradingClockForMarket with an explicit holiday-source
+// override (the resolved --holiday-source flag value; "" defers to env/config/
+// default). It selects the base NYSE/NSE clock for the market and attaches the
+// exchange holidays yielded by the chosen HolidayProvider. An unavailable source
+// degrades to weekend-only (empty holiday set), never a broken clock.
+func TradingClockWithSource(market, holidaySourceOverride string) marketcal.Clock {
 	exchange := marketExchangeName(market)
 	base := marketcal.NSE
 	if exchange == "NYSE" {
 		base = marketcal.NYSE
 	}
-	holidays := config.LoadHolidays(config.Path("holidays.json"))
-	return base.WithHolidays(holidays.For(exchange)...)
+	provider := selectHolidayProvider(holidaySourceOverride)
+	return base.WithHolidays(provider.Holidays(exchange)...)
 }
 
 // BrokerName returns the configured broker name from defaults.

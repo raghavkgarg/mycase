@@ -71,6 +71,11 @@ func main() {
 				Name:  "verbose",
 				Usage: "Shorthand for --log-level debug",
 			},
+			&cli.StringFlag{
+				Name:    "holiday-source",
+				Usage:   "Trading-holiday source: 'file' (config/holidays.json) or 'db' (holidays table in mycase.db)",
+				Sources: cli.EnvVars("MYCASE_HOLIDAY_SOURCE"),
+			},
 			&cli.StringFlag{Name: "index", Aliases: []string{"i"}, Value: "niftytotalmarket", Usage: "Index name to analyze or pick"},
 			&cli.StringFlag{Name: "method", Aliases: []string{"m"}, Value: "earlymb", Usage: "Strategy method"},
 			&cli.StringFlag{Name: "market", Aliases: []string{"mkt"}, Usage: "Target market: 'india' or 'us' (defaults to config/defaults.json or auto-detected from --index)"},
@@ -82,6 +87,16 @@ func main() {
 		Before: func(ctx context.Context, c *cli.Command) (context.Context, error) {
 			appLogger = setupLogging(c)
 			slog.SetDefault(appLogger.Logger)
+
+			// Propagate --holiday-source (flag > env) into the environment so the
+			// broker.TradingClock() call sites — which read MYCASE_HOLIDAY_SOURCE
+			// via selectHolidayProvider — honor it uniformly without threading an
+			// override through every command. When the value came from the env var
+			// this is a harmless no-op; when it came from the flag it makes the
+			// flag authoritative (flag > env > config > default).
+			if hs := c.String("holiday-source"); hs != "" {
+				_ = os.Setenv("MYCASE_HOLIDAY_SOURCE", hs)
+			}
 
 			reqID := logging.GenerateReqID(commandName(c))
 			ctx = logging.WithReqID(ctx, reqID)

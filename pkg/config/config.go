@@ -493,6 +493,13 @@ type UserDefaults struct {
 	Raw            RawConfig       `json:"raw"`
 	Scheduler      SchedulerConfig `json:"scheduler"`
 	TopN           int             `json:"top_n"`
+
+	// HolidaySource selects where trading holidays are read from: "file"
+	// (config/holidays.json, the default) or "db" (the `holidays` table in
+	// data/mycase.db). Consumed by broker.TradingClock via a pluggable
+	// HolidayProvider. Env MYCASE_HOLIDAY_SOURCE and a --holiday-source flag
+	// override this (flag > env > config > default). Empty → "file".
+	HolidaySource string `json:"holiday_source"`
 }
 
 // SchedulerConfig configures the autonomous scheduler (pkg/scheduler, Phase 12):
@@ -504,10 +511,12 @@ type UserDefaults struct {
 // A zero value (block absent) leaves every cadence disabled, so installing the
 // scheduler is an explicit opt-in per cadence.
 type SchedulerConfig struct {
-	EnableEOD       bool `json:"enable_eod"`       // run the daily EOD cache/snapshot update
-	EnableDrift     bool `json:"enable_drift"`     // run the daily portfolio drift check (after EOD)
-	EnableRebalance bool `json:"enable_rebalance"` // run the quarterly/monthly rebalance proposal
-	CloseOffsetMin  int  `json:"close_offset_min"` // minutes after market close to fire daily cadences (default 15)
+	EnableEOD       bool   `json:"enable_eod"`       // run the daily EOD cache/snapshot update
+	EnableDrift     bool   `json:"enable_drift"`     // run the daily portfolio drift check (after EOD)
+	EnableRebalance bool   `json:"enable_rebalance"` // run the quarterly/monthly rebalance proposal
+	CloseOffsetMin  int    `json:"close_offset_min"` // minutes after market close to fire daily cadences (default 15)
+	EnableReport    bool   `json:"enable_report"`    // append a human-readable run block to the maintenance log
+	ReportPath      string `json:"report_path"`      // maintenance-log path ("" → data/logs/scheduler-runs.log)
 }
 
 // RawConfig holds retention settings for the raw-response archive (pkg/rawstore,

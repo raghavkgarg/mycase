@@ -318,11 +318,11 @@ in `config/defaults.json` (committed `defaults.us.json` / `defaults.india.json` 
 `make use-us` / `make use-india`); `config/defaults.json` gained a `scheduler` block; the
 previously-dead `auto_execute` is now consumed (gated) and `scripts/daily_sync.sh` is retired.
 
-**Follow-up — pluggable `HolidayProvider` (open).** Holiday dates are currently loaded
-from `config/holidays.json` (`config.LoadHolidays`) and injected into a `marketcal.Clock`
-via `WithHolidays` at the `broker.TradingClock()` composition point — the injection seam
-already exists and `marketcal` stays a zero-import leaf. What's missing is a *provider
-abstraction* so the source is pluggable rather than file-only:
+**Follow-up — pluggable `HolidayProvider` (shipped).** Holiday dates were originally
+loaded from `config/holidays.json` (`config.LoadHolidays`) and injected into a
+`marketcal.Clock` via `WithHolidays` at the `broker.TradingClock()` composition point. That
+seam is now behind a *provider abstraction* so the source is pluggable rather than
+file-only:
 
 ```go
 type HolidayProvider interface {
@@ -330,18 +330,52 @@ type HolidayProvider interface {
 }
 ```
 
-with a `FileHolidayProvider` (wraps today's loader) and a `DBHolidayProvider`
-(`SELECT date FROM holidays WHERE exchange = ?` against `mycase.db`, following the
-domains-own-their-tables pattern like `attribution.Store`/`tax.Store`), selected by a
-config switch (`holiday_source: file|db`). Open questions to decide deliberately: where the
-`holidays` table is seeded from (a one-time import of `holidays.json`?), who maintains it,
-and the yearly-refresh workflow. Until then, the package-level `marketdata` NSE helpers
-(`EODSettlementDate`, `NextEODAvailableDate`, `IsFreshEOD`, `IsNSEHoliday`) intentionally use
-the **bare, holiday-unaware** `marketcal.NSE` — holiday-aware settlement is available only
-through the injected clock (`broker.TradingClock()`), which the scheduler/daemon/autopilot
-already use. (This is why those leaf helpers' tests assert weekend/cutoff behavior only, not
-holiday rollback.) The duplicate, unwired `config/nse_holidays.json` was removed in favor of
-the single `config/holidays.json`.
+Both providers live in **`pkg/broker`** (L1, the consumer that owns the clock assembly, per
+"interfaces are defined by their consumer"): `FileHolidayProvider` wraps the existing
+`config.LoadHolidays` loader, and `DBHolidayProvider` reads `SELECT date FROM holidays WHERE
+exchange = ?` from `mycase.db`, owning its `holidays` table via `cache.Conn()` (the
+domains-own-their-tables pattern like `attribution.Store`/`tax.Store`), and ships an
+`UpsertHolidays` seeding path. The source is selected by a config switch
+(`holiday_source: file|db` in `defaults.json`) with the standard **flag > env > config >
+default** precedence (`--holiday-source`, `MYCASE_HOLIDAY_SOURCE`, default `file`);
+`selectHolidayProvider` degrades to the file provider when `db` is chosen but the cache DB
+isn't open, so a clock is always assembled. `broker.TradingClockWithSource` is the new
+seam; `TradingClock()`/`TradingClockForMarket()` keep their signatures (they defer to
+env/config), so every existing call site is unchanged. `config` and `marketcal` stay
+zero-import leaves — the abstraction did not leak downward. Still open (deliberately, low
+priority): who seeds/maintains the `holidays` table and the yearly-refresh workflow; until
+someone runs on `holiday_source: db`, the file path remains the default. The package-level
+`marketdata` NSE helpers (`EODSettlementDate`, `NextEODAvailableDate`, `IsFreshEOD`,
+`IsNSEHoliday`) still intentionally use the **bare, holiday-unaware** `marketcal.NSE` —
+holiday-aware settlement remains available only through the injected clock
+(`broker.TradingClock()`), which the scheduler/daemon/autopilot use. The duplicate, unwired
+`config/nse_holidays.json` was removed in favor of the single `config/holidays.json`.
+
+**Follow-up — scheduler run reporting (shipped).** The scheduler now appends a
+human-readable maintenance-log block per pass to `data/logs/scheduler-runs.log` (distinct
+from the machine-readable JSONL slog file — the two-channel rule holds). Each `scheduler
+run-now` / tick renders one dated block modeled on the operator maintenance-log convention:
+
+```
+──── Wed 2026-09-23 20:15 ────
+  [eod]     3 method(s) screened; 2/500 integrity flags; 4 theme(s) synced in 5m12s
+  [drift]   drift index 0.0830; portfolio 512340.00 across 20 holdings in 1.4s
+  ⚠ drift: alert dispatch failed — telegram 429
+  ✓ SUCCESS in 5m14s
+```
+
+Mechanically: the `Runner` interface widened from returning bare `error` to `(StageResult,
+error)` so each cadence contributes detail lines + non-fatal warnings; `runCadence` times
+every stage and records the outcome into a `RunReport` accumulator (`pkg/scheduler/
+report.go`); `RunOnce`/`Run` open one report per pass and flush a single block at the end
+with a `✓ SUCCESS in <dur>` or `✗ FAILED — <cadence>: <err> (<dur>)` summary. To feed real
+counts, `eod.Run` now returns an `*eod.Result` (methods screened, integrity failed/total,
+themes synced, warnings) instead of only `error`, and the `defaultRunner` also surfaces the
+`daemon.DriftResult` (index, portfolio value, holdings) and the autopilot `RunResult.Proposal`
+(entries/exits/reweights/orders + tax warnings + report path) that were previously discarded
+at the scheduler boundary. Reporting is an explicit opt-in (`scheduler.enable_report`, path
+override `scheduler.report_path`), gated so an empty catch-up tick writes nothing, and a
+report-write failure is logged-and-swallowed — it never fails the run.
 
 ---
 

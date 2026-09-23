@@ -138,6 +138,8 @@ func buildSchedulerConfig(c *cli.Command, live bool) (scheduler.Config, error) {
 		EnableRebalance: sc.EnableRebalance,
 		AutoExecute:     pipelineCfg.Schedule.AutoExecute,
 		Live:            live,
+		EnableReport:    sc.EnableReport,
+		ReportPath:      sc.ReportPath,
 	}, nil
 }
 
