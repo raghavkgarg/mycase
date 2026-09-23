@@ -4,13 +4,11 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"os"
 	"strings"
 
 	"log/slog"
 
 	"github.com/raghavkgarg/mycase/pkg/cache"
-	"github.com/raghavkgarg/mycase/pkg/config"
 )
 
 // HolidayProvider yields the trading-holiday dates for an exchange, formatted
@@ -19,31 +17,14 @@ import (
 //
 // Defined here (pkg/broker, L1) because broker is the consumer: it owns the
 // clock assembly (TradingClock/TradingClockForMarket). "Interfaces are defined by
-// their consumer" (see .kiro/steering/architecture.md) — config (a zero-import
-// leaf) and marketcal (the pure floor) must not grow this abstraction.
+// their consumer" (see .kiro/steering/architecture.md) — marketcal (the pure
+// floor) must not grow this abstraction.
 type HolidayProvider interface {
 	// Holidays returns the holiday dates for an exchange ("NYSE", "NSE"), or an
 	// empty slice when none are configured. It must never error the caller into a
 	// broken clock — an unavailable source degrades to weekend-only trading-day
-	// logic, matching config.LoadHolidays' philosophy.
+	// logic.
 	Holidays(exchange string) []string
-}
-
-// FileHolidayProvider reads holidays from config/holidays.json (the default). It
-// wraps config.LoadHolidays, so a missing/malformed file degrades to an empty
-// holiday set (weekend-only trading days) rather than an error.
-type FileHolidayProvider struct {
-	// Path is the holidays.json path. Empty → config.Path("holidays.json").
-	Path string
-}
-
-// Holidays returns the file-configured holidays for an exchange.
-func (p FileHolidayProvider) Holidays(exchange string) []string {
-	path := p.Path
-	if path == "" {
-		path = config.Path("holidays.json")
-	}
-	return config.LoadHolidays(path).For(exchange)
 }
 
 // holidaysDDL creates the per-exchange holiday table this domain owns. Following
@@ -127,8 +108,13 @@ func (p *DBHolidayProvider) Holidays(exchange string) []string {
 }
 
 // UpsertHolidays inserts (or ignores duplicates of) the given dates for an
-// exchange. It is the seeding path for the DB provider — e.g. a one-time import
-// of config/holidays.json into the table. A nil provider/handle is a no-op.
+// exchange — the sanctioned write primitive for landing operator-sourced holiday
+// data into the table (and for round-tripping it in tests). The authoritative
+// calendar comes from each exchange in whatever format it publishes (CSV,
+// circular, HTML), so seeding is an operator step (direct SQL via the duckdb CLI,
+// or their own tooling), documented in the runbook — the product deliberately
+// ships no importer that would enshrine one intermediate format as authoritative.
+// A nil provider/handle is a no-op.
 func (p *DBHolidayProvider) UpsertHolidays(ctx context.Context, exchange string, dates []string) error {
 	if p == nil || p.db == nil {
 		return nil
@@ -159,40 +145,18 @@ func (p *DBHolidayProvider) UpsertHolidays(ctx context.Context, exchange string,
 	return nil
 }
 
-// Holiday-source selection constants.
-const (
-	holidaySourceFile = "file"
-	holidaySourceDB   = "db"
-	holidaySourceEnv  = "MYCASE_HOLIDAY_SOURCE"
-)
-
-// selectHolidayProvider chooses the holiday source using the precedence
-// flag > env > config > default (default "file"), mirroring rawstore.ResolveRetention.
-//
-// The "db" source is only honored when the cache singleton is open; when it is
-// not (e.g. a lightweight command that never opened the DB), it falls back to the
-// file provider so a clock is always assembled. This keeps the graceful-degrade
-// contract: an unavailable source never yields a broken (order-blocking) clock.
-//
-// override is the resolved --holiday-source flag value ("" when unset).
-func selectHolidayProvider(override string) HolidayProvider {
-	source := holidaySourceFile // default
-	if cfgSrc := config.LoadUserDefaults(config.Path("defaults.json")).HolidaySource; cfgSrc != "" {
-		source = strings.ToLower(strings.TrimSpace(cfgSrc)) // config
+// selectHolidayProvider returns the holiday source. Holidays live in the
+// `holidays` table of the DuckDB cache (data/mycase.db) — the single source of
+// truth, seeded and maintained operationally (see docs/18-runbook.md). When the
+// cache singleton is not open (e.g. a lightweight command that never opened the
+// DB) or the table is empty, the DB provider yields no holidays and the clock
+// degrades to weekend-only, so a clock is always assembled and order-placing
+// paths are never blocked by a missing calendar.
+func selectHolidayProvider() HolidayProvider {
+	if c := cache.GetDB(); c != nil {
+		return NewDBHolidayProvider(c.Conn())
 	}
-	if env := strings.TrimSpace(os.Getenv(holidaySourceEnv)); env != "" {
-		source = strings.ToLower(env) // env
-	}
-	if o := strings.TrimSpace(override); o != "" {
-		source = strings.ToLower(o) // flag / explicit override
-	}
-
-	if source == holidaySourceDB {
-		if c := cache.GetDB(); c != nil {
-			return NewDBHolidayProvider(c.Conn())
-		}
-		slog.Warn("holidays.db_source_unavailable", "fallback", "file",
-			"note", "holiday_source=db but cache DB is not open")
-	}
-	return FileHolidayProvider{}
+	slog.Warn("holidays.db_unavailable", "fallback", "weekend_only",
+		"note", "cache DB is not open; holiday calendar unavailable this invocation")
+	return NewDBHolidayProvider(nil)
 }

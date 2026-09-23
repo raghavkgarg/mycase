@@ -29,6 +29,5 @@
     "close_offset_min": 15,
     "enable_report": true,
     "report_path": ""
-  },
-  "holiday_source": "file"
+  }
 }

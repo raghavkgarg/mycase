@@ -493,13 +493,6 @@ type UserDefaults struct {
 	Raw            RawConfig       `json:"raw"`
 	Scheduler      SchedulerConfig `json:"scheduler"`
 	TopN           int             `json:"top_n"`
-
-	// HolidaySource selects where trading holidays are read from: "file"
-	// (config/holidays.json, the default) or "db" (the `holidays` table in
-	// data/mycase.db). Consumed by broker.TradingClock via a pluggable
-	// HolidayProvider. Env MYCASE_HOLIDAY_SOURCE and a --holiday-source flag
-	// override this (flag > env > config > default). Empty → "file".
-	HolidaySource string `json:"holiday_source"`
 }
 
 // SchedulerConfig configures the autonomous scheduler (pkg/scheduler, Phase 12):

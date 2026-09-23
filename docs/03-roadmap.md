@@ -294,10 +294,11 @@ EOD extraction (#3) unblocks scheduler dispatch of cadence (a). Independent of P
 
 **Progress**: the holiday calendar (#4) is **shipped and unified**. `marketcal.Clock` gained
 an injectable holiday set (`WithHolidays`) and a first-class `IsTradingDay`, with the
-weekend rollback loops now holiday-aware; holiday data lives in a hand-maintained
-`config/holidays.json` (NYSE + NSE), loaded by `config.LoadHolidays` (which returns raw
-date lists so the `config` leaf stays zero-import). `broker.TradingClock()` (L1, the one
-place that legally composes `config` + `marketcal`) assembles the active market's
+weekend rollback loops now holiday-aware; holiday data lives in the `holidays` table of
+`mycase.db` (NYSE + NSE), read via the `DBHolidayProvider` (see the DB-only follow-up
+below — the original `config/holidays.json` + `config.LoadHolidays` seam was retired).
+`broker.TradingClock()` (L1, the one place that legally composes the holiday source +
+`marketcal`) assembles the active market's
 holiday-aware clock, and **both** former trading-day notions now consult it: the drift
 daemon skips weekends/holidays instead of firing every calendar day, and autopilot's
 `IsTradingDay` uses the calendar as its authority (keeping the live benchmark probe only
@@ -318,11 +319,9 @@ in `config/defaults.json` (committed `defaults.us.json` / `defaults.india.json` 
 `make use-us` / `make use-india`); `config/defaults.json` gained a `scheduler` block; the
 previously-dead `auto_execute` is now consumed (gated) and `scripts/daily_sync.sh` is retired.
 
-**Follow-up — pluggable `HolidayProvider` (shipped).** Holiday dates were originally
-loaded from `config/holidays.json` (`config.LoadHolidays`) and injected into a
-`marketcal.Clock` via `WithHolidays` at the `broker.TradingClock()` composition point. That
-seam is now behind a *provider abstraction* so the source is pluggable rather than
-file-only:
+**Follow-up — `HolidayProvider`, DB-only (shipped).** Holiday dates are attached to the
+`marketcal.Clock` at the `broker.TradingClock()` composition point via a small provider
+abstraction:
 
 ```go
 type HolidayProvider interface {
@@ -330,21 +329,34 @@ type HolidayProvider interface {
 }
 ```
 
-Both providers live in **`pkg/broker`** (L1, the consumer that owns the clock assembly, per
-"interfaces are defined by their consumer"): `FileHolidayProvider` wraps the existing
-`config.LoadHolidays` loader, and `DBHolidayProvider` reads `SELECT date FROM holidays WHERE
-exchange = ?` from `mycase.db`, owning its `holidays` table via `cache.Conn()` (the
-domains-own-their-tables pattern like `attribution.Store`/`tax.Store`), and ships an
-`UpsertHolidays` seeding path. The source is selected by a config switch
-(`holiday_source: file|db` in `defaults.json`) with the standard **flag > env > config >
-default** precedence (`--holiday-source`, `MYCASE_HOLIDAY_SOURCE`, default `file`);
-`selectHolidayProvider` degrades to the file provider when `db` is chosen but the cache DB
-isn't open, so a clock is always assembled. `broker.TradingClockWithSource` is the new
-seam; `TradingClock()`/`TradingClockForMarket()` keep their signatures (they defer to
-env/config), so every existing call site is unchanged. `config` and `marketcal` stay
-zero-import leaves — the abstraction did not leak downward. Still open (deliberately, low
-priority): who seeds/maintains the `holidays` table and the yearly-refresh workflow; until
-someone runs on `holiday_source: db`, the file path remains the default.
+There is exactly **one** implementation — `DBHolidayProvider` (in `pkg/broker`, L1, the
+consumer that owns the clock assembly) — which reads `SELECT date FROM holidays WHERE
+exchange = ?` from the `holidays` table in `mycase.db`, owning that table via `cache.Conn()`
+(the domains-own-their-tables pattern like `attribution.Store`/`tax.Store`). The **DuckDB
+`holidays` table is the single source of truth.** `selectHolidayProvider` always returns the
+DB provider; when the cache DB is not open, or the table is empty, it yields no holidays and
+the clock degrades to weekend-only — a clock is always assembled, so order-placing paths are
+never blocked by a missing calendar. `marketcal` stays a zero-import leaf (holidays arrive as
+a value via `WithHolidays`).
+
+The earlier file source was removed outright rather than kept as dead optionality: there is
+no `config/holidays.json`, no `config.LoadHolidays`, no `FileHolidayProvider`, no
+`holiday_source` switch, and no `--holiday-source` flag. The rationale: the JSON was *our*
+intermediate format, not authoritative — the authoritative calendar is whatever each
+exchange publishes (CSV, a circular, an HTML table), in a shape that varies by source and
+year. Keeping a file provider + `file|db` switch would enshrine that intermediate format and
+leave two coexisting sources to reconcile. Collapsing to DB-only makes provenance
+operator-owned and unambiguous.
+
+**Seeding is operational, not a product feature.** The `holidays` table is populated and
+refreshed by an operator from each exchange's official calendar — landed via direct SQL (the
+`duckdb` CLI) or the operator's own tooling — documented in the runbook (Ch. 18). The product
+ships **no** importer: an `UpsertHolidays` write primitive exists on `DBHolidayProvider` for
+operator tooling/tests, but nothing hard-codes a `<some-format> → DB` path. The initial rows
+(NYSE + NSE, 2026–2027) were a one-time load from the retired `holidays.json` via the CLI.
+Consequence to note: a fresh checkout/machine has an empty `holidays` table until seeded, so
+first-run trading-day logic is weekend-only until the operator loads the calendar — the
+runbook makes this the explicit first-run step.
 
 **Holiday-awareness on the pick path (fixed).** The strategy pipeline's settlement
 decisions are now holiday-aware end to end, resolved the *sound* way — the holiday-aware

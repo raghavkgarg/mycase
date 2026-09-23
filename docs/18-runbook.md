@@ -833,10 +833,55 @@ for a future intraday-reactive case but is no longer what `install` uses.
 ### Trading-day awareness & catch-up
 
 Every cadence is gated on the holiday-aware market calendar (`marketcal` + the active
-market's clock), so weekends and the exchange holidays in `config/holidays.json` are skipped
-uniformly — no hand-maintained holiday list in a shell script. Each `tick` first runs a
-**catch-up** EOD if a close was missed (machine asleep), guarded by `scheduler_state.json`
-so a cadence never double-runs on the same trading day.
+market's clock), so weekends and the exchange holidays in the `holidays` table of
+`mycase.db` are skipped uniformly — no hand-maintained holiday list in a shell script. Each
+`tick` first runs a **catch-up** EOD if a close was missed (machine asleep), guarded by
+`scheduler_state.json` so a cadence never double-runs on the same trading day.
+
+### Holiday calendar (operator-maintained)
+
+Exchange holidays are the **single source of truth in the `holidays` table** of
+`data/mycase.db` — there is no committed holiday file. `broker.TradingClock()` reads it (via
+`DBHolidayProvider`) and attaches the dates to the market clock. **An empty table degrades
+to weekend-only** (no error): the system still runs, but only weekends are treated as
+non-trading until you seed the calendar. Seeding and the yearly refresh are an **operator
+responsibility**, because the authoritative calendar comes from each exchange in whatever
+format it publishes (CSV, an annual circular, an HTML table) — the product deliberately
+ships no importer that would bless one intermediate format.
+
+Table shape:
+
+```sql
+CREATE TABLE IF NOT EXISTS holidays (
+    exchange VARCHAR NOT NULL,   -- 'NYSE' | 'NSE'
+    date     VARCHAR NOT NULL,   -- 'YYYY-MM-DD' in the exchange's local tz
+    PRIMARY KEY (exchange, date)
+);
+```
+
+Yearly workflow (per exchange):
+
+1. Pull the official full-day-closure calendar — NYSE:
+   `https://www.nyse.com/markets/hours-calendars`; NSE: the annual NSE trading-holiday
+   circular. Omit early-close half-days (the market is open) and weekend-falling holidays
+   (already non-trading).
+2. Land the dates with the `duckdb` CLI (idempotent — `ON CONFLICT DO NOTHING`):
+
+   ```bash
+   duckdb data/mycase.db "INSERT INTO holidays (exchange, date) VALUES
+     ('NYSE','2028-01-01'), ('NYSE','2028-01-17') ON CONFLICT DO NOTHING;"
+   ```
+
+   (Or use a CSV the exchange provides:
+   `INSERT INTO holidays SELECT 'NYSE', column0 FROM read_csv('nyse_2028.csv') ON CONFLICT DO NOTHING;`)
+3. Verify:
+
+   ```bash
+   duckdb data/mycase.db "SELECT exchange, COUNT(*) FROM holidays GROUP BY exchange;"
+   ```
+
+> **First run on a fresh machine/checkout:** the `holidays` table starts empty, so seed it
+> before relying on holiday-aware scheduling. Until then, only weekends are skipped.
 
 ### Configuration
 
