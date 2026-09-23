@@ -54,12 +54,8 @@ func (c *Cache) StoreFundamentalsJSON(ctx context.Context, ticker string, data [
 }
 
 // isFreshFundamentals reports whether cached fundamentals fetched at fetchedAt
-// are still fresh: either they already include the ticker market's most recent
-// settled EOD (NYSE 16:00 ET for US, NSE 21:00 IST otherwise), or they were
-// fetched within the last 24 hours.
+// are still fresh against the ticker market's most recent settled EOD
+// (NYSE 16:00 ET for US, NSE 21:00 IST otherwise).
 func isFreshFundamentals(ticker string, fetchedAt time.Time) bool {
-	if marketcal.ClockForTicker(ticker).IsFreshEOD(fetchedAt, time.Now()) {
-		return true
-	}
-	return time.Since(fetchedAt) < 24*time.Hour
+	return marketcal.ClockForTicker(ticker).IsFreshEOD(fetchedAt, time.Now())
 }

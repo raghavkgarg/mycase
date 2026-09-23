@@ -36,13 +36,14 @@ var PickCommand = &cli.Command{
 		&cli.StringFlag{Name: "out", Usage: "Custom output CSV path"},
 		&cli.BoolFlag{Name: "force", Aliases: []string{"F"}, Usage: "Force re-running stock pick calculation even if snapshot already exists"},
 		&cli.BoolFlag{Name: "analysis", Aliases: []string{"a"}, Usage: "Run deep quantitative deduction analysis using DuckDB"},
+		&cli.StringFlag{Name: "market", Aliases: []string{"mkt"}, Usage: "Target market: 'india' or 'us' (defaults to config/defaults.json or auto-detected from --index)"},
 	},
 	Action: runPick,
 }
 
 func runPick(ctx context.Context, c *cli.Command) error {
 	if c.Bool("analysis") {
-		return RunPitAnalysisDirect(ctx, c.String("index"), c.String("method"))
+		return RunPitAnalysisDirect(ctx, c.String("index"), c.String("method"), c.String("market"))
 	}
 	opts := pickOptsFromCmd(c)
 

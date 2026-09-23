@@ -19,6 +19,7 @@ var PitCommand = &cli.Command{
 	Flags: []cli.Flag{
 		&cli.StringFlag{Name: "index", Aliases: []string{"i"}, Value: "niftytotalmarket", Usage: "Index name to analyze"},
 		&cli.StringFlag{Name: "method", Aliases: []string{"m"}, Value: "earlymb", Usage: "Strategy method to analyze"},
+		&cli.StringFlag{Name: "market", Aliases: []string{"mkt"}, Usage: "Target market: 'india' or 'us' (defaults to config/defaults.json or auto-detected from --index)"},
 		&cli.BoolFlag{Name: "analysis", Aliases: []string{"a"}, Usage: "Run deep quantitative deduction analysis using DuckDB"},
 	},
 	Action: func(ctx context.Context, c *cli.Command) error {
@@ -30,7 +31,7 @@ var PitCommand = &cli.Command{
 	Commands: []*cli.Command{
 		{
 			Name:  "update",
-			Usage: "Execute daily PIT screening run and update data/pit_history.db",
+			Usage: "Execute daily PIT screening run and update data/mycase.db",
 			Flags: []cli.Flag{
 				&cli.StringFlag{Name: "index", Aliases: []string{"i"}, Value: "microcap250,smallcap250", Usage: "Indices to evaluate"},
 				&cli.StringFlag{Name: "method", Aliases: []string{"m"}, Value: "earlymb", Usage: "Strategy method (earlymb, multibagger)"},
@@ -41,10 +42,11 @@ var PitCommand = &cli.Command{
 		},
 		{
 			Name:  "stats",
-			Usage: "Display empirical percentile distributions and historical run stats from data/pit_history.db",
+			Usage: "Display empirical percentile distributions and historical run stats from data/mycase.db",
 			Flags: []cli.Flag{
 				&cli.StringFlag{Name: "index", Aliases: []string{"i"}, Value: "microcap250_smallcap250", Usage: "Index name to analyze"},
 				&cli.StringFlag{Name: "method", Aliases: []string{"m"}, Value: "earlymb", Usage: "Strategy method to analyze"},
+				&cli.StringFlag{Name: "market", Aliases: []string{"mkt"}, Usage: "Target market: 'india' or 'us' (defaults to config/defaults.json or auto-detected from --index)"},
 				&cli.IntFlag{Name: "days", Value: 60, Usage: "Rolling history lookback window in calendar days (0 for all)"},
 				&cli.StringFlag{Name: "ticker", Usage: "Optional specific ticker to view score trajectory for"},
 				&cli.BoolFlag{Name: "analysis", Aliases: []string{"a"}, Usage: "Run deep quantitative deduction analysis using DuckDB"},
@@ -67,10 +69,34 @@ var PitCommand = &cli.Command{
 			Flags: []cli.Flag{
 				&cli.StringFlag{Name: "index", Aliases: []string{"i"}, Value: "niftytotalmarket", Usage: "Index name to analyze"},
 				&cli.StringFlag{Name: "method", Aliases: []string{"m"}, Value: "earlymb", Usage: "Strategy method to analyze"},
+				&cli.StringFlag{Name: "market", Aliases: []string{"mkt"}, Usage: "Target market: 'india' or 'us' (defaults to config/defaults.json or auto-detected from --index)"},
 				&cli.IntFlag{Name: "days", Value: 60, Usage: "Rolling history lookback window in calendar days (0 for all)"},
 				&cli.StringFlag{Name: "ticker", Usage: "Optional specific ticker to view score trajectory for"},
+				&cli.BoolFlag{Name: "churn", Usage: "Display Gate Churn Rate and Pool Stability Oscillator"},
 			},
 			Action: runPitAnalysis,
+		},
+		{
+			Name:    "stage",
+			Aliases: []string{"staging", "pre-prod"},
+			Usage:   "Generate Tier-2 pre-production staging basket (data/pre_microsmall.csv) from top qualified candidates",
+			Flags: []cli.Flag{
+				&cli.StringFlag{Name: "index", Aliases: []string{"i"}, Value: "niftytotalmarket", Usage: "Index name to stage"},
+				&cli.StringFlag{Name: "method", Aliases: []string{"m"}, Value: "earlymb", Usage: "Strategy method (earlymb)"},
+				&cli.IntFlag{Name: "top", Aliases: []string{"n", "t"}, Value: 15, Usage: "Number of top candidates to stage"},
+				&cli.StringFlag{Name: "output", Aliases: []string{"o"}, Value: "data/pre_microsmall.csv", Usage: "Output CSV file path"},
+			},
+			Action: runPitStage,
+		},
+		{
+			Name:    "sentry",
+			Aliases: []string{"holding-sentry", "decay-audit"},
+			Usage:   "Evaluate active live holdings for technical decay and distribution (Levels 1-3 Sentry)",
+			Flags: []cli.Flag{
+				&cli.StringFlag{Name: "basket", Aliases: []string{"b"}, Value: "data/microsmall.csv", Usage: "Path to live portfolio basket CSV"},
+				&cli.StringFlag{Name: "staged", Aliases: []string{"s"}, Value: "data/pre_microsmall.csv", Usage: "Path to pre-production staged candidates CSV"},
+			},
+			Action: runPitSentry,
 		},
 		{
 			Name:    "retry",
@@ -272,11 +298,26 @@ func runPitStats(ctx context.Context, c *cli.Command) error {
 func runPitAnalysis(ctx context.Context, c *cli.Command) error {
 	indexVal := strings.NewReplacer(",", "_", " ", "_", "^", "").Replace(c.String("index"))
 	methodVal := c.String("method")
-	return RunPitAnalysisDirect(ctx, indexVal, methodVal)
+	marketVal := c.String("market")
+	days := int(c.Int("days"))
+	if c.Bool("churn") {
+		db, err := pithistory.Open("")
+		if err != nil {
+			return fmt.Errorf("failed to open pit database: %w", err)
+		}
+		defer db.Close()
+		return db.PrintGateChurnReport(ctx, indexVal, methodVal, days)
+	}
+	return RunPitAnalysisWithOptions(ctx, indexVal, methodVal, days, marketVal)
 }
 
 // RunPitAnalysisDirect executes the DuckDB deep analysis engine directly without CLI context overhead.
-func RunPitAnalysisDirect(ctx context.Context, indexName, method string) error {
+func RunPitAnalysisDirect(ctx context.Context, indexName, method string, marketOverride ...string) error {
+	return RunPitAnalysisWithOptions(ctx, indexName, method, 60, marketOverride...)
+}
+
+// RunPitAnalysisWithOptions executes the DuckDB deep analysis engine with custom lookback days.
+func RunPitAnalysisWithOptions(ctx context.Context, indexName, method string, days int, marketOverride ...string) error {
 	indexVal := strings.NewReplacer(",", "_", " ", "_", "^", "").Replace(indexName)
 	if indexVal == "" {
 		indexVal = "niftytotalmarket"
@@ -291,7 +332,7 @@ func RunPitAnalysisDirect(ctx context.Context, indexName, method string) error {
 	}
 	defer db.Close()
 
-	return db.RunDeepAnalysis(ctx, indexVal, method)
+	return db.RunDeepAnalysis(ctx, indexVal, method, days, marketOverride...)
 }
 
 func runPitShadow(ctx context.Context, c *cli.Command) error {
@@ -334,7 +375,7 @@ func runPitRetry(ctx context.Context, c *cli.Command) error {
 		if dbErr := db.SaveRunSnapshot(ctx, snap); dbErr != nil {
 			fmt.Printf("Warning: failed to update DuckDB: %v\n", dbErr)
 		} else {
-			fmt.Println("Successfully synchronized updated run snapshot into DuckDB (data/pit_history.db).")
+			fmt.Printf("Successfully synchronized updated run snapshot into DuckDB (%s).\n", pithistory.DefaultDBPath)
 		}
 	}
 
@@ -352,4 +393,44 @@ func runPitConsensus(ctx context.Context, c *cli.Command) error {
 	defer db.Close()
 
 	return db.PrintConsensusLeaders(ctx, dateVal, topN)
+}
+
+func runPitStage(ctx context.Context, c *cli.Command) error {
+	indexVal := strings.NewReplacer(",", "_", " ", "_", "^", "").Replace(c.String("index"))
+	methodVal := c.String("method")
+	topN := int(c.Int("top"))
+	outPath := c.String("output")
+
+	db, err := pithistory.Open("")
+	if err != nil {
+		return fmt.Errorf("failed to open pit database: %w", err)
+	}
+	defer db.Close()
+
+	staged, err := db.StagePreProduction(ctx, indexVal, methodVal, topN, outPath)
+	if err != nil {
+		return fmt.Errorf("staging failed: %w", err)
+	}
+
+	pithistory.PrintStagingSummary(staged, outPath)
+	return nil
+}
+
+func runPitSentry(ctx context.Context, c *cli.Command) error {
+	basketPath := c.String("basket")
+	stagedPath := c.String("staged")
+
+	db, err := pithistory.Open("")
+	if err != nil {
+		return fmt.Errorf("failed to open pit database: %w", err)
+	}
+	defer db.Close()
+
+	results, overlaps, err := db.EvaluateHoldingSentry(ctx, basketPath, stagedPath)
+	if err != nil {
+		return fmt.Errorf("sentry evaluation failed: %w", err)
+	}
+
+	pithistory.PrintSentryReport(results, overlaps, basketPath, stagedPath)
+	return nil
 }

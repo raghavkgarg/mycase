@@ -74,9 +74,21 @@ func (c Config) clock() marketcal.Clock {
 // DryRunPlan returns the human-readable steps an EOD run would perform, for the
 // CLI to print as a preview. It performs no work and touches no database.
 func (c Config) DryRunPlan() []string {
+	methods := strings.Split(c.Method, ",")
+	var methPlan []string
+	for _, mRaw := range methods {
+		m := strings.TrimSpace(mRaw)
+		if m != "" {
+			methPlan = append(methPlan, m)
+		}
+	}
+	methDesc := strings.Join(methPlan, ", ")
+	if methDesc == "" {
+		methDesc = c.Method
+	}
 	return []string{
 		"1. Check database schema & connections (data/mycase.db)",
-		fmt.Sprintf("2. Daily PIT Research Screening for %s (%s, Top %d)", c.IndexName, c.Method, c.TopN),
+		fmt.Sprintf("2. Daily PIT Research Screening for %s (%s, Top %d)", c.IndexName, methDesc, c.TopN),
 		"3. Automated constituent self-healing retry pass",
 		"4. Synchronize theme lifecycle, exits, and return intelligence across all themes",
 	}
@@ -103,8 +115,17 @@ func Run(ctx context.Context, cfg Config) error {
 	}
 	defer db.Close()
 
-	if err := runScreening(ctx, cfg, targetDateStr); err != nil {
-		return err
+	methods := strings.Split(cfg.Method, ",")
+	for _, mRaw := range methods {
+		meth := strings.TrimSpace(mRaw)
+		if meth == "" {
+			continue
+		}
+		mCfg := cfg
+		mCfg.Method = meth
+		if err := runScreening(ctx, mCfg, targetDateStr); err != nil {
+			return err
+		}
 	}
 	syncThemes(ctx, db)
 

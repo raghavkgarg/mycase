@@ -57,6 +57,9 @@ var BasketCommand = &cli.Command{
 
 func runBasketWithParams(ctx context.Context, liveMode bool, basketFilename string, taxOptimize bool, brokerOverride ...string) error {
 	mktCfg := broker.LoadMarketConfig()
+	if stockpicker.IsUSIndex(basketFilename) {
+		mktCfg = broker.MarketConfigForName("us")
+	}
 
 	mode := "DRY RUN / MOCK MODE"
 	if liveMode {

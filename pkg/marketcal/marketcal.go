@@ -175,3 +175,8 @@ func (c Clock) NextEODAvailable(t time.Time) time.Time {
 	}
 	return c.atCutoff(local)
 }
+
+// IsNSEHoliday reports whether the given date (in IST) is an NSE trading holiday.
+func IsNSEHoliday(t time.Time) bool {
+	return !NSE.IsTradingDay(t)
+}

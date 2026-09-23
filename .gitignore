@@ -31,6 +31,8 @@ holding/
 # Generated stock picker output CSVs and temporary combined files
 data/stockpicker_*.csv
 data/*combine.csv
+data/modularmicro.csv
+data/aitheme.csv
 
 # Generated portfolio reports & explanation files
 report/*.txt

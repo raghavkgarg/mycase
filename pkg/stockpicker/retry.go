@@ -23,8 +23,11 @@ func RetryFailedSnapshotCandidates(ctx context.Context, indexName, method, asOfD
 	fileName := fmt.Sprintf("%s_%s_%s.json", cleanIndex, method, asOfDate)
 	snapPath := filepath.Join(PITSnapshotDir, fileName)
 
-	// If exact date file not found, try to locate latest for the index and method
+	// If exact date file not found, try to locate latest for the index and method only if asOfDate is empty
 	if _, err := os.Stat(snapPath); os.IsNotExist(err) {
+		if asOfDate != "" {
+			return nil, fmt.Errorf("snapshot for %s (%s, %s) not found on disk", indexName, method, asOfDate)
+		}
 		files, _ := filepath.Glob(filepath.Join(PITSnapshotDir, fmt.Sprintf("%s_%s_*.json", cleanIndex, method)))
 		if len(files) == 0 {
 			return nil, fmt.Errorf("no PIT snapshots found for %s (%s)", indexName, method)
@@ -50,7 +53,7 @@ func RetryFailedSnapshotCandidates(ctx context.Context, indexName, method, asOfD
 		if strings.Contains(t, "DUMMY") {
 			continue
 		}
-		if c.DataFetchFailed || (!c.PassedStage1 && c.RejectionReason == "") || strings.HasPrefix(c.RejectionReason, "DATA_FETCH_FAILED") {
+		if c.DataFetchFailed || (!c.PassedStage1 && c.RejectionReason == "") || strings.HasPrefix(c.RejectionReason, "DATA_FETCH_FAILED") || strings.Contains(c.RejectionReason, "Missing fundamental") {
 			failedTickers = append(failedTickers, t)
 		}
 	}

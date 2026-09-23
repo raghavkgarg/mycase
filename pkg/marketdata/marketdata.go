@@ -219,7 +219,7 @@ func (h *HistoricalData) truncateLast() {
 }
 
 // The EOD-settlement time helpers below preserve the historical India (NSE)
-// behavior — a 21:00 IST daily cutoff with weekend rollback — by delegating to
+// behavior — a 21:00 IST daily cutoff with weekend and holiday rollback — by delegating to
 // pkg/marketcal.NSE. They keep their original signatures so existing call sites
 // (cmd/pick, cmd/db, cmd/pit) and tests are unchanged. New, market-aware call
 // sites should prefer the *ForTicker variants (or use marketcal directly), which
@@ -261,7 +261,7 @@ func EODSettlementDateForTicker(ticker string, t time.Time) time.Time {
 }
 
 // NextEODAvailableDate returns when the next NSE (India) EOD file will be
-// available (next 21:00 IST cutoff, skipping weekends). See
+// available (next 21:00 IST cutoff, skipping weekends and holidays). See
 // marketcal.Clock.NextEODAvailable.
 func NextEODAvailableDate(t time.Time) time.Time {
 	return marketcal.NSE.NextEODAvailable(t)
@@ -270,6 +270,11 @@ func NextEODAvailableDate(t time.Time) time.Time {
 // NextEODAvailableDateForTicker is the market-aware variant.
 func NextEODAvailableDateForTicker(ticker string, t time.Time) time.Time {
 	return marketcal.ClockForTicker(ticker).NextEODAvailable(t)
+}
+
+// IsNSEHoliday reports whether the given date (in IST) is an NSE trading holiday.
+func IsNSEHoliday(t time.Time) bool {
+	return marketcal.IsNSEHoliday(t)
 }
 
 // FormatOrdinalDay returns e.g. "21st", "22nd", "23rd", "24th" for a day number.

@@ -222,7 +222,7 @@ INSERT OR REPLACE INTO pit_candidate_scores (
 			c.DeliveryDelta,
 			c.Selected,
 			c.FinalWeight,
-			0.0, // forward return initialized to 0.0, backfilled after 21 days
+			nil, // forward return initialized to NULL, backfilled after 21 trading sessions
 			isUncalibrated,
 			c.Pillar4InsufficientHistory,
 		)
@@ -294,6 +294,36 @@ WHERE (? = '' OR c.as_of_date = ?)
 `
 	_, err := p.db.ExecContext(ctx, syncQuery, asOfDate, asOfDate, indexName, method)
 	return err
+}
+
+// BackfillForwardReturns backfills realized 21-trading-session forward returns
+// for historical candidates from the prices table.
+func (p *DB) BackfillForwardReturns(ctx context.Context) (int64, error) {
+	query := `
+WITH ranked_prices AS (
+    SELECT ticker, date, close,
+           ROW_NUMBER() OVER (PARTITION BY ticker ORDER BY date ASC) as rn
+    FROM prices
+),
+fwd_returns AS (
+    SELECT p0.ticker, p0.date as as_of_date,
+           (p21.close - p0.close) / NULLIF(p0.close, 0) as fwd_ret
+    FROM ranked_prices p0
+    JOIN ranked_prices p21 ON p0.ticker = p21.ticker AND p21.rn = p0.rn + 21
+)
+UPDATE pit_candidate_scores
+SET forward_return_21d = f.fwd_ret
+FROM fwd_returns f
+WHERE pit_candidate_scores.ticker = f.ticker
+  AND pit_candidate_scores.as_of_date = f.as_of_date
+  AND pit_candidate_scores.forward_return_21d IS NULL;
+`
+	res, err := p.db.ExecContext(ctx, query)
+	if err != nil {
+		return 0, fmt.Errorf("backfill forward returns: %w", err)
+	}
+	rowsAffected, _ := res.RowsAffected()
+	return rowsAffected, nil
 }
 
 // UpdateForwardReturns updates the realized forward return for a specific candidate at a historical date.
