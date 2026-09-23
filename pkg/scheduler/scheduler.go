@@ -168,6 +168,7 @@ func (s *Scheduler) Run(ctx context.Context) error {
 
 		now := time.Now()
 		rep := newRunReport(now, s.cfg.Clock.SettlementDate(now).Format("2006-01-02"), s.cfg.Live, s.cfg.ReportPath)
+		s.warnIfEmptyCalendar(ctx, rep)
 		s.tick(ctx, now, rep)
 		s.flushReport(ctx, rep)
 	}
@@ -193,12 +194,29 @@ func (s *Scheduler) RunOnce(ctx context.Context) error {
 
 	now := time.Now()
 	rep := newRunReport(now, s.cfg.Clock.SettlementDate(now).Format("2006-01-02"), s.cfg.Live, s.cfg.ReportPath)
+	s.warnIfEmptyCalendar(ctx, rep)
 	s.catchUp(ctx, rep)
 	s.tick(ctx, now, rep)
 	s.flushReport(ctx, rep)
 
 	slog.InfoContext(ctx, "scheduler.tick_once_completed")
 	return nil
+}
+
+// warnIfEmptyCalendar flags a pass whose active clock carries no holidays — an
+// almost-certain sign the holidays table is unseeded (a real exchange always has
+// holidays), which silently degrades gating to weekend-only. It records a
+// pass-level report warning and logs at WARN so the miss is observable at the run
+// itself rather than months later when a cadence fires on a holiday. It never
+// blocks the run (the empty calendar still yields a usable weekend-only clock).
+func (s *Scheduler) warnIfEmptyCalendar(ctx context.Context, rep *RunReport) {
+	if len(s.cfg.Clock.Holidays) > 0 {
+		return
+	}
+	slog.WarnContext(ctx, "scheduler.empty_holiday_calendar",
+		"impact", "trading-day gating is WEEKEND-ONLY (holidays not skipped)",
+		"fix", "seed the holidays table (duckdb data/mycase.db < holiday.sql) — see docs/18-runbook.md")
+	rep.warn("holiday calendar is EMPTY — gating is weekend-only; seed the holidays table (see docs/18-runbook.md)")
 }
 
 // flushReport appends the maintenance-log block for a completed pass, unless

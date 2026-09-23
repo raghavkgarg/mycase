@@ -50,6 +50,48 @@ func TestDBHolidayProvider_NilHandle(t *testing.T) {
 	if err := p.UpsertHolidays(context.Background(), "NYSE", []string{"2026-01-01"}); err != nil {
 		t.Fatalf("nil-handle upsert should be no-op, got %v", err)
 	}
+	if got := p.Count(context.Background(), "NYSE"); got != -1 {
+		t.Fatalf("nil-handle Count = %d, want -1 (couldn't check)", got)
+	}
+}
+
+func TestDBHolidayProvider_CountAndStatus(t *testing.T) {
+	c, err := cache.Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatalf("cache.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = c.Close() })
+	p := NewDBHolidayProvider(c.Conn())
+	ctx := context.Background()
+
+	// Empty table: Count is 0 (checked, none), status has no rows.
+	if got := p.Count(ctx, "NYSE"); got != 0 {
+		t.Fatalf("empty Count = %d, want 0", got)
+	}
+	stats, err := p.HolidayStatus(ctx)
+	if err != nil {
+		t.Fatalf("HolidayStatus: %v", err)
+	}
+	if len(stats) != 0 {
+		t.Fatalf("empty status = %v, want none", stats)
+	}
+
+	if err := p.UpsertHolidays(ctx, "NYSE", []string{"2026-12-25", "2026-01-01"}); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+	if got := p.Count(ctx, "NYSE"); got != 2 {
+		t.Fatalf("Count after seed = %d, want 2", got)
+	}
+	stats, err = p.HolidayStatus(ctx)
+	if err != nil {
+		t.Fatalf("HolidayStatus: %v", err)
+	}
+	if len(stats) != 1 || stats[0].Exchange != "NYSE" || stats[0].Count != 2 {
+		t.Fatalf("status = %+v, want one NYSE row count 2", stats)
+	}
+	if stats[0].MinDate != "2026-01-01" || stats[0].MaxDate != "2026-12-25" {
+		t.Errorf("status date range = %s..%s, want 2026-01-01..2026-12-25", stats[0].MinDate, stats[0].MaxDate)
+	}
 }
 
 // selectHolidayProvider always yields a DB-backed provider. With no cache DB

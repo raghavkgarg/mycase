@@ -113,3 +113,22 @@ func TestRunReport_NilSafe(t *testing.T) {
 		t.Errorf("nil report Flush should be no-op, got %v", err)
 	}
 }
+
+func TestRunReport_PassLevelWarning(t *testing.T) {
+	r := newRunReport(time.Now(), "2026-09-23", true, "")
+	r.warn("holiday calendar is EMPTY — gating is weekend-only; seed the holidays table")
+	var eod StageResult
+	eod.line("3 method(s) screened")
+	r.record(CadenceEOD, eod, time.Second, nil)
+
+	out := r.Render()
+	// Pass-level warning appears before the stage lines.
+	wIdx := strings.Index(out, "holiday calendar is EMPTY")
+	sIdx := strings.Index(out, "[eod]")
+	if wIdx < 0 || sIdx < 0 {
+		t.Fatalf("missing warning or stage line:\n%s", out)
+	}
+	if wIdx > sIdx {
+		t.Errorf("pass-level warning should render before stages:\n%s", out)
+	}
+}

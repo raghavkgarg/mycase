@@ -122,6 +122,7 @@ func main() {
 			mycmd.MonitorCommand,
 			mycmd.BasketCommand,
 			mycmd.HoldingsCommand,
+			mycmd.HolidaysCommand,
 			mycmd.TaxCommand,
 			mycmd.MergeCommand,
 			mycmd.AuthCommand,

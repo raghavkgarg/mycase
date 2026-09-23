@@ -874,14 +874,39 @@ Yearly workflow (per exchange):
 
    (Or use a CSV the exchange provides:
    `INSERT INTO holidays SELECT 'NYSE', column0 FROM read_csv('nyse_2028.csv') ON CONFLICT DO NOTHING;`)
-3. Verify:
+3. Verify with the built-in check:
 
    ```bash
-   duckdb data/mycase.db "SELECT exchange, COUNT(*) FROM holidays GROUP BY exchange;"
+   mycase holidays status          # per-exchange counts + date range; non-zero exit if unseeded
+   mycase holidays list -e NSE     # dump one exchange's dates
    ```
 
+**Quick local bootstrap.** For a fresh checkout/machine, the committed `holiday.sql` snapshot
+seeds the currently-known NYSE + NSE dates in one command:
+
+```bash
+duckdb data/mycase.db < holiday.sql
+mycase holidays status            # confirm: NYSE / NSE both show counts, no "NOT SEEDED"
+```
+
+`holiday.sql` is a **convenience snapshot only** — not authoritative and read by no code. The
+source of truth is the table; the yearly refresh above updates the table from the official
+calendar (refresh the snapshot afterwards if you like). Re-running it is safe.
+
+**Detection — you will be told when it's empty, not left to guess:**
+
+- `mycase holidays status` prints a `NOT SEEDED` row per unseeded known exchange and exits
+  non-zero.
+- Every `broker.TradingClock()` lookup for a known exchange with no rows logs a WARN
+  (`holidays.empty_calendar`) with a seed hint.
+- The scheduler flags an empty calendar at the top of its maintenance-log block
+  (`⚠ holiday calendar is EMPTY — gating is weekend-only …`) and logs
+  `scheduler.empty_holiday_calendar`, so an autonomous run self-nags rather than silently
+  skipping only weekends.
+
 > **First run on a fresh machine/checkout:** the `holidays` table starts empty, so seed it
-> before relying on holiday-aware scheduling. Until then, only weekends are skipped.
+> (`duckdb data/mycase.db < holiday.sql`) before relying on holiday-aware scheduling. Until
+> then, only weekends are skipped.
 
 ### Configuration
 

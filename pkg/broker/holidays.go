@@ -70,9 +70,21 @@ func (p *DBHolidayProvider) ensureSchema(ctx context.Context) error {
 	return nil
 }
 
+// knownExchanges are the exchanges the system actively schedules against. A
+// zero-row result for one of these is almost certainly an unseeded table (a real
+// exchange always has holidays in a year), so Holidays warns actionably rather
+// than silently degrading — closing the "forgot to seed" silent-failure hole.
+var knownExchanges = map[string]bool{"NYSE": true, "NSE": true}
+
 // Holidays returns the DB-configured holidays for an exchange. On any error (no
 // handle, schema failure, query failure) it logs and returns nil so the clock
 // degrades to weekend-only rather than propagating a fatal error.
+//
+// A zero-row result for a *known* exchange (NYSE/NSE) is treated as a likely
+// unseeded table and logged at WARN with a seed hint — an empty holiday calendar
+// is never legitimate for a real exchange, so it must be observable rather than
+// silent. It still returns an empty set (weekend-only) so the clock is never
+// broken; loudness here is visibility, not a hard failure.
 func (p *DBHolidayProvider) Holidays(exchange string) []string {
 	if p == nil || p.db == nil {
 		return nil
@@ -104,8 +116,76 @@ func (p *DBHolidayProvider) Holidays(exchange string) []string {
 		slog.WarnContext(ctx, "holidays.db_rows_failed", "err", err, "exchange", exchange)
 		return nil
 	}
+	if len(dates) == 0 && knownExchanges[strings.ToUpper(exchange)] {
+		slog.WarnContext(ctx, "holidays.empty_calendar",
+			"exchange", exchange,
+			"impact", "trading-day logic is WEEKEND-ONLY until seeded",
+			"fix", "seed the holidays table (duckdb data/mycase.db < holiday.sql) — see docs/18-runbook.md")
+	}
 	return dates
 }
+
+// Count returns the number of holiday rows for an exchange (-1 on any error or
+// nil handle, so callers can distinguish "0 rows" from "couldn't check"). Used by
+// `mycase holidays status` and the scheduler's empty-calendar check.
+func (p *DBHolidayProvider) Count(ctx context.Context, exchange string) int {
+	if p == nil || p.db == nil {
+		return -1
+	}
+	if err := p.ensureSchema(ctx); err != nil {
+		return -1
+	}
+	var n int
+	if err := p.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM holidays WHERE exchange = ?`, exchange).Scan(&n); err != nil {
+		return -1
+	}
+	return n
+}
+
+// HolidayStat summarizes the seeded holidays for one exchange, for the read-only
+// `mycase holidays status` report.
+type HolidayStat struct {
+	Exchange string
+	Count    int
+	MinDate  string
+	MaxDate  string
+}
+
+// HolidayStatus returns per-exchange row counts + date range from the holidays
+// table, ordered by exchange. A nil handle yields nil. It is read-only.
+func (p *DBHolidayProvider) HolidayStatus(ctx context.Context) ([]HolidayStat, error) {
+	if p == nil || p.db == nil {
+		return nil, nil
+	}
+	if err := p.ensureSchema(ctx); err != nil {
+		return nil, err
+	}
+	rows, err := p.db.QueryContext(ctx,
+		`SELECT exchange, COUNT(*), MIN(date), MAX(date) FROM holidays GROUP BY exchange ORDER BY exchange`)
+	if err != nil {
+		return nil, fmt.Errorf("querying holiday status: %w", err)
+	}
+	defer rows.Close()
+
+	var stats []HolidayStat
+	for rows.Next() {
+		var s HolidayStat
+		var minD, maxD sql.NullString
+		if err := rows.Scan(&s.Exchange, &s.Count, &minD, &maxD); err != nil {
+			return nil, fmt.Errorf("scanning holiday status: %w", err)
+		}
+		s.MinDate = minD.String
+		s.MaxDate = maxD.String
+		stats = append(stats, s)
+	}
+	return stats, rows.Err()
+}
+
+// KnownExchanges returns the exchanges the system schedules against, so callers
+// (e.g. `holidays status`) can report a "NOT SEEDED" line for a known exchange
+// that has no rows at all (and thus no GROUP BY row above).
+func KnownExchanges() []string { return []string{"NSE", "NYSE"} }
 
 // UpsertHolidays inserts (or ignores duplicates of) the given dates for an
 // exchange — the sanctioned write primitive for landing operator-sourced holiday
@@ -159,4 +239,16 @@ func selectHolidayProvider() HolidayProvider {
 	slog.Warn("holidays.db_unavailable", "fallback", "weekend_only",
 		"note", "cache DB is not open; holiday calendar unavailable this invocation")
 	return NewDBHolidayProvider(nil)
+}
+
+// HolidayStore returns the DB-backed holiday provider over the active cache
+// connection, or nil when the cache DB is not open. Exported for the composition
+// root (`mycase holidays status`) to read/report the table without re-deriving
+// the cache wiring. Returns the concrete type so callers can reach Count/
+// HolidayStatus/UpsertHolidays, not just the read-only interface.
+func HolidayStore() *DBHolidayProvider {
+	if c := cache.GetDB(); c != nil {
+		return NewDBHolidayProvider(c.Conn())
+	}
+	return nil
 }

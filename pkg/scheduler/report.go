@@ -60,6 +60,10 @@ type RunReport struct {
 	tradday string
 	live    bool
 	stages  []stageEntry
+	// warnings are pass-level notices not tied to a single stage (e.g. an empty
+	// holiday calendar). Rendered near the top of the block so they're the first
+	// thing an operator sees.
+	warnings []string
 	// path is the maintenance-log file to append to. Empty → default under the
 	// data log dir. Disabled reporting is signalled by a nil *RunReport.
 	path string
@@ -77,6 +81,15 @@ func (r *RunReport) record(c Cadence, res StageResult, dur time.Duration, err er
 		return
 	}
 	r.stages = append(r.stages, stageEntry{cadence: c, result: res, err: err, duration: dur})
+}
+
+// warn adds a pass-level warning (not tied to a stage), shown near the top of the
+// rendered block. Nil-safe.
+func (r *RunReport) warn(format string, args ...any) {
+	if r == nil {
+		return
+	}
+	r.warnings = append(r.warnings, fmt.Sprintf(format, args...))
 }
 
 // reportPath resolves the maintenance-log path (explicit, else default).
@@ -121,6 +134,12 @@ func (r *RunReport) firstError() (Cadence, error) {
 func (r *RunReport) Render() string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "\n──── %s ────\n", r.started.Format("Mon 2006-01-02 15:04"))
+
+	// Pass-level warnings (e.g. empty holiday calendar) come first — they apply to
+	// the whole run, not a single stage, and an operator should see them up top.
+	for _, w := range r.warnings {
+		fmt.Fprintf(&b, "  ⚠ %s\n", w)
+	}
 
 	if len(r.stages) == 0 {
 		fmt.Fprintf(&b, "  (nothing due for %s — no cadences ran)\n", r.tradday)
