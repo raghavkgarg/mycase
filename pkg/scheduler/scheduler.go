@@ -26,12 +26,17 @@ package scheduler
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"time"
 
 	"log/slog"
 
+	"github.com/raghavkgarg/mycase/pkg/alert"
 	"github.com/raghavkgarg/mycase/pkg/broker"
+	"github.com/raghavkgarg/mycase/pkg/broker/schwab"
 	"github.com/raghavkgarg/mycase/pkg/config"
+	"github.com/raghavkgarg/mycase/pkg/daemon"
 	"github.com/raghavkgarg/mycase/pkg/marketcal"
 )
 
@@ -79,6 +84,17 @@ type Config struct {
 	// fire (gives the EOD data time to settle). Default 15.
 	CloseOffsetMin int
 
+	// MaxRunMin bounds a single RunOnce pass. When it elapses the run's context is
+	// cancelled, which propagates through the broker rate-limiter (limiter.Wait)
+	// and every ctx-aware HTTP call, unwinding the pass and releasing the DuckDB
+	// writer lock rather than sitting on it. Default 20 (see maxRun).
+	MaxRunMin int
+
+	// FailureAlertAfter is the number of consecutive failed attempts of a cadence
+	// that triggers a persistent-failure alert. An auth error (re-auth required)
+	// always alerts on the first occurrence regardless of this. Default 3.
+	FailureAlertAfter int
+
 	// Enable toggles per cadence. A disabled cadence is never dispatched.
 	EnableEOD       bool
 	EnableDrift     bool
@@ -108,6 +124,26 @@ func (c Config) closeOffset() time.Duration {
 		return 15 * time.Minute
 	}
 	return time.Duration(c.CloseOffsetMin) * time.Minute
+}
+
+// maxRun returns the overall deadline for a single RunOnce pass, defaulting to
+// 20 minutes. It is deliberately generous: a cold-cache catch-up on the US path
+// (~500 tickers) can take several minutes, but a run that exceeds this is stuck
+// (hung socket, dead broker) and must release the DuckDB lock.
+func (c Config) maxRun() time.Duration {
+	if c.MaxRunMin <= 0 {
+		return 20 * time.Minute
+	}
+	return time.Duration(c.MaxRunMin) * time.Minute
+}
+
+// failureAlertAfter returns the consecutive-failure count that triggers an alert,
+// defaulting to 3.
+func (c Config) failureAlertAfter() int {
+	if c.FailureAlertAfter <= 0 {
+		return 3
+	}
+	return c.FailureAlertAfter
 }
 
 // Runner executes a single cadence. Split out so the tick loop is testable with
@@ -188,9 +224,29 @@ func (s *Scheduler) Run(ctx context.Context) error {
 // provided the ordering. State (scheduler_state.json) prevents double-runs across
 // invocations exactly as it does across loop ticks.
 func (s *Scheduler) RunOnce(ctx context.Context) error {
+	// Single-instance guard: refuse up front if another run holds the lock, so a
+	// stray manual run-now overlapping the scheduled fire never collides on the
+	// DuckDB writer lock mid-pass. Stale locks (from a killed run) self-heal.
+	lock, err := acquireLock()
+	if err != nil {
+		if locked := (ErrLocked{}); errors.As(err, &locked) {
+			slog.WarnContext(ctx, "scheduler.run_refused_locked", "holder_pid", locked.PID)
+		}
+		return err
+	}
+	defer lock.release()
+
+	// Bound the whole pass. Without this, a hung outbound call (dead broker,
+	// stalled socket) would sit indefinitely holding the single-writer DuckDB
+	// lock — the failure mode that blocked a concurrent command in the field.
+	// The deadline propagates through the broker's limiter.Wait(ctx) and every
+	// ctx-aware HTTP call, so the pass unwinds and releases the lock.
+	ctx, cancel := context.WithTimeout(ctx, s.cfg.maxRun())
+	defer cancel()
+
 	slog.InfoContext(ctx, "scheduler.tick_once_started",
 		"eod", s.cfg.EnableEOD, "drift", s.cfg.EnableDrift, "rebalance", s.cfg.EnableRebalance,
-		"auto_execute", s.cfg.AutoExecute, "live", s.cfg.Live)
+		"auto_execute", s.cfg.AutoExecute, "live", s.cfg.Live, "max_run_min", int(s.cfg.maxRun().Minutes()))
 
 	now := time.Now()
 	rep := newRunReport(now, s.cfg.Clock.SettlementDate(now).Format("2006-01-02"), s.cfg.Live, s.cfg.ReportPath)
@@ -291,7 +347,9 @@ func (s *Scheduler) tick(ctx context.Context, now time.Time, rep *RunReport) {
 // runCadence executes one cadence, times it, records its last-run day, logs the
 // outcome, and appends its result to the run report. A cadence failure is logged
 // and swallowed so one failing cadence never stops the loop or blocks the others;
-// the failure is still recorded in the report (which drives the FAILED summary).
+// the failure is still recorded in the report (which drives the FAILED summary)
+// and tracked in state so a persistent (or auth) failure raises an alert rather
+// than failing silently forever.
 func (s *Scheduler) runCadence(ctx context.Context, c Cadence, day string, fn func(context.Context) (StageResult, error), rep *RunReport) {
 	slog.InfoContext(ctx, "scheduler.cadence_started", "cadence", string(c), "trading_day", day)
 	start := time.Now()
@@ -299,12 +357,71 @@ func (s *Scheduler) runCadence(ctx context.Context, c Cadence, day string, fn fu
 	dur := time.Since(start)
 	rep.record(c, res, dur, err)
 	if err != nil {
-		slog.ErrorContext(ctx, "scheduler.cadence_failed", "cadence", string(c), "err", err, "ms", dur.Milliseconds())
+		count := s.state.recordFailure(c)
+		slog.ErrorContext(ctx, "scheduler.cadence_failed",
+			"cadence", string(c), "err", err, "ms", dur.Milliseconds(), "consecutive_failures", count)
+		s.maybeAlertFailure(ctx, c, err, count)
+		_ = SaveState(s.state)
 		return
 	}
 	s.state.markRun(c, day)
+	s.state.recordSuccess(c)
 	_ = SaveState(s.state)
 	slog.InfoContext(ctx, "scheduler.cadence_completed", "cadence", string(c), "trading_day", day, "ms", dur.Milliseconds())
+}
+
+// maybeAlertFailure dispatches a persistent-failure / re-auth alert when warranted
+// and not already sent for the current streak. An auth error (ErrReauthRequired)
+// alerts on its first occurrence — it never self-heals, so waiting is pointless.
+// Any other failure alerts once its consecutive-failure count reaches the
+// configured threshold. Alerting is best-effort: a send failure is logged and
+// swallowed so it never fails the run.
+func (s *Scheduler) maybeAlertFailure(ctx context.Context, c Cadence, cadErr error, count int) {
+	if s.state.alreadyAlerted(c) {
+		return // one alert per streak; already notified
+	}
+	authIssue := errors.Is(cadErr, schwab.ErrReauthRequired)
+	if !authIssue && count < s.cfg.failureAlertAfter() {
+		return // transient failure, below threshold — keep retrying quietly
+	}
+
+	title, body, level := s.failureAlertMessage(c, cadErr, count, authIssue)
+	msg := alert.Alert{Title: title, Body: body, Level: level}
+
+	alerters := daemon.BuildAlerters(s.cfg.Alert)
+	if len(alerters) == 0 {
+		slog.WarnContext(ctx, "scheduler.failure_alert_unconfigured",
+			"cadence", string(c), "auth", authIssue, "consecutive_failures", count,
+			"hint", "no alert channels configured (pipeline.yaml alerts.channels); failure is log-only")
+		// Still mark alerted so we don't spin on this every day; the log carries it.
+		s.state.markAlerted(c)
+		return
+	}
+	for _, a := range alerters {
+		if err := a.Send(msg); err != nil {
+			slog.WarnContext(ctx, "scheduler.failure_alert_send_failed", "cadence", string(c), "err", err)
+		}
+	}
+	slog.InfoContext(ctx, "scheduler.failure_alert_sent",
+		"cadence", string(c), "auth", authIssue, "consecutive_failures", count)
+	s.state.markAlerted(c)
+}
+
+// failureAlertMessage builds the alert payload for a cadence failure, giving the
+// auth case an explicit, actionable title (re-run `mycase auth`).
+func (s *Scheduler) failureAlertMessage(c Cadence, cadErr error, count int, authIssue bool) (title, body, level string) {
+	if authIssue {
+		return "mycase: re-authentication required",
+			fmt.Sprintf("The %s cadence failed because the broker session expired.\n"+
+				"Automated runs are stalled until you re-authenticate.\n\n"+
+				"Fix: run `mycase auth --broker schwab` on the host.\n\nError: %v", c, cadErr),
+			"critical"
+	}
+	return fmt.Sprintf("mycase: %s cadence failing (%d consecutive)", c, count),
+		fmt.Sprintf("The %s cadence has failed %d times in a row.\n"+
+			"It will keep retrying, but check the host — the data/scheduler.log has details.\n\nLast error: %v",
+			c, count, cadErr),
+		"warn"
 }
 
 // catchUp runs a missed EOD if the machine was asleep at the last close: if the

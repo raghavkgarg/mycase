@@ -27,6 +27,8 @@
     "enable_drift": true,
     "enable_rebalance": true,
     "close_offset_min": 15,
+    "max_run_min": 20,
+    "fail_alert_after": 3,
     "enable_report": true,
     "report_path": ""
   }

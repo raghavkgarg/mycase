@@ -1,6 +1,9 @@
 .PHONY: build build-linux-arm64 build-linux-amd64 build-darwin-arm64 build-darwin-amd64
 .PHONY: install install-gopath uninstall run test test-verbose test-race test-integration test-coverage cleanup analyze clean fetch-echarts check-deps deps-graph arch-graph overview-graph help
-.PHONY: use-us use-india scheduler-install scheduler-uninstall scheduler-status
+.PHONY: use-us use-india scheduler-install scheduler-uninstall scheduler-status reload
+
+SCHED_PLIST  := $(HOME)/Library/LaunchAgents/com.mycase.scheduler.plist
+SCHED_LABEL  := com.mycase.scheduler
 
 # Pinned advisory-analysis tool versions (run via `go run` — no global install needed).
 # Bump deliberately; keep reproducible per the project's determinism convention.
@@ -46,6 +49,7 @@ build:
 	@mkdir -p dist
 	@go build -ldflags "$(LDFLAGS)" -o dist/mycase .
 	@echo "Build complete: dist/mycase"
+	@$(MAKE) --no-print-directory reload
 
 # install symlinks $(BINDIR)/mycase -> dist/mycase (this project tree). The
 # symlink is deliberate: mycase follows it back to the project root to find
@@ -242,6 +246,38 @@ scheduler-uninstall:
 scheduler-status:
 	@./dist/mycase scheduler status
 
+# reload keeps the installed entry points current after a rebuild — auto-invoked
+# by `build`. It is intentionally passive: it only refreshes things that ALREADY
+# exist, never creating them (so a plain build never writes to /usr/local/bin or
+# installs a launchd agent, and never triggers a sudo prompt).
+#
+#   1. Symlink: if $(INSTALL_LINK) exists AND already points into this tree's
+#      dist/mycase, re-point it (a no-op unless the target moved). A missing link,
+#      or one owned by another checkout, is left untouched — run `make install`
+#      to (re)create it deliberately.
+#   2. launchd agent: if the scheduler plist is currently loaded, bootout+bootstrap
+#      it so launchd re-registers against the freshly built binary. This is the
+#      guard against launchd running a stale/newer binary than it registered (the
+#      failure seen in the sibling tool). If nothing is loaded, do nothing.
+reload:
+	@if [ -L "$(INSTALL_LINK)" ]; then \
+		cur="$$(readlink "$(INSTALL_LINK)")"; \
+		case "$$cur" in \
+			"$(DIST_BIN)") : ;; \
+			"$(abspath dist)"/*) ln -sf "$(DIST_BIN)" "$(INSTALL_LINK)" 2>/dev/null && echo "✓ Refreshed symlink $(INSTALL_LINK)" || true ;; \
+			*) : ;; \
+		esac; \
+	fi
+	@if [ "$$(uname -s)" = "Darwin" ] && launchctl list "$(SCHED_LABEL)" >/dev/null 2>&1; then \
+		domain="gui/$$(id -u)"; \
+		launchctl bootout "$$domain/$(SCHED_LABEL)" 2>/dev/null || true; \
+		if launchctl bootstrap "$$domain" "$(SCHED_PLIST)" 2>/dev/null; then \
+			echo "✓ Reloaded scheduler LaunchAgent against rebuilt binary"; \
+		else \
+			echo "⚠  Scheduler LaunchAgent was loaded but reload failed; re-run 'make scheduler-install'"; \
+		fi; \
+	fi
+
 clean:
 	@rm -f dist/mycase dist/mycase-arm64 dist/mycase-amd64 dist/mycase-darwin-arm64 dist/mycase-darwin-amd64 dist/deps.dot dist/deps.svg dist/deps.d2 dist/arch.svg
 	@echo "Cleaned"
@@ -279,5 +315,6 @@ help:
 	@echo "  scheduler-install  - Build + install/reload the daily OS timer (mycase scheduler tick)"
 	@echo "  scheduler-uninstall- Remove the installed scheduler timer"
 	@echo "  scheduler-status   - Show last completed EOD / drift / rebalance day"
+	@echo "  reload             - Refresh existing symlink + reload scheduler agent against rebuilt binary (auto-run by build; passive, no sudo)"
 	@echo "  clean              - Remove build artifacts"
 	@echo "  fetch-echarts      - Download ECharts 5.6.0 into pkg/server/static/vendor/"

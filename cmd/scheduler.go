@@ -8,12 +8,14 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"text/template"
 	"time"
 
 	"github.com/urfave/cli/v3"
 
 	"github.com/raghavkgarg/mycase/pkg/broker"
+	"github.com/raghavkgarg/mycase/pkg/cache"
 	"github.com/raghavkgarg/mycase/pkg/config"
 	"github.com/raghavkgarg/mycase/pkg/marketcal"
 	"github.com/raghavkgarg/mycase/pkg/render"
@@ -33,6 +35,7 @@ var SchedulerCommand = &cli.Command{
 		schedulerRunNowCmd,
 		schedulerDaemonCmd,
 		schedulerStatusCmd,
+		schedulerDoctorCmd,
 		schedulerInstallCmd,
 		schedulerUninstallCmd,
 	},
@@ -71,6 +74,12 @@ var schedulerStatusCmd = &cli.Command{
 	Name:   "status",
 	Usage:  "Show the last completed trading day per cadence and flag if behind",
 	Action: runSchedulerStatus,
+}
+
+var schedulerDoctorCmd = &cli.Command{
+	Name:   "doctor",
+	Usage:  "Preflight: print resolved home/DB path, lock state, and flag stale legacy units",
+	Action: runSchedulerDoctor,
 }
 
 var schedulerInstallCmd = &cli.Command{
@@ -123,23 +132,25 @@ func buildSchedulerConfig(c *cli.Command, live bool) (scheduler.Config, error) {
 	}
 
 	return scheduler.Config{
-		Clock:           broker.TradingClock(),
-		Broker:          b,
-		Alert:           alertCfg,
-		Pipeline:        *pipelineCfg,
-		PortfolioFile:   resolvePortfolioFile(c, alertCfg),
-		ConfigPath:      c.String("config"),
-		EODIndex:        defaults.Index,
-		EODMethod:       defaults.Method,
-		EODTopN:         topN,
-		CloseOffsetMin:  sc.CloseOffsetMin,
-		EnableEOD:       sc.EnableEOD,
-		EnableDrift:     sc.EnableDrift,
-		EnableRebalance: sc.EnableRebalance,
-		AutoExecute:     pipelineCfg.Schedule.AutoExecute,
-		Live:            live,
-		EnableReport:    sc.EnableReport,
-		ReportPath:      sc.ReportPath,
+		Clock:             broker.TradingClock(),
+		Broker:            b,
+		Alert:             alertCfg,
+		Pipeline:          *pipelineCfg,
+		PortfolioFile:     resolvePortfolioFile(c, alertCfg),
+		ConfigPath:        c.String("config"),
+		EODIndex:          defaults.Index,
+		EODMethod:         defaults.Method,
+		EODTopN:           topN,
+		CloseOffsetMin:    sc.CloseOffsetMin,
+		MaxRunMin:         sc.MaxRunMin,
+		FailureAlertAfter: sc.FailAlertAfter,
+		EnableEOD:         sc.EnableEOD,
+		EnableDrift:       sc.EnableDrift,
+		EnableRebalance:   sc.EnableRebalance,
+		AutoExecute:       pipelineCfg.Schedule.AutoExecute,
+		Live:              live,
+		EnableReport:      sc.EnableReport,
+		ReportPath:        sc.ReportPath,
 	}, nil
 }
 
@@ -217,6 +228,164 @@ func lastRunOrNever(state scheduler.State, c scheduler.Cadence) string {
 		return "never"
 	}
 	return state.LastRun[string(c)]
+}
+
+// runSchedulerDoctor is a read-only preflight. It answers the two questions that
+// caused real confusion in the field: "is this binary looking at the project's
+// data/, or a stray dist/data?" and "is anything (a stale lock, a duplicate
+// launchd unit) going to make the next scheduled run fail or double-run?" It
+// touches nothing — no fetch, no write, no live broker.
+func runSchedulerDoctor(_ context.Context, _ *cli.Command) error {
+	fmt.Println("mycase scheduler doctor")
+	fmt.Println()
+
+	// 1. Resolved paths — the home-resolution question.
+	dbPath := config.DataPath("mycase.db")
+	render.KV(os.Stdout, []render.KVPair{
+		{Key: "Resolved home", Value: config.Home()},
+		{Key: "Config dir", Value: config.ConfigDir()},
+		{Key: "Data dir", Value: config.DataDir()},
+		{Key: "Cache DB", Value: dbPath},
+	})
+
+	var problems, warnings int
+
+	// 2. DB openable? A lock conflict here means another writer holds it. Keep it
+	// open through the holiday check below — TradingClock reads holidays from the
+	// global cache, so closing early would falsely report an empty calendar.
+	fmt.Println()
+	dbOpen := false
+	if c, err := cache.Open(dbPath); err != nil {
+		fmt.Printf("✗ Cache DB not openable: %v\n", err)
+		fmt.Println("  If this says \"Conflicting lock\", another mycase process holds the DB.")
+		problems++
+	} else {
+		defer c.Close()
+		dbOpen = true
+		fmt.Println("✓ Cache DB opens cleanly (no conflicting writer).")
+	}
+
+	// 3. Single-instance lock state.
+	if held, pid, path := scheduler.LockStatus(); held {
+		fmt.Printf("⚠  Scheduler run-lock held by live pid %d (%s).\n", pid, path)
+		fmt.Println("   A run is in progress, or a previous run is stuck. run-now will refuse until it clears.")
+		warnings++
+	} else if pid > 0 {
+		fmt.Printf("✓ Stale run-lock present (pid %d, dead) — will self-heal on next run.\n", pid)
+	} else {
+		fmt.Println("✓ No scheduler run-lock held.")
+	}
+
+	// 4. Legacy launchd units — duplicate-run risk (macOS only).
+	fmt.Println()
+	if runtime.GOOS == "darwin" {
+		for _, legacy := range []string{"com.mycase.daemon", "com.mycase.autopilot"} {
+			if launchdLoaded(legacy) {
+				fmt.Printf("✗ Legacy LaunchAgent %s is loaded — it duplicates the scheduler's cadences.\n", legacy)
+				fmt.Printf("   Uninstall it to avoid two writers colliding:  launchctl bootout gui/%d/%s\n", os.Getuid(), legacy)
+				problems++
+			}
+		}
+		// 5. Scheduler unit load state + binary freshness.
+		if launchdLoaded(schedulerPlistLabel) {
+			fmt.Printf("✓ Scheduler LaunchAgent %s is loaded.\n", schedulerPlistLabel)
+			checkSchedulerBinaryFreshness(&warnings)
+		} else {
+			fmt.Printf("⚠  Scheduler LaunchAgent %s is NOT loaded — run `make scheduler-install`.\n", schedulerPlistLabel)
+			warnings++
+		}
+	} else {
+		fmt.Println("(launchd checks skipped — not macOS.)")
+	}
+
+	// 6. Holiday calendar seeded — gating degrades to weekend-only if empty.
+	fmt.Println()
+	clk := broker.TradingClock()
+	switch {
+	case len(clk.Holidays) > 0:
+		fmt.Printf("✓ Holiday calendar loaded (%d holidays, %s).\n", len(clk.Holidays), clk.Loc)
+	case !dbOpen:
+		fmt.Printf("⚠  Holiday calendar unknown for %s — the cache DB isn't open (see above).\n", clk.Loc)
+		warnings++
+	default:
+		fmt.Printf("⚠  Holiday calendar for %s is EMPTY — trading-day gating is weekend-only.\n", clk.Loc)
+		fmt.Println("   Seed it (see docs/18-runbook.md) so cadences skip exchange holidays.")
+		warnings++
+	}
+
+	// Summary.
+	fmt.Println()
+	switch {
+	case problems > 0:
+		fmt.Printf("✗ %d problem(s), %d warning(s). Resolve problems before relying on the scheduler.\n", problems, warnings)
+	case warnings > 0:
+		fmt.Printf("⚠  %d warning(s), no blocking problems.\n", warnings)
+	default:
+		fmt.Println("✓ All checks passed.")
+	}
+	return nil
+}
+
+// launchdLoaded reports whether a launchd label is currently loaded for this GUI
+// session. `launchctl list <label>` exits 0 when loaded, non-zero otherwise.
+func launchdLoaded(label string) bool {
+	return exec.Command("launchctl", "list", label).Run() == nil
+}
+
+// checkSchedulerBinaryFreshness compares the binary the installed plist points at
+// against the current dist/mycase, warning if they diverge (the "launchd running a
+// stale binary" failure). Best-effort: parsing failures are silently skipped.
+func checkSchedulerBinaryFreshness(warnings *int) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return
+	}
+	plistFile := filepath.Join(home, "Library", "LaunchAgents", schedulerPlistPath)
+	data, err := os.ReadFile(plistFile)
+	if err != nil {
+		return
+	}
+	// The plist's first <string> under ProgramArguments is the binary path.
+	installedBin := firstProgramArgument(string(data))
+	if installedBin == "" {
+		return
+	}
+	wd, err := os.Getwd()
+	if err != nil {
+		return
+	}
+	current := filepath.Join(wd, "dist", "mycase")
+	if resolved, err := filepath.EvalSymlinks(installedBin); err == nil {
+		installedBin = resolved
+	}
+	if curResolved, err := filepath.EvalSymlinks(current); err == nil {
+		current = curResolved
+	}
+	if installedBin != current {
+		fmt.Printf("⚠  Installed plist points at %s, but this tree builds %s.\n", installedBin, current)
+		fmt.Println("   If you rebuilt elsewhere, re-run `make scheduler-install`. (`make build` auto-reloads.)")
+		*warnings++
+	}
+}
+
+// firstProgramArgument extracts the first <string>…</string> that follows the
+// ProgramArguments <array> in the plist — the binary path launchd invokes.
+func firstProgramArgument(plist string) string {
+	i := strings.Index(plist, "ProgramArguments")
+	if i < 0 {
+		return ""
+	}
+	rest := plist[i:]
+	open := strings.Index(rest, "<string>")
+	if open < 0 {
+		return ""
+	}
+	rest = rest[open+len("<string>"):]
+	end := strings.Index(rest, "</string>")
+	if end < 0 {
+		return ""
+	}
+	return strings.TrimSpace(rest[:end])
 }
 
 const (

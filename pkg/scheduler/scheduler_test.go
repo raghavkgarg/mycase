@@ -32,7 +32,7 @@ func (f *fakeRunner) RunRebalance(context.Context) (StageResult, error) {
 
 func newTestScheduler(cfg Config, r Runner) *Scheduler {
 	// Bypass LoadState (which touches the data dir) with a clean in-memory state.
-	return &Scheduler{cfg: cfg, runner: r, state: State{LastRun: map[string]string{}}}
+	return &Scheduler{cfg: cfg, runner: r, state: emptyState()}
 }
 
 func baseConfig() Config {
@@ -177,6 +177,7 @@ func TestRunOnce_NoDoubleEOD(t *testing.T) {
 	if err != nil {
 		t.Skipf("tz unavailable: %v", err)
 	}
+	isolateState(t)
 	// Freeze "now" is not injectable, but catch-up uses SettlementDate(now) and the
 	// tick uses the same; on any trading day the two agree, exercising the guard.
 	cfg := baseConfig()
@@ -198,6 +199,7 @@ func TestRunOnce_NoDoubleEOD(t *testing.T) {
 // A second RunOnce in the same process must not re-run a cadence already recorded
 // for today (state guards persist within the Scheduler across calls).
 func TestRunOnce_Idempotent_SamePass(t *testing.T) {
+	isolateState(t)
 	cfg := baseConfig()
 	r := &countRunner{}
 	s := newTestScheduler(cfg, r)
@@ -315,6 +317,7 @@ func TestRunOnce_WritesReport(t *testing.T) {
 		t.Skipf("tz unavailable: %v", err)
 	}
 	_ = et
+	isolateState(t)
 	dir := t.TempDir()
 	path := filepath.Join(dir, "scheduler-runs.log")
 

@@ -77,7 +77,7 @@ func RunCheck(ctx context.Context, b broker.Broker, cfg config.AlertConfig, port
 				result.DriftIndex, cfg.DriftThreshold, portfolioFile, mktCfg.Currency, result.TotalValue),
 			Level: "warn",
 		}
-		for _, a := range buildAlerters(cfg) {
+		for _, a := range BuildAlerters(cfg) {
 			if err := a.Send(msg); err != nil {
 				slog.WarnContext(ctx, "daemon.alert_failed",
 					"portfolio", portfolioFile, "err", err)
@@ -155,7 +155,11 @@ func writePID() error {
 	return os.WriteFile(PIDFile, fmt.Appendf(nil, "%d\n", os.Getpid()), 0644)
 }
 
-func buildAlerters(cfg config.AlertConfig) []alert.Alerter {
+// BuildAlerters constructs the configured alert channels from an AlertConfig,
+// honoring the MYCASE_TELEGRAM_TOKEN / MYCASE_DISCORD_WEBHOOK env overrides. It
+// is exported so other orchestrators (the scheduler's failure/re-auth alerts)
+// dispatch through the same channel construction as the drift check.
+func BuildAlerters(cfg config.AlertConfig) []alert.Alerter {
 	var result []alert.Alerter
 	for _, ch := range cfg.Channels {
 		switch ch {

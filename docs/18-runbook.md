@@ -758,6 +758,13 @@ fabricated one. Since the strategy rebalances quarterly, a one/two-day gap in da
 snapshots does not affect decisions. `scheduler status` reports how many trading days the
 EOD is behind so you know to run once.
 
+> `make build` auto-reloads the installed scheduler LaunchAgent (bootout + bootstrap) so
+> launchd always runs the freshly built binary — the guard against a stale/newer binary
+> than the one launchd registered. It also refreshes the `/usr/local/bin/mycase` symlink if
+> it already exists. Both steps are passive: a plain build never creates the symlink or the
+> agent from scratch (no unexpected sudo) — use `make install` / `make scheduler-install`
+> for that.
+
 ### Install / status / uninstall
 
 ```bash
@@ -774,6 +781,53 @@ mycase scheduler uninstall
 `scheduler status` prints the last completed day per cadence and, if the EOD is behind the
 latest settled trading day, a warning naming how many trading days behind plus the recovery
 command (`mycase scheduler run-now`).
+
+### Preflight & resilience
+
+**`scheduler doctor`** is a read-only preflight — it fetches nothing, writes nothing, and
+never touches the live broker. Run it when a scheduled pass looks wrong, after switching
+market paths, or before relying on a fresh install:
+
+```bash
+mycase scheduler doctor
+```
+
+It reports:
+
+- **Resolved paths** — home, config dir, data dir, cache DB. This is the fast answer to
+  "is this binary looking at the project's `data/`, or a stray `dist/data/`?" (the
+  home-resolution gotcha: run via `make run` or the installed `/usr/local/bin/mycase`
+  symlink, not a bare `./dist/mycase` from the wrong CWD).
+- **Cache DB** — opens cleanly, or a conflicting-writer lock is held by another process.
+- **Run-lock** — held (a run is in progress or stuck), stale (dead PID, self-heals next
+  run), or absent.
+- **Legacy launchd units** — flags `com.mycase.daemon` / `com.mycase.autopilot` if still
+  loaded; those duplicate the scheduler's cadences and risk two writers colliding. The fix
+  (`launchctl bootout …`) is printed inline.
+- **Scheduler unit** — whether the LaunchAgent is loaded, and whether the binary it points
+  at matches this tree's `dist/mycase` (catches launchd running a stale binary).
+- **Holiday calendar** — whether it is seeded; an empty calendar silently degrades
+  trading-day gating to weekend-only.
+
+**Single-instance lock.** `run-now` takes a PID lock (`data/scheduler.lock`) for the whole
+pass. A stray manual run overlapping the scheduled fire **refuses cleanly** ("another
+scheduler run is in progress (pid N)") instead of starting work and colliding on DuckDB's
+single-writer lock. A lock left by a killed run (battery, forced sleep) records a dead PID
+and **self-heals** — the next run detects the dead holder, reclaims it, and proceeds.
+`--dry-run` never locks (a preview shouldn't be blocked).
+
+**Run deadline.** Each `run-now` pass is bounded by `scheduler.max_run_min` (default 20).
+If it elapses, the run's context is cancelled — the cancellation propagates through the
+broker rate-limiter and every outbound HTTP call, so a hung socket or dead broker unwinds
+the pass and **releases the DB lock** rather than sitting on it indefinitely.
+
+**Failure & re-auth alerts.** A cadence failure is logged and swallowed (one bad stage never
+blocks the others), but persistent failure is surfaced, not silent. After
+`scheduler.fail_alert_after` consecutive failures of a cadence (default 3) an alert is
+dispatched through the configured channels (pipeline YAML `alerts.channels`), once per
+failure streak, reset on the next success. An **auth failure** (Schwab refresh token expired
+or revoked) alerts on the *first* occurrence with an actionable message — it never
+self-heals, so the fix is to re-run `mycase auth --broker schwab` on the host.
 
 ### Run history — the maintenance log
 
