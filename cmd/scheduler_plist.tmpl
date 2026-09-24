@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Template for the mycase scheduler LaunchAgent (embedded into the binary).
+
+  `mycase scheduler install` fills the placeholders below (binary path, working
+  directory, and the market-close fire time derived from the active market's
+  marketcal.Clock, converted to the machine's LOCAL timezone) and writes the
+  result to ~/Library/LaunchAgents/com.mycase.scheduler.plist, then loads it with
+  `launchctl bootstrap gui/$UID`.
+
+  Model: a one-shot. launchd owns *when* (StartCalendarInterval, which also fires
+  a missed job on wake if the machine slept through the scheduled time) and runs
+  `mycase scheduler run-now` once per day; that process runs the sequenced
+  EOD -> drift -> rebalance pass and exits (live broker + real data by default).
+  This replaces the earlier keep-alive `scheduler daemon` loop. The market path (US vs India) is selected by
+  config/defaults.json, so the same install works for either — only the fire time
+  (16:15 ET for NYSE vs 21:15 IST for NSE) and the pipeline differ, both derived
+  at install time. A committed reference copy lives at
+  scripts/com.mycase.scheduler.plist.tmpl.
+-->
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>com.mycase.scheduler</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>{{.BinaryPath}}</string>
+		<string>scheduler</string>
+		<string>run-now</string>
+	</array>
+	<key>WorkingDirectory</key>
+	<string>{{.WorkDir}}</string>
+	<key>StartCalendarInterval</key>
+	<dict>
+		<key>Hour</key>
+		<integer>{{.Hour}}</integer>
+		<key>Minute</key>
+		<integer>{{.Minute}}</integer>
+	</dict>
+	<key>RunAtLoad</key>
+	<false/>
+	<key>StandardOutPath</key>
+	<string>{{.WorkDir}}/data/scheduler.log</string>
+	<key>StandardErrorPath</key>
+	<string>{{.WorkDir}}/data/scheduler.log</string>
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>PATH</key>
+		<string>/usr/local/bin:/usr/bin:/bin</string>
+	</dict>
+</dict>
+</plist>

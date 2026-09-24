@@ -79,8 +79,8 @@ func IsUSBroker(brokerName string) bool {
 	return brokerName == "schwab"
 }
 
-// marketExchangeName maps a MarketConfig.Market to the exchange key used in
-// config/holidays.json and the marketcal clock selection.
+// marketExchangeName maps a MarketConfig.Market to the exchange key used in the
+// `holidays` table and the marketcal clock selection.
 func marketExchangeName(market string) string {
 	if strings.EqualFold(market, "us") {
 		return "NYSE"
@@ -99,20 +99,34 @@ func marketExchangeName(market string) string {
 // broker (L1) is the natural home: it already owns MarketConfig + config access,
 // and both the daemon (L4) and autopilot (L5) import it, so the holiday-clock
 // assembly lives in one place rather than being duplicated per consumer.
+// TradingClock returns the holiday-aware settlement clock for the active market
+// (from config/defaults.json). It selects the NYSE clock for the US market and
+// NSE otherwise, then attaches exchange holidays from the `holidays` table in the
+// DuckDB cache (data/mycase.db) via the HolidayProvider. This is the single
+// authority every scheduler/daemon path should consult for "is the market open
+// today?" (clock.IsTradingDay) and EOD settlement timing.
+//
+// broker (L1) is the natural home: it already owns MarketConfig + config access
+// and can import cache (L0) for the holiday table, and both the daemon (L4) and
+// autopilot (L5) import it, so the holiday-clock assembly lives in one place
+// rather than being duplicated per consumer.
 func TradingClock() marketcal.Clock {
 	return TradingClockForMarket(LoadMarketConfig().Market)
 }
 
 // TradingClockForMarket is TradingClock for an explicit market name ("us" /
-// "india"), so callers that already know the market avoid re-reading defaults.
+// "india"), so callers that already know the market avoid re-reading defaults. It
+// selects the base NYSE/NSE clock and attaches the exchange holidays yielded by
+// the HolidayProvider (the DuckDB `holidays` table). An unavailable/empty source
+// degrades to weekend-only (empty holiday set), never a broken clock.
 func TradingClockForMarket(market string) marketcal.Clock {
 	exchange := marketExchangeName(market)
 	base := marketcal.NSE
 	if exchange == "NYSE" {
 		base = marketcal.NYSE
 	}
-	holidays := config.LoadHolidays(config.Path("holidays.json"))
-	return base.WithHolidays(holidays.For(exchange)...)
+	provider := selectHolidayProvider()
+	return base.WithHolidays(provider.Holidays(exchange)...)
 }
 
 // BrokerName returns the configured broker name from defaults.

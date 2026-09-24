@@ -234,34 +234,34 @@ func runPerfWithParams(ctx context.Context, filePath string, capital float64, ta
 	return nil
 }
 
-// perfMarketConfig derives the market (and therefore currency symbol + timezone)
-// for a portfolio from its tickers. US tickers carry a "US:" exchange prefix
-// (e.g. "US:CF"); India tickers use "NSE:"/"BSE:" or none. If every prefixed
-// ticker is US we treat the portfolio as US; otherwise we fall back to the
-// configured default market (config/defaults.json). This keeps the Rs.→$ fix
-// scoped to the performance flow without a global config change.
-func perfMarketConfig(holdings []backtest.Holding) broker.MarketConfig {
-	sawPrefix := false
-	allUS := true
-	for _, h := range holdings {
-		ex := broker.ExchangeFromTicker(h.Ticker, "")
-		if ex == "" {
-			continue
-		}
-		sawPrefix = true
-		if strings.ToUpper(ex) != "US" {
-			allUS = false
-		}
-	}
-	if sawPrefix && allUS {
-		return broker.MarketConfigForName("us")
-	}
-	if sawPrefix && !allUS {
-		return broker.MarketConfigForName("india")
-	}
-	// No prefixes at all — defer to the configured default market.
-	return broker.LoadMarketConfig()
-}
+// TODO(cleanup): perfMarketConfig is unused (flagged by staticcheck U1000). It
+// came in with the US-currency merge but was never wired up — the performance
+// flow currently derives the market inline via broker.LoadMarketConfig().Market
+// + stockpicker.IsUSIndex (see ~L123). Commented out to keep the lint gate green;
+// either wire it in (replacing the inline logic) or delete it.
+//
+// func perfMarketConfig(holdings []backtest.Holding) broker.MarketConfig {
+// 	sawPrefix := false
+// 	allUS := true
+// 	for _, h := range holdings {
+// 		ex := broker.ExchangeFromTicker(h.Ticker, "")
+// 		if ex == "" {
+// 			continue
+// 		}
+// 		sawPrefix = true
+// 		if strings.ToUpper(ex) != "US" {
+// 			allUS = false
+// 		}
+// 	}
+// 	if sawPrefix && allUS {
+// 		return broker.MarketConfigForName("us")
+// 	}
+// 	if sawPrefix && !allUS {
+// 		return broker.MarketConfigForName("india")
+// 	}
+// 	// No prefixes at all — defer to the configured default market.
+// 	return broker.LoadMarketConfig()
+// }
 
 func parsePerfDate(dateStr string, loc *time.Location) (time.Time, error) {
 	if dateStr == "" {

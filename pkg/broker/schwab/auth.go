@@ -27,12 +27,27 @@ const (
 	callbackPath = "/callback"
 )
 
+// tokenHTTPClient bounds the OAuth token exchange/refresh calls. These previously
+// used http.DefaultClient (Timeout: 0 = infinite); if a caller passed a
+// context.Background() (the auto-refresh-on-401 path can), a hung token endpoint
+// would stall forever — and in the scheduler that means sitting on the DuckDB
+// writer lock. An explicit client timeout bounds the call regardless of the
+// context the caller supplies.
+var tokenHTTPClient = &http.Client{Timeout: 15 * time.Second}
+
 // ErrCodeExpired signals that Schwab rejected the authorization code as
 // invalid, already used, or expired (400 invalid_grant / unsupported_token_type).
 // This is recoverable by re-running the browser flow to obtain a fresh code —
 // the most common cause is a slow click-through of the local certificate
 // warning, since codes expire in ~30 seconds. RunAuthFlow retries once on this.
 var ErrCodeExpired = errors.New("schwab authorization code invalid, used, or expired")
+
+// ErrReauthRequired signals that the refresh token itself is no longer valid
+// (expired after 7 days, or revoked): the token endpoint rejected the refresh
+// with 400/401. Unlike a transient network error this NEVER self-heals — it
+// requires the operator to re-run `mycase auth`. Callers (the scheduler) match
+// this with errors.Is to alert immediately rather than retrying silently.
+var ErrReauthRequired = errors.New("schwab refresh token expired or revoked; re-run `mycase auth`")
 
 // AppConfig holds Schwab OAuth2 application credentials.
 type AppConfig struct {
@@ -182,7 +197,7 @@ func RefreshToken(ctx context.Context, clientID, clientSecret, refreshToken stri
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Authorization", "Basic "+basicAuth(clientID, clientSecret))
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := tokenHTTPClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -191,6 +206,13 @@ func RefreshToken(ctx context.Context, clientID, clientSecret, refreshToken stri
 	if resp.StatusCode != http.StatusOK {
 		var errBody map[string]any
 		json.NewDecoder(resp.Body).Decode(&errBody)
+		// 400/401 on a refresh means the refresh token is dead (expired/revoked):
+		// wrap the sentinel so the scheduler can alert for manual re-auth instead
+		// of retrying a token that will never work again. Other codes (5xx, 429)
+		// are transient and left unwrapped so they follow the normal retry path.
+		if resp.StatusCode == http.StatusBadRequest || resp.StatusCode == http.StatusUnauthorized {
+			return nil, fmt.Errorf("%w (token endpoint %d: %v)", ErrReauthRequired, resp.StatusCode, errBody)
+		}
 		return nil, fmt.Errorf("token refresh returned %d: %v", resp.StatusCode, errBody)
 	}
 
@@ -377,7 +399,7 @@ func exchangeCode(ctx context.Context, app *AppConfig, code string) (*Token, err
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Authorization", "Basic "+basicAuth(app.ClientID, app.ClientSecret))
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := tokenHTTPClient.Do(req)
 	if err != nil {
 		return nil, err
 	}

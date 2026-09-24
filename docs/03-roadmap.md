@@ -214,6 +214,15 @@ calendar in Go** → `config/holidays.json` + `marketcal` holidays.
    inside one process. The drift daemon's existing self-timed-loop model (L4
    `daemon.RunLoop`) is the proven pattern to generalize.
 
+   > **Superseded in the as-built (see Progress below).** The shipped design keeps
+   > the single-process *coordination* (one `scheduler run-now` runs the ordered pass)
+   > but drops the resident keep-alive loop in favor of an OS **one-shot** timer
+   > (`StartCalendarInterval` / `OnCalendar`) firing `mycase scheduler run-now` daily.
+   > The "impossible across three one-shots" rationale held only for *three separate*
+   > units; **one** OS timer running the single sequenced pass keeps coordination while
+   > letting the OS own *when* (and sleep/wake). `scheduler daemon` (the loop) is retained
+   > for a future intraday-reactive case.
+
 2. **Layering: new `pkg/scheduler` at L6 (beside `server`).** It must invoke
    `autopilot.Run` (L5) and the EOD update, so it sits above autopilot. `cmd/scheduler.go`
    (composition root) wires it. This respects strictly-downward imports; a lower-layer
@@ -276,7 +285,7 @@ The open questions have been decided:
 - `pkg/eod/` (or equivalent) — EOD-update logic lifted out of `cmd/db.go`.
 - `marketcal` holiday calendar (NSE + NYSE) + committed holiday data; unify the three
   trading-day notions onto it.
-- `mycase scheduler {run,status,install,uninstall}` CLI + one OS keep-alive unit,
+- `mycase scheduler {run-now,daemon,status,install,uninstall}` CLI + one OS timer,
   replacing the separate `daemon install` / `autopilot install` units.
 - `scheduler:` config block; first real consumer of `auto_execute` / `drift_trigger_pct`.
 
@@ -285,22 +294,120 @@ EOD extraction (#3) unblocks scheduler dispatch of cadence (a). Independent of P
 
 **Progress**: the holiday calendar (#4) is **shipped and unified**. `marketcal.Clock` gained
 an injectable holiday set (`WithHolidays`) and a first-class `IsTradingDay`, with the
-weekend rollback loops now holiday-aware; holiday data lives in a hand-maintained
-`config/holidays.json` (NYSE + NSE), loaded by `config.LoadHolidays` (which returns raw
-date lists so the `config` leaf stays zero-import). `broker.TradingClock()` (L1, the one
-place that legally composes `config` + `marketcal`) assembles the active market's
+weekend rollback loops now holiday-aware; holiday data lives in the `holidays` table of
+`mycase.db` (NYSE + NSE), read via the `DBHolidayProvider` (see the DB-only follow-up
+below — the original `config/holidays.json` + `config.LoadHolidays` seam was retired).
+`broker.TradingClock()` (L1, the one place that legally composes the holiday source +
+`marketcal`) assembles the active market's
 holiday-aware clock, and **both** former trading-day notions now consult it: the drift
 daemon skips weekends/holidays instead of firing every calendar day, and autopilot's
 `IsTradingDay` uses the calendar as its authority (keeping the live benchmark probe only
 as a secondary cross-check for an unlisted holiday). The EOD update is **extracted**:
 `pkg/eod` (L5) holds the daily screening + self-heal + theme-sync logic, lifted out of
 `cmd/db.go` (now a thin wrapper), clock- and fetcher-injected; progress is slog. The
-**scheduler is shipped**: `pkg/scheduler` (L6) runs one in-process tick loop dispatching
-EOD → drift → rebalance with the coordination and catch-up described below, gated on the
-holiday-aware clock; `mycase scheduler {run,status,install,uninstall}` installs a single
-launchd/systemd keep-alive unit that replaces the separate daemon + autopilot units;
-`config/defaults.json` gained a `scheduler` block; the previously-dead `auto_execute` is
-now consumed (gated) and `scripts/daily_sync.sh` is retired.
+**scheduler is shipped**: `pkg/scheduler` (L6) runs the ordered EOD → drift → rebalance
+pass with the coordination and catch-up described below, gated on the holiday-aware clock.
+The installed model is a **one-shot** — `mycase scheduler install` writes a launchd
+`StartCalendarInterval` LaunchAgent (systemd `oneshot` + `OnCalendar` timer on Linux) that
+fires `mycase scheduler run-now` once per trading day at the active market's close+offset (in
+local time); the process runs the sequenced pass and exits. This replaced the original
+keep-alive tick-loop (letting the OS own *when*, and sleep/wake handling, while Go keeps the
+ordering); `scheduler daemon` remains available for a future intraday-reactive case.
+`mycase scheduler {run-now,daemon,status,install,uninstall}` installs a single unit that replaces
+the separate daemon + autopilot units. The market path (US vs India) is a single-file switch
+in `config/defaults.json` (committed `defaults.us.json` / `defaults.india.json` presets +
+`make use-us` / `make use-india`); `config/defaults.json` gained a `scheduler` block; the
+previously-dead `auto_execute` is now consumed (gated) and `scripts/daily_sync.sh` is retired.
+
+**Follow-up — `HolidayProvider`, DB-only (shipped).** Holiday dates are attached to the
+`marketcal.Clock` at the `broker.TradingClock()` composition point via a small provider
+abstraction:
+
+```go
+type HolidayProvider interface {
+    Holidays(exchange string) []string // ["2006-01-02", ...]
+}
+```
+
+There is exactly **one** implementation — `DBHolidayProvider` (in `pkg/broker`, L1, the
+consumer that owns the clock assembly) — which reads `SELECT date FROM holidays WHERE
+exchange = ?` from the `holidays` table in `mycase.db`, owning that table via `cache.Conn()`
+(the domains-own-their-tables pattern like `attribution.Store`/`tax.Store`). The **DuckDB
+`holidays` table is the single source of truth.** `selectHolidayProvider` always returns the
+DB provider; when the cache DB is not open, or the table is empty, it yields no holidays and
+the clock degrades to weekend-only — a clock is always assembled, so order-placing paths are
+never blocked by a missing calendar. `marketcal` stays a zero-import leaf (holidays arrive as
+a value via `WithHolidays`).
+
+The earlier file source was removed outright rather than kept as dead optionality: there is
+no `config/holidays.json`, no `config.LoadHolidays`, no `FileHolidayProvider`, no
+`holiday_source` switch, and no `--holiday-source` flag. The rationale: the JSON was *our*
+intermediate format, not authoritative — the authoritative calendar is whatever each
+exchange publishes (CSV, a circular, an HTML table), in a shape that varies by source and
+year. Keeping a file provider + `file|db` switch would enshrine that intermediate format and
+leave two coexisting sources to reconcile. Collapsing to DB-only makes provenance
+operator-owned and unambiguous.
+
+**Seeding is operational, not a product feature.** The `holidays` table is populated and
+refreshed by an operator from each exchange's official calendar — landed via direct SQL (the
+`duckdb` CLI) or the operator's own tooling — documented in the runbook (Ch. 18). The product
+ships **no** importer: an `UpsertHolidays` write primitive exists on `DBHolidayProvider` for
+operator tooling/tests, but nothing hard-codes a `<some-format> → DB` path. The initial rows
+(NYSE + NSE, 2026–2027) were a one-time load from the retired `holidays.json` via the CLI.
+Consequence to note: a fresh checkout/machine has an empty `holidays` table until seeded, so
+first-run trading-day logic is weekend-only until the operator loads the calendar — the
+runbook makes this the explicit first-run step.
+
+**Holiday-awareness on the pick path (fixed).** The strategy pipeline's settlement
+decisions are now holiday-aware end to end, resolved the *sound* way — the holiday-aware
+`marketcal.Clock` flows in as an explicit value, never a global. `stockpicker.Options`
+gained a `Clock` field (with a `clock()` accessor defaulting a zero value to the bare
+`marketcal.NSE`, preserving prior behavior); `stockpicker`'s as-of / based-on decisions now
+read that one clock instead of calling the package-level bare `marketdata.*` helpers, so its
+settlement authority is a single injected value (it still cannot import `broker` — the clock
+arrives as data). The composition-root callers inject the active market's aware clock:
+`cmd/pick` and `cmd/pit` build it from `broker.TradingClock()` (the weekend-only IST
+normalization in `pick` is replaced by the clock's holiday-aware `IsTradingDay`/
+`SettlementDate`), `cmd`'s `runPickWithOpts` defaults `Options.Clock` from
+`broker.TradingClock()` for the pipeline/pit callers, and `pkg/eod` injects `cfg.clock()`.
+This collapsed the previous three ways stockpicker could pick an as-of date into one.
+
+What deliberately stays **bare**: the package-level `marketdata` NSE helpers still exist
+(`EODSettlementDate`, `NextEODAvailableDate`, `IsFreshEOD`, `IsNSEHoliday` — bound to
+`marketcal.NSE`) for the low layers that cannot reach the holiday source. Their only
+remaining live caller is `pkg/yfinance/prices.go` (legacy file `.cache` day-bucketing +
+freshness), which is at L1 and cannot import `broker`; cache **freshness** is
+holiday-insensitive (an entry is fresh until the next settlement cutoff regardless of an
+intervening holiday), so the bare clock is correct there. Making that legacy cache
+market-aware (NYSE vs NSE day bucketing via `marketcal.ClockForTicker`) is a separate,
+optional market-correctness cleanup — not a holiday concern. The duplicate, unwired
+`config/nse_holidays.json` was removed in favor of the single `config/holidays.json`.
+
+**Follow-up — scheduler run reporting (shipped).** The scheduler now appends a
+human-readable maintenance-log block per pass to `data/logs/scheduler-runs.log` (distinct
+from the machine-readable JSONL slog file — the two-channel rule holds). Each `scheduler
+run-now` / tick renders one dated block modeled on the operator maintenance-log convention:
+
+```
+──── Wed 2026-09-23 20:15 ────
+  [eod]     3 method(s) screened; 2/500 integrity flags; 4 theme(s) synced in 5m12s
+  [drift]   drift index 0.0830; portfolio 512340.00 across 20 holdings in 1.4s
+  ⚠ drift: alert dispatch failed — telegram 429
+  ✓ SUCCESS in 5m14s
+```
+
+Mechanically: the `Runner` interface widened from returning bare `error` to `(StageResult,
+error)` so each cadence contributes detail lines + non-fatal warnings; `runCadence` times
+every stage and records the outcome into a `RunReport` accumulator (`pkg/scheduler/
+report.go`); `RunOnce`/`Run` open one report per pass and flush a single block at the end
+with a `✓ SUCCESS in <dur>` or `✗ FAILED — <cadence>: <err> (<dur>)` summary. To feed real
+counts, `eod.Run` now returns an `*eod.Result` (methods screened, integrity failed/total,
+themes synced, warnings) instead of only `error`, and the `defaultRunner` also surfaces the
+`daemon.DriftResult` (index, portfolio value, holdings) and the autopilot `RunResult.Proposal`
+(entries/exits/reweights/orders + tax warnings + report path) that were previously discarded
+at the scheduler boundary. Reporting is an explicit opt-in (`scheduler.enable_report`, path
+override `scheduler.report_path`), gated so an empty catch-up tick writes nothing, and a
+report-write failure is logged-and-swallowed — it never fails the run.
 
 ---
 

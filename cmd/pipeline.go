@@ -581,11 +581,8 @@ func runPipeline(ctx context.Context, c *cli.Command) error {
 			if cfg.Broker == "schwab" || stockpicker.IsUSIndex(goldenCSV) || stockpicker.IsUSIndex(cfg.GoldenCopyPath) {
 				marketOverride = "us"
 			}
-			for _, idx := range cfg.Indices {
-				if stockpicker.IsUSIndex(idx) {
-					marketOverride = "us"
-					break
-				}
+			if slices.ContainsFunc(cfg.Indices, stockpicker.IsUSIndex) {
+				marketOverride = "us"
 			}
 			if err := runPerfWithParams(ctx, goldenCSV, capFloat, dateVal, "09:30", marketOverride); err != nil {
 				return fmt.Errorf("step %d (performance): %w", stepCounter, err)

@@ -1,5 +1,9 @@
 .PHONY: build build-linux-arm64 build-linux-amd64 build-darwin-arm64 build-darwin-amd64
 .PHONY: install install-gopath uninstall run test test-verbose test-race test-integration test-coverage cleanup analyze clean fetch-echarts check-deps deps-graph arch-graph overview-graph help
+.PHONY: use-us use-india scheduler-install scheduler-uninstall scheduler-status reload
+
+SCHED_PLIST  := $(HOME)/Library/LaunchAgents/com.mycase.scheduler.plist
+SCHED_LABEL  := com.mycase.scheduler
 
 # Pinned advisory-analysis tool versions (run via `go run` — no global install needed).
 # Bump deliberately; keep reproducible per the project's determinism convention.
@@ -16,12 +20,19 @@ else
   ARM64_CXX ?= aarch64-linux-gnu-g++
 endif
 
-VERSION    ?= $(shell git describe --tags 2>/dev/null || echo "0.0.0-dev")
+# Version stamping (project convention — see scripts/version.sh + docs).
+# VERSION precedence: explicit `make VERSION=... ` > scripts/version.sh, which is
+#   1. git describe --tags --dirty  → v1.2.0 / v1.2.0-4-gabc1234 / ...-dirty
+#   2. pre-first-tag fallback: 0.0.0-<commit-count>-g<sha>[-dirty] (monotonic)
+#   3. non-git fallback: 0.0.0-unknown
+# Injected into the exported main.{Version,GitCommit,BuildDate} vars.
+# Tag a release:  git tag -a v1.2.0 -m "v1.2.0" && git push --tags
+VERSION    ?= $(shell sh scripts/version.sh 2>/dev/null || echo "0.0.0-unknown")
 GIT_COMMIT := $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 BUILD_DATE := $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
-LDFLAGS    := -X github.com/raghavkgarg/mycase/cmd.Version=$(VERSION) \
-              -X github.com/raghavkgarg/mycase/cmd.GitCommit=$(GIT_COMMIT) \
-              -X github.com/raghavkgarg/mycase/cmd.BuildDate=$(BUILD_DATE)
+LDFLAGS    := -X main.Version=$(VERSION) \
+              -X main.GitCommit=$(GIT_COMMIT) \
+              -X main.BuildDate=$(BUILD_DATE)
 
 # Install location for `make install`. The installed entry is a SYMLINK back to
 # the built dist/mycase in this project tree — mycase resolves its config/ and
@@ -38,6 +49,7 @@ build:
 	@mkdir -p dist
 	@go build -ldflags "$(LDFLAGS)" -o dist/mycase .
 	@echo "Build complete: dist/mycase"
+	@$(MAKE) --no-print-directory reload
 
 # install symlinks $(BINDIR)/mycase -> dist/mycase (this project tree). The
 # symlink is deliberate: mycase follows it back to the project root to find
@@ -205,6 +217,67 @@ overview-graph:
 		echo "Install D2 (https://d2lang.com) to render docs/architecture-overview.d2"; \
 	fi
 
+# --- Market path & scheduler ---
+#
+# The active market path (US vs India) is selected by config/defaults.json — one
+# file that drives the broker, market clock, EOD index/method, and pipeline YAML.
+# `use-us` / `use-india` copy the committed preset over it; re-run scheduler-install
+# afterward so the launchd fire time + pipeline pick up the change.
+
+use-us:
+	@cp config/defaults.us.json config/defaults.json
+	@echo "Active path: US (Schwab / NYSE / sp500 / us_quality_momentum / pipeline_us.yaml)"
+	@echo "Re-run 'make scheduler-install' to update the installed timer."
+
+use-india:
+	@cp config/defaults.india.json config/defaults.json
+	@echo "Active path: India (Zerodha / NSE / niftytotalmarket / multibagger / pipeline.yaml)"
+	@echo "Re-run 'make scheduler-install' to update the installed timer."
+
+# scheduler-install builds, then installs/reloads the one-shot OS timer that fires
+# `mycase scheduler tick` daily at the active market's close+offset (in local time).
+# Idempotent: safe to re-run after switching paths or rebuilding.
+scheduler-install: build
+	@./dist/mycase scheduler install
+
+scheduler-uninstall:
+	@./dist/mycase scheduler uninstall
+
+scheduler-status:
+	@./dist/mycase scheduler status
+
+# reload keeps the installed entry points current after a rebuild — auto-invoked
+# by `build`. It is intentionally passive: it only refreshes things that ALREADY
+# exist, never creating them (so a plain build never writes to /usr/local/bin or
+# installs a launchd agent, and never triggers a sudo prompt).
+#
+#   1. Symlink: if $(INSTALL_LINK) exists AND already points into this tree's
+#      dist/mycase, re-point it (a no-op unless the target moved). A missing link,
+#      or one owned by another checkout, is left untouched — run `make install`
+#      to (re)create it deliberately.
+#   2. launchd agent: if the scheduler plist is currently loaded, bootout+bootstrap
+#      it so launchd re-registers against the freshly built binary. This is the
+#      guard against launchd running a stale/newer binary than it registered (the
+#      failure seen in the sibling tool). If nothing is loaded, do nothing.
+reload:
+	@if [ -L "$(INSTALL_LINK)" ]; then \
+		cur="$$(readlink "$(INSTALL_LINK)")"; \
+		case "$$cur" in \
+			"$(DIST_BIN)") : ;; \
+			"$(abspath dist)"/*) ln -sf "$(DIST_BIN)" "$(INSTALL_LINK)" 2>/dev/null && echo "✓ Refreshed symlink $(INSTALL_LINK)" || true ;; \
+			*) : ;; \
+		esac; \
+	fi
+	@if [ "$$(uname -s)" = "Darwin" ] && launchctl list "$(SCHED_LABEL)" >/dev/null 2>&1; then \
+		domain="gui/$$(id -u)"; \
+		launchctl bootout "$$domain/$(SCHED_LABEL)" 2>/dev/null || true; \
+		if launchctl bootstrap "$$domain" "$(SCHED_PLIST)" 2>/dev/null; then \
+			echo "✓ Reloaded scheduler LaunchAgent against rebuilt binary"; \
+		else \
+			echo "⚠  Scheduler LaunchAgent was loaded but reload failed; re-run 'make scheduler-install'"; \
+		fi; \
+	fi
+
 clean:
 	@rm -f dist/mycase dist/mycase-arm64 dist/mycase-amd64 dist/mycase-darwin-arm64 dist/mycase-darwin-amd64 dist/deps.dot dist/deps.svg dist/deps.d2 dist/arch.svg
 	@echo "Cleaned"
@@ -237,5 +310,11 @@ help:
 	@echo "  deps-graph         - Render pkg/ dependency graph to dist/deps.svg (Graphviz, layer-colored)"
 	@echo "  arch-graph         - Render pkg/ architecture diagram to dist/arch.svg (D2/TALA, transitive-reduced; REDUCE=0 for full)"
 	@echo "  overview-graph     - Re-render docs/architecture-overview.svg (hand-authored high-level view, D2/TALA)"
+	@echo "  use-us             - Switch active path to US (copies config/defaults.us.json -> defaults.json)"
+	@echo "  use-india          - Switch active path to India (copies config/defaults.india.json -> defaults.json)"
+	@echo "  scheduler-install  - Build + install/reload the daily OS timer (mycase scheduler tick)"
+	@echo "  scheduler-uninstall- Remove the installed scheduler timer"
+	@echo "  scheduler-status   - Show last completed EOD / drift / rebalance day"
+	@echo "  reload             - Refresh existing symlink + reload scheduler agent against rebuilt binary (auto-run by build; passive, no sudo)"
 	@echo "  clean              - Remove build artifacts"
 	@echo "  fetch-echarts      - Download ECharts 5.6.0 into pkg/server/static/vendor/"

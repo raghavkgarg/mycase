@@ -2,7 +2,7 @@
   "broker": "zerodha",
   "market": "india",
   "index": "niftytotalmarket",
-  "method": "earlymb,multibagger",
+  "method": "multibagger",
   "top_n": 20,
   "range": "3mo",
   "pipeline_config": "config/pipeline.yaml",

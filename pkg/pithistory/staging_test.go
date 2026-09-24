@@ -70,21 +70,21 @@ func TestCalculateScoreCV(t *testing.T) {
 
 func TestCalculateRiskParityWeights(t *testing.T) {
 	candidates := []StagedCandidate{
-		{Ticker: "NSE:A1", Sector: "Technology", SetupQuality: 3.0, CurrentPrice: 1000, ATR20: 20},  // 2% ATR -> high weight
-		{Ticker: "NSE:A2", Sector: "Technology", SetupQuality: 2.8, CurrentPrice: 500, ATR20: 10},   // 2% ATR
-		{Ticker: "NSE:A3", Sector: "Technology", SetupQuality: 2.5, CurrentPrice: 200, ATR20: 4},    // 2% ATR
-		{Ticker: "NSE:A4", Sector: "Technology", SetupQuality: 2.0, CurrentPrice: 100, ATR20: 2},    // Exceeds 3 stocks per sector -> should be dropped
-		{Ticker: "NSE:B1", Sector: "Healthcare", SetupQuality: 2.7, CurrentPrice: 1500, ATR20: 45},  // 3% ATR
-		{Ticker: "NSE:B2", Sector: "Healthcare", SetupQuality: 2.4, CurrentPrice: 800, ATR20: 24},   // 3% ATR
-		{Ticker: "NSE:C1", Sector: "Financials", SetupQuality: 2.6, CurrentPrice: 400, ATR20: 16},   // 4% ATR
-		{Ticker: "NSE:C2", Sector: "Financials", SetupQuality: 2.2, CurrentPrice: 600, ATR20: 24},   // 4% ATR
-		{Ticker: "NSE:D1", Sector: "Energy", SetupQuality: 2.3, CurrentPrice: 250, ATR20: 12.5},     // 5% ATR
-		{Ticker: "NSE:D2", Sector: "Energy", SetupQuality: 2.1, CurrentPrice: 300, ATR20: 15},       // 5% ATR
-		{Ticker: "NSE:E1", Sector: "Consumer", SetupQuality: 2.2, CurrentPrice: 1200, ATR20: 36},    // 3% ATR
-		{Ticker: "NSE:E2", Sector: "Consumer", SetupQuality: 2.0, CurrentPrice: 900, ATR20: 27},     // 3% ATR
-		{Ticker: "NSE:F1", Sector: "Industrials", SetupQuality: 1.9, CurrentPrice: 750, ATR20: 30},  // 4% ATR
-		{Ticker: "NSE:F2", Sector: "Industrials", SetupQuality: 1.8, CurrentPrice: 450, ATR20: 18},  // 4% ATR
-		{Ticker: "NSE:G1", Sector: "Materials", SetupQuality: 1.7, CurrentPrice: 1100, ATR20: 44},   // 4% ATR
+		{Ticker: "NSE:A1", Sector: "Technology", SetupQuality: 3.0, CurrentPrice: 1000, ATR20: 20}, // 2% ATR -> high weight
+		{Ticker: "NSE:A2", Sector: "Technology", SetupQuality: 2.8, CurrentPrice: 500, ATR20: 10},  // 2% ATR
+		{Ticker: "NSE:A3", Sector: "Technology", SetupQuality: 2.5, CurrentPrice: 200, ATR20: 4},   // 2% ATR
+		{Ticker: "NSE:A4", Sector: "Technology", SetupQuality: 2.0, CurrentPrice: 100, ATR20: 2},   // Exceeds 3 stocks per sector -> should be dropped
+		{Ticker: "NSE:B1", Sector: "Healthcare", SetupQuality: 2.7, CurrentPrice: 1500, ATR20: 45}, // 3% ATR
+		{Ticker: "NSE:B2", Sector: "Healthcare", SetupQuality: 2.4, CurrentPrice: 800, ATR20: 24},  // 3% ATR
+		{Ticker: "NSE:C1", Sector: "Financials", SetupQuality: 2.6, CurrentPrice: 400, ATR20: 16},  // 4% ATR
+		{Ticker: "NSE:C2", Sector: "Financials", SetupQuality: 2.2, CurrentPrice: 600, ATR20: 24},  // 4% ATR
+		{Ticker: "NSE:D1", Sector: "Energy", SetupQuality: 2.3, CurrentPrice: 250, ATR20: 12.5},    // 5% ATR
+		{Ticker: "NSE:D2", Sector: "Energy", SetupQuality: 2.1, CurrentPrice: 300, ATR20: 15},      // 5% ATR
+		{Ticker: "NSE:E1", Sector: "Consumer", SetupQuality: 2.2, CurrentPrice: 1200, ATR20: 36},   // 3% ATR
+		{Ticker: "NSE:E2", Sector: "Consumer", SetupQuality: 2.0, CurrentPrice: 900, ATR20: 27},    // 3% ATR
+		{Ticker: "NSE:F1", Sector: "Industrials", SetupQuality: 1.9, CurrentPrice: 750, ATR20: 30}, // 4% ATR
+		{Ticker: "NSE:F2", Sector: "Industrials", SetupQuality: 1.8, CurrentPrice: 450, ATR20: 18}, // 4% ATR
+		{Ticker: "NSE:G1", Sector: "Materials", SetupQuality: 1.7, CurrentPrice: 1100, ATR20: 44},  // 4% ATR
 	}
 
 	sized := CalculateRiskParityWeights(candidates)

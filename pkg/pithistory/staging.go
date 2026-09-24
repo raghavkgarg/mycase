@@ -143,11 +143,11 @@ func CalculateRiskParityWeights(candidates []StagedCandidate) []StagedCandidate 
 	const maxStockWeight = 0.08
 	const maxSectorWeight = 0.25
 
-	for iter := 0; iter < 50; iter++ {
+	for range 50 {
 		constrained := false
 
 		// Check single stock cap
-		for i := 0; i < n; i++ {
+		for i := range n {
 			if weights[i] > maxStockWeight+1e-7 {
 				weights[i] = maxStockWeight
 				constrained = true

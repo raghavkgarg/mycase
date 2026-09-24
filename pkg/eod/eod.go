@@ -20,8 +20,11 @@
 package eod
 
 import (
+	"bufio"
 	"context"
 	"fmt"
+	"io"
+	"os"
 	"strings"
 	"time"
 
@@ -50,6 +53,13 @@ type Config struct {
 	DBPath    string // DuckDB path; "" → pithistory/themedb defaults (data/mycase.db)
 	TopN      int    // number of selections
 	Force     bool   // recompute even if a snapshot for today already exists
+
+	// QuietStdout redirects the user-facing pick banner/funnel tables that
+	// stockpicker writes to os.Stdout into slog (Debug) instead, keeping stdout
+	// clean. Set by operational callers (the scheduler, whose stdout is the
+	// keep-alive/log channel); left false by the interactive `db update` command
+	// where the investor is meant to see that output.
+	QuietStdout bool
 }
 
 // clock returns the configured clock, defaulting to NSE when unset (preserves the
@@ -84,11 +94,28 @@ func (c Config) DryRunPlan() []string {
 	}
 }
 
+// Result summarizes a completed EOD run for operational reporting (e.g. the
+// scheduler's maintenance log). All counts are best-effort: a stage that is
+// skipped or degrades leaves its counts zero. Warnings collects non-fatal
+// notices (integrity flags, self-heal notices) so a caller can surface them
+// without scraping slog. It is purely informational — Run still communicates
+// hard failure via its error return.
+type Result struct {
+	AsOf            string   // settled trading day the run targeted ("2006-01-02")
+	Methods         []string // scoring methods screened
+	IntegrityTotal  int      // candidates audited for fundamentals integrity
+	IntegrityFailed int      // candidates with unverified/missing fundamentals
+	ThemesSynced    int      // themes whose lifecycle was synced
+	Warnings        []string // non-fatal notices for the operator
+}
+
 // Run executes the unified EOD update: PIT screening + scoring, self-healing
 // snapshot verification, and theme-lifecycle sync. Progress is logged via slog;
 // stdout is left clean for command results. A per-ticker or per-theme failure is
-// logged and skipped, never aborting the whole run (API discipline).
-func Run(ctx context.Context, cfg Config) error {
+// logged and skipped, never aborting the whole run (API discipline). It returns a
+// *Result summarizing the run for operational reporting (nil only alongside a
+// hard error).
+func Run(ctx context.Context, cfg Config) (*Result, error) {
 	clock := cfg.clock()
 	now := time.Now()
 	targetEOD := clock.SettlementDate(now)
@@ -99,34 +126,37 @@ func Run(ctx context.Context, cfg Config) error {
 		"index", cfg.IndexName, "method", cfg.Method, "top_n", cfg.TopN,
 		"as_of", targetDateStr, "next_eod", nextAvailable.Format("2006-01-02 15:04"))
 
+	res := &Result{AsOf: targetDateStr}
+
 	db, err := themedb.Open(cfg.DBPath)
 	if err != nil {
-		return fmt.Errorf("opening mycase.db: %w", err)
+		return nil, fmt.Errorf("opening mycase.db: %w", err)
 	}
 	defer db.Close()
 
-	methods := strings.Split(cfg.Method, ",")
-	for _, mRaw := range methods {
+	methods := strings.SplitSeq(cfg.Method, ",")
+	for mRaw := range methods {
 		meth := strings.TrimSpace(mRaw)
 		if meth == "" {
 			continue
 		}
+		res.Methods = append(res.Methods, meth)
 		mCfg := cfg
 		mCfg.Method = meth
-		if err := runScreening(ctx, mCfg, targetDateStr); err != nil {
-			return err
+		if err := runScreening(ctx, mCfg, targetDateStr, res); err != nil {
+			return nil, err
 		}
 	}
-	syncThemes(ctx, db)
+	syncThemes(ctx, db, res)
 
 	slog.InfoContext(ctx, "eod.completed", "as_of", targetDateStr)
-	return nil
+	return res, nil
 }
 
 // runScreening performs Stage 1 (PIT screening + scoring) and Stage 2 (self-heal
 // + integrity check). It short-circuits when today's snapshot already exists and
 // Force is not set.
-func runScreening(ctx context.Context, cfg Config, targetDateStr string) error {
+func runScreening(ctx context.Context, cfg Config, targetDateStr string, res *Result) error {
 	slog.InfoContext(ctx, "eod.stage_started", "stage", "1/3", "name", "pit_screening",
 		"index", cfg.IndexName, "method", cfg.Method)
 
@@ -144,10 +174,29 @@ func runScreening(ctx context.Context, cfg Config, targetDateStr string) error {
 		RangeStr:           "1y",
 		RebalanceTolerance: 0.10,
 		AsOfDate:           targetDateStr,
+		// Inject the run's holiday-aware settlement clock so stockpicker's
+		// as-of/based-on decisions share this single authority (targetDateStr was
+		// itself derived from it). No global; the clock rides in as a value.
+		Clock: cfg.clock(),
 	}
-	if err := runPick(ctx, cfg.DBPath, opts); err != nil {
+	// stockpicker.RunWithResult prints the pick banner + funnel tables to stdout
+	// (user-facing `pick` output). For an operational caller (QuietStdout — e.g.
+	// the scheduler, whose stdout is the log/keep-alive channel) redirect it into
+	// slog (debug) per the two-channel rule; the interactive `db update` leaves it
+	// on stdout for the investor.
+	run := func() error { return runPick(ctx, cfg.DBPath, opts) }
+	var err error
+	if cfg.QuietStdout {
+		err = withCapturedStdout(ctx, run)
+	} else {
+		err = run()
+	}
+	if err != nil {
 		// Non-fatal: continue to the self-healing pass, which may recover dropouts.
 		slog.WarnContext(ctx, "eod.pit_warning", "err", err, "recovery", "self_heal")
+		if res != nil {
+			res.Warnings = append(res.Warnings, fmt.Sprintf("%s screening warning: %v (self-heal attempted)", cfg.Method, err))
+		}
 	}
 
 	// Stage 2: self-healing retry for transient dropouts.
@@ -163,7 +212,7 @@ func runScreening(ctx context.Context, cfg Config, targetDateStr string) error {
 		slog.WarnContext(ctx, "eod.self_heal_notice", "err", sErr)
 	}
 
-	checkIntegrity(ctx, cfg.DBPath, cfg.IndexName, cfg.Method)
+	checkIntegrity(ctx, cfg.DBPath, cfg.IndexName, cfg.Method, res)
 	return nil
 }
 
@@ -179,8 +228,9 @@ func snapshotExists(ctx context.Context, dbPath, asOf, index, method string) boo
 }
 
 // checkIntegrity audits the freshly committed snapshot and logs a warning when a
-// material fraction of candidates have unverified/missing fundamentals.
-func checkIntegrity(ctx context.Context, dbPath, index, method string) {
+// material fraction of candidates have unverified/missing fundamentals. It also
+// records the audited/failed counts and any warning into res for reporting.
+func checkIntegrity(ctx context.Context, dbPath, index, method string, res *Result) {
 	pitDB, err := pithistory.Open(dbPath)
 	if err != nil {
 		return
@@ -191,12 +241,21 @@ func checkIntegrity(ctx context.Context, dbPath, index, method string) {
 	if iErr != nil || integrity == nil || integrity.TotalCandidates == 0 {
 		return
 	}
+	if res != nil {
+		res.IntegrityTotal += integrity.TotalCandidates
+		res.IntegrityFailed += integrity.FailedCandidates
+	}
 	if integrity.FailurePct >= 5.0 {
 		slog.WarnContext(ctx, "eod.data_integrity_warning",
 			"failed", integrity.FailedCandidates,
 			"total", integrity.TotalCandidates,
 			"failure_pct", integrity.FailurePct,
 			"flagged_sample", strings.Join(integrity.FlaggedTickers, ","))
+		if res != nil {
+			res.Warnings = append(res.Warnings, fmt.Sprintf(
+				"%s data integrity: %d/%d candidates flagged (%.1f%%)",
+				method, integrity.FailedCandidates, integrity.TotalCandidates, integrity.FailurePct))
+		}
 		return
 	}
 	slog.InfoContext(ctx, "eod.data_integrity_ok",
@@ -207,11 +266,14 @@ func checkIntegrity(ctx context.Context, dbPath, index, method string) {
 // syncThemes runs Stage 3: synchronize each configured theme's lifecycle, exits,
 // and return intelligence from the latest proposals. A theme with no local files
 // yet is skipped, not fatal.
-func syncThemes(ctx context.Context, db *themedb.DB) {
+func syncThemes(ctx context.Context, db *themedb.DB, res *Result) {
 	slog.InfoContext(ctx, "eod.stage_started", "stage", "3/3", "name", "theme_sync")
 	themes, err := config.LoadThemes(config.Path("themes.json"))
 	if err != nil {
 		slog.WarnContext(ctx, "eod.themes_load_failed", "err", err)
+		if res != nil {
+			res.Warnings = append(res.Warnings, fmt.Sprintf("themes load failed: %v", err))
+		}
 		return
 	}
 	for _, tc := range themes {
@@ -230,6 +292,9 @@ func syncThemes(ctx context.Context, db *themedb.DB) {
 			// Non-fatal: a theme may have no local proposals yet.
 			slog.DebugContext(ctx, "eod.theme_sync_skipped", "theme", tc.Name, "err", err)
 			continue
+		}
+		if res != nil {
+			res.ThemesSynced++
 		}
 		v, _ := db.GetLatestVersion(ctx, uName)
 		active, _ := db.GetActiveHoldings(ctx, uName)
@@ -264,4 +329,43 @@ func runPick(ctx context.Context, dbPath string, opts *stockpicker.Options) erro
 		slog.InfoContext(ctx, "eod.snapshot_persisted", "as_of", opts.AsOfDate)
 	}
 	return nil
+}
+
+// withCapturedStdout runs fn with os.Stdout redirected into a pipe whose lines are
+// forwarded to slog at Debug level (event "eod.pick_output"), then restores
+// os.Stdout. This keeps the user-facing `pick` banner/tables that
+// stockpicker.RunWithResult writes to stdout out of the scheduler's stdout/log
+// channel while preserving them (at debug) for troubleshooting. On any pipe setup
+// failure it falls back to running fn with stdout untouched, so EOD never fails
+// merely because capture could not be established.
+func withCapturedStdout(ctx context.Context, fn func() error) error {
+	r, w, pipeErr := os.Pipe()
+	if pipeErr != nil {
+		return fn()
+	}
+	orig := os.Stdout
+	os.Stdout = w
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		sc := bufio.NewScanner(r)
+		sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+		for sc.Scan() {
+			line := strings.TrimRight(sc.Text(), " \t")
+			if line == "" {
+				continue
+			}
+			slog.DebugContext(ctx, "eod.pick_output", "line", line)
+		}
+		_, _ = io.Copy(io.Discard, r) // drain any remainder after a scan error
+	}()
+
+	runErr := fn()
+
+	os.Stdout = orig
+	_ = w.Close()
+	<-done
+	_ = r.Close()
+	return runErr
 }

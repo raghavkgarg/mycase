@@ -115,7 +115,8 @@ func RunDBUpdateDirect(ctx context.Context, all bool, indexName, method string, 
 		return nil
 	}
 
-	return eod.Run(ctx, cfg)
+	_, err := eod.Run(ctx, cfg)
+	return err
 }
 
 var dbStatusCmd = &cli.Command{

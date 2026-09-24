@@ -55,7 +55,7 @@ var Layers = map[string]int{
 	"universe":         0,
 
 	// L1 — stores / low-level impls over leaves.
-	"broker":     1, // broker/types, config, costs
+	"broker":     1, // broker/types, config, costs, cache, marketcal — cache for the DB-backed HolidayProvider (owns the holidays table via cache.Conn())
 	"edgar":      1, // cache, marketdata — SEC EDGAR fundamentals client; owns its CIK-map + facts tables via cache.Conn()
 	"kiteclient": 1, // config (Zerodha/Kite low-level client, India-Path)
 	"portfolio":  1, // broker/types (India-Path) — dormant; string utils + Holding alias, consumed by optimizer/zerodha/themereturn

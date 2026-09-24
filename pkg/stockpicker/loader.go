@@ -606,7 +606,7 @@ func FetchBenchmarkPricesResilient(ctx context.Context, fetcher DataFetcher, ben
 	var fetchErr error
 
 	backoffs := []time.Duration{1000 * time.Millisecond, 2000 * time.Millisecond, 4000 * time.Millisecond}
-	for attempt := 0; attempt < 3; attempt++ {
+	for attempt := range 3 {
 		if fetcher != nil {
 			benchmarkPrices, fetchErr = fetcher.FetchHistoricalPrices(ctx, benchSym, rangeStr)
 		} else {

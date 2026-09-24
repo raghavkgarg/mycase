@@ -70,6 +70,43 @@ and set `MYCASE_HOME` (a standalone binary there can't auto-resolve `config/`).
 > auto-resolve `config/`. Either use `make install` (symlink) or set
 > `MYCASE_HOME=/path/to/mycase` in your shell profile.
 
+### Versioning
+
+`mycase --version` reports the build's version, commit, build date, and runtime:
+
+```
+mycase version v1.2.0-4-gabc1234 (commit: abc1234, built: 2026-09-22T18:20:10Z, go1.27.0 darwin/arm64)
+```
+
+The version string is stamped at build time via `-ldflags -X` into the exported
+`main.Version` / `main.GitCommit` / `main.BuildDate` vars (see the Makefile
+`LDFLAGS`). `Version` is derived by `scripts/version.sh` (POSIX sh + git only):
+
+1. **`git describe --tags --dirty`** once annotated tags exist —
+   `v1.2.0` on a tag, `v1.2.0-4-gabc1234` four commits past it, `-dirty` appended
+   when the tree has uncommitted changes.
+2. **Pre-first-tag fallback:** `0.0.0-<commit-count>-g<sha>[-dirty]` — monotonic
+   (the commit count only grows), so dev builds stay distinguishable instead of
+   all reporting a static `0.0.0-dev`.
+3. **Non-git fallback:** `0.0.0-unknown` (tarball/CI build with no `.git`).
+
+`GitCommit` and `BuildDate` are always `git rev-parse --short HEAD` and a UTC
+timestamp. Override the whole string for a release build with
+`make build VERSION=v1.2.0`.
+
+**Cut a release** (tags are `vMAJOR.MINOR.PATCH`, semver, always `v`-prefixed):
+
+```bash
+git tag -a v1.2.0 -m "v1.2.0"
+git push --tags
+make install            # rebuild + reinstall; --version now reads v1.2.0
+```
+
+> [!NOTE]
+> This scheme (exported vars + `scripts/version.sh` + the LDFLAGS block) is the
+> intended standard across the sibling Go projects; `scripts/version.sh` is the
+> copy-paste unit. Roll it out per-repo deliberately.
+
 ### Authenticate with Zerodha (live mode only)
 
 Run the interactive authentication utility to link your Zerodha Kite Connect account:
@@ -677,39 +714,268 @@ mycase --index niftytotalmarket --method earlymb --analysis
 ## 11. Autonomous Scheduler (`scheduler`)
 
 The autonomous **scheduler** replaces manual daily terminal commands and the old
-`daily_sync.sh` shell script. One long-lived process owns all three operating cadences and
-coordinates them; install it once:
+`daily_sync.sh` shell script. A single OS timer fires `mycase scheduler run-now` once per
+trading day at the market close (+ offset); that one process runs all three cadences in
+order and exits. It **replaces the separate `daemon install` and `autopilot install`
+units** — if either is installed, uninstall it to avoid duplicate runs.
+
+### Choosing a market path (US or India)
+
+The active market path is selected by **one file — `config/defaults.json`** — which drives
+the broker, the market clock (NYSE vs NSE), the daily EOD index/method, and which pipeline
+YAML the rebalance/drift cadences use. Two committed presets make switching a one-liner:
 
 ```bash
-mycase scheduler install     # launchd keep-alive service on macOS (systemd unit printed on Linux)
-mycase scheduler run --live  # or run in the foreground (blocks)
-mycase scheduler status      # last completed trading day per cadence
+make use-us       # Schwab / NYSE / sp500 / us_quality_momentum / pipeline_us.yaml
+make use-india    # Zerodha / NSE / niftytotalmarket / multibagger / pipeline.yaml
+```
+
+Each copies `config/defaults.<path>.json` over `config/defaults.json`. After switching,
+re-run the install so the timer's fire time and pipeline pick up the change.
+
+### Run manually / recover a missed day
+
+`run-now` does today's due work once and exits — it's what the OS timer invokes and what
+you run by hand to recover (e.g. the machine was off at the scheduled close):
+
+```bash
+mycase scheduler run-now              # live broker + real data (default)
+mycase scheduler run-now --dry-run    # preview which cadences would run; fetch/write nothing
+mycase scheduler run-now --mock       # non-live broker (drift/rebalance become meaningless)
+```
+
+`run-now` and the OS timer share `data/scheduler_state.json` and guard on it, so running
+manually while the timer is installed is safe — a cadence already completed for the day is
+skipped, not repeated. Use `--dry-run` first if you want to see the plan without side
+effects; it works even without valid live-broker tokens.
+
+**On a missed day:** the next `run-now` (timer-fired on wake, or manual) runs a single fresh
+EOD to get **current** — it does *not* backfill one run per missed day, by design. Prices
+self-heal (the range fetch pulls any missing daily bars), fundamentals only change on filing
+dates (a fresh fetch supersedes the miss), and a historical daily PIT snapshot *cannot* be
+faithfully reconstructed with today's fundamentals — so an honest gap is preferred over a
+fabricated one. Since the strategy rebalances quarterly, a one/two-day gap in daily
+snapshots does not affect decisions. `scheduler status` reports how many trading days the
+EOD is behind so you know to run once.
+
+> `make build` auto-reloads the installed scheduler LaunchAgent (bootout + bootstrap) so
+> launchd always runs the freshly built binary — the guard against a stale/newer binary
+> than the one launchd registered. It also refreshes the `/usr/local/bin/mycase` symlink if
+> it already exists. Both steps are passive: a plain build never creates the symlink or the
+> agent from scratch (no unexpected sudo) — use `make install` / `make scheduler-install`
+> for that.
+
+### Install / status / uninstall
+
+```bash
+make scheduler-install     # build + install/reload the daily OS timer (idempotent)
+make scheduler-status      # last completed EOD / drift / rebalance day + staleness
+make scheduler-uninstall   # remove the timer
+
+# equivalently, on the binary directly:
+mycase scheduler install
+mycase scheduler status
 mycase scheduler uninstall
 ```
 
-It **replaces the separate `daemon install` and `autopilot install` units** — if either is
-installed, uninstall it to avoid duplicate runs.
+`scheduler status` prints the last completed day per cadence and, if the EOD is behind the
+latest settled trading day, a warning naming how many trading days behind plus the recovery
+command (`mycase scheduler run-now`).
 
-### Cadences (coordinated in one process):
-1. **Daily EOD update** — after the market close cutoff + offset, refreshes the DuckDB
-   cache/snapshot (screening + self-heal + theme sync, via `pkg/eod`).
+### Preflight & resilience
+
+**`scheduler doctor`** is a read-only preflight — it fetches nothing, writes nothing, and
+never touches the live broker. Run it when a scheduled pass looks wrong, after switching
+market paths, or before relying on a fresh install:
+
+```bash
+mycase scheduler doctor
+```
+
+It reports:
+
+- **Resolved paths** — home, config dir, data dir, cache DB. This is the fast answer to
+  "is this binary looking at the project's `data/`, or a stray `dist/data/`?" (the
+  home-resolution gotcha: run via `make run` or the installed `/usr/local/bin/mycase`
+  symlink, not a bare `./dist/mycase` from the wrong CWD).
+- **Cache DB** — opens cleanly, or a conflicting-writer lock is held by another process.
+- **Run-lock** — held (a run is in progress or stuck), stale (dead PID, self-heals next
+  run), or absent.
+- **Legacy launchd units** — flags `com.mycase.daemon` / `com.mycase.autopilot` if still
+  loaded; those duplicate the scheduler's cadences and risk two writers colliding. The fix
+  (`launchctl bootout …`) is printed inline.
+- **Scheduler unit** — whether the LaunchAgent is loaded, and whether the binary it points
+  at matches this tree's `dist/mycase` (catches launchd running a stale binary).
+- **Holiday calendar** — whether it is seeded; an empty calendar silently degrades
+  trading-day gating to weekend-only.
+
+**Single-instance lock.** `run-now` takes a PID lock (`data/scheduler.lock`) for the whole
+pass. A stray manual run overlapping the scheduled fire **refuses cleanly** ("another
+scheduler run is in progress (pid N)") instead of starting work and colliding on DuckDB's
+single-writer lock. A lock left by a killed run (battery, forced sleep) records a dead PID
+and **self-heals** — the next run detects the dead holder, reclaims it, and proceeds.
+`--dry-run` never locks (a preview shouldn't be blocked).
+
+**Run deadline.** Each `run-now` pass is bounded by `scheduler.max_run_min` (default 20).
+If it elapses, the run's context is cancelled — the cancellation propagates through the
+broker rate-limiter and every outbound HTTP call, so a hung socket or dead broker unwinds
+the pass and **releases the DB lock** rather than sitting on it indefinitely.
+
+**Failure & re-auth alerts.** A cadence failure is logged and swallowed (one bad stage never
+blocks the others), but persistent failure is surfaced, not silent. After
+`scheduler.fail_alert_after` consecutive failures of a cadence (default 3) an alert is
+dispatched through the configured channels (pipeline YAML `alerts.channels`), once per
+failure streak, reset on the next success. An **auth failure** (Schwab refresh token expired
+or revoked) alerts on the *first* occurrence with an actionable message — it never
+self-heals, so the fix is to re-run `mycase auth --broker schwab` on the host.
+
+### Run history — the maintenance log
+
+Each pass appends a human-readable block to `data/logs/scheduler-runs.log` (opt-in via
+`scheduler.enable_report` in `defaults.json`, on by default; override the path with
+`scheduler.report_path`). This is the fast "did last night's run work?" view — distinct from
+the JSONL slog file (`data/logs/mycase-*.jsonl`), which is the machine-readable diagnostic
+channel. One dated block per pass, one indented line per cadence with counts + duration,
+`⚠` for non-fatal warnings, and a final `✓ SUCCESS in <dur>` or `✗ FAILED — <cadence>:
+<err>`:
+
+```
+──── Wed 2026-09-23 20:15 ────
+  [eod]     3 method(s) screened; 2/500 integrity flags; 4 theme(s) synced in 5m12s
+  [drift]   drift index 0.0830; portfolio 512340.00 across 20 holdings in 1.4s
+  ✓ SUCCESS in 5m14s
+```
+
+A failing cadence is logged and swallowed (one bad stage never blocks the others), but its
+error still appears in the block and flips the summary to `✗ FAILED`. Reporting never fails
+the run: a write error is logged and ignored, and an empty catch-up tick writes nothing.
+
+On macOS, `install` writes `~/Library/LaunchAgents/com.mycase.scheduler.plist` (a
+`StartCalendarInterval` LaunchAgent) and loads it with `launchctl bootstrap gui/$UID`;
+`uninstall` uses `launchctl bootout`. On Linux it prints a systemd `oneshot` service + a
+daily `OnCalendar` timer to install manually. The committed template is
+`scripts/com.mycase.scheduler.plist.tmpl` (the authoritative copy is embedded in the
+binary at `cmd/scheduler_plist.tmpl`).
+
+The install computes the fire time from the **active market's** close cutoff + offset and
+converts it to the **machine's local wall-clock time** (what launchd/systemd expect). For a
+machine in US Eastern time: US path fires 16:15 ET (NYSE 16:00 + 15m); India path fires
+11:45 ET (NSE 21:00 IST + 15m, converted). Re-run `make scheduler-install` after a DST
+change so the fixed local time stays aligned.
+
+### Why a one-shot, not a resident daemon
+
+launchd/systemd own *when* to fire and handle sleep/wake correctly (a job missed while the
+laptop slept fires on wake); the `run-now` process owns *what* runs and in what order.
+Because the ordered EOD → drift → rebalance pass is a single process doing sequential calls,
+the one-shot preserves all cross-cadence coordination while dropping the fragile in-process
+`time.After` loop. `mycase scheduler daemon` (the older keep-alive loop) remains available
+for a future intraday-reactive case but is no longer what `install` uses.
+
+### Cadences (coordinated in one `run-now` pass)
+
+1. **Daily EOD update** — refreshes the DuckDB cache/snapshot (screening + self-heal +
+   theme sync, via `pkg/eod`). Its user-facing pick banner/tables are redirected to the log
+   at debug level so the scheduler's stdout/log stays clean.
 2. **Daily drift check** — runs *after* the same day's EOD (so it reads a fresh cache);
    alerts if the portfolio has drifted beyond threshold.
 3. **Quarterly/monthly rebalance** — produces an autopilot proposal; a rebalance day forces
    an EOD first. **Investor-in-the-loop:** it never places orders unless `auto_execute` is
-   set in `pipeline.yaml` *and* the run is `--live`; otherwise you confirm via the dashboard.
+   set in the pipeline YAML *and* the run is `--live`; otherwise you confirm via the
+   dashboard.
 
-### Trading-day awareness:
+### Trading-day awareness & catch-up
+
 Every cadence is gated on the holiday-aware market calendar (`marketcal` + the active
-market's clock), so weekends and the exchange holidays in `config/holidays.json` are skipped
-uniformly — no hand-maintained holiday list in a shell script. On startup the scheduler runs
-a **catch-up** EOD if the machine was asleep at the last close.
+market's clock), so weekends and the exchange holidays in the `holidays` table of
+`mycase.db` are skipped uniformly — no hand-maintained holiday list in a shell script. Each
+`tick` first runs a **catch-up** EOD if a close was missed (machine asleep), guarded by
+`scheduler_state.json` so a cadence never double-runs on the same trading day.
 
-### Configuration:
+### Holiday calendar (operator-maintained)
+
+Exchange holidays are the **single source of truth in the `holidays` table** of
+`data/mycase.db` — there is no committed holiday file. `broker.TradingClock()` reads it (via
+`DBHolidayProvider`) and attaches the dates to the market clock. **An empty table degrades
+to weekend-only** (no error): the system still runs, but only weekends are treated as
+non-trading until you seed the calendar. Seeding and the yearly refresh are an **operator
+responsibility**, because the authoritative calendar comes from each exchange in whatever
+format it publishes (CSV, an annual circular, an HTML table) — the product deliberately
+ships no importer that would bless one intermediate format.
+
+Table shape:
+
+```sql
+CREATE TABLE IF NOT EXISTS holidays (
+    exchange VARCHAR NOT NULL,   -- 'NYSE' | 'NSE'
+    date     VARCHAR NOT NULL,   -- 'YYYY-MM-DD' in the exchange's local tz
+    PRIMARY KEY (exchange, date)
+);
+```
+
+Yearly workflow (per exchange):
+
+1. Pull the official full-day-closure calendar — NYSE:
+   `https://www.nyse.com/markets/hours-calendars`; NSE: the annual NSE trading-holiday
+   circular. Omit early-close half-days (the market is open) and weekend-falling holidays
+   (already non-trading).
+2. Land the dates with the `duckdb` CLI (idempotent — `ON CONFLICT DO NOTHING`):
+
+   ```bash
+   duckdb data/mycase.db "INSERT INTO holidays (exchange, date) VALUES
+     ('NYSE','2028-01-01'), ('NYSE','2028-01-17') ON CONFLICT DO NOTHING;"
+   ```
+
+   (Or use a CSV the exchange provides:
+   `INSERT INTO holidays SELECT 'NYSE', column0 FROM read_csv('nyse_2028.csv') ON CONFLICT DO NOTHING;`)
+3. Verify with the built-in check:
+
+   ```bash
+   mycase holidays status          # per-exchange counts + date range; non-zero exit if unseeded
+   mycase holidays list -e NSE     # dump one exchange's dates
+   ```
+
+**Quick local bootstrap.** For a fresh checkout/machine, the committed `holiday.sql` snapshot
+seeds the currently-known NYSE + NSE dates in one command:
+
+```bash
+duckdb data/mycase.db < holiday.sql
+mycase holidays status            # confirm: NYSE / NSE both show counts, no "NOT SEEDED"
+```
+
+`holiday.sql` is a **convenience snapshot only** — not authoritative and read by no code. The
+source of truth is the table; the yearly refresh above updates the table from the official
+calendar (refresh the snapshot afterwards if you like). Re-running it is safe.
+
+**Detection — you will be told when it's empty, not left to guess:**
+
+- `mycase holidays status` prints a `NOT SEEDED` row per unseeded known exchange and exits
+  non-zero.
+- Every `broker.TradingClock()` lookup for a known exchange with no rows logs a WARN
+  (`holidays.empty_calendar`) with a seed hint.
+- The scheduler flags an empty calendar at the top of its maintenance-log block
+  (`⚠ holiday calendar is EMPTY — gating is weekend-only …`) and logs
+  `scheduler.empty_holiday_calendar`, so an autonomous run self-nags rather than silently
+  skipping only weekends.
+
+> **First run on a fresh machine/checkout:** the `holidays` table starts empty, so seed it
+> (`duckdb data/mycase.db < holiday.sql`) before relying on holiday-aware scheduling. Until
+> then, only weekends are skipped.
+
+### Configuration
+
 Cadence toggles live in the `scheduler` block of `config/defaults.json`
 (`enable_eod` / `enable_drift` / `enable_rebalance` / `close_offset_min`); the rebalance
-schedule (`frequency` / `day` / `auto_execute`) stays in the `schedule:` block of
-`pipeline.yaml`. Diagnostics stream to `data/scheduler.log`.
+schedule (`frequency` / `day` / `auto_execute`) stays in the `schedule:` block of the
+active pipeline YAML. Diagnostics stream to `data/scheduler.log`.
+
+### Quick start (US path on this machine)
+
+```bash
+make use-us && make scheduler-install
+make scheduler-status          # verify (all "never" until the first fire)
+launchctl list | grep mycase   # macOS: confirm com.mycase.scheduler is loaded
+```
 
 ---
 

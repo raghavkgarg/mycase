@@ -8,6 +8,7 @@ import (
 
 	"github.com/urfave/cli/v3"
 
+	"github.com/raghavkgarg/mycase/pkg/broker"
 	"github.com/raghavkgarg/mycase/pkg/marketdata"
 	"github.com/raghavkgarg/mycase/pkg/pithistory"
 	"github.com/raghavkgarg/mycase/pkg/stockpicker"
@@ -132,9 +133,10 @@ func runPitUpdate(ctx context.Context, c *cli.Command) error {
 	isForce := c.Bool("force")
 
 	now := time.Now()
-	targetEOD := marketdata.EODSettlementDate(now)
+	clk := broker.TradingClock()
+	targetEOD := clk.SettlementDate(now)
 	targetDateStr := targetEOD.Format("2006-01-02")
-	nextAvailable := marketdata.NextEODAvailableDate(now)
+	nextAvailable := clk.NextEODAvailable(now)
 
 	cleanIndex := strings.NewReplacer(",", "_", " ", "_", "^", "").Replace(indexVal)
 	pitDB, err := pithistory.Open("")
@@ -162,6 +164,7 @@ func runPitUpdate(ctx context.Context, c *cli.Command) error {
 		RangeStr:           "1y",
 		RebalanceTolerance: 0.10,
 		AsOfDate:           targetDateStr,
+		Clock:              clk,
 	}
 
 	if err := runPickWithOpts(ctx, opts); err != nil {
