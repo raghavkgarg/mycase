@@ -259,8 +259,9 @@ func ReadCSVWeights(path string) (map[string]float64, error) {
 // human-readable selection-reasons .txt report. Kept as a plain leaf DTO so
 // csvloader (an L0 leaf) needs no import of pkg/cache.
 type RankScore struct {
-	Rank  int
-	Score float64
+	Rank   int
+	Score  float64
+	Reason string
 }
 
 // PrintComparisonReport compares a source candidate CSV with the destination golden copy CSV,
@@ -358,14 +359,18 @@ func PrintComparisonReport(src, dst, strategy string, prevRanks, currRanks map[s
 
 		var action string
 		if prevW > 0 && newW == 0 {
-			if hasPrev {
+			if pInfo.Reason != "" {
+				action = fmt.Sprintf("Remove Action (%s)", pInfo.Reason)
+			} else if hasPrev {
 				action = fmt.Sprintf("Remove Action (Prev Rank #%d)", pInfo.Rank)
 			} else {
 				action = "Remove Action"
 			}
 			removed++
 		} else if prevW == 0 && newW > 0 {
-			if hasCurr {
+			if cInfo.Reason != "" {
+				action = fmt.Sprintf("New Addition (%s)", cInfo.Reason)
+			} else if hasCurr {
 				action = fmt.Sprintf("New Addition (Rank #%d, Score %.1f)", cInfo.Rank, cInfo.Score)
 			} else {
 				action = "New Addition"

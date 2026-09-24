@@ -499,6 +499,8 @@ func (t *Tracker) SaveReport(identity, displayName, method string, existingHoldi
 				reason = fmt.Sprintf("Dropped by sector cap: %s", r)
 			} else if r, ok := t.HysteresisDrops[ticker]; ok {
 				reason = r
+			} else if r, ok := t.ScoreThresholdDrops[ticker]; ok {
+				reason = r
 			}
 
 			rawScore := 0.0

@@ -699,6 +699,65 @@ func TestApplyHysteresisSelectionSmart_FundamentalHealthForfeiture(t *testing.T)
 	})
 }
 
+func TestApplyHysteresisSelectionSmart_CooldownBackfill(t *testing.T) {
+	// 5 candidates: N1, N2_CD (on cooldown), N3, N4, N5
+	// topN = 3, bufferLimit = 5.
+	// Since N2_CD is on cooldown and no existing buffer holdings exist,
+	// N4 (rank 4) should backfill the 3rd slot to satisfy topN = 3.
+	sorted := []string{"N1", "N2_CD", "N3", "N4", "N5"}
+	existing := map[string]float64{}
+	recentExits := map[string]time.Time{
+		"N2_CD": time.Now().Add(-10 * 24 * time.Hour), // 10 days ago <= 30 day window
+	}
+	cooldownDays := 30
+	bypassRank := 1
+
+	tracker := selectiontracker.New()
+	for idx, sym := range sorted {
+		tracker.RecordRawScore(sym, float64(100-idx*10), idx+1)
+	}
+
+	selected := ApplyHysteresisSelectionSmart(sorted, existing, 3, 5, tracker, recentExits, cooldownDays, bypassRank, SmartHysteresisConfig{})
+
+	if len(selected) != 3 {
+		t.Fatalf("expected 3 selected to fulfill topN, got %d: %v", len(selected), selected)
+	}
+	expected := []string{"N1", "N3", "N4"}
+	for i, want := range expected {
+		if selected[i] != want {
+			t.Errorf("expected selected[%d] to be %s, got %s (full list: %v)", i, want, selected[i], selected)
+		}
+	}
+
+	// Verify cooldown rejection was recorded
+	cdReason, isCd := tracker.CooldownDrops["N2_CD"]
+	if !isCd {
+		t.Errorf("expected N2_CD to be recorded in CooldownDrops")
+	}
+	if !strings.Contains(cdReason, "cooldown window") {
+		t.Errorf("unexpected cooldown drop reason: %s", cdReason)
+	}
+
+	// Verify N5 was rejected with standard cutoff reason
+	dropReason, isDropped := tracker.HysteresisDrops["N5"]
+	if !isDropped {
+		t.Errorf("expected N5 to be recorded in HysteresisDrops")
+	}
+	if !strings.Contains(dropReason, "fell below selection cutoff") {
+		t.Errorf("unexpected drop reason for N5: %s", dropReason)
+	}
+
+	// Verify selection funnel conservation
+	funnel, err := tracker.BuildFunnel()
+	if err != nil {
+		t.Fatalf("funnel validation failed: %v", err)
+	}
+	if len(funnel.FinalSelected) != 3 || len(funnel.CooldownBlocked) != 1 || len(funnel.RankLimited) != 1 {
+		t.Errorf("unexpected funnel counts: FinalSelected=%d, CooldownBlocked=%d, RankLimited=%d",
+			len(funnel.FinalSelected), len(funnel.CooldownBlocked), len(funnel.RankLimited))
+	}
+}
+
 func TestApplyRebalancingBand_NoExisting(t *testing.T) {
 	target := map[string]float64{"A": 0.6, "B": 0.4}
 	result := ApplyRebalancingBand([]string{"A", "B"}, target, nil, 0.10)

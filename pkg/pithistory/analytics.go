@@ -694,7 +694,7 @@ LEFT JOIN (
 ) h ON c.ticker = h.ticker
 WHERE c.as_of_date = ? AND c.index_name = ? AND c.method = ? AND c.passed_stage1 = true
 ORDER BY c.raw_score DESC
-LIMIT 12;
+LIMIT 20;
 `
 	incubatorRows, err := p.db.QueryContext(ctx, incubatorQuery, latestRun.RegimeMultiplier, indexName, method, indexName, method, latestRun.AsOfDate, latestRun.AsOfDate, indexName, method)
 	if err == nil {
@@ -741,73 +741,70 @@ LIMIT 12;
 			dateT2 = runs[2].AsOfDate
 		}
 
-		fmt.Printf("\n--- 8. MULTI-RUN ACCUMULATION VELOCITY (Building Up Across Consecutive Runs) ---\n")
-		if dateT2 != "" {
-			fmt.Printf("Tracking Score & Accumulation Trajectory across 3 Runs: [%s -> %s -> %s]\n\n", dateT2, dateT1, dateT0)
-		} else {
-			fmt.Printf("Tracking Score & Accumulation Trajectory across 2 Runs: [%s -> %s]\n\n", dateT1, dateT0)
-		}
-
-		velocityQuery := `
+		velQuery := `
 SELECT 
-    curr.ticker,
-    COALESCE(NULLIF(curr.sector, ''), 'Unknown') as sec,
-    COALESCE(prev2.raw_score, 0.0) as score_t2,
-    prev.raw_score as score_t1,
-    curr.raw_score as score_t0,
-    curr.vcp_ratio,
-    curr.delivery_delta
-FROM v_pit_candidate_scores curr
-JOIN v_pit_candidate_scores prev 
-  ON curr.ticker = prev.ticker AND curr.index_name = prev.index_name AND curr.method = prev.method
-LEFT JOIN v_pit_candidate_scores prev2
-  ON curr.ticker = prev2.ticker AND curr.index_name = prev2.index_name AND curr.method = prev2.method AND prev2.as_of_date = ?
-WHERE curr.as_of_date = ? 
-  AND prev.as_of_date = ?
-  AND curr.index_name = ? 
-  AND curr.method = ?
-  AND curr.passed_stage1 = true
-  AND prev.passed_stage1 = true
-  AND (curr.data_fetch_failed = false OR curr.data_fetch_failed IS NULL)
-  AND (prev.data_fetch_failed = false OR prev.data_fetch_failed IS NULL)
-  AND curr.raw_score > 0.0
-  AND prev.raw_score > 0.0
-  AND curr.raw_score >= prev.raw_score
-  AND curr.raw_score >= 35.0
-ORDER BY curr.raw_score DESC;
+    c0.ticker,
+    COALESCE(NULLIF(c0.sector, ''), 'Unknown') as sec,
+    COALESCE(c2.raw_score, 0.0) as score_t2,
+    COALESCE(c1.raw_score, 0.0) as score_t1,
+    c0.raw_score as score_t0,
+    c0.vcp_ratio,
+    c0.delivery_delta
+FROM v_pit_candidate_scores c0
+JOIN v_pit_candidate_scores c1 ON c0.ticker = c1.ticker AND c1.as_of_date = ? AND c1.index_name = ? AND c1.method = ?
+LEFT JOIN v_pit_candidate_scores c2 ON c0.ticker = c2.ticker AND c2.as_of_date = ? AND c2.index_name = ? AND c2.method = ?
+WHERE c0.as_of_date = ? AND c0.index_name = ? AND c0.method = ?
+  AND c0.passed_stage1 = true AND c1.passed_stage1 = true
+  AND (c0.raw_score - c1.raw_score) >= 2.0
+ORDER BY (c0.raw_score - c1.raw_score) DESC
+LIMIT 12;
 `
-		velocityRows, err := p.db.QueryContext(ctx, velocityQuery, dateT2, dateT0, dateT1, indexName, method)
+		vRows, err := p.db.QueryContext(ctx, velQuery, dateT1, indexName, method, dateT2, indexName, method, dateT0, indexName, method)
 		if err == nil {
-			fmt.Printf("  %-15s | %-18s | %-10s | %-10s | %-10s | %-8s | %-9s | %-25s\n",
-				"Ticker", "Sector", "Score (T-2)", "Score (T-1)", "Score (T)", "VCP ATR", "Deliv Δ", "Accumulation Pattern")
-			fmt.Println("  ---------------------------------------------------------------------------------------------------------------------")
-			foundVelocity := false
-			for velocityRows.Next() {
+			fmt.Printf("\n--- 8. MULTI-RUN ACCUMULATION VELOCITY (Building Up Across Consecutive Runs) ---\n")
+			dateHeaders := fmt.Sprintf("[%s -> %s]", dateT1, dateT0)
+			if dateT2 != "" {
+				dateHeaders = fmt.Sprintf("[%s -> %s -> %s]", dateT2, dateT1, dateT0)
+			}
+			fmt.Printf("Tracking Score & Accumulation Trajectory across %d Runs: %s\n\n", len(runs), dateHeaders)
+
+			hasT2 := dateT2 != ""
+			if hasT2 {
+				fmt.Printf("  %-15s | %-18s | %-11s | %-11s | %-10s | %-8s | %-9s | %-25s\n",
+					"Ticker", "Sector", "Score (T-2)", "Score (T-1)", "Score (T)", "VCP ATR", "Deliv Δ", "Accumulation Pattern")
+				fmt.Println("  ---------------------------------------------------------------------------------------------------------------------")
+			} else {
+				fmt.Printf("  %-15s | %-18s | %-11s | %-10s | %-8s | %-9s | %-25s\n",
+					"Ticker", "Sector", "Score (T-1)", "Score (T)", "VCP ATR", "Deliv Δ", "Accumulation Pattern")
+				fmt.Println("  -------------------------------------------------------------------------------------------------------")
+			}
+
+			for vRows.Next() {
 				var ticker, sec string
 				var sT2, sT1, sT0, vcp, deliv float64
-				if err := velocityRows.Scan(&ticker, &sec, &sT2, &sT1, &sT0, &vcp, &deliv); err == nil {
-					foundVelocity = true
-					pattern := "Persistent Accumulation"
-					if sT0 >= sT1+5.0 {
-						pattern = "Velocity Breakout (+5pt Δ)"
-					} else if sT2 > 0 && sT0 > sT1+0.5 && sT1 > sT2+0.5 {
-						pattern = "3-Session Consecutive Surge"
+				if err := vRows.Scan(&ticker, &sec, &sT2, &sT1, &sT0, &vcp, &deliv); err == nil {
+					delta := sT0 - sT1
+					pat := "Steady Accumulation (+2-5pt)"
+					if delta >= 5.0 {
+						pat = "Velocity Breakout (+5pt Δ)"
+					} else if hasT2 && sT1 > sT2 && sT0 > sT1 {
+						pat = "3-Session Consecutive Surge"
 					} else if deliv >= 0.08 {
-						pattern = "Stealth Institutional Absorption"
+						pat = "Institutional Footprint"
+					} else if vcp < 0.60 {
+						pat = "Coil Compression Surge"
 					}
 
-					sT2Str := fmt.Sprintf("%10.1f", sT2)
-					if sT2 == 0 {
-						sT2Str = "         -"
+					if hasT2 {
+						fmt.Printf("  %-15s | %-18s | %10.1f | %10.1f | %10.1f | %8.2f | %+8.1f%% | %-25s\n",
+							ticker, sec, sT2, sT1, sT0, vcp, deliv*100.0, pat)
+					} else {
+						fmt.Printf("  %-15s | %-18s | %10.1f | %10.1f | %8.2f | %+8.1f%% | %-25s\n",
+							ticker, sec, sT1, sT0, vcp, deliv*100.0, pat)
 					}
-					fmt.Printf("  %-15s | %-18s | %10s | %10.1f | %10.1f | %8.2f | %+8.1f%% | %-25s\n",
-						ticker, sec, sT2Str, sT1, sT0, vcp, deliv*100.0, pattern)
 				}
 			}
-			velocityRows.Close()
-			if !foundVelocity {
-				fmt.Println("  No candidates currently exhibiting positive multi-run accumulation velocity >= 35.0 pts.")
-			}
+			vRows.Close()
 		}
 	}
 
@@ -889,7 +886,7 @@ LIMIT 20;
 		}
 		radarRows.Close()
 		if !foundRadar {
-			fmt.Println("  No near-miss candidates currently exhibit strong institutional delivery accumulation (Deliv Δ >= +8.0%).")
+			fmt.Println("  No active near-miss candidates currently meeting stealth accumulation threshold.")
 		}
 
 		// Mini-table: Graduated Stocks Alpha Audit (First-Seen Date -> Gate Clear Date)
@@ -1054,7 +1051,8 @@ SELECT
     COALESCE(c.delivery_delta, 0.0) AS delivery_delta,
     COALESCE(c.composite_rs, 0.0) AS composite_rs,
     COALESCE(NULLIF(c.rejection_reason, ''), 'Stage-1 Qualified') AS stage1_status,
-    CASE WHEN c.ticker IS NOT NULL THEN true ELSE false END AS has_score
+    CASE WHEN c.ticker IS NOT NULL THEN true ELSE false END AS has_score,
+    COALESCE(p_c.passed_stage1, false) AS prev_passed_stage1
 FROM ntm
 JOIN curr ON ntm.ticker = curr.ticker
 JOIN prev ON ntm.ticker = prev.ticker
@@ -1063,11 +1061,16 @@ LEFT JOIN v_pit_candidate_scores c
  AND c.as_of_date = ? 
  AND c.index_name = ? 
  AND c.method = ?
+LEFT JOIN v_pit_candidate_scores p_c
+  ON ntm.ticker = p_c.ticker
+ AND p_c.as_of_date = ?
+ AND p_c.index_name = ?
+ AND p_c.method = ?
 WHERE prev.prev_close > 0
 ORDER BY pct_gain DESC
 LIMIT 15;
 `
-		gRows, err := p.db.QueryContext(ctx, gainersQuery, indexName, latestRun.AsOfDate, prevDate, latestRun.AsOfDate, indexName, method)
+		gRows, err := p.db.QueryContext(ctx, gainersQuery, indexName, latestRun.AsOfDate, prevDate, latestRun.AsOfDate, indexName, method, prevDate, indexName, method)
 		if err == nil {
 			gainHeader := "1D Gain"
 			tCurr, errCurr := time.Parse("2006-01-02", latestRun.AsOfDate)
@@ -1081,15 +1084,15 @@ LIMIT 15;
 
 			prevHdr := fmt.Sprintf("Prev (%s)", currSym)
 			closeHdr := fmt.Sprintf("Close (%s)", currSym)
-			fmt.Printf("  %-15s | %11s | %11s | %-11s | %-7s | %-5s | %-7s | %-12s | %-28s | %-12s\n",
-				"Ticker", prevHdr, closeHdr, gainHeader, "Deliv Δ", "Accum", "Comp RS", "Gate Type", "Stage-1 Bottleneck", "Radar")
-			fmt.Println("  --------------------------------------------------------------------------------------------------------------------------------------")
+			fmt.Printf("  %-15s | %11s | %11s | %-11s | %-7s | %-5s | %-7s | %-12s | %-28s | %-14s\n",
+				"Ticker", prevHdr, closeHdr, gainHeader, "Deliv Δ", "Accum", "Comp RS", "Gate Type", "Stage-1 Bottleneck", "Radar Footprint")
+			fmt.Println("  ----------------------------------------------------------------------------------------------------------------------------------------")
 			foundGainer := false
 			for gRows.Next() {
 				var ticker, status string
 				var prevClose, currClose, pctGain, deliv, rs float64
-				var passedStage1, hasScore bool
-				if err := gRows.Scan(&ticker, &prevClose, &currClose, &pctGain, &passedStage1, &deliv, &rs, &status, &hasScore); err == nil {
+				var passedStage1, hasScore, prevPassedStage1 bool
+				if err := gRows.Scan(&ticker, &prevClose, &currClose, &pctGain, &passedStage1, &deliv, &rs, &status, &hasScore, &prevPassedStage1); err == nil {
 					foundGainer = true
 					delivStr := "- "
 					realAccumStr := "NO"
@@ -1103,15 +1106,23 @@ LIMIT 15;
 					}
 					gateType, cleanStatus := classifyGate(passedStage1, status)
 					conciseStatus := formatConciseBottleneck(cleanStatus)
+
 					overlapStr := "-"
 					if graduatedTickers[ticker] {
 						overlapStr = "GRADUATED"
-					} else if radarTickers[ticker] {
+					} else if prevPassedStage1 {
+						if deliv >= 0.06 {
+							overlapStr = "INCUBATED HIT"
+						} else {
+							overlapStr = "INCUBATED"
+						}
+					} else if radarTickers[ticker] || (!passedStage1 && deliv >= 0.08 && rs >= 0.0) {
 						overlapStr = "ACTIVE RADAR"
-					} else if hasScore && deliv >= 0.08 && rs >= 0.0 {
-						overlapStr = "DUAL HIT"
+					} else if !prevPassedStage1 && passedStage1 && (deliv >= 0.06 || pctGain >= 10.0) {
+						overlapStr = "COINCIDENT POP"
 					}
-					fmt.Printf("  %-15s | %11s | %11s | %+10.2f%% | %-7s | %-5s | %-7s | %-12s | %-28s | %-12s\n",
+
+					fmt.Printf("  %-15s | %11s | %11s | %+10.2f%% | %-7s | %-5s | %-7s | %-12s | %-28s | %-14s\n",
 						ticker, render.Currency(prevClose, currSym), render.Currency(currClose, currSym), pctGain, delivStr, realAccumStr, rsStr, gateType, conciseStatus, overlapStr)
 				}
 			}

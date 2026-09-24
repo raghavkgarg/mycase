@@ -85,6 +85,7 @@ var PitCommand = &cli.Command{
 				&cli.StringFlag{Name: "method", Aliases: []string{"m"}, Value: "earlymb", Usage: "Strategy method (earlymb)"},
 				&cli.IntFlag{Name: "top", Aliases: []string{"n", "t"}, Value: 15, Usage: "Number of top candidates to stage"},
 				&cli.StringFlag{Name: "output", Aliases: []string{"o"}, Value: "data/pre_microsmall.csv", Usage: "Output CSV file path"},
+				&cli.StringFlag{Name: "exclude", Aliases: []string{"x"}, Usage: "Path to live basket CSV whose active holdings should be excluded from staging (e.g. data/microsmall.csv)"},
 			},
 			Action: runPitStage,
 		},
@@ -95,6 +96,8 @@ var PitCommand = &cli.Command{
 			Flags: []cli.Flag{
 				&cli.StringFlag{Name: "basket", Aliases: []string{"b"}, Value: "data/microsmall.csv", Usage: "Path to live portfolio basket CSV"},
 				&cli.StringFlag{Name: "staged", Aliases: []string{"s"}, Value: "data/pre_microsmall.csv", Usage: "Path to pre-production staged candidates CSV"},
+				&cli.BoolFlag{Name: "apply", Usage: "Automatically execute and apply proposed Level-3 rebalance swaps to the live basket CSV"},
+				&cli.BoolFlag{Name: "strict-sector", Usage: "Enforce strict max 3 stocks per sector (e.g. substituting PARKHOSPS with BALRAMCHIN)"},
 			},
 			Action: runPitSentry,
 		},
@@ -400,6 +403,7 @@ func runPitStage(ctx context.Context, c *cli.Command) error {
 	methodVal := c.String("method")
 	topN := int(c.Int("top"))
 	outPath := c.String("output")
+	excludePath := c.String("exclude")
 
 	db, err := pithistory.Open("")
 	if err != nil {
@@ -407,18 +411,20 @@ func runPitStage(ctx context.Context, c *cli.Command) error {
 	}
 	defer db.Close()
 
-	staged, err := db.StagePreProduction(ctx, indexVal, methodVal, topN, outPath)
+	staged, err := db.StagePreProduction(ctx, indexVal, methodVal, topN, outPath, excludePath)
 	if err != nil {
 		return fmt.Errorf("staging failed: %w", err)
 	}
 
-	pithistory.PrintStagingSummary(staged, outPath)
+	pithistory.PrintStagingSummary(staged, outPath, excludePath)
 	return nil
 }
 
 func runPitSentry(ctx context.Context, c *cli.Command) error {
 	basketPath := c.String("basket")
 	stagedPath := c.String("staged")
+	apply := c.Bool("apply")
+	strictSector := c.Bool("strict-sector")
 
 	db, err := pithistory.Open("")
 	if err != nil {
@@ -426,11 +432,26 @@ func runPitSentry(ctx context.Context, c *cli.Command) error {
 	}
 	defer db.Close()
 
-	results, overlaps, err := db.EvaluateHoldingSentry(ctx, basketPath, stagedPath)
+	opts := pithistory.SentryOptions{
+		StrictSector: strictSector,
+	}
+
+	results, overlaps, rebalances, err := db.EvaluateHoldingSentry(ctx, basketPath, stagedPath, opts)
 	if err != nil {
 		return fmt.Errorf("sentry evaluation failed: %w", err)
 	}
 
-	pithistory.PrintSentryReport(results, overlaps, basketPath, stagedPath)
+	pithistory.PrintSentryReport(results, overlaps, rebalances, basketPath, stagedPath)
+
+	if apply {
+		if len(rebalances) == 0 {
+			fmt.Println("\nNo Level-3 trend ruptures detected; live basket is healthy, no swaps needed.")
+			return nil
+		}
+		if err := pithistory.ApplyRebalanceSwaps(basketPath, rebalances); err != nil {
+			return fmt.Errorf("failed to apply rebalance swaps: %w", err)
+		}
+	}
+
 	return nil
 }

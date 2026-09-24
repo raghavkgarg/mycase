@@ -180,6 +180,8 @@ func RunWithResult(ctx context.Context, opts *Options) (*PickResult, error) {
 	smartHysteresis := SmartHysteresisConfig{
 		MinScoreDelta:             opts.HysteresisMinScoreDelta,
 		RequireGrowthAcceleration: opts.HysteresisRequireGrowthAcceleration,
+		FullHistory:               fullHistory,
+		EnableSentryGate:          !opts.DisableSentryGate,
 	}
 
 	if opts.Method == "value" {

@@ -55,6 +55,11 @@ cooldown_days:
 cooldown_bypass_rank:
   - 5
 
+# Tier-3 Sentry Gate & Technical Protection
+sentry: true                                  # Upstream Sentry Gate: filters out falling knives (price < 0.95*SMA200 / >20% DD)
+# staged_path: data/pre_microsmall.csv        # (Optional) Uncomment to swap decaying holdings from staged bullpen instead of in-strategy waterfall
+strict_sector: false                          # Set to true to strictly cap max 3 stocks per sector in substitutions
+
 # Broker configuration
 broker: zerodha                     # "zerodha" (default) or "schwab"
 # schwab_config: config/schwab.json   # Schwab app credentials

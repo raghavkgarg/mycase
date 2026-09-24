@@ -196,7 +196,7 @@ func rangeKeyToStartDate(rangeKey string) time.Time {
 	case "6mo":
 		return now.AddDate(0, -6, 0)
 	case "1y":
-		return now.AddDate(-1, 0, 0)
+		return now.AddDate(-1, 0, -15)
 	case "2y":
 		return now.AddDate(-2, 0, 0)
 	case "5y":

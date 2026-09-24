@@ -37,6 +37,9 @@ type PipelineConfig struct {
 	SchwabConfig                        string         `yaml:"schwab_config"` // path to schwab.json
 	SchwabToken                         string         `yaml:"schwab_token"`  // path to schwab_token.json
 	Schedule                            ScheduleConfig `yaml:"schedule"`
+	Sentry                              bool           `yaml:"sentry"`        // enable Tier-3 Holding Sentry defense overlay
+	StagedPath                          string         `yaml:"staged_path"`   // path to pre-production staged candidates CSV
+	StrictSector                        bool           `yaml:"strict_sector"` // enforce strict max stocks per sector in Sentry swaps
 }
 
 // Snapshot returns a compact JSON snapshot of the resolved config, for recording
@@ -69,6 +72,9 @@ type rawPipelineConfig struct {
 	SchwabConfig                        string         `yaml:"schwab_config"`
 	SchwabToken                         string         `yaml:"schwab_token"`
 	Schedule                            ScheduleConfig `yaml:"schedule"`
+	Sentry                              any            `yaml:"sentry"`
+	StagedPath                          any            `yaml:"staged_path"`
+	StrictSector                        any            `yaml:"strict_sector"`
 }
 
 // resolveFirst extracts T from val (which may be a scalar or a []any from multi-doc YAML).
@@ -205,6 +211,12 @@ func (cfg *PipelineConfig) UnmarshalYAML(value *yaml.Node) error {
 	if cfg.SchwabToken == "" {
 		cfg.SchwabToken = Path("schwab_token.json")
 	}
+
+	// Sentry defense overlay config
+	cfg.Sentry = resolveFirst(a.Sentry, true)
+	cfg.StagedPath = resolveFirst(a.StagedPath, "")
+	cfg.StrictSector = resolveFirst(a.StrictSector, false)
+
 	return nil
 }
 

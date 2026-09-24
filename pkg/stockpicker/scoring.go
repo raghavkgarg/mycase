@@ -509,6 +509,8 @@ func SelectTopNValueWithCooldown(
 	}
 	slog.Info("select.value_sector_caps", "max_per_sector", maxPerSector)
 
+	smartCfg := resolveSmartHysteresis(scores, fundamentals, smartHysteresis)
+
 	var sectorCapCandidates []string
 	sectorCounts := make(map[string]int)
 	sectorTopTickers := make(map[string][]string)
@@ -541,6 +543,21 @@ func SelectTopNValueWithCooldown(
 			ROIC:     roceVal,
 		})
 
+		// Sentry Gate: evict decaying incumbents and reject falling knife newcomers
+		if smartCfg.EnableSentryGate && smartCfg.FullHistory != nil {
+			if hist, ok := smartCfg.FullHistory[t]; ok {
+				if isRupture, sReason := CheckSentryTrendRupture(hist); isRupture {
+					_, isExisting := existingHoldings[t]
+					if isExisting {
+						tracker.RecordHysteresisDropWithReason(t, fmt.Sprintf("Removed: Incumbent evicted by Sentry Gate (%s)", sReason))
+					} else {
+						tracker.RecordHysteresisDropWithReason(t, fmt.Sprintf("Rejected: Failed Sentry Gate (%s)", sReason))
+					}
+					continue
+				}
+			}
+		}
+
 		if sectorCounts[sec] >= maxPerSector {
 			tracker.RecordSectorCapDrop(t, sec, sectorTopTickers[sec])
 			continue
@@ -551,7 +568,6 @@ func SelectTopNValueWithCooldown(
 	}
 
 	bufferLimit := topN + hysteresisBuffer
-	smartCfg := resolveSmartHysteresis(scores, fundamentals, smartHysteresis)
 	return ApplyHysteresisSelectionSmart(sectorCapCandidates, existingHoldings, topN, bufferLimit, tracker, recentExits, cooldownDays, bypassRank, smartCfg)
 }
 
@@ -717,7 +733,9 @@ func SelectTopNMultibaggerWithCooldown(
 	}
 	slog.Info("select.multibagger_sector_caps", "max_per_sector", maxPerSector)
 
-	// 1. Filter all activeKeys by sector caps to get valid candidates in ranked order
+	smartCfg := resolveSmartHysteresis(scores, fundamentals, smartHysteresis)
+
+	// 1. Filter all activeKeys by Sentry Gate and sector caps to get valid candidates in ranked order
 	var sectorCapCandidates []string
 	sectorCounts := make(map[string]int)
 	sectorTopTickers := make(map[string][]string)
@@ -756,6 +774,21 @@ func SelectTopNMultibaggerWithCooldown(
 			ROIC:        roceVal,
 		})
 
+		// Sentry Gate: evict decaying incumbents and reject falling knife newcomers
+		if smartCfg.EnableSentryGate && smartCfg.FullHistory != nil {
+			if hist, ok := smartCfg.FullHistory[t]; ok {
+				if isRupture, sReason := CheckSentryTrendRupture(hist); isRupture {
+					_, isExisting := existingHoldings[t]
+					if isExisting {
+						tracker.RecordHysteresisDropWithReason(t, fmt.Sprintf("Removed: Incumbent evicted by Sentry Gate (%s)", sReason))
+					} else {
+						tracker.RecordHysteresisDropWithReason(t, fmt.Sprintf("Rejected: Failed Sentry Gate (%s)", sReason))
+					}
+					continue
+				}
+			}
+		}
+
 		if sectorCounts[sec] >= maxPerSector {
 			tracker.RecordSectorCapDrop(t, sec, sectorTopTickers[sec])
 			continue
@@ -769,7 +802,6 @@ func SelectTopNMultibaggerWithCooldown(
 	bufferLimit := topN + hysteresisBuffer
 	slog.Info("select.multibagger_hysteresis", "top_n", topN, "buffer_limit", bufferLimit)
 	fmt.Printf("Applying Hysteresis Buffer Zone (Top %d target, existing kept up to rank %d)...\n", topN, bufferLimit)
-	smartCfg := resolveSmartHysteresis(scores, fundamentals, smartHysteresis)
 	return ApplyHysteresisSelectionSmart(sectorCapCandidates, existingHoldings, topN, bufferLimit, tracker, recentExits, cooldownDays, bypassRank, smartCfg)
 }
 
@@ -953,12 +985,15 @@ func ApplyHysteresisSelection(
 }
 
 // SmartHysteresisConfig defines parameters for conviction-based displacement (Rule 3A)
-// and fundamental health eligibility (Rule 3B) in the hysteresis buffer zone.
+// and fundamental health eligibility (Rule 3B) in the hysteresis buffer zone,
+// as well as Sentry technical gate enforcement.
 type SmartHysteresisConfig struct {
 	Scores                    map[string]float64
 	Fundamentals              map[string]yfinance.Fundamentals
+	FullHistory               map[string]*yfinance.HistoricalData
 	MinScoreDelta             float64 // min score advantage for a top-N candidate to displace a buffer holding (default: 3.0)
 	RequireGrowthAcceleration bool    // if true, buffer grace is forfeited if sales growth decelerates (TTM < 3Y CAGR)
+	EnableSentryGate          bool    // if true, enforces Sentry Level-3 technical health gate (price >= 0.95*SMA200 and DD <= 20%)
 }
 
 func resolveSmartHysteresis(scores map[string]float64, fundamentals map[string]yfinance.Fundamentals, smartHysteresis []SmartHysteresisConfig) SmartHysteresisConfig {
@@ -967,6 +1002,7 @@ func resolveSmartHysteresis(scores map[string]float64, fundamentals map[string]y
 		Fundamentals:              fundamentals,
 		MinScoreDelta:             3.0,
 		RequireGrowthAcceleration: true,
+		EnableSentryGate:          true,
 	}
 	if len(smartHysteresis) > 0 {
 		custom := smartHysteresis[0]
@@ -976,10 +1012,14 @@ func resolveSmartHysteresis(scores map[string]float64, fundamentals map[string]y
 		if custom.Fundamentals != nil {
 			cfg.Fundamentals = custom.Fundamentals
 		}
+		if custom.FullHistory != nil {
+			cfg.FullHistory = custom.FullHistory
+		}
 		if custom.MinScoreDelta > 0 {
 			cfg.MinScoreDelta = custom.MinScoreDelta
 		}
 		cfg.RequireGrowthAcceleration = custom.RequireGrowthAcceleration
+		cfg.EnableSentryGate = custom.EnableSentryGate
 	}
 	return cfg
 }
@@ -1152,13 +1192,11 @@ func ApplyHysteresisSelectionSmart(
 		tracker.RecordSelected(b.ticker, b.rank, bufferLimit, true)
 	}
 
-	// Phase 4: Fill remaining slots with remaining eligible candidates up to topN (marginal new candidates)
+	// Phase 4: Fill remaining slots with remaining eligible candidates up to topN (marginal new candidates).
+	// Candidates beyond topN can backfill if prior slots were vacated by cooldown or ineligible buffer holdings.
 	for rankIdx, ticker := range sortedKeys {
 		rank := rankIdx + 1
 		if len(selected) >= topN {
-			break
-		}
-		if rank > topN {
 			break
 		}
 		if selectedMap[ticker] {
@@ -1184,6 +1222,10 @@ func ApplyHysteresisSelectionSmart(
 		if !selectedMap[ticker] {
 			if _, isCd := tracker.CooldownDrops[ticker]; isCd {
 				// Already accounted for as cooldown drop
+				continue
+			}
+			if _, isDrop := tracker.HysteresisDrops[ticker]; isDrop {
+				// Already accounted for with specific reason (e.g. Sentry Gate)
 				continue
 			}
 			if reason, isForfeited := ineligibleBufferHoldings[ticker]; isForfeited {

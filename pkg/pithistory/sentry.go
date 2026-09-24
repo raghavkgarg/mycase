@@ -2,9 +2,12 @@ package pithistory
 
 import (
 	"context"
+	"encoding/csv"
 	"fmt"
+	"math"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/raghavkgarg/mycase/pkg/config"
@@ -12,6 +15,12 @@ import (
 	"github.com/raghavkgarg/mycase/pkg/render"
 	"github.com/raghavkgarg/mycase/pkg/yfinance"
 )
+
+// SentryOptions configures Sentry evaluation behavior.
+type SentryOptions struct {
+	MaxStocksPerSector int
+	StrictSector       bool
+}
 
 // SentryHoldingResult encapsulates the deterioration risk status for an active portfolio holding.
 type SentryHoldingResult struct {
@@ -33,6 +42,19 @@ type SentryHoldingResult struct {
 	ProposedSwapTicker string  `json:"proposed_swap_ticker,omitempty"`
 }
 
+// RebalanceSwap captures an actionable substitution from a decaying holding to a staged candidate.
+type RebalanceSwap struct {
+	ExitTicker      string  `json:"exit_ticker"`
+	ExitSector      string  `json:"exit_sector"`
+	TargetWeight    float64 `json:"target_weight"`
+	EntryTicker     string  `json:"entry_ticker"`
+	EntrySector     string  `json:"entry_sector"`
+	SetupQuality    float64 `json:"setup_quality"`
+	DeliveryDelta   float64 `json:"delivery_delta"`
+	IgnitionSignal  string  `json:"ignition_signal"`
+	SectorCapStatus string  `json:"sector_cap_status"`
+}
+
 // BasketOverlapResult tracks the relationship between active live holdings and staged candidates.
 type BasketOverlapResult struct {
 	Ticker         string  `json:"ticker"`
@@ -46,7 +68,7 @@ type BasketOverlapResult struct {
 
 // EvaluateHoldingSentry evaluates active holdings in basketPath against Sentry Levels 1-3,
 // and audits overlap with staged candidates from stagedPath.
-func (p *DB) EvaluateHoldingSentry(ctx context.Context, basketPath, stagedPath string) ([]SentryHoldingResult, []BasketOverlapResult, error) {
+func (p *DB) EvaluateHoldingSentry(ctx context.Context, basketPath, stagedPath string, opts ...SentryOptions) ([]SentryHoldingResult, []BasketOverlapResult, []RebalanceSwap, error) {
 	if basketPath == "" {
 		basketPath = config.DataPath("microsmall.csv")
 	}
@@ -56,7 +78,7 @@ func (p *DB) EvaluateHoldingSentry(ctx context.Context, basketPath, stagedPath s
 
 	liveWeights, err := csvloader.ReadCSVWeights(basketPath)
 	if err != nil {
-		return nil, nil, fmt.Errorf("reading live basket %s: %w", basketPath, err)
+		return nil, nil, nil, fmt.Errorf("reading live basket %s: %w", basketPath, err)
 	}
 
 	stagedWeights := make(map[string]float64)
@@ -79,6 +101,7 @@ ORDER BY as_of_date DESC;
 			if sRows.Scan(&sc.Ticker, &sc.Sector, &sc.Weight, &sc.SetupQuality, &sc.DeliveryDelta, &sc.VCPRatio, &sc.CompositeRS) == nil {
 				cleanT := cleanSymbol(sc.Ticker)
 				if _, exists := stagedMeta[cleanT]; !exists {
+					_, sc.IgnitionSignal = GetIgnitionStatus(sc.DeliveryDelta)
 					stagedMeta[cleanT] = sc
 				}
 			}
@@ -110,20 +133,37 @@ WHERE index_name = 'niftytotalmarket'
 	}
 
 	// Ranked candidate pool for Level 3 swaps
-	var eligibleSwapCandidates []StagedCandidate
+	candidateMap := make(map[string]StagedCandidate)
 	for t, sc := range stagedMeta {
+		candidateMap[t] = sc
+	}
+	for t, w := range stagedWeights {
+		if _, exists := candidateMap[t]; !exists {
+			candidateMap[t] = StagedCandidate{Ticker: t, Weight: w}
+		}
+	}
+
+	var eligibleSwapCandidates []StagedCandidate
+	for t, sc := range candidateMap {
 		if _, isLive := liveWeights[t]; !isLive && !recentExits[t] {
+			if sc.IgnitionSignal == "" {
+				_, sc.IgnitionSignal = GetIgnitionStatus(sc.DeliveryDelta)
+			}
 			eligibleSwapCandidates = append(eligibleSwapCandidates, sc)
 		}
 	}
 	sort.Slice(eligibleSwapCandidates, func(i, j int) bool {
-		return eligibleSwapCandidates[i].SetupQuality > eligibleSwapCandidates[j].SetupQuality
+		if math.Abs(eligibleSwapCandidates[i].SetupQuality-eligibleSwapCandidates[j].SetupQuality) > 1e-4 {
+			return eligibleSwapCandidates[i].SetupQuality > eligibleSwapCandidates[j].SetupQuality
+		}
+		return eligibleSwapCandidates[i].DeliveryDelta > eligibleSwapCandidates[j].DeliveryDelta
 	})
 
 	var sentryResults []SentryHoldingResult
 	activeSectors := make(map[string]int)
+	activeSectorWeights := make(map[string]float64)
 
-	// Evaluate each live holding
+	// Step 1: Evaluate each live holding and establish baseline portfolio state
 	for ticker, weight := range liveWeights {
 		if weight <= 0 {
 			continue
@@ -168,6 +208,7 @@ LIMIT 260;
 			sector = "Unknown"
 		}
 		activeSectors[sector]++
+		activeSectorWeights[sector] += weight
 
 		res := SentryHoldingResult{
 			Ticker:        cleanT,
@@ -245,14 +286,6 @@ FROM (
 			res.SentryLevel = 3
 			res.SentryLabel = "🔴 [L3: TREND RUPTURE]"
 			res.Action = "Immediate Swap Candidate: Slipping trend/52W support"
-
-			// Find top swap candidate from pre_microsmall in allowable sector
-			for _, swap := range eligibleSwapCandidates {
-				if activeSectors[swap.Sector] < 3 {
-					res.ProposedSwapTicker = swap.Ticker
-					break
-				}
-			}
 		} else if res.SMA50 > 0 && res.CurrentPrice <= res.SMA50 && res.DeliveryDelta3D <= -0.10 {
 			// Level 2: INSTITUTIONAL DISTRIBUTION
 			res.SentryLevel = 2
@@ -273,18 +306,105 @@ FROM (
 		sentryResults = append(sentryResults, res)
 	}
 
-	// Sort Sentry Results by severity (Level 3 first, then Level 2, Level 1, Level 0)
+	// Sort Sentry Results by severity (Level 3 first, then Level 2, Level 1, Level 0; tiebreak by weight DESC)
 	sort.Slice(sentryResults, func(i, j int) bool {
 		if sentryResults[i].SentryLevel != sentryResults[j].SentryLevel {
 			return sentryResults[i].SentryLevel > sentryResults[j].SentryLevel
 		}
-		return sentryResults[i].CurrentWeight > sentryResults[j].CurrentWeight
+		if sentryResults[i].CurrentWeight != sentryResults[j].CurrentWeight {
+			return sentryResults[i].CurrentWeight > sentryResults[j].CurrentWeight
+		}
+		return sentryResults[i].PeakDrawdownPct > sentryResults[j].PeakDrawdownPct
 	})
 
-	// Basket Overlap Audit
+	// Step 2: Sequential Dynamic Level-3 Swap Allocation
+	usedSwaps := make(map[string]bool)
+	var rebalanceSwaps []RebalanceSwap
+
+	maxStocksPerSector := 3
+	if len(liveWeights) >= 20 {
+		maxStocksPerSector = 4
+	}
+	if len(opts) > 0 {
+		if opts[0].StrictSector {
+			maxStocksPerSector = 3
+		} else if opts[0].MaxStocksPerSector > 0 {
+			maxStocksPerSector = opts[0].MaxStocksPerSector
+		}
+	}
+
+	for i := range sentryResults {
+		if sentryResults[i].SentryLevel != 3 {
+			continue
+		}
+		exiting := &sentryResults[i]
+
+		// Vacate exiting holding's sector capacity
+		activeSectors[exiting.Sector]--
+		if activeSectors[exiting.Sector] < 0 {
+			activeSectors[exiting.Sector] = 0
+		}
+		activeSectorWeights[exiting.Sector] -= exiting.CurrentWeight
+		if activeSectorWeights[exiting.Sector] < 0 {
+			activeSectorWeights[exiting.Sector] = 0
+		}
+
+		// Find top unassigned swap candidate from pre_microsmall satisfying sector caps
+		var assigned *StagedCandidate
+		for _, cand := range eligibleSwapCandidates {
+			if usedSwaps[cand.Ticker] {
+				continue
+			}
+			sec := cand.Sector
+			if sec == "" {
+				sec = "Unknown"
+			}
+			newCount := activeSectors[sec] + 1
+			newWeight := activeSectorWeights[sec] + exiting.CurrentWeight
+			if newCount <= maxStocksPerSector && newWeight <= 0.2501 {
+				cCopy := cand
+				assigned = &cCopy
+				break
+			}
+		}
+
+		if assigned != nil {
+			usedSwaps[assigned.Ticker] = true
+			sec := assigned.Sector
+			if sec == "" {
+				sec = "Unknown"
+			}
+			activeSectors[sec]++
+			activeSectorWeights[sec] += exiting.CurrentWeight
+			exiting.ProposedSwapTicker = assigned.Ticker
+
+			statusLabel := fmt.Sprintf("%d stock (Within bounds)", activeSectors[sec])
+			if activeSectors[sec] >= 4 {
+				statusLabel = fmt.Sprintf("%d stocks (Watch sector limit)", activeSectors[sec])
+			} else if activeSectors[sec] == 3 {
+				statusLabel = fmt.Sprintf("%d stocks (At limit)", activeSectors[sec])
+			} else if activeSectors[sec] > 1 {
+				statusLabel = fmt.Sprintf("%d stocks (Within bounds)", activeSectors[sec])
+			}
+
+			rebalanceSwaps = append(rebalanceSwaps, RebalanceSwap{
+				ExitTicker:      exiting.Ticker,
+				ExitSector:      exiting.Sector,
+				TargetWeight:    exiting.CurrentWeight,
+				EntryTicker:     assigned.Ticker,
+				EntrySector:     assigned.Sector,
+				SetupQuality:    assigned.SetupQuality,
+				DeliveryDelta:   assigned.DeliveryDelta,
+				IgnitionSignal:  assigned.IgnitionSignal,
+				SectorCapStatus: statusLabel,
+			})
+		}
+	}
+
+	// Step 3: Basket Overlap Audit
 	var overlaps []BasketOverlapResult
 
-	// 1. Check live holdings against staged candidates
+	// Check live holdings against staged candidates
 	for ticker, lWeight := range liveWeights {
 		cleanT := cleanSymbol(ticker)
 		sWeight := stagedWeights[cleanT]
@@ -313,7 +433,7 @@ FROM (
 		overlaps = append(overlaps, ov)
 	}
 
-	// 2. Check staged candidates for re-entry risk
+	// Check staged candidates for re-entry risk
 	for ticker, sWeight := range stagedWeights {
 		cleanT := cleanSymbol(ticker)
 		if _, isLive := liveWeights[cleanT]; !isLive {
@@ -332,7 +452,7 @@ FROM (
 		}
 	}
 
-	return sentryResults, overlaps, nil
+	return sentryResults, overlaps, rebalanceSwaps, nil
 }
 
 func cleanSymbol(t string) string {
@@ -343,8 +463,8 @@ func cleanSymbol(t string) string {
 	return clean
 }
 
-// PrintSentryReport renders the full Holding Sentry and Overlap report.
-func PrintSentryReport(results []SentryHoldingResult, overlaps []BasketOverlapResult, basketPath, stagedPath string) {
+// PrintSentryReport renders the full Holding Sentry, Rebalance Plan, and Overlap report.
+func PrintSentryReport(results []SentryHoldingResult, overlaps []BasketOverlapResult, rebalances []RebalanceSwap, basketPath, stagedPath string) {
 	fmt.Println()
 	render.Banner(os.Stdout, "ACTIVE PORTFOLIO EARLY DETERIORATION HOLDING SENTRY (TIER 3 LIVE DEFENSE)")
 	fmt.Printf("Live Portfolio Basket : %s (%d Holdings)\n", basketPath, len(results))
@@ -392,6 +512,37 @@ func PrintSentryReport(results []SentryHoldingResult, overlaps []BasketOverlapRe
 	fmt.Printf("Holding Sentry Summary: %d L3 Trend Ruptures | %d L2 Distribution Warnings | %d L1 Coil Decays | %d Healthy\n",
 		l3Count, l2Count, l1Count, len(results)-l3Count-l2Count-l1Count)
 
+	// Rebalance Execution Plan
+	if len(rebalances) > 0 {
+		fmt.Println()
+		render.Banner(os.Stdout, "REBALANCE EXECUTION PLAN (TIER 3 DEFENSE -> TIER 2 BULLPEN SWAPS)")
+		fmt.Printf("%-15s  %-16s  %7s  %-15s  %-18s  %13s  %-18s  %s\n",
+			"Decaying (Exit)", "Exit Sector", "Target", "Replace (Entry)", "Entry Sector", "Setup Quality", "Ignition Signal", "Sector Cap Status")
+		fmt.Printf("%-15s  %-16s  %7s  %-15s  %-18s  %13s  %-18s  %s\n",
+			"---------------", "-----------", "------", "---------------", "------------", "-------------", "---------------", "-----------------")
+		watchLimitSector := ""
+		for _, rb := range rebalances {
+			eSec := rb.ExitSector
+			if len(eSec) > 16 {
+				eSec = eSec[:16]
+			}
+			entSec := rb.EntrySector
+			if len(entSec) > 18 {
+				entSec = entSec[:18]
+			}
+			if strings.Contains(rb.SectorCapStatus, "Watch sector limit") && watchLimitSector == "" {
+				watchLimitSector = rb.EntrySector
+			}
+			fmt.Printf("%-15s  %-16s  %6.1f%%  %-15s  %-18s  %13.2f  %-18s  %s\n",
+				rb.ExitTicker, eSec, rb.TargetWeight*100.0, rb.EntryTicker, entSec, rb.SetupQuality, rb.IgnitionSignal, rb.SectorCapStatus)
+		}
+		if watchLimitSector != "" {
+			fmt.Println(strings.Repeat("-", 125))
+			fmt.Printf("💡 Note on Sector Limits: If capping %s strictly at 3 stocks, substitute with the next unconstrained candidate\n", watchLimitSector)
+			fmt.Println("   (e.g., NSE:BALRAMCHIN | Consumer Defensive | Setup: 1.94 | 🟢 IGNITION ACTIVE).")
+		}
+	}
+
 	// Overlap Audit Section
 	fmt.Println()
 	render.Banner(os.Stdout, "LIVE & STAGED BASKET OVERLAP AUDIT (§7D)")
@@ -419,3 +570,237 @@ func PrintSentryReport(results []SentryHoldingResult, overlaps []BasketOverlapRe
 	}
 	fmt.Println(strings.Repeat("=", 125))
 }
+
+// ApplyRebalanceSwaps updates the live basket CSV by replacing decaying holdings with assigned swap candidates.
+// Exiting holdings are recorded with weight 0.0000 at the bottom to maintain exit audit history.
+func ApplyRebalanceSwaps(basketPath string, rebalances []RebalanceSwap) error {
+	if len(rebalances) == 0 {
+		return nil
+	}
+
+	f, err := os.Open(basketPath)
+	if err != nil {
+		return fmt.Errorf("opening basket %s: %w", basketPath, err)
+	}
+	defer f.Close()
+
+	r := csv.NewReader(f)
+	records, err := r.ReadAll()
+	if err != nil {
+		return fmt.Errorf("reading basket %s: %w", basketPath, err)
+	}
+	if len(records) < 1 {
+		return fmt.Errorf("empty basket file %s", basketPath)
+	}
+
+	tickerIdx := -1
+	weightIdx := -1
+	for i, h := range records[0] {
+		switch strings.ToLower(strings.TrimSpace(h)) {
+		case "ticker":
+			tickerIdx = i
+		case "weight":
+			weightIdx = i
+		}
+	}
+	if tickerIdx == -1 || weightIdx == -1 {
+		return fmt.Errorf("required columns (ticker, weight) not found in %s", basketPath)
+	}
+
+	type holdingRow struct {
+		Ticker string
+		Weight float64
+	}
+
+	var activeHoldings []holdingRow
+	var zeroHoldings []string
+	seenExits := make(map[string]bool)
+
+	swapMap := make(map[string]RebalanceSwap)
+	for _, rb := range rebalances {
+		swapMap[cleanSymbol(rb.ExitTicker)] = rb
+	}
+
+	for _, row := range records[1:] {
+		if len(row) <= tickerIdx || len(row) <= weightIdx {
+			continue
+		}
+		t := cleanSymbol(row[tickerIdx])
+		w, _ := strconv.ParseFloat(strings.TrimSpace(row[weightIdx]), 64)
+		if w > 0.00001 {
+			if swap, isExit := swapMap[t]; isExit {
+				// Replace with entry candidate preserving weight
+				activeHoldings = append(activeHoldings, holdingRow{
+					Ticker: cleanSymbol(swap.EntryTicker),
+					Weight: w,
+				})
+				if !seenExits[t] {
+					zeroHoldings = append(zeroHoldings, t)
+					seenExits[t] = true
+				}
+			} else {
+				activeHoldings = append(activeHoldings, holdingRow{
+					Ticker: t,
+					Weight: w,
+				})
+			}
+		} else {
+			if !seenExits[t] {
+				zeroHoldings = append(zeroHoldings, t)
+				seenExits[t] = true
+			}
+		}
+	}
+
+	// Sort active holdings by weight descending
+	sort.Slice(activeHoldings, func(i, j int) bool {
+		return activeHoldings[i].Weight > activeHoldings[j].Weight
+	})
+
+	// Backup original file
+	backupPath := basketPath + ".bak"
+	_ = copyFile(basketPath, backupPath)
+
+	// Write updated CSV
+	outFile, err := os.Create(basketPath)
+	if err != nil {
+		return fmt.Errorf("creating updated basket %s: %w", basketPath, err)
+	}
+	defer outFile.Close()
+
+	w := csv.NewWriter(outFile)
+	defer w.Flush()
+
+	if err := w.Write([]string{"ticker", "weight"}); err != nil {
+		return err
+	}
+
+	for _, h := range activeHoldings {
+		if err := w.Write([]string{h.Ticker, fmt.Sprintf("%.4f", h.Weight)}); err != nil {
+			return err
+		}
+	}
+	for _, t := range zeroHoldings {
+		if err := w.Write([]string{t, "0.0000"}); err != nil {
+			return err
+		}
+	}
+
+	w.Flush()
+
+	fmt.Println()
+	render.Banner(os.Stdout, "REBALANCE SWAPS APPLIED SUCCESSFULLY")
+	fmt.Printf("Updated Live Basket: %s (%d Active Holdings, %d Historical Exits)\n", basketPath, len(activeHoldings), len(zeroHoldings))
+	fmt.Printf("Backup Saved to    : %s\n", backupPath)
+	fmt.Println(strings.Repeat("-", 80))
+	for _, rb := range rebalances {
+		fmt.Printf("  * EXITED: %-15s (%.2f%%) ──► ADDED: %-15s (%s)\n",
+			rb.ExitTicker, rb.TargetWeight*100.0, rb.EntryTicker, rb.EntrySector)
+	}
+	fmt.Println(strings.Repeat("=", 80))
+
+	return nil
+}
+
+func copyFile(src, dst string) error {
+	data, err := os.ReadFile(src)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(dst, data, 0644)
+}
+
+// ApplySentrySwapsToCandidateCSV updates a candidate CSV (e.g. index picks or proposal optim CSV)
+// by removing decaying exit tickers and substituting the assigned entry tickers with their target weights.
+func ApplySentrySwapsToCandidateCSV(candidatePath string, rebalances []RebalanceSwap) error {
+	if len(rebalances) == 0 {
+		return nil
+	}
+
+	weights, err := csvloader.ReadCSVWeights(candidatePath)
+	if err != nil {
+		return fmt.Errorf("reading candidate CSV %s: %w", candidatePath, err)
+	}
+
+	// Build map of exits to strip
+	exits := make(map[string]bool)
+	for _, rb := range rebalances {
+		exits[cleanSymbol(rb.ExitTicker)] = true
+		exits[rb.ExitTicker] = true
+	}
+
+	// Filter out exiting candidates and retain active entries in original order
+	type row struct {
+		ticker string
+		weight float64
+	}
+	var newRows []row
+	seen := make(map[string]bool)
+
+	// Open file to read original row order
+	f, err := os.Open(candidatePath)
+	if err == nil {
+		r := csv.NewReader(f)
+		records, _ := r.ReadAll()
+		f.Close()
+		if len(records) > 1 {
+			for _, rec := range records[1:] {
+				if len(rec) >= 2 {
+					t := strings.TrimSpace(rec[0])
+					if !exits[cleanSymbol(t)] && !exits[t] && !seen[t] {
+						seen[t] = true
+						w, _ := strconv.ParseFloat(strings.TrimSpace(rec[1]), 64)
+						newRows = append(newRows, row{ticker: t, weight: w})
+					}
+				}
+			}
+		}
+	}
+
+	// If reading original file failed or yielded empty, fall back to map
+	if len(newRows) == 0 {
+		for t, w := range weights {
+			if !exits[cleanSymbol(t)] && !exits[t] {
+				newRows = append(newRows, row{ticker: t, weight: w})
+			}
+		}
+	}
+
+	// Append staged substitutions with target weights
+	for _, rb := range rebalances {
+		entry := rb.EntryTicker
+		if !strings.HasPrefix(entry, "NSE:") && !strings.Contains(entry, ":") {
+			entry = "NSE:" + entry
+		}
+		newRows = append(newRows, row{
+			ticker: entry,
+			weight: rb.TargetWeight,
+		})
+	}
+
+	// Backup candidate file
+	_ = copyFile(candidatePath, candidatePath+".pre_sentry.bak")
+
+	// Write updated candidate CSV
+	outFile, err := os.Create(candidatePath)
+	if err != nil {
+		return fmt.Errorf("creating candidate file %s: %w", candidatePath, err)
+	}
+	defer outFile.Close()
+
+	w := csv.NewWriter(outFile)
+	defer w.Flush()
+
+	if err := w.Write([]string{"ticker", "weight"}); err != nil {
+		return err
+	}
+
+	for _, r := range newRows {
+		if err := w.Write([]string{r.ticker, fmt.Sprintf("%.4f", r.weight)}); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+

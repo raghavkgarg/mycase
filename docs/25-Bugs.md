@@ -696,5 +696,125 @@ Importantly, **Component 1 of the Coiled Spring Index (Setup Quality Score)** is
 2. **Scheduled Recalibration:**
    Once $\ge 30$ trading sessions have accumulated under `pillar4_uncalibrated = false` in `data/mycase.db`, execute a clean rolling OOS Spearman rank correlation test and update the canonical IC/IR tables.
 
+---
+---
 
+## Bug-012: Hysteresis Phase 4 Selection Dead-Zone Leaves Portfolio Under-Allocated on Cooldown Disqualification
+
+- **Status:** Resolved (2026-09-22)
+- **Component:** [`pkg/stockpicker/scoring.go`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/stockpicker/scoring.go#L1155-L1176) (`ApplyHysteresisSelectionSmart`)
+- **Strategy:** Multibagger / Standard / All strategies using Hysteresis Buffer (`--golden`, `--hysteresis-buffer`)
+- **Reported In:** `mycase pipeline --config config/pipeline.yaml --strategy multibagger --golden data/microsmall.csv`
+- **Execution Date:** 2026-09-22
+
+---
+
+### 1. Symptoms & Observed Behavior
+
+When executing the portfolio selection pipeline targeting `Top N: 20` with a golden copy:
+```bash
+mycase pipeline --config config/pipeline.yaml --strategy multibagger --golden data/microsmall.csv
+```
+The selection completed with only **19 stocks** instead of the configured 20:
+- Ranks 1–18 and Rank 20 were selected.
+- Rank 19 (`NSE:ARVIND`) was rejected by the 30-day anti-churn cooldown window.
+- Buffer zone holdings (`NSE:TENNIND` at Rank 23, `NSE:CCL` at Rank 25) were dropped due to sector caps and decelerating revenue growth (Rule 3B).
+- The 20th slot remained vacant, and the next-in-line eligible candidate (`NSE:EMCURE` at Rank 21) was erroneously rejected with:
+  ```
+  NSE:EMCURE | Healthcare | Not added: Rank 21 fell below selection cutoff (Top 20)
+  ```
+- The resulting portfolio was under-allocated, artificially concentrating weights (~5.26% each instead of ~5.00%).
+
+---
+
+### 2. Root Cause Analysis
+
+In [`pkg/stockpicker/scoring.go:1161`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/stockpicker/scoring.go#L1161), Phase 4 of `ApplyHysteresisSelectionSmart` (filling remaining slots with marginal new candidates) contained a rigid termination condition:
+```go
+for rankIdx, ticker := range sortedKeys {
+    rank := rankIdx + 1
+    if len(selected) >= topN {
+        break
+    }
+    if rank > topN {
+        break
+    }
+    ...
+```
+Because of `if rank > topN { break }`:
+1. The loop strictly terminated as soon as `rank > 20`.
+2. When a candidate within the top 20 (such as `NSE:ARVIND` at Rank 19) was disqualified by the 30-day anti-churn cooldown, exactly 19 candidates with `rank <= 20` were available.
+3. If no existing buffer-zone holdings qualified in Phase 3, Phase 4 halted prematurely at Rank 20 rather than evaluating Rank 21 (`NSE:EMCURE`) to fill the remaining open slot.
+
+---
+
+### 3. Remediation & Fix Specification
+
+1. **Phase 4 Backfill Logic**:
+   Removed `if rank > topN { break }` from Phase 4 in `pkg/stockpicker/scoring.go`. Phase 4 now scans remaining eligible candidates in `sortedKeys` until `len(selected) >= topN` or the candidate pool is exhausted.
+   - Buffer-zone existing holdings (Phase 3) still take precedence over new marginal candidates.
+   - High-conviction candidates (Phase 2) still displace buffer holdings as intended.
+   - Anti-churn cooldown and sector caps continue to be strictly enforced.
+   - If earlier candidates are disqualified, next-in-line candidates cleanly backfill the open slots.
+
+2. **Automated Unit Testing**:
+   Added `TestApplyHysteresisSelectionSmart_CooldownBackfill` in `pkg/stockpicker/stockpicker_test.go`:
+   - Verified that when a candidate in the top $N$ is blocked by a 30-day cooldown and no buffer holdings exist, the next eligible candidate backfills to fulfill `topN`.
+   - Verified that `tracker.CooldownDrops` captures the blocked candidate and `tracker.BuildFunnel()` conservation holds without error.
+
+---
+---
+
+## Bug-013: Pseudo-Predictive Attribution Inversion: Same-Day Catalyst Surges Stamped as "DUAL HIT" in Daily Gainers (Section 10)
+
+- **Status:** Resolved (2026-09-23)
+- **Component:** [`pkg/pithistory/analytics.go`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/pithistory/analytics.go) (Section 10: `gainersQuery` & overlap evaluation)
+- **Strategy:** Early Multibagger (`earlymb`)
+- **Reported In:** `mycase --index niftytotalmarket --method earlymb --analysis`
+- **Execution Date:** 2026-09-22
+
+---
+
+### 1. Symptoms & Observed Behavior
+
+In the PIT deep analysis report for **2026-09-22**, `NSE:GABRIEL` gained $+14.04\%$ and was labeled `DUAL HIT` in Section 10:
+```text
+  Ticker          |    Prev (₹) |   Close (₹) | 1D Gain     | Deliv Δ | Accum | Comp RS | Gate Type    | Stage-1 Bottleneck           | Radar Footprint
+  ----------------------------------------------------------------------------------------------------------------------------------------
+  NSE:GABRIEL     |   ₹1,290.30 |   ₹1,471.40 |     +14.04% |   +8.2% | YES   |  +17.9% | [CLEARED]    | Stage-1 Qualified            | DUAL HIT
+```
+This gave the false impression that `earlymb` had surfaced a predictive pre-breakout setup in advance. However:
+1. `GABRIEL` had **never appeared in the Pre-Breakout Incubator (Section 7)** or the **Near-Miss Radar (Section 9)** on any prior run.
+2. In all 16 consecutive sessions leading up to Sep 22, it was strictly disqualified by Stage-1 gates (`Far from 52W High: 81.3% < 85.0% floor`).
+3. Its delivery delta leading up to the pop was unremarkable or negative ($-3.9\%$ to $+4.2\%$).
+
+---
+
+### 2. Root Cause Analysis
+
+In [`pkg/pithistory/analytics.go:1111`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/pithistory/analytics.go#L1111):
+```go
+} else if hasScore && deliv >= 0.08 && rs >= 0.0 {
+    overlapStr = "DUAL HIT"
+}
+```
+`hasScore`, `deliv`, and `rs` were evaluated **on the day of the breakout itself ($T$)**:
+1. When `GABRIEL` surged $+14.04\%$ on 7.89M shares (a 39× volume spike), the move mechanically propelled its close from ₹1,290.30 (81.3% of 52W high) to ₹1,471.40 (92.7% of 52W high).
+2. The surge caused it to clear Stage-1 for the very first time on day $T$ (`hasScore = true`), with $\text{Deliv }\Delta = +8.2\%$ and $\text{Comp RS} = +17.9\%$.
+3. The report credited the system with a "DUAL HIT" catch, when in reality the breakout caused the gate to clear (**reverse causality**), rather than the gate predicting the breakout.
+
+---
+
+### 3. Remediation & Fix Specification
+
+1. **Prior-Session ($T-1$) Historical Join**:
+   Joined `v_pit_candidate_scores` on `p_c.as_of_date = prevDate` inside `gainersQuery` to retrieve `prev_passed_stage1`.
+2. **Mutual Exclusion Footprint Taxonomy**:
+   - `GRADUATED`: On Near-Miss Radar on $T-1$; cleared Stage-1 on session $T$. *(True predictive stealth alpha)*
+   - `INCUBATED HIT`: Stage-1 Qualified on $T-1$; confirmed breakout on session $T$ with heavy volume ($\text{Deliv }\Delta \ge +6.0\%$) (e.g. `NSE:MARKSANS`, `NSE:MANKIND`).
+   - `INCUBATED`: Stage-1 Qualified on $T-1$; gained price on session $T$ without large volume surge (e.g. `NSE:ENGINERSIN`).
+   - `ACTIVE RADAR`: Blocked on session $T$, but on active near-miss radar.
+   - `COINCIDENT POP`: Disqualified on $T-1$; no prior radar tracking on $T-1$; surged on session $T$ ($\ge 10\%$ or $\text{Deliv }\Delta \ge +6\%$), clearing Stage-1 on the surge itself. *(Explicitly flagged as reverse-causality unseeded move)*
+3. **Pre-Breakout Incubator Table Widened**:
+   Expanded Section 7 display from `LIMIT 12` to `LIMIT 20` to eliminate visual display bottlenecks for candidates ranked 13–20.
 

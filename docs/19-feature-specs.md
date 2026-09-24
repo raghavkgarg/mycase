@@ -382,7 +382,34 @@ Forward return calibration must account for the **market regime state at scoring
 
 $$\text{Regime-Conditional IC}_{k, R} = \text{SpearmanCorr}(\text{Pillar}_k, R_{t+21}) \quad \text{where } R_t \in [R_{\text{low}}, R_{\text{high}}]$$
 
-**Strategic Implication**: If P90 stocks scored during $R \approx 0.25$ deliver higher forward alpha than the same score during $R = 0.80$, then the system should be **more aggressive** (larger weights, tighter staging criteria) when $R$ begins recovering from troughs.
+### H. Reverse-Causality & Same-Day Gate Qualifiers (SDQ)
+
+#### 1. The Epistemological Boundary of Trailing Technical Systems
+Quantitative models built entirely on trailing price, volume, and relative strength (VCP, Comp RS, Delivery $\Delta$, 52W-High Proximity) possess an inherent boundary:
+- **What they CAN detect**: Gradual, quiet, pre-markup institutional accumulation footprints building over 1–3 weeks (e.g., `NSE:MARKSANS`, `NSE:MANKIND`).
+- **What they CANNOT detect**: Sudden, exogenous, catalyst-driven shocks (e.g., M&A announcements, major order wins, block deals, earnings surprises).
+
+Accepting this boundary plainly prevents wasteful sensitivity hyper-tuning on existing pillars to catch inherently unforecastable events.
+
+#### 2. The Reverse-Causality Trap (Case Study: `NSE:GABRIEL` on 2026-09-22)
+Prior to Sep 22, `NSE:GABRIEL` was persistently disqualified by Stage-1 gates (`Far from 52-Week High: 81.3% < 85.0% floor`), with negative or unremarkable delivery deltas ($-3.9\%$ to $+4.2\%$).
+On Sep 22, an unforecastable volume surge (7.89M shares vs 200k 20-day average) drove a $+14.04\%$ same-day price explosion.
+
+**The Reverse-Causality:** The gate did not select for the breakout; the breakout mechanically propelled the price above the 85% 52W high floor, satisfying the gate on the day of the surge itself. Concurrently, the 39× volume spike inflated today's $\text{Deliv }\Delta$ to $+8.2\%$. 
+
+If the system labels this as a predictive `DUAL HIT`, it commits an attribution inversion—falsely crediting trailing indicators with forecasting an event that actually generated the indicators.
+
+#### 3. Formal Same-Day Qualifier (SDQ) Footprint Taxonomy (Section 10)
+To enforce strict attribution integrity, Section 10 (`Daily Top Price Gainers`) partitions gainers into five mutually exclusive states based on **prior-session ($T-1$) status**:
+
+| Footprint Tag | Criteria ($T-1 \rightarrow T$) | Attribution Classification |
+|---|---|---|
+| **`GRADUATED`** | On Near-Miss Radar on $T-1$; cleared Stage-1 on session $T$. | **Predictive Success**: Stealth accumulation anticipated gate clearance. |
+| **`INCUBATED HIT`** | Stage-1 Qualified on $T-1$; confirmed breakout on session $T$ with heavy volume ($\text{Deliv }\Delta \ge +6.0\%$). | **Predictive Success**: Pre-breakout setup identified in advance and marked up. |
+| **`INCUBATED`** | Stage-1 Qualified on $T-1$; gained price on session $T$ without high delivery confirmation. | **Pre-Tracked Mover**: Part of existing Stage-1 core pool. |
+| **`ACTIVE RADAR`** | Disqualified by Stage-1 on session $T$, but currently exhibiting stealth accumulation ($\text{Deliv }\Delta \ge +8.0\%$). | **Active Surveillance**: On near-miss watch for potential gate resolution. |
+| **`COINCIDENT POP`** | Disqualified on $T-1$; had no prior radar tracking on $T-1$; surged on session $T$ ($\ge 10\%$ or $\text{Deliv }\Delta \ge +6\%$), clearing Stage-1 on the surge itself. | **Reverse-Causality Event**: Same-day unseeded catalyst. Explicitly barred from predictive credit. |
+| **`-`** | Standard gainer with no prior incubation, no radar tracking, and no institutional delivery confirmation. | **Noise / Baseline**. |
 
 ---
 

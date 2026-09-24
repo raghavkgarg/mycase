@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/raghavkgarg/mycase/pkg/config"
+	"github.com/raghavkgarg/mycase/pkg/csvloader"
 	"github.com/raghavkgarg/mycase/pkg/render"
 )
 
@@ -230,13 +231,25 @@ func CalculateRiskParityWeights(candidates []StagedCandidate) []StagedCandidate 
 
 // StagePreProduction generates the pre-production staging basket (data/pre_microsmall.csv)
 // and updates the companion DuckDB audit table.
-func (p *DB) StagePreProduction(ctx context.Context, indexName, method string, topN int, outCSVPath string) ([]StagedCandidate, error) {
+// If excludeBasketPath is provided, any active holdings in that basket are filtered out to ensure mutual exclusion.
+func (p *DB) StagePreProduction(ctx context.Context, indexName, method string, topN int, outCSVPath string, excludeBasketPath ...string) ([]StagedCandidate, error) {
 	indexName = NormalizeIndexName(indexName)
 	if outCSVPath == "" {
 		outCSVPath = config.DataPath("pre_microsmall.csv")
 	}
 	if topN <= 0 {
 		topN = 15
+	}
+
+	excludedTickers := make(map[string]bool)
+	if len(excludeBasketPath) > 0 && excludeBasketPath[0] != "" {
+		if exWeights, exErr := csvloader.ReadCSVWeights(excludeBasketPath[0]); exErr == nil {
+			for t, w := range exWeights {
+				if w > 0.00001 {
+					excludedTickers[cleanSymbol(t)] = true
+				}
+			}
+		}
 	}
 
 	latestDate, err := p.GetLatestRunDate(ctx, indexName, method)
@@ -376,6 +389,11 @@ LIMIT 20;
 			continue
 		}
 
+		cleanT := cleanSymbol(cand.Ticker)
+		if excludedTickers[cleanT] {
+			continue
+		}
+
 		qualified = append(qualified, cand)
 	}
 
@@ -478,10 +496,13 @@ INSERT INTO pre_production_staging (
 }
 
 // PrintStagingSummary renders the terminal report for pre-production staging.
-func PrintStagingSummary(candidates []StagedCandidate, outCSVPath string) {
+func PrintStagingSummary(candidates []StagedCandidate, outCSVPath string, excludeBasketPath ...string) {
 	fmt.Println()
 	render.Banner(os.Stdout, "PRE-PRODUCTION STAGING BASKET (TIER 2 INCUBATOR)")
 	fmt.Printf("Staged Output Path : %s\n", outCSVPath)
+	if len(excludeBasketPath) > 0 && excludeBasketPath[0] != "" {
+		fmt.Printf("Excluded Basket    : %s (Air-Gapped Mutual Exclusion Active)\n", excludeBasketPath[0])
+	}
 	fmt.Printf("Weighting Engine   : Inverse-Volatility Risk Parity (Max 8%% Single Stock / Max 25%% Sector Cap)\n")
 	fmt.Printf("Ranking Metric     : Setup Quality = max(0.10, 1 + Comp RS) / (VCP + 0.10) [Insulated from Delivery]\n")
 	fmt.Printf("Timing Overlay     : Ignition Signal = Delivery Delta %% (Tiebreaker & Visual Flag)\n")

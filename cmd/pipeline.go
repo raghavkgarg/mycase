@@ -19,6 +19,7 @@ import (
 	"github.com/raghavkgarg/mycase/pkg/cache"
 	"github.com/raghavkgarg/mycase/pkg/config"
 	"github.com/raghavkgarg/mycase/pkg/csvloader"
+	"github.com/raghavkgarg/mycase/pkg/pithistory"
 	"github.com/raghavkgarg/mycase/pkg/render"
 	"github.com/raghavkgarg/mycase/pkg/stockpicker"
 	"github.com/raghavkgarg/mycase/pkg/themedb"
@@ -40,6 +41,10 @@ var PipelineCommand = &cli.Command{
 		&cli.FloatFlag{Name: "rebalance-tolerance", Usage: "Rebalancing weight tolerance % (e.g. 0.10 for 0.10%)"},
 		&cli.IntFlag{Name: "hysteresis-buffer", Usage: "Extra ranks to allow existing holdings to drift"},
 		&cli.BoolFlag{Name: "yes", Aliases: []string{"y"}, Usage: "Non-interactive mode (auto-accept defaults, skip prompts)"},
+		&cli.BoolFlag{Name: "sentry", Usage: "Enable Tier-3 Holding Sentry defense overlay (auto-veto decaying holdings)"},
+		&cli.BoolFlag{Name: "no-sentry", Usage: "Disable Tier-3 Holding Sentry defense overlay"},
+		&cli.StringFlag{Name: "staged", Aliases: []string{"s"}, Usage: "Path to pre-production staged candidates CSV (default: data/pre_<golden>.csv)"},
+		&cli.BoolFlag{Name: "strict-sector", Usage: "Enforce strict sector caps in Sentry candidate substitution"},
 	},
 	Action: runPipeline,
 	Commands: []*cli.Command{
@@ -115,6 +120,19 @@ func runPipeline(ctx context.Context, c *cli.Command) error {
 
 	if c.IsSet("hysteresis-buffer") {
 		cfg.HysteresisRankBuffer = int(c.Int("hysteresis-buffer"))
+	}
+
+	if c.IsSet("staged") {
+		cfg.StagedPath = c.String("staged")
+	}
+	if c.IsSet("strict-sector") {
+		cfg.StrictSector = c.Bool("strict-sector")
+	}
+	if c.IsSet("sentry") {
+		cfg.Sentry = c.Bool("sentry")
+	}
+	if c.Bool("no-sentry") {
+		cfg.Sentry = false
 	}
 
 	reader := bufio.NewReader(os.Stdin)
@@ -384,6 +402,93 @@ func runPipeline(ctx context.Context, c *cli.Command) error {
 			stepCounter++
 		} else {
 			sourceCSV = outputCSVs[0]
+		}
+
+		// --- Tier-3 Holding Sentry Defense Overlay ---
+		sentryEnabled := !c.Bool("no-sentry") && cfg.Sentry
+		if c.IsSet("sentry") {
+			sentryEnabled = c.Bool("sentry")
+		}
+
+		if sentryEnabled && goldenCSV != "" {
+			stagedPath := cfg.StagedPath
+			if c.IsSet("staged") {
+				stagedPath = c.String("staged")
+			}
+
+			if stagedPath != "" {
+				if _, err := os.Stat(stagedPath); err == nil {
+					pitDB, pErr := pithistory.Open("")
+					if pErr == nil {
+						defer pitDB.Close()
+						sentryOpts := pithistory.SentryOptions{
+							StrictSector: cfg.StrictSector || c.Bool("strict-sector"),
+						}
+						results, overlaps, rebalances, sErr := pitDB.EvaluateHoldingSentry(ctx, goldenCSV, stagedPath, sentryOpts)
+						if sErr != nil {
+							fmt.Printf("[pipeline] Warning: Sentry evaluation failed: %v\n", sErr)
+						} else if len(rebalances) > 0 {
+							fmt.Println()
+							render.Banner(os.Stdout, "ACTIVE PORTFOLIO TIER-3 SENTRY DEFENSE OVERLAY (L3 TREND RUPTURES)")
+							pithistory.PrintSentryReport(results, overlaps, rebalances, goldenCSV, stagedPath)
+
+							fmt.Printf("\nApplying %d Tier-3 Sentry rebalance substitutions to candidate basket (%s)...\n", len(rebalances), sourceCSV)
+							if appErr := pithistory.ApplySentrySwapsToCandidateCSV(sourceCSV, rebalances); appErr != nil {
+								fmt.Printf("Warning: Failed to apply Sentry substitutions to candidate CSV: %v\n", appErr)
+							} else {
+								fmt.Println("Successfully substituted decaying holdings with staged ignition leaders.")
+
+								// Re-generate comparison report with Sentry annotations
+								prevRanks := make(map[string]csvloader.RankScore)
+								currRanks := make(map[string]csvloader.RankScore)
+								for _, rb := range rebalances {
+									prevRanks[rb.ExitTicker] = csvloader.RankScore{
+										Reason: fmt.Sprintf("🔴 Tier-3 Sentry L3 Trend Rupture Exit (%s)", rb.ExitSector),
+									}
+									cleanExit := strings.TrimPrefix(rb.ExitTicker, "NSE:")
+									prevRanks[cleanExit] = prevRanks[rb.ExitTicker]
+
+									currRanks[rb.EntryTicker] = csvloader.RankScore{
+										Reason: fmt.Sprintf("🟢 Tier-3 Sentry Staged Entry (Score %.1f, %s)", rb.SetupQuality, rb.IgnitionSignal),
+									}
+									cleanEntry := strings.TrimPrefix(rb.EntryTicker, "NSE:")
+									currRanks[cleanEntry] = currRanks[rb.EntryTicker]
+								}
+								csvloader.PrintComparisonReport(sourceCSV, goldenCSV, cfg.Strategy, prevRanks, currRanks)
+
+								// Persist sentry-rebalanced proposals to DuckDB if available
+								if db != nil {
+									if proposals := csvWeightsToProposals(sourceCSV); len(proposals) > 0 {
+										_ = db.InsertProposals(ctx, runID, "sentry_rebalanced", proposals)
+									}
+								}
+							}
+						} else {
+							fmt.Println("\n[Sentry Defense] All active holdings healthy; no Level-3 trend ruptures detected.")
+						}
+					}
+				}
+			} else {
+				// Pure in-strategy waterfall mode: Sentry audit check without bullpen swaps
+				pitDB, pErr := pithistory.Open("")
+				if pErr == nil {
+					defer pitDB.Close()
+					results, _, _, sErr := pitDB.EvaluateHoldingSentry(ctx, goldenCSV, "")
+					if sErr == nil {
+						l3Count := 0
+						for _, r := range results {
+							if r.SentryLevel == 3 {
+								l3Count++
+							}
+						}
+						if l3Count > 0 {
+							fmt.Printf("\n[Sentry Defense] Detected %d Level-3 trend rupture(s) in active holdings — evicted upstream via in-strategy selection waterfall.\n", l3Count)
+						} else {
+							fmt.Println("\n[Sentry Defense] All active holdings healthy; no Level-3 trend ruptures detected.")
+						}
+					}
+				}
+			}
 		}
 
 		// Update Golden Copy
