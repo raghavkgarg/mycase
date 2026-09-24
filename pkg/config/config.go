@@ -309,10 +309,11 @@ type HardFilters struct {
 	MinInterestCoverage         float64  `json:"min_interest_coverage"`
 	MaxCapExYoYMultiplier       float64  `json:"max_capex_yoy_multiplier"`
 	MaxDSODeteriorationPct      float64  `json:"max_dso_deterioration_pct"`
-	VolumeBreakoutLookbackDays  int      `json:"volume_breakout_lookback_days"`
-	VolumeBreakoutMultiplier    float64  `json:"volume_breakout_multiplier"`
-	MaxStocksPerSector          int      `json:"max_stocks_per_sector"`
-	MaxSectorWeightCap          float64  `json:"max_sector_weight_cap"`
+	VolumeBreakoutLookbackDays  int            `json:"volume_breakout_lookback_days"`
+	VolumeBreakoutMultiplier    float64        `json:"volume_breakout_multiplier"`
+	MaxStocksPerSector          int            `json:"max_stocks_per_sector"`
+	SectorMaxStocks             map[string]int `json:"sector_max_stocks,omitempty"`
+	MaxSectorWeightCap          float64        `json:"max_sector_weight_cap"`
 	PEGFloor                    float64  `json:"peg_floor"`
 	MaxPEG                      float64  `json:"max_peg"`
 	MinRSPercentile             float64  `json:"min_rs_percentile"`
@@ -371,6 +372,8 @@ type HardFilters struct {
 	Check200DaySMA                 bool    `json:"check_200day_sma"`
 	AllowCashOnSectorCapExhaustion bool    `json:"allow_cash_on_sector_cap_exhaustion"`
 	CheckGrossMargin               bool    `json:"check_gross_margin"`
+	MinEntryScore                  float64 `json:"min_entry_score"`
+	MinHoldingScore                float64 `json:"min_holding_score"`
 }
 
 // MFSStrategies wrapper containing the mapping of strategies and filters
@@ -401,6 +404,23 @@ func LoadHardFilters(filename string, strategy string) (*HardFilters, error) {
 		return &f, nil
 	}
 	return nil, nil
+}
+
+// GetMaxStocksForSector returns the maximum allowed stock count for a given sector,
+// honoring sector-specific overrides if configured, or falling back to the global limit.
+func (hf *HardFilters) GetMaxStocksForSector(sector string) int {
+	if hf == nil {
+		return 3
+	}
+	if hf.SectorMaxStocks != nil {
+		if capVal, ok := hf.SectorMaxStocks[sector]; ok && capVal > 0 {
+			return capVal
+		}
+	}
+	if hf.MaxStocksPerSector > 0 {
+		return hf.MaxStocksPerSector
+	}
+	return 3
 }
 
 // GovernanceWrapper wraps the map of pledged percentages

@@ -20,6 +20,7 @@ import (
 type SentryOptions struct {
 	MaxStocksPerSector int
 	StrictSector       bool
+	SectorMaxStocks    map[string]int
 }
 
 // SentryHoldingResult encapsulates the deterioration risk status for an active portfolio holding.
@@ -361,7 +362,13 @@ FROM (
 			}
 			newCount := activeSectors[sec] + 1
 			newWeight := activeSectorWeights[sec] + exiting.CurrentWeight
-			if newCount <= maxStocksPerSector && newWeight <= 0.2501 {
+			secMax := maxStocksPerSector
+			if len(opts) > 0 && opts[0].SectorMaxStocks != nil {
+				if m, ok := opts[0].SectorMaxStocks[sec]; ok && m > 0 {
+					secMax = m
+				}
+			}
+			if newCount <= secMax && newWeight <= 0.2501 {
 				cCopy := cand
 				assigned = &cCopy
 				break

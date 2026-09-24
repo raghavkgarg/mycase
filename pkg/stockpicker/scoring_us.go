@@ -266,7 +266,8 @@ func SelectTopNUSQMWithCooldown(
 			RSI:        rsi,
 		})
 
-		if sectorCounts[sec] >= maxPerSector {
+		secMax := hardFilters.GetMaxStocksForSector(sec)
+		if sectorCounts[sec] >= secMax {
 			tracker.RecordSectorCapDrop(t, sec, sectorTopTickers[sec])
 			continue
 		}

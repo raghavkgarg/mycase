@@ -119,6 +119,28 @@ func RunWithResult(ctx context.Context, opts *Options) (*PickResult, error) {
 	if err != nil {
 		slog.WarnContext(ctx, "pick.config_load_failed", "path", config.Path("mfs.json"), "err", err, "fallback", "defaults")
 	}
+	if cfg.HardFilters != nil {
+		if opts.SectorMaxStocks != nil {
+			if cfg.HardFilters.SectorMaxStocks == nil {
+				cfg.HardFilters.SectorMaxStocks = make(map[string]int)
+			}
+			for sec, capVal := range opts.SectorMaxStocks {
+				cfg.HardFilters.SectorMaxStocks[sec] = capVal
+			}
+		}
+		if opts.MinEntryScore > 0 {
+			cfg.HardFilters.MinEntryScore = opts.MinEntryScore
+		}
+		if opts.MinHoldingScore > 0 {
+			cfg.HardFilters.MinHoldingScore = opts.MinHoldingScore
+		}
+		if opts.MaxStockWeightCap > 0 {
+			cfg.HardFilters.MaxStockWeightCap = opts.MaxStockWeightCap
+		}
+		if opts.AllowCashReserve {
+			cfg.HardFilters.AllowCashOnSectorCapExhaustion = true
+		}
+	}
 
 	fundamentals, err := fetchFundamentalsVia(ctx, opts.DataFetcher, activeKeys)
 	if err != nil {

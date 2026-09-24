@@ -255,6 +255,11 @@ func runPipeline(ctx context.Context, c *cli.Command) error {
 				HysteresisRequireGrowthAcceleration: cfg.HysteresisRequireGrowthAcceleration,
 				CooldownDays:                        cfg.CooldownDays,
 				CooldownBypassRank:                  cfg.CooldownBypassRank,
+				SectorMaxStocks:                     cfg.SectorMaxStocks,
+				MinEntryScore:                       cfg.MinEntryScore,
+				MinHoldingScore:                     cfg.MinHoldingScore,
+				MaxStockWeightCap:                   cfg.MaxStockWeightCap,
+				AllowCashReserve:                    cfg.AllowCashReserve,
 				OutputFile:                          outPath,
 			}
 			if src.isIndex {
@@ -339,6 +344,11 @@ func runPipeline(ctx context.Context, c *cli.Command) error {
 				HysteresisRequireGrowthAcceleration: cfg.HysteresisRequireGrowthAcceleration,
 				CooldownDays:                        cfg.CooldownDays,
 				CooldownBypassRank:                  cfg.CooldownBypassRank,
+				SectorMaxStocks:                     cfg.SectorMaxStocks,
+				MinEntryScore:                       cfg.MinEntryScore,
+				MinHoldingScore:                     cfg.MinHoldingScore,
+				MaxStockWeightCap:                   cfg.MaxStockWeightCap,
+				AllowCashReserve:                    cfg.AllowCashReserve,
 				DisplayName:                         goldenBase,
 				OutputFile:                          outPath,
 			}
@@ -382,6 +392,11 @@ func runPipeline(ctx context.Context, c *cli.Command) error {
 				HysteresisRequireGrowthAcceleration: cfg.HysteresisRequireGrowthAcceleration,
 				CooldownDays:                        cfg.CooldownDays,
 				CooldownBypassRank:                  cfg.CooldownBypassRank,
+				SectorMaxStocks:                     cfg.SectorMaxStocks,
+				MinEntryScore:                       cfg.MinEntryScore,
+				MinHoldingScore:                     cfg.MinHoldingScore,
+				MaxStockWeightCap:                   cfg.MaxStockWeightCap,
+				AllowCashReserve:                    cfg.AllowCashReserve,
 				DisplayName:                         goldenBase,
 				OutputFile:                          optimPath,
 			}
@@ -422,7 +437,8 @@ func runPipeline(ctx context.Context, c *cli.Command) error {
 					if pErr == nil {
 						defer pitDB.Close()
 						sentryOpts := pithistory.SentryOptions{
-							StrictSector: cfg.StrictSector || c.Bool("strict-sector"),
+							StrictSector:    cfg.StrictSector || c.Bool("strict-sector"),
+							SectorMaxStocks: cfg.SectorMaxStocks,
 						}
 						results, overlaps, rebalances, sErr := pitDB.EvaluateHoldingSentry(ctx, goldenCSV, stagedPath, sentryOpts)
 						if sErr != nil {

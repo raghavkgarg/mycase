@@ -558,7 +558,21 @@ func SelectTopNValueWithCooldown(
 			}
 		}
 
-		if sectorCounts[sec] >= maxPerSector {
+		// Quality Hurdle Gate: reject sub-hurdle newcomers and evict severely decayed incumbents
+		_, isExistingVal := existingHoldings[t]
+		if hardFilters != nil {
+			if !isExistingVal && hardFilters.MinEntryScore > 0 && scores[t] < hardFilters.MinEntryScore {
+				tracker.RecordScoreThresholdDrop(t, fmt.Sprintf("Score (%.1f) below minimum entry quality hurdle (%.1f)", scores[t], hardFilters.MinEntryScore))
+				continue
+			}
+			if isExistingVal && hardFilters.MinHoldingScore > 0 && scores[t] < hardFilters.MinHoldingScore {
+				tracker.RecordHysteresisDropWithReason(t, fmt.Sprintf("Removed: Holding score (%.1f) fell below maintenance threshold (%.1f)", scores[t], hardFilters.MinHoldingScore))
+				continue
+			}
+		}
+
+		secMax := hardFilters.GetMaxStocksForSector(sec)
+		if sectorCounts[sec] >= secMax {
 			tracker.RecordSectorCapDrop(t, sec, sectorTopTickers[sec])
 			continue
 		}
@@ -586,9 +600,11 @@ func NormalizeAndCapWeights(
 	if sectorCap <= 0 {
 		sectorCap = 0.25
 	}
-	minEqWeight := 1.0 / float64(len(selectedKeys))
-	if stockCap < minEqWeight {
-		stockCap = minEqWeight
+	if !allowCashOnSectorCapExhaustion {
+		minEqWeight := 1.0 / float64(len(selectedKeys))
+		if stockCap < minEqWeight {
+			stockCap = minEqWeight
+		}
 	}
 
 	if !allowCashOnSectorCapExhaustion {
@@ -652,8 +668,13 @@ func NormalizeAndCapWeights(
 			}
 		}
 
-		if !hasViolation && math.Abs(currentSum-1.0) < 1e-4 {
-			break
+		if !hasViolation {
+			if allowCashOnSectorCapExhaustion && currentSum <= 1.0+1e-4 {
+				break
+			}
+			if math.Abs(currentSum-1.0) < 1e-4 {
+				break
+			}
 		}
 	}
 }
@@ -789,7 +810,21 @@ func SelectTopNMultibaggerWithCooldown(
 			}
 		}
 
-		if sectorCounts[sec] >= maxPerSector {
+		// Quality Hurdle Gate: reject sub-hurdle newcomers and evict severely decayed incumbents
+		_, isExistingHold := existingHoldings[t]
+		if hardFilters != nil {
+			if !isExistingHold && hardFilters.MinEntryScore > 0 && scores[t] < hardFilters.MinEntryScore {
+				tracker.RecordScoreThresholdDrop(t, fmt.Sprintf("Score (%.1f) below minimum entry quality hurdle (%.1f)", scores[t], hardFilters.MinEntryScore))
+				continue
+			}
+			if isExistingHold && hardFilters.MinHoldingScore > 0 && scores[t] < hardFilters.MinHoldingScore {
+				tracker.RecordHysteresisDropWithReason(t, fmt.Sprintf("Removed: Holding score (%.1f) fell below maintenance threshold (%.1f)", scores[t], hardFilters.MinHoldingScore))
+				continue
+			}
+		}
+
+		secMax := hardFilters.GetMaxStocksForSector(sec)
+		if sectorCounts[sec] >= secMax {
 			tracker.RecordSectorCapDrop(t, sec, sectorTopTickers[sec])
 			continue
 		}
@@ -831,9 +866,11 @@ func NormalizeMultibaggerWeights(
 	if stockCapVal <= 0 {
 		stockCapVal = 0.20
 	}
-	minEqWeight := 1.0 / float64(len(selectedKeys))
-	if stockCapVal < minEqWeight {
-		stockCapVal = minEqWeight
+	if hardFilters == nil || !hardFilters.AllowCashOnSectorCapExhaustion {
+		minEqWeight := 1.0 / float64(len(selectedKeys))
+		if stockCapVal < minEqWeight {
+			stockCapVal = minEqWeight
+		}
 	}
 	capVal := hardFilters.MaxSectorWeightCap
 	if capVal <= 0 {
@@ -1051,12 +1088,26 @@ func ApplyHysteresisSelectionSmart(
 	smartCfg SmartHysteresisConfig,
 ) []string {
 	if len(sortedKeys) <= topN {
+		var filteredSelected []string
 		for rankIdx, ticker := range sortedKeys {
 			rank := rankIdx + 1
-			_, isExisting := existingHoldings[ticker]
-			tracker.RecordSelected(ticker, rank, topN, isExisting)
+			if _, isExisting := existingHoldings[ticker]; isExisting {
+				filteredSelected = append(filteredSelected, ticker)
+				tracker.RecordSelected(ticker, rank, topN, true)
+			} else {
+				evalRank := rank
+				if tracker != nil && tracker.RawRanks != nil && tracker.RawRanks[ticker] > 0 {
+					evalRank = tracker.RawRanks[ticker]
+				}
+				if onCd, cdReason := IsOnCooldown(ticker, recentExits, evalRank, bypassRank, time.Now(), cooldownDays); onCd {
+					tracker.RecordCooldownDrop(ticker, cdReason)
+					continue
+				}
+				filteredSelected = append(filteredSelected, ticker)
+				tracker.RecordSelected(ticker, rank, topN, false)
+			}
 		}
-		return sortedKeys
+		return filteredSelected
 	}
 
 	minScoreDelta := smartCfg.MinScoreDelta
@@ -1165,7 +1216,11 @@ func ApplyHysteresisSelectionSmart(
 			}
 
 			if isHighConviction {
-				if onCd, cdReason := IsOnCooldown(ticker, recentExits, rank, bypassRank, time.Now(), cooldownDays); onCd {
+				evalRank := rank
+				if tracker != nil && tracker.RawRanks != nil && tracker.RawRanks[ticker] > 0 {
+					evalRank = tracker.RawRanks[ticker]
+				}
+				if onCd, cdReason := IsOnCooldown(ticker, recentExits, evalRank, bypassRank, time.Now(), cooldownDays); onCd {
 					tracker.RecordCooldownDrop(ticker, cdReason)
 					continue
 				}
@@ -1203,7 +1258,11 @@ func ApplyHysteresisSelectionSmart(
 			continue
 		}
 		if _, isExisting := existingHoldings[ticker]; !isExisting {
-			if onCd, cdReason := IsOnCooldown(ticker, recentExits, rank, bypassRank, time.Now(), cooldownDays); onCd {
+			evalRank := rank
+			if tracker != nil && tracker.RawRanks != nil && tracker.RawRanks[ticker] > 0 {
+				evalRank = tracker.RawRanks[ticker]
+			}
+			if onCd, cdReason := IsOnCooldown(ticker, recentExits, evalRank, bypassRank, time.Now(), cooldownDays); onCd {
 				tracker.RecordCooldownDrop(ticker, cdReason)
 				continue
 			}
@@ -1285,9 +1344,20 @@ func ApplyRebalancingBand(
 		return targetWeights
 	}
 
+	var totalTargetSum float64
+	for _, w := range targetWeights {
+		totalTargetSum += w
+	}
+	targetBudget := 1.0
+	if totalTargetSum < 0.9999 && totalTargetSum > 0 {
+		targetBudget = totalTargetSum
+	}
+
 	if sumNonLockedTarget <= 0 {
 		// All selected stocks are within the tolerance band.
-		// Retain their existing weights, normalized to sum to exactly 1.0.
+		if totalTargetSum < 0.9999 {
+			return lockedWeights
+		}
 		var sum float64
 		for _, w := range lockedWeights {
 			sum += w
@@ -1302,13 +1372,13 @@ func ApplyRebalancingBand(
 		return targetWeights
 	}
 
-	if sumLocked >= 1.0 {
+	if sumLocked >= targetBudget {
 		return targetWeights
 	}
 
 	finalWeights := make(map[string]float64)
 	maps.Copy(finalWeights, lockedWeights)
-	remainingWeight := 1.0 - sumLocked
+	remainingWeight := targetBudget - sumLocked
 	for _, ticker := range nonLockedKeys {
 		finalWeights[ticker] = targetWeights[ticker] * (remainingWeight / sumNonLockedTarget)
 	}
@@ -1538,7 +1608,8 @@ func SelectTopNEarlyMultibaggerWithCooldown(
 		}
 		tracker.RecordAdditionDriver(t, driverStr)
 
-		if sectorCounts[sec] >= maxPerSector {
+		secMax := hardFilters.GetMaxStocksForSector(sec)
+		if sectorCounts[sec] >= secMax {
 			tracker.RecordSectorCapDrop(t, sec, sectorTopTickers[sec])
 			continue
 		}

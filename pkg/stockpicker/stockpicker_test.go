@@ -2,6 +2,7 @@ package stockpicker
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"os"
 	"path/filepath"
@@ -1498,3 +1499,188 @@ func TestComputeROIC_ClampsExtremes(t *testing.T) {
 		t.Errorf("computeROIC = %v, want 1.0 (clamped)", got)
 	}
 }
+
+func TestSelectTopNMultibagger_SectorMaxStocks(t *testing.T) {
+	activeKeys := []string{"CD1", "CD2", "CD3", "TECH1", "CD4"}
+	scores := map[string]float64{
+		"CD1":   90.0,
+		"CD2":   85.0,
+		"CD3":   80.0,
+		"TECH1": 75.0,
+		"CD4":   70.0,
+	}
+	fundamentals := map[string]yfinance.Fundamentals{
+		"CD1":   {Sector: "Consumer Defensive"},
+		"CD2":   {Sector: "Consumer Defensive"},
+		"CD3":   {Sector: "Consumer Defensive"},
+		"TECH1": {Sector: "Technology"},
+		"CD4":   {Sector: "Consumer Defensive"},
+	}
+	hardFilters := &config.HardFilters{
+		MaxStocksPerSector: 5,
+		SectorMaxStocks: map[string]int{
+			"Consumer Defensive": 2,
+		},
+	}
+	tracker := selectiontracker.New()
+	existingHoldings := make(map[string]float64)
+	recentExits := make(map[string]time.Time)
+
+	selected := SelectTopNMultibaggerWithCooldown(
+		activeKeys,
+		scores,
+		fundamentals,
+		hardFilters,
+		5,
+		existingHoldings,
+		0,
+		tracker,
+		recentExits,
+		30,
+		5,
+	)
+
+	// Expected: CD1, CD2, TECH1 (CD3 and CD4 blocked by sector cap of 2)
+	expected := []string{"CD1", "CD2", "TECH1"}
+	if len(selected) != len(expected) {
+		t.Fatalf("expected %d selected, got %d: %v", len(expected), len(selected), selected)
+	}
+	for i, exp := range expected {
+		if selected[i] != exp {
+			t.Errorf("expected selected[%d]=%s, got %s", i, exp, selected[i])
+		}
+	}
+
+	// Verify tracker recorded sector cap drops for CD3 and CD4
+	if _, ok := tracker.SectorCapDrops["CD3"]; !ok {
+		t.Errorf("expected CD3 to be in tracker.SectorCapDrops")
+	}
+	if _, ok := tracker.SectorCapDrops["CD4"]; !ok {
+		t.Errorf("expected CD4 to be in tracker.SectorCapDrops")
+	}
+}
+
+func TestSelectTopNMultibagger_MinEntryScoreHurdle(t *testing.T) {
+	activeKeys := []string{"STOCK1", "STOCK2", "STOCK3", "STOCK4"}
+	scores := map[string]float64{
+		"STOCK1": 55.0,
+		"STOCK2": 45.0,
+		"STOCK3": 38.0, // Below 40.0 entry hurdle
+		"STOCK4": 35.0, // Below 40.0 entry hurdle
+	}
+	fundamentals := map[string]yfinance.Fundamentals{
+		"STOCK1": {Sector: "Technology"},
+		"STOCK2": {Sector: "Healthcare"},
+		"STOCK3": {Sector: "Industrials"},
+		"STOCK4": {Sector: "Financial Services"},
+	}
+	hardFilters := &config.HardFilters{
+		MaxStocksPerSector: 5,
+		MinEntryScore:      40.0,
+		MinHoldingScore:    35.0,
+	}
+	tracker := selectiontracker.New()
+	existingHoldings := make(map[string]float64)
+	recentExits := make(map[string]time.Time)
+
+	selected := SelectTopNMultibaggerWithCooldown(
+		activeKeys,
+		scores,
+		fundamentals,
+		hardFilters,
+		4, // Asking for 4, but only 2 meet the 40.0 score hurdle
+		existingHoldings,
+		0,
+		tracker,
+		recentExits,
+		30,
+		5,
+	)
+
+	expected := []string{"STOCK1", "STOCK2"}
+	if len(selected) != len(expected) {
+		t.Fatalf("expected %d selected, got %d: %v", len(expected), len(selected), selected)
+	}
+	for i, exp := range expected {
+		if selected[i] != exp {
+			t.Errorf("expected selected[%d]=%s, got %s", i, exp, selected[i])
+		}
+	}
+
+	// Verify tracker recorded hurdle drops
+	if reason, ok := tracker.ScoreThresholdDrops["STOCK3"]; !ok || !strings.Contains(reason, "below minimum entry quality hurdle") {
+		t.Errorf("expected STOCK3 in ScoreThresholdDrops with quality hurdle reason, got: %s", reason)
+	}
+	if reason, ok := tracker.ScoreThresholdDrops["STOCK4"]; !ok || !strings.Contains(reason, "below minimum entry quality hurdle") {
+		t.Errorf("expected STOCK4 in ScoreThresholdDrops with quality hurdle reason, got: %s", reason)
+	}
+}
+
+func TestNormalizeAndCapWeights_CashSpillover(t *testing.T) {
+	// 15 stocks, each capped at 0.06 (6%), sector cap 0.25 (25%)
+	selectedKeys := []string{
+		"S01", "S02", "S03", "S04", "S05",
+		"S06", "S07", "S08", "S09", "S10",
+		"S11", "S12", "S13", "S14", "S15",
+	}
+	weights := make(map[string]float64)
+	fundamentals := make(map[string]yfinance.Fundamentals)
+	for i, s := range selectedKeys {
+		weights[s] = 10.0 // equal initial scores
+		sec := fmt.Sprintf("Sector_%d", i%5) // 5 sectors, 3 stocks each -> 3*6% = 18% < 25%
+		fundamentals[s] = yfinance.Fundamentals{Sector: sec}
+	}
+
+	NormalizeAndCapWeights(selectedKeys, weights, fundamentals, 0.06, 0.25, true)
+
+	var totalWeight float64
+	for _, s := range selectedKeys {
+		if weights[s] > 0.06001 {
+			t.Errorf("stock %s exceeded 6%% cap: %.4f", s, weights[s])
+		}
+		totalWeight += weights[s]
+	}
+
+	// Expected total weight is 15 * 0.06 = 0.9000
+	if math.Abs(totalWeight-0.9000) > 1e-3 {
+		t.Errorf("expected total equity weight ~0.9000, got %.4f", totalWeight)
+	}
+	cashReserve := 1.0 - totalWeight
+	if math.Abs(cashReserve-0.1000) > 1e-3 {
+		t.Errorf("expected cash reserve ~0.1000, got %.4f", cashReserve)
+	}
+}
+
+func TestApplyHysteresisSelectionSmart_CooldownWhenPoolUnderTopN(t *testing.T) {
+	// Candidate pool has 3 stocks, topN = 5 (pool <= topN)
+	// Stock CD_NEW is a newcomer on cooldown (rank 2, bypassRank 1)
+	sorted := []string{"STOCK1", "CD_NEW", "STOCK2"}
+	existing := map[string]float64{
+		"STOCK1": 0.50,
+	}
+	recentExits := map[string]time.Time{
+		"CD_NEW": time.Now().Add(-15 * 24 * time.Hour), // 15 days ago <= 30d
+	}
+	tracker := selectiontracker.New()
+	for idx, s := range sorted {
+		tracker.RecordRawScore(s, float64(80-idx*10), idx+1)
+	}
+
+	selected := ApplyHysteresisSelectionSmart(sorted, existing, 5, 7, tracker, recentExits, 30, 1, SmartHysteresisConfig{})
+
+	// Expected: STOCK1 and STOCK2 selected; CD_NEW blocked by cooldown
+	expected := []string{"STOCK1", "STOCK2"}
+	if len(selected) != len(expected) {
+		t.Fatalf("expected %d selected, got %d: %v", len(expected), len(selected), selected)
+	}
+	for i, want := range expected {
+		if selected[i] != want {
+			t.Errorf("expected selected[%d]=%s, got %s", i, want, selected[i])
+		}
+	}
+
+	if _, ok := tracker.CooldownDrops["CD_NEW"]; !ok {
+		t.Errorf("expected CD_NEW to be recorded in tracker.CooldownDrops")
+	}
+}
+

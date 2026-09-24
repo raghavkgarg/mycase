@@ -40,6 +40,11 @@ type PipelineConfig struct {
 	Sentry                              bool           `yaml:"sentry"`        // enable Tier-3 Holding Sentry defense overlay
 	StagedPath                          string         `yaml:"staged_path"`   // path to pre-production staged candidates CSV
 	StrictSector                        bool           `yaml:"strict_sector"` // enforce strict max stocks per sector in Sentry swaps
+	SectorMaxStocks                     map[string]int `yaml:"sector_max_stocks"` // sector-specific stock count caps (e.g. "Consumer Defensive": 2)
+	MinEntryScore                       float64        `yaml:"min_entry_score"`   // minimum score hurdle for new additions (e.g. 40.0)
+	MinHoldingScore                     float64        `yaml:"min_holding_score"` // minimum score floor for incumbents (e.g. 35.0)
+	MaxStockWeightCap                   float64        `yaml:"max_stock_weight_cap"` // maximum single stock weight cap (e.g. 0.06 / 6%)
+	AllowCashReserve                    bool           `yaml:"allow_cash_reserve"`   // allow excess/unallocated weight to spill into CASH_RESERVE
 }
 
 // Snapshot returns a compact JSON snapshot of the resolved config, for recording
@@ -75,6 +80,11 @@ type rawPipelineConfig struct {
 	Sentry                              any            `yaml:"sentry"`
 	StagedPath                          any            `yaml:"staged_path"`
 	StrictSector                        any            `yaml:"strict_sector"`
+	SectorMaxStocks                     map[string]int `yaml:"sector_max_stocks"`
+	MinEntryScore                       any            `yaml:"min_entry_score"`
+	MinHoldingScore                     any            `yaml:"min_holding_score"`
+	MaxStockWeightCap                   any            `yaml:"max_stock_weight_cap"`
+	AllowCashReserve                    any            `yaml:"allow_cash_reserve"`
 }
 
 // resolveFirst extracts T from val (which may be a scalar or a []any from multi-doc YAML).
@@ -216,6 +226,11 @@ func (cfg *PipelineConfig) UnmarshalYAML(value *yaml.Node) error {
 	cfg.Sentry = resolveFirst(a.Sentry, true)
 	cfg.StagedPath = resolveFirst(a.StagedPath, "")
 	cfg.StrictSector = resolveFirst(a.StrictSector, false)
+	cfg.SectorMaxStocks = a.SectorMaxStocks
+	cfg.MinEntryScore = resolveFirst(a.MinEntryScore, 0.0)
+	cfg.MinHoldingScore = resolveFirst(a.MinHoldingScore, 0.0)
+	cfg.MaxStockWeightCap = resolveFirst(a.MaxStockWeightCap, 0.0)
+	cfg.AllowCashReserve = resolveFirst(a.AllowCashReserve, false)
 
 	return nil
 }

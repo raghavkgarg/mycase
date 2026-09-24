@@ -212,9 +212,11 @@ func (z *ZerodhaBroker) PlaceGTT(order broker.Order) (broker.OrderResult, error)
 		TransactionType: order.TransactionType,
 		Product:         order.Product,
 		Trigger: &kiteconnect.GTTSingleLegTrigger{
-			TriggerValue: order.TriggerPrice,
-			LimitPrice:   order.Price,
-			Quantity:     float64(order.Quantity),
+			TriggerParams: kiteconnect.TriggerParams{
+				TriggerValue: order.TriggerPrice,
+				LimitPrice:   order.Price,
+				Quantity:     float64(order.Quantity),
+			},
 		},
 	})
 	if err != nil {

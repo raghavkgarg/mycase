@@ -297,8 +297,13 @@ For the `multibagger` method, the following filter parameters are mapped:
 * `"max_capex_yoy_multiplier"`: CapEx stabilization boundary limit for Operating Leverage (default `1.15` / 15% growth cap).
 * `"volume_breakout_lookback_days"`: Rolling lookback window for institutional volume breakout checks (default `60` days).
 * `"volume_breakout_multiplier"`: Minimum volume multiplier threshold on green days compared to average red days (default `2.0`x).
-* `"max_stocks_per_sector"`: Maximum number of stocks allowed from the same sector in the selection portfolio (default `3`).
+* `"max_stocks_per_sector"`: Maximum number of stocks allowed from the same sector in the selection portfolio (default `3` or `5`).
+* `"sector_max_stocks"`: Sector-specific maximum stock count overrides (e.g. `{"Consumer Defensive": 2}` to limit exposure to particular sectors (like FMCG) while other sectors maintain their normal caps).
 * `"max_sector_weight_cap"`: Maximum concentration weight allowed for any single sector (default `0.25` / 25%).
+* `"max_stock_weight_cap"`: Maximum concentration weight allowed for any individual stock (default `0.06` / 6% or `0.10` / 10%).
+* `"min_entry_score"`: Absolute quality hurdle for new candidate entry (e.g. `40.0`). Candidates scoring below this threshold are rejected even if target portfolio Top $N$ is not full.
+* `"min_holding_score"`: Minimum score maintenance floor for existing holdings in the buffer zone (e.g. `35.0`).
+* `"allow_cash_on_sector_cap_exhaustion"` / `"allow_cash_reserve"`: If true, unallocated portfolio weight resulting from stock caps or quality hurdles automatically spills into `CASH_RESERVE` rather than being forced into equities.
 * `"hysteresis_min_score_delta"`: Minimum score advantage required for a Top $N$ new entrant to displace a buffer holding (default `3.0` pts in `config/pipeline.yaml`).
 * `"hysteresis_require_growth_acceleration"`: If true, existing holdings in the buffer zone forfeit buffer protection if sales growth decelerates ($TTM \le 3Y\text{ CAGR}$) (default `true` in `config/pipeline.yaml`).
 
@@ -361,6 +366,8 @@ To solve these live production challenges, `mycase` implements a **4-pillar anti
 * **Bypass Exception**: An exited stock is strictly blocked from re-entering within 30 days unless it achieves an **Exceptional Conviction Rank $\le 5$** (`cooldown_bypass_rank: 5`).
 * **Persistence & Discovery**: Historical exits are dynamically reconstructed by inspecting previous portfolio backups (`data/backups/<universe>/bk_*.csv`) and timestamped execution logs (`report/<theme>/executions/*_selection_reasons.txt`).
 * **Funnel Conservation**: Candidates blocked by cooldown are structurally categorized as `CooldownDrops` in the selection funnel audit report.
+* **Under-Subscribed Pool Invariant**: Cooldown is strictly enforced regardless of candidate pool size. Even when total surviving candidates are fewer than or equal to $TopN$ (e.g. 17 or 18 stocks for a 20-stock target), recently exited stocks cannot slip through to "fill slots".
+* **True Market Rank Evaluation**: The bypass threshold ($\le 5$) evaluates the candidate's true market rank (`RawRank`) rather than post-filter slice indices, preventing upstream sector drops from synthetically promoting a mediocre candidate into a cooldown bypass.
 
 ### Pillar 2: Asymmetric Soft-Band Safety Tolerances (Anti-Cliff Protection)
 To eliminate binary cliff liquidations, the system applies asymmetric thresholds between **New Candidate Entry Gates** and **Existing Holding Exit Gates** (`isExisting = true`):
@@ -742,11 +749,139 @@ top_n:
 * **Physical Database Pure Base**: Purged 2,446 redundant sub-index physical records (`small250`, `smallcap250`, `microcap250`, `microsmall`) from `data/mycase.db`. All Indian equity point-in-time scores are anchored solely on `niftytotalmarket`.
 * **Dynamic Slicing**: Views `v_pit_candidate_scores` and `v_pit_runs` project any sub-index on demand via `index_constituents`.
 * **Consensus Command**:
-  ```bash
-  # View top dual-conviction leaders combining Multibagger and EarlyMB
-  mycase pit consensus [--top 15] [--date YYYY-MM-DD]
-  ```
-  Surfaces institutional compounders supported by both fundamental cash generation and pre-breakout volume accumulation (e.g., `MCX`, `TMCV`, `NETWEB`, `MANORAMA`), while displaying active portfolio holding tags and Stage-1 dual pass statuses.
+---
+
+## 12. In-Strategy Technical Sentry Gate & Waterfall Defense (September 24, 2026)
+
+### 1. The Fundamental Lag Dilemma
+Fundamental quality metrics (ROCE, CROIC, CFO/PAT, DSO) are derived from audited financial reports with 45–90 day publication lags. While indispensable for identifying long-term compounders, accounting statements are blind to immediate structural breakdowns in market structure.
+
+In live production (`data/microsmall.csv`), three legacy holdings deteriorated technically while retaining high fundamental scores:
+- **`NSE:HINDCOPPER`**: Crashed to ₹513.00 from a 52W high of ₹760.00 (**-32.5% peak drawdown**).
+- **`NSE:SARDAEN`**: Slipped to ₹505.95 below its 200-day SMA (₹521.20) from a 52W high of ₹639.80 (**-20.9% peak drawdown**).
+- **`NSE:SUMICHEM`**: Declined to ₹464.20 from a 52W high of ₹601.80 (**-22.9% peak drawdown**).
+
+Under standard hysteresis rules (Top 20 target with buffer protection up to Rank 25), these decaying incumbents occupied slots #3, #5, and #17, blocking pristine, accelerating Multibagger compounders (`NSE:ENRIN`, `NSE:NAM-INDIA`, `NSE:RADICO`) which were ranked at #21, #22, and #24.
+
+---
+
+### 2. Upstream Sentry Technical Health Gate (`pkg/stockpicker/sentry_gate.go`)
+To eliminate falling knives without compromising the fundamental nature of the strategy, the system implements an **Upstream Technical Sentry Gate** directly inside [`SelectTopNMultibaggerWithCooldown`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/stockpicker/scoring.go):
+
+```go
+// CheckSentryTrendRupture checks if a stock violates the Tier-3 Sentry Level-3 Trend Rupture criteria:
+// 1. Price < 0.95 * SMA200 (breaking down >5% below 200-day simple moving average)
+// 2. Price < 0.80 * 52W High (severe peak drawdown > 20% from 52-week high)
+func CheckSentryTrendRupture(hist *yfinance.HistoricalData) (isRupture bool, reason string)
+```
+
+#### Evaluation Rules:
+1. **Incumbent Disqualification**:
+   - Every candidate is checked against the 200-SMA breakdown floor ($Price < 0.95 \times SMA_{200}$) and severe peak drawdown ($Price < 0.80 \times High_{52W}$).
+   - Decaying incumbents **immediately forfeit hysteresis buffer protection** and are evicted from the portfolio:
+     - `NSE:HINDCOPPER` $\to$ `Removed: Incumbent evicted by Sentry Gate (Peak drawdown -32.5% exceeds -20% limit (52W High ₹760.0))`
+     - `NSE:SARDAEN` $\to$ `Removed: Incumbent evicted by Sentry Gate (Peak drawdown -20.9% exceeds -20% limit (52W High ₹639.8))`
+     - `NSE:SUMICHEM` $\to$ `Removed: Incumbent evicted by Sentry Gate (Peak drawdown -22.9% exceeds -20% limit (52W High ₹601.8))`
+2. **Falling Knife Rejection**:
+   - New entrants failing the gate are blocked before sector cap or ranking evaluation:
+     - `NSE:AFFLE` (-26.4% DD), `NSE:FSL` (-28.7% DD), `NSE:ECLERX` (-22.8% DD), `NSE:IFBIND` (-37.2% DD), `NSE:WAKEFIT` (-32.0% DD), `NSE:PRAJIND` (-24.0% DD), `NSE:SUPREMEIND` (-23.9% DD).
+
+---
+
+### 3. Lookback Horizon Alignment (260 Trading Bars vs 250 Calendar Bars)
+A subtle temporal discrepancy was diagnosed and resolved during live validation:
+- **The Issue**: [`pkg/cache/prices.go`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/cache/prices.go) previously computed the `"1y"` start date via `now.AddDate(-1, 0, 0)` (365 calendar days $\approx 248\text{--}250$ trading bars), and `sentry_gate.go` checked `lookback := min(len, 250)`. 
+- **The Consequence**: `SARDAEN`'s peak (₹639.8 on 2025-09-16) and `SUMICHEM`'s peak (₹601.8 on 2025-09-22) occurred 255 to 261 trading sessions ago. They were truncated by 2 to 8 days in the 250-bar window, causing their calculated drawdowns to appear artificially under 20% in `stockpicker`. Meanwhile, the Holding Sentry queried DuckDB with `LIMIT 260` ($52\text{ weeks} \times 5\text{ days} = 260\text{ bars}$) and correctly flagged them.
+- **The Fix**:
+  1. Updated [`pkg/cache/prices.go`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/cache/prices.go) to `now.AddDate(-1, 0, -15)` (52 calendar weeks + 2-week buffer), returning $\ge 261$ trading sessions.
+  2. Updated [`pkg/stockpicker/sentry_gate.go`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/stockpicker/sentry_gate.go) lookback to `min(len, 260)`.
+- **Result**: Complete mathematical parity between the screening engine and the Holding Sentry audit.
+
+---
+
+### 4. In-Strategy Cascading Waterfall (Paradigm 2)
+Rather than forcing external bullpen substitutions (`PARKHOSPS`, `TIPSMUSIC`, `DCBBANK` from `pre_microsmall.csv`), the Core Multibagger strategy employs an **In-Strategy Cascading Waterfall**:
+1. Evicted slots are cleared.
+2. The selection engine cascades down the ranked candidate pool (`activeKeys`), promoting the next highest-scoring, healthy Multibagger compounders:
+   - **`NSE:ENRIN`** (Rank #21, Score 39.2 | ROCE 27.4%, Inst Stake 55.6%) $\to$ **PROMOTED!**
+   - **`NSE:NAM-INDIA`** (Rank #22, Score 39.1 | TTM Growth +15.1%, ROCE 35.5%, Inst Stake 89.7%) $\to$ **PROMOTED!**
+   - **`NSE:RADICO`** (Rank #24, Score 38.4 | TTM Growth +3.7%, ROCE 23.6%, Inst Stake 32.3%) $\to$ **PROMOTED!**
+3. In [`cmd/pipeline.go`](file:///Users/raghavgarg/Projects/myGo/mycase/cmd/pipeline.go), the implicit fallback to `pre_microsmall.csv` was removed. For the Core pipeline, Sentry runs in **pure audit mode**:
+   ```text
+   [Sentry Defense] Detected 3 Level-3 trend rupture(s) in active holdings — evicted upstream via in-strategy selection waterfall.
+   ```
+4. **The Need for Further Refinement**: While the in-strategy waterfall successfully evicted the 3 falling knives, it exposed two new design dilemmas:
+   - **Quality Dilution**: Forcing the portfolio to reach exactly 20 stocks promoted sub-40 score candidates (`ENRIN` 39.4, `NAM-INDIA` 39.1, `RADICO` 38.5) simply to fill quota.
+   - **Sector Concentration**: Adding `RADICO` gave Consumer Defensive 3 stocks, exceeding user preference for FMCG and liquor exposure.
+   - These challenges prompted the introduction of **Sector Overrides, Absolute Quality Hurdles, and Hybrid Cash Reserves** detailed in Section 13.
+
+---
+
+## 13. Absolute Quality Hurdle, Sector Overrides & Hybrid Cash Reserve (September 24, 2026)
+
+### 1. The Dilution Problem of Fixed-Count Top-N Portfolios
+When decaying incumbents are evicted, a naive optimizer blindly promotes the next ordinal stocks until $Top N$ is filled. This causes:
+1. **Compelled Mediocrity**: Admitting stocks with scores $< 40.0$ just because slots exist, diluting portfolio Sharpe ratio and compound growth.
+2. **Unwanted Sector Concentration**: Over-allocating into specific industries (e.g. spirits/liquor in Consumer Defensive) when better risk-adjusted opportunities or cash yields exist.
+3. **Under-Subscribed Cooldown Bypasses**: If a pool shrinks below $Top N$, algorithms assuming "plenty of room for all" can inadvertently skip anti-churn cooldown checks (as was diagnosed with `NSE:ARVIND`).
+
+### 2. The Solution: Four Integrated Architecture Refinements
+
+#### A. Sector-Specific Max Stock Overrides (`sector_max_stocks`)
+Allows defining granular per-sector stock count limits that override the global default (`max_stocks_per_sector: 3`):
+```yaml
+# config/pipeline.yaml
+sector_max_stocks:
+  Consumer Defensive: 2   # Strict cap on FMCG/liquor stocks; other sectors retain default cap
+```
+* **Mechanics**: Implemented across `pkg/config/pipeline.go`, `pkg/stockpicker/types.go`, `pkg/stockpicker/scoring.go`, `pkg/pithistory/sentry.go`, and `pkg/selectiontracker/tracker.go`.
+* **Behavior**: Candidates exceeding the override (`RADICO` at rank #23) are dropped with explicit attribution:
+  `Sector cap for 'Consumer Defensive' exceeded (2/2 slots filled by NSE:MANORAMA, NSE:LTFOODS)`
+
+#### B. Asymmetric Absolute Quality Hurdle (`min_entry_score` & `min_holding_score`)
+Replaces rigid ordinal filling with cardinal quality floors:
+* **`min_entry_score: 40.0`**: A new candidate MUST achieve a multi-factor score $\ge 40.0$ to enter the portfolio. Candidates scoring below 40.0 (`ENRIN` 39.4, `NAM-INDIA` 39.1, `RADICO` 38.5) are rejected before ranking:
+  `Score (39.4) below minimum entry quality hurdle (40.0)`
+* **`min_holding_score: 35.0`**: Existing incumbents enjoy a softer maintenance floor. An incumbent is only evicted if its score falls below 35.0, preventing unnecessary turnover on proven compounders like `CASTROLIND` (39.7) and `EMCURE` (38.4).
+
+#### C. Hybrid Cash Reserve Trigger (`max_stock_weight_cap: 0.06`, `allow_cash_reserve: true`)
+Decouples portfolio quality from arbitrary fixed stock counts:
+* **Flexible Sizing**: The portfolio holds **only high-conviction stocks** that clear the quality hurdle (e.g. 15, 16, 17, or 18 stocks).
+* **Single-Stock Weight Cap**: Individual stock weights are capped at **6.0%** (`max_stock_weight_cap: 0.06`), with sector weights capped at **25.0%**.
+* **Automatic Cash Spillover**: When 15–17 stocks hit their 6% cap (17 stocks $\times$ 6% = 102% headroom, actual normalized sum $\approx 89.6\%$), any residual unallocated weight automatically spills into **`CASH_RESERVE`** (e.g. **10.39% Cash Reserve**) rather than being forced into low-conviction equities.
+
+```text
+  Surviving Candidates (Score >= 40.0)
+  ┌──────────────────────────────────────────────────────────┐
+  │ 17 Quality Stocks @ ~5.27% - 6.00% each (Total: 89.61%)  │
+  └────────────────────────────┬─────────────────────────────┘
+                               │ Residual Unallocated Weight
+                               ▼
+  ┌──────────────────────────────────────────────────────────┐
+  │ CASH_RESERVE: 10.39%                                     │
+  │ (Safe overnight yields, awaiting high-conviction setups) │
+  └──────────────────────────────────────────────────────────┘
+```
+
+#### D. Unconditional Anti-Churn Cooldown Invariant
+* In [`pkg/stockpicker/scoring.go`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/stockpicker/scoring.go), the under-subscribed pool branch (`len(sortedKeys) <= topN`) was hardened to strictly enforce `IsOnCooldown` on all newcomers (`!isExisting`).
+* `NSE:ARVIND` (exited on 2026-08-26, 29d ago $\le$ 30d window, Raw Rank 19 > 5) is reliably blocked and categorized under `CooldownDrops`.
+* Evaluates true `RawRank` (19) rather than post-filter slice indices (16), keeping the reported rationale aligned with the table rank.
+
+---
+
+### 3. Live Rebalance Validation (`data/microsmall.csv` - September 24, 2026)
+Executing `mycase pipeline --config config/pipeline.yaml --strategy multibagger --golden data/microsmall.csv` produces:
+* **Active Equities**: Exactly **17 stocks** (all clearing the 40.0 quality hurdle or 35.0 maintenance floor).
+* **Consumer Defensive**: Exactly **2 stocks** (`MANORAMA`, `LTFOODS`), honoring the sector override.
+* **Liquidated Incumbents**: `HINDCOPPER`, `SARDAEN`, `SUMICHEM` evicted upstream by Sentry Gate.
+* **Rejected Newcomers**:
+  - `ENRIN` (Score 39.4 < 40.0 Hurdle)
+  - `NAM-INDIA` (Score 39.1 < 40.0 Hurdle)
+  - `RADICO` (Score 38.5 < 40.0 Hurdle & Consumer Defensive Cap 2/2 Filled)
+  - `ARVIND` (Exited 2026-08-26, 29d ago $\le$ 30d Cooldown Window)
+* **Cash Allocation**: **~10.39% in Cash Reserve** earning safe collateral yields while awaiting new breakout compounders that clear the 40.0 quality bar.
+
 
 
 

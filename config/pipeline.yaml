@@ -60,6 +60,16 @@ sentry: true                                  # Upstream Sentry Gate: filters ou
 # staged_path: data/pre_microsmall.csv        # (Optional) Uncomment to swap decaying holdings from staged bullpen instead of in-strategy waterfall
 strict_sector: false                          # Set to true to strictly cap max 3 stocks per sector in substitutions
 
+# Sector-specific stock count caps (e.g. limit liquor / Consumer Defensive to 2)
+sector_max_stocks:
+  Consumer Defensive: 2
+
+# Quality Hurdle & Hybrid Cash Trigger
+min_entry_score: 40.0                         # Hard score hurdle for new candidate additions
+min_holding_score: 35.0                       # Eviction floor for existing holdings in buffer
+max_stock_weight_cap: 0.06                    # Single-stock weight ceiling (6.0%)
+allow_cash_reserve: true                      # Unallocated weight spills into CASH_RESERVE
+
 # Broker configuration
 broker: zerodha                     # "zerodha" (default) or "schwab"
 # schwab_config: config/schwab.json   # Schwab app credentials

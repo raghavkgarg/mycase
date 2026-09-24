@@ -41,6 +41,11 @@ type Options struct {
 	BasedOn                             string // Formatted based-on string e.g. "2026-09-11 EOD (Synced: 2026-09-11 21:15:00 IST)"
 	Force                               bool   // Force execution even if snapshot exists
 	DisableSentryGate                   bool   // if true, skips Sentry technical gate (price >= 0.95*SMA200 and DD <= 20%)
+	SectorMaxStocks                     map[string]int // sector-specific stock count caps (e.g. "Consumer Defensive": 2)
+	MinEntryScore                       float64        // minimum score hurdle for new additions (e.g. 40.0)
+	MinHoldingScore                     float64        // minimum score floor for incumbents (e.g. 35.0)
+	MaxStockWeightCap                   float64        // maximum single stock weight cap (e.g. 0.06 / 6%)
+	AllowCashReserve                    bool           // allow excess/unallocated weight to spill into CASH_RESERVE
 
 	// Clock is the market settlement/trading calendar used for the run's as-of /
 	// based-on date decisions. It is the single source of truth for "which

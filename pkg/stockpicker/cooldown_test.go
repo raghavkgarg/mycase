@@ -72,3 +72,28 @@ func TestLoadRecentExitsMock(t *testing.T) {
 		t.Errorf("did not expect current holding NSE:TICKER_A to be detected as an exit")
 	}
 }
+
+func TestLoadRecentExits_ArvindCooldown(t *testing.T) {
+	origWd, _ := os.Getwd()
+	_ = os.Chdir("../..")
+	defer os.Chdir(origWd)
+
+	exits := LoadRecentExits("microsmall", nil, 30, time.Now())
+	exitDate, ok := exits["NSE:ARVIND"]
+	if !ok {
+		t.Fatalf("expected NSE:ARVIND to be identified in recent exits for microsmall")
+	}
+	expectedExitDate := time.Date(2026, 8, 26, 0, 0, 0, 0, time.UTC)
+	if !exitDate.Equal(expectedExitDate) {
+		t.Errorf("expected ARVIND exit date %v, got %v", expectedExitDate, exitDate)
+	}
+
+	onCd, reason := IsOnCooldown("NSE:ARVIND", exits, 19, 5, time.Now(), 30)
+	if !onCd {
+		t.Errorf("expected NSE:ARVIND at rank 19 to be on cooldown, got false")
+	}
+	if reason == "" {
+		t.Errorf("expected non-empty cooldown reason")
+	}
+}
+

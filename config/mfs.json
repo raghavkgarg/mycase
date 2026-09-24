@@ -18,7 +18,13 @@
       "volume_breakout_lookback_days": 60,
       "volume_breakout_multiplier": 1.5,
       "max_stocks_per_sector": 5,
+      "sector_max_stocks": {
+        "Consumer Defensive": 2
+      },
       "max_sector_weight_cap": 0.25,
+      "max_stock_weight_cap": 0.06,
+      "min_entry_score": 40.0,
+      "min_holding_score": 35.0,
       "allow_cash_on_sector_cap_exhaustion": true,
       "peg_floor": 0.1,
       "max_peg": 0.0,

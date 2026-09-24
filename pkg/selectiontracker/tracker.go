@@ -101,7 +101,7 @@ func (t *Tracker) RecordScore(ticker string, rawScore, effectiveScore float64, r
 // RecordSectorCapDrop logs that a ticker was dropped because of sector caps.
 func (t *Tracker) RecordSectorCapDrop(ticker, sector string, higherTickers []string) {
 	fillers := strings.Join(higherTickers, ", ")
-	t.SectorCapDrops[ticker] = fmt.Sprintf("Sector cap for '%s' exceeded (3/3 slots filled by %s)", sector, fillers)
+	t.SectorCapDrops[ticker] = fmt.Sprintf("Sector cap for '%s' exceeded (%d/%d slots filled by %s)", sector, len(higherTickers), len(higherTickers), fillers)
 }
 
 // RecordCooldownDrop logs that a candidate ticker was blocked by the anti-churn re-entry cooldown window.

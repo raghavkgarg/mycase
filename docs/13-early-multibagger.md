@@ -1530,6 +1530,149 @@ Rank  Ticker           Sector              Consensus  MB Score   EarlyMB    VCP 
 ============================================================================================================
 ```
 
+---
+
+## 28. Two-Book "Core & Satellite" Portfolio System & Dedicated Satellite Pipeline (September 24, 2026)
+
+### 1. Architectural Philosophy: The Dual-Book Mandate
+To balance patient institutional compounding with tactical momentum capture, the portfolio architecture was bifurcated into two mutually exclusive, independently executed books:
+
+```text
+                               ┌────────────────────────────────────────────────────────┐
+                               │           NIFTY TOTAL MARKET (750 STOCKS)              │
+                               └──────────────────────────┬─────────────────────────────┘
+                                                          │
+                    ┌─────────────────────────────────────┴─────────────────────────────────────┐
+                    ▼                                                                           ▼
+      ┌───────────────────────────┐                                               ┌───────────────────────────┐
+      │   BOOK 1: CORE COMPOUNDER │                                               │ BOOK 2: KINETIC SATELLITE │
+      ├───────────────────────────┤                                               ├───────────────────────────┤
+      │ File: data/microsmall.csv │                                               │ File: earlymb_live.csv    │
+      │ Strategy: multibagger     │                                               │ Strategy: earlymb         │
+      │ Horizon: 6 to 18 months   │                                               │ Horizon: 2 to 8 weeks     │
+      │ Top N: 20 Holdings        │                                               │ Top N: 12 Holdings        │
+      │ Target: Cash Flow Quality │                                               │ Target: Pre-Breakout VCP  │
+      │         & ROCE Growth     │                                               │         & Delivery Delta  │
+      └─────────────┬─────────────┘                                               └─────────────┬─────────────┘
+                    │                                                                           │
+                    │               ┌─────────────────────────────────────────┐                 │
+                    └──────────────►│ Air-Gapped Mutual Exclusion (--exclude) │◄────────────────┘
+                                    │ (Zero Stock Duplication Guaranteed)     │
+                                    └─────────────────────────────────────────┘
+```
+
+1. **Book 1: Core Fundamental Compounder (`data/microsmall.csv`)**:
+   - **Engine**: `multibagger`
+   - **Mandate**: Long-term capital compounding backed by audited balance-sheet quality, cash realization (CFO/PAT $\ge 25\%$), high ROCE/CROIC, and upstream technical defense via the In-Strategy Sentry Gate.
+   - **Capital Horizon**: 6 to 18 months.
+2. **Book 2: Kinetic Momentum Satellite (`data/earlymb_live.csv`)**:
+   - **Engine**: `earlymb`
+   - **Mandate**: Tactical swing capture of high-traction setups displaying tight volatility contraction (VCP $\le 1.0$), institutional delivery accumulation, and strong relative strength.
+   - **Capital Horizon**: 2 to 8 weeks.
+
+---
+
+### 2. Air-Gapped Mutual Exclusion Engine (`pkg/pithistory/staging.go` & `cmd/pit.go`)
+When a holding is exited from Core Multibagger due to deceleration or rebalancing, it may experience sharp short-term momentum surges (e.g. `NSE:CUPID` surging +6% with a +174% composite RS). Without strict structural isolation, capital from the two strategies risks colliding or re-buying exited core stocks into the wrong mandate.
+
+The system implements the **Air-Gapped Mutual Exclusion Engine** in [`pkg/pithistory/staging.go`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/pithistory/staging.go) and [`cmd/pit.go`](file:///Users/raghavgarg/Projects/myGo/mycase/cmd/pit.go):
+```bash
+# Generate kinetic satellite basket with strict exclusion of all active Core holdings:
+mycase pit stage --output data/earlymb_live.csv --exclude data/microsmall.csv --top 12
+```
+
+#### Mechanics:
+- Any ticker present with active weight $>0$ in `data/microsmall.csv` (e.g. `MCX`, `TMCV`, `CHENNPETRO`, `NETWEB`, `MANORAMA`) is automatically pruned from the satellite candidate pool before setup quality ranking and inverse-volatility risk parity allocation.
+- High-momentum swing leaders (`NSE:CUPID`, `NSE:PARKHOSPS`, `NSE:TIPSMUSIC`, `NSE:DCBBANK`, `NSE:RUBICON`) are staged in their appropriate satellite book with **zero overlap** with the core fundamental book.
+
+---
+
+### 3. Continuous Market Regime Sentry ($R_{\text{regime}}$) & Empirical Capital Preservation
+Early Multibagger v3.4 replaces fragile binary index gates with a continuous, smoothed Market Regime Multiplier:
+$$R_{\text{regime}} = 0.20 + (0.60 \times \text{Persistence Ratio}) + (0.50 \times \text{Scaled Distance})$$
+$$\text{Effective Score} = \text{Raw Score} \times R_{\text{regime}}$$
+
+Where:
+- $\text{Persistence Ratio} = \frac{\text{Sessions Above 50-DMA in Last 20 Sessions}}{20}$
+- $\text{Scaled Distance} = \text{clamp}\left(\frac{\text{Close} - \text{SMA}_{50}}{0.10 \times \text{SMA}_{50}}, -0.40, +0.40\right)$
+
+#### Real-World Case Study (September 24, 2026):
+During live execution of `mycase pipeline --config config/pipeline_earlymb.yaml`:
+- **Nifty 50 Close**: ₹23,446.80
+- **Nifty 50 50-DMA**: ₹24,033.41 ($\text{Distance} = -2.44\% \to \text{Scaled Distance} = -0.2441$)
+- **Persistence**: Only 5 of last 20 trading sessions closed above 50-DMA ($0.25$)
+- **Calculated $R_{\text{regime}}$**:
+  $$R_{\text{regime}} = 0.20 + (0.60 \times 0.25) + (0.50 \times -0.2441) = \mathbf{0.2280}$$
+- **Screening Outcome**:
+  - 136 constituents passed Stage-1 safety filters.
+  - The highest raw pre-breakout score was `NSE:IKS` at **45.8**.
+  - Its effective score was $45.8 \times 0.2280 = \mathbf{10.4}$, far below the `min_effective_score_threshold: 30.0`.
+  - **Capital Preservation Action**: The engine eliminated all 136 candidates at the regime cutoff, allocating **100% of portfolio weight to `CASH_RESERVE`**.
+  - **Institutional Value**: Rather than forcing high-beta, pre-breakout swing trades into an index that is breaking down below its 50-DMA, the strategy automatically preserves cash until the broader market regains an uptrend ($R_{\text{regime}} \ge 0.60$).
+
+---
+
+### 4. Selection Tracker Exit Rationale Accuracy Fix (`pkg/selectiontracker/tracker.go`)
+Previously, when existing holdings in `earlymb_live.csv` were dropped because effective scores fell below the regime cutoff ($10.4 < 30.0$), the exit summary table in [`tracker.go`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/selectiontracker/tracker.go) only evaluated `SafetyReasons`, `SectorCapDrops`, and `HysteresisDrops`. Because regime drops were stored under `ScoreThresholdDrops`, the report fell back to:
+`Missing from index dataset or fetch error`
+
+This created the false impression that active stocks had disappeared from the index or failed network fetching.
+- **The Fix**: Added an explicit check for `t.ScoreThresholdDrops[ticker]` in [`pkg/selectiontracker/tracker.go`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/selectiontracker/tracker.go#L502).
+- **Corrected Report Output**:
+  ```text
+  =========================================================================================================
+                                 REMOVED ACTIVE HOLDINGS (EXITS)
+  =========================================================================================================
+  Ticker           | Sector               | Raw Score | Eff Score | Raw Rank | Exit Reason
+  ---------------------------------------------------------------------------------------------------------
+  NSE:AVALON       | Technology           |      39.9 |       9.1 | 7        | Effective Score (9.1) below Regime Minimum Threshold (30.0) [Raw Score: 39.9, R_regime: 0.2280]
+  NSE:BALRAMCHIN   | Consumer Defensive   |      30.7 |       7.0 | 20       | Effective Score (7.0) below Regime Minimum Threshold (30.0) [Raw Score: 30.7, R_regime: 0.2280]
+  NSE:CUPID        | Consumer Defensive   |      42.1 |       9.6 | 5        | Effective Score (9.6) below Regime Minimum Threshold (30.0) [Raw Score: 42.1, R_regime: 0.2280]
+  NSE:DCBBANK      | Financial Services   |      43.6 |       9.9 | 4        | Effective Score (9.9) below Regime Minimum Threshold (30.0) [Raw Score: 43.6, R_regime: 0.2280]
+  NSE:RUBICON      | Healthcare           |      45.2 |      10.3 | 2        | Effective Score (10.3) below Regime Minimum Threshold (30.0) [Raw Score: 45.2, R_regime: 0.2280]
+  NSE:TIPSMUSIC    | Communication Services |      44.7 |      10.2 | 3        | Effective Score (10.2) below Regime Minimum Threshold (30.0) [Raw Score: 44.7, R_regime: 0.2280]
+  ```
+
+---
+
+### 5. Dedicated Pipeline Automation (`config/pipeline_earlymb.yaml`)
+To operationalize the satellite book independently from the core multibagger book without requiring manual CLI flags, a dedicated pipeline specification was created in [`config/pipeline_earlymb.yaml`](file:///Users/raghavgarg/Projects/myGo/mycase/config/pipeline_earlymb.yaml):
+
+```yaml
+indices:
+  - niftytotalmarket
+golden_copy_path:
+  - data/earlymb_live.csv
+strategy: 
+  - earlymb
+top_n: 
+  - 12
+capital: 
+  - 100000
+purchase_date: 
+  - "2026-01-01"
+rebalance_tolerance_pct: 
+  - 0.25
+hysteresis_rank_buffer: 
+  - 5
+cooldown_days: 
+  - 30
+cooldown_bypass_rank: 
+  - 5
+sentry: true
+broker: zerodha
+```
+
+#### Daily Operating Rhythm:
+1. **Core Fundamental Book**:
+   ```bash
+   mycase pipeline --config config/pipeline.yaml --strategy multibagger --golden data/microsmall.csv
+   ```
+2. **Kinetic Momentum Satellite Book**:
+   ```bash
+   mycase pipeline --config config/pipeline_earlymb.yaml
+   ```
+
 
 
 
