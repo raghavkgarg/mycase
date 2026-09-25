@@ -114,6 +114,7 @@ CREATE TABLE selections (
     action          VARCHAR,           -- 'new', 'retained', 'removed'
     prev_rank       INTEGER,           -- rank in previous run (NULL if new)
     prev_weight     DOUBLE,            -- weight in previous run (NULL if new)
+    source          VARCHAR,           -- data provenance tag: 'schwab+edgar'/'schwab'/'edgar'/'yahoo' (Phase 10d)
     PRIMARY KEY (run_id, ticker)
 );
 ```

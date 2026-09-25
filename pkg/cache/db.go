@@ -144,6 +144,7 @@ CREATE TABLE IF NOT EXISTS selections (
     action       VARCHAR,
     prev_rank    INTEGER,
     prev_weight  DOUBLE,
+    source       VARCHAR,
     PRIMARY KEY (run_id, ticker)
 );
 `
@@ -167,4 +168,5 @@ func (c *Cache) initSchema(ctx context.Context) error {
 var migrations = []string{
 	`ALTER TABLE prices ADD COLUMN IF NOT EXISTS source VARCHAR`,
 	`ALTER TABLE fundamentals ADD COLUMN IF NOT EXISTS source VARCHAR`,
+	`ALTER TABLE selections ADD COLUMN IF NOT EXISTS source VARCHAR`,
 }

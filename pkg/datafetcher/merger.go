@@ -26,17 +26,36 @@ import "github.com/raghavkgarg/mycase/pkg/marketdata"
 func mergeFundamentals(base marketdata.Fundamentals, edgarPartial marketdata.Fundamentals, hasSchwab, hasEDGAR bool) (marketdata.Fundamentals, string) {
 	merged := base
 
+	// Per-field provenance for the EDGAR-overlayable subset. The base for these
+	// fields is whichever provider produced `base` (Schwab on the US path, else
+	// Yahoo); EDGAR marks the fields it authoritatively overrides. Left nil when
+	// there is no EDGAR overlay — the record-level Source then covers every field.
+	var fieldSources map[string]string
+
 	if hasEDGAR {
+		baseTag := marketdata.SourceSchwab
+		if !hasSchwab {
+			baseTag = marketdata.SourceYahoo
+		}
+		fieldSources = map[string]string{
+			marketdata.FieldOperatingCashflow: baseTag,
+			marketdata.FieldNetIncome:         baseTag,
+			marketdata.FieldFreeCashflow:      baseTag,
+		}
+
 		// Point values — overlay only when EDGAR supplied a non-zero value.
 		if edgarPartial.OperatingCashflow != 0 {
 			merged.OperatingCashflow = edgarPartial.OperatingCashflow
+			fieldSources[marketdata.FieldOperatingCashflow] = marketdata.SourceEDGAR
 		}
 		if edgarPartial.NetIncome != 0 {
 			merged.NetIncome = edgarPartial.NetIncome
+			fieldSources[marketdata.FieldNetIncome] = marketdata.SourceEDGAR
 		}
 		// FreeCashflow: EDGAR (OCF − capex) is authoritative; prefer it when set.
 		if edgarPartial.FreeCashflow != 0 {
 			merged.FreeCashflow = edgarPartial.FreeCashflow
+			fieldSources[marketdata.FieldFreeCashflow] = marketdata.SourceEDGAR
 		}
 
 		// Annual series — overlay only when EDGAR produced a non-empty series.
@@ -51,7 +70,10 @@ func mergeFundamentals(base marketdata.Fundamentals, edgarPartial marketdata.Fun
 		merged.AnnualInterestExpense = pickSeries(edgarPartial.AnnualInterestExpense, base.AnnualInterestExpense)
 	}
 
-	return merged, provenance(hasSchwab, hasEDGAR)
+	prov := provenance(hasSchwab, hasEDGAR)
+	merged.Source = prov
+	merged.FieldSources = fieldSources
+	return merged, prov
 }
 
 // pickSeries returns the overlay series when it has data, else the base series.

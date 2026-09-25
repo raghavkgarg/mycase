@@ -22,6 +22,7 @@ type PickResult struct {
 	Weights      map[string]float64       // ticker → weight
 	Scores       map[string]float64       // ticker → score (nil for standard method)
 	Sectors      map[string]string        // ticker → sector
+	Sources      map[string]string        // ticker → data provenance tag ("schwab+edgar"/"schwab"/"edgar"/"yahoo")
 	Ranks        map[string]int           // ticker → 1-based raw rank at selection time
 	Drivers      map[string]DriverMetrics // ticker → structured driver metrics
 	PITSnapshot  *PITRunSnapshot          // point-in-time run snapshot for DuckDB persistence by the command layer
@@ -245,9 +246,15 @@ func RunWithResult(ctx context.Context, opts *Options) (*PickResult, error) {
 	}
 
 	sectors := make(map[string]string)
+	sources := make(map[string]string)
+	fieldSources := make(map[string]map[string]string)
 	resultDates := make(map[string]string)
 	for ticker, fund := range fundamentals {
 		sectors[ticker] = fund.Sector
+		sources[ticker] = fund.Source
+		if len(fund.FieldSources) > 0 {
+			fieldSources[ticker] = fund.FieldSources
+		}
 		resultDates[ticker] = fund.ResultPrevComing
 	}
 
@@ -344,7 +351,7 @@ func RunWithResult(ctx context.Context, opts *Options) (*PickResult, error) {
 	}
 
 	prevDrivers := loadPreviousDriverStrings(ctx, displayNameVal, opts.Method)
-	if err := tracker.SaveReport(PickIdentity(displayNameVal, opts.Method), displayNameVal, opts.Method, goldenWeights, sectors, finalWeights, resultDates, prevDrivers); err != nil {
+	if err := tracker.SaveReport(PickIdentity(displayNameVal, opts.Method), displayNameVal, opts.Method, goldenWeights, sectors, sources, fieldSources, finalWeights, resultDates, prevDrivers); err != nil {
 		slog.WarnContext(ctx, "pick.report_save_failed", "err", err)
 	}
 
@@ -382,12 +389,14 @@ func RunWithResult(ctx context.Context, opts *Options) (*PickResult, error) {
 		Weights:      finalWeights,
 		Scores:       scores,
 		Sectors:      make(map[string]string, len(selectedKeys)),
+		Sources:      make(map[string]string, len(selectedKeys)),
 		Ranks:        make(map[string]int, len(selectedKeys)),
 		Drivers:      make(map[string]DriverMetrics, len(selectedKeys)),
 	}
 	for _, k := range selectedKeys {
 		if f, ok := fundamentals[k]; ok {
 			result.Sectors[k] = f.Sector
+			result.Sources[k] = f.Source
 		}
 		if r, ok := tracker.RawRanks[k]; ok {
 			result.Ranks[k] = r

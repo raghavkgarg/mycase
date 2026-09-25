@@ -134,7 +134,12 @@ Routing is centralized in `pkg/datafetcher/router.go`. `Router` holds one field,
 6. `cmd/backtest.go` — per-holding + benchmark date-range history.
 7. `pkg/stockpicker/run.go` fallbacks (`fetchFundamentalsVia`/`fetchHistoricalPricesVia`/`getBenchmarkAndSlicedPricesVia`) drop to direct `yfinance.*` when `opts.DataFetcher == nil`; EBM added more in `pkg/stockpicker/io.go` (`FetchNselibDeliveryDataDetails`, `FetchQualitativeNSEData`, `FetchCustomerConcentrationData`) and `pkg/datafetcher/datafetcher.go` `FetchMarketData` calls `yfinance.FetchQuotes` directly (India-legacy interactive path).
 
-**Provenance: not implemented.** No cache table (`prices`, `fundamentals`, `cache_meta`, `selections`, `proposals`, `index_picks`) has a `source`/`provenance` column. A value's origin is not auditable today, and one source cannot be selectively invalidated. This is the single biggest gap versus the stated principle (§10).
+**Provenance: partially implemented.** The `prices`, `fundamentals`, and `selections`
+tables carry a `source` column; `marketdata.Fundamentals` carries a record-level `Source`
+tag plus a per-field `FieldSources` map (which fields EDGAR overlaid), both riding through
+the DuckDB cache blob and surfaced in `pipeline show` and the selection-reasons report
+(Phase 10d). Still open: the `cache_meta` / `proposals` / `index_picks` tables have no
+source column, and selective source invalidation is not yet a workflow. See §10.
 
 ### How to add a provider without touching consumers
 
@@ -275,7 +280,7 @@ Scored after the EBM integration (`integration/main-ebm`), grounded in the file 
 | Layering | 🟢 Strong | `devtools/checkdeps` enforces the full layer map with three failure modes (unlisted / leaf-violation / downward-only); `check-deps` green. datafetcher→stockpicker cycle avoided via consumer-defined interface + structural satisfaction (`router.go`); pithistory owns its own DB (`pithistory/db.go`) instead of pushing into `cache`. |
 | IO / side effects | 🟢 Good | render(stdout)/slog(stderr+file) split with `req_id` tracing (`main.go` Before hook); `config/` read-only; golden-copy mutated only via `cmd/merge.go`. Residual gap: several diagnostic `fmt` sites not yet migrated to slog (audit pending). |
 | Config management | 🟢 Good | flag>env>file>default proven in `setupLogging`; additive zero-value-safe structs; `LoadUserDefaults` degrades on malformed input; aliasing at load boundary. Gap: no schema/range validation, no schema-version/migration story (§10). |
-| Data sources | 🟡 Partial | Router prefix-routing with logged Schwab→Yahoo fallback exists (`datafetcher/router.go`), but **~7 bypass paths** hit yfinance directly (server, benchmark leg, calibrate/monitor/report/backtest, run.go fallbacks + EBM io.go), and **no provenance column** exists in any cache table. Only one `DataFetcher` interface, not the aspirational Price/Fundamentals/Sector trio. Biggest gap vs. principles. |
+| Data sources | 🟡 Partial | Router prefix-routing with logged Schwab→Yahoo fallback exists (`datafetcher/router.go`), but **~7 bypass paths** hit yfinance directly (server, benchmark leg, calibrate/monitor/report/backtest, run.go fallbacks + EBM io.go). Provenance is now recorded: `prices`/`fundamentals`/`selections` carry a `source` column, and `marketdata.Fundamentals` carries record-level `Source` + per-field `FieldSources` surfaced in `pipeline show`/reports (Phase 10d). Still only one `DataFetcher` interface, not the aspirational Price/Fundamentals/Sector trio. |
 | Algorithms | 🟢 Good | Single `--method` dispatch in `RunWithResult`; injected `DataFetcher`; hard-filters-then-score-then-select with sector caps + hysteresis; EBM slotted in without touching IO/data layers. Gap: `rsi`/`momentum_1y` persist zero (three `RecordDriverMetrics` sites omit them) — partial "explainable from output" violation. |
 | Pipelines | 🟢 Good | One process / one DB conn / one broker (`autopilot.Run`); run-tracked (`pipeline_runs`); proposal lifecycle closed with both submitted-intent and realized-fill reconciles (`proposal.go`, `cmd/pipeline_reconcile.go`); launchd owns long intervals, in-process loop only for daily drift. PIT vs selections confirmed complementary. |
 | Testing | 🟢 Good | build + check-deps + test all green; graceful `t.Skipf` for env-absent integration tests; table-driven + hand-written mocks; EBM added significant stockpicker coverage. Gap: no numeric per-layer coverage target (directional policy only). |

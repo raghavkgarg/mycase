@@ -119,15 +119,15 @@ func runPipelineShow(ctx context.Context, c *cli.Command) error {
 			rows = append(rows, []string{
 				s.Ticker, fmt.Sprintf("%d", s.Rank),
 				scoreOrDash(s.Score), weightPct(s.Weight), dashIfEmpty(s.Sector),
-				dashIfEmpty(s.Action), prevStr, driverSummary(s),
+				dashIfEmpty(s.Action), prevStr, dashIfEmpty(s.Source), driverSummary(s),
 			})
 		}
 		render.TableWithOpts(out, render.TableOpts{
-			Headers: []string{"Ticker", "Rank", "Score", "Weight", "Sector", "Action", "Prev Rank", "Drivers"},
+			Headers: []string{"Ticker", "Rank", "Score", "Weight", "Sector", "Action", "Prev Rank", "Source", "Drivers"},
 			Rows:    rows,
 			Align: []render.Alignment{
 				render.AlignLeft, render.AlignRight, render.AlignRight, render.AlignRight,
-				render.AlignLeft, render.AlignLeft, render.AlignRight, render.AlignLeft,
+				render.AlignLeft, render.AlignLeft, render.AlignRight, render.AlignLeft, render.AlignLeft,
 			},
 		})
 		fmt.Fprintln(out)

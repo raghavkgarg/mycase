@@ -125,7 +125,7 @@ chapter pointers, and its history lives in git. Design detail for shipped subsys
 in `docs/04-architecture.md` (design decisions) and `docs/10-duckdb-migration.md` (storage).
 Only active and planned work remains below.
 
-### Phase 10 — Data Source Resilience  *(shipped; Phase 10d optional, open)*
+### Phase 10 — Data Source Resilience  *(shipped; Phase 10d provenance shipped, interface split open)*
 
 **Goal**: source each data type from the most authoritative provider that can supply it,
 with deterministic logged fallback, and record provenance. This is **shipped** — US data
@@ -136,10 +136,32 @@ provenance column. All three API clients (Schwab, EDGAR, Yahoo) are cache-first 
 by a shared rate limiter. See **Ch. 7 Data Sources**, **Ch. 8–9 EDGAR**, and **Ch. 10
 Storage** for how it works.
 
-**Open — Phase 10d (optional):** split `DataFetcher` into capability interfaces
-(`PriceSource`, `FundamentalsSource`, `SectorSource`), formalize the ordered fallback
-chain, and surface provenance in `pipeline show`/reports (e.g. "FCF: $2.1B [source: EDGAR
-10-K 2025-Q4]"). Depends on nothing further; deferred for lack of pressure.
+**Phase 10d (partially shipped):**
+
+- **Provenance surfacing — shipped.** Data provenance now flows end to end from the
+  fetch/merge layer to the audit surfaces, at two granularities:
+  - *Per-record* — `marketdata.Fundamentals` carries a `Source` tag
+    (`schwab+edgar` / `schwab` / `edgar` / `yahoo`) set by the merger (US Schwab/EDGAR
+    path) or the Yahoo path. It rides through the DuckDB cache blob, is persisted on the
+    `selections` table (new `source` column + migration), and renders as a **Source
+    column** in `mycase pipeline show` and in the selection-reasons report.
+  - *Per-field* — `marketdata.Fundamentals.FieldSources` records which specific fields
+    EDGAR authoritatively overlaid onto the Schwab base (FCF, operating cash flow, net
+    income). The selection-reasons report annotates each pick with a compact marker, e.g.
+    `… | [source: EDGAR FCF, OCF]`. Populated only on the merged US path.
+  - *Deferred:* filing-level detail (`[source: EDGAR 10-K 2025-Q4]`). The EDGAR client
+    has the form/period/filed metadata on each fact, but `pkg/edgar` `mapFacts` collapses
+    it to plain values; surfacing the filing form + fiscal period needs that metadata
+    plumbed up through `marketdata.Fundamentals`.
+
+- **Open — interface split + fallback chain (optional):** split `DataFetcher` into
+  capability interfaces (`PriceSource`, `FundamentalsSource`, `SectorSource`) and formalize
+  the currently ad-hoc, per-method fallback (historical does not fall back; quotes/
+  fundamentals do) into one explicit ordered chain. The consumer-defined-interface pattern
+  already exists (`stockpicker.DataFetcher`, `server.MarketDataFetcher`,
+  `attribution.PriceFetcher`), so this is largely mechanical. Depends on nothing further;
+  deferred for lack of pressure.
+
 
 ---
 
@@ -435,7 +457,7 @@ report-write failure is logged-and-swallowed — it never fails the run.
 
 | Phase | Target | Dependency | Core value delivered | Status |
 |-------|--------|------------|---------------------|--------|
-| 10. Data Source Resilience | Q4 2026 | Schwab API | Authoritative US data (SEC EDGAR), Schwab everywhere, provenance | 🟩 shipped; 10d optional |
+| 10. Data Source Resilience | Q4 2026 | Schwab API | Authoritative US data (SEC EDGAR), Schwab everywhere, provenance | 🟩 shipped; 10d provenance shipped, interface split open |
 | 11. Data & observability hygiene | Q4 2026 | none | Raw-response capture/triage, market-aware settlement/formatting, mapping-bug fixes | 🟩 shipped; R-store-6/7 + flatten open |
 | 12. Autonomous Scheduler | Q1 2027 | `marketcal` holiday calendar | One Go-native orchestrator for all three cadences (EOD / drift / rebalance); investor-in-the-loop preserved | 🟩 shipped |
 | 6. Options Overlay | H2 2027 | 6mo live data | Income optimization | ⬜ |

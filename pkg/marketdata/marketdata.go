@@ -100,6 +100,25 @@ type Fundamentals struct {
 	Sector           string
 	ResultPrevComing string
 
+	// Source records which provider(s) produced this record — the per-record
+	// provenance tag ("schwab+edgar", "schwab", "edgar", or "yahoo"). It is set
+	// by the fetch path (merger for the US Schwab/EDGAR path, "yahoo" on the
+	// Yahoo path) and rides through the DuckDB cache blob so a warm read
+	// preserves it. Empty when the producing path predates provenance tagging.
+	// Phase 10d provenance surfacing.
+	Source string
+
+	// FieldSources records per-field provenance for the subset of fields whose
+	// origin can differ from the record-level Source — specifically the US
+	// Schwab+EDGAR merge, where EDGAR authoritatively overlays some fields
+	// (e.g. FreeCashflow, OperatingCashflow, NetIncome) onto a Schwab base.
+	// Keys are canonical field names (see the FieldSource* consts); values are
+	// provider tags ("edgar"/"schwab"/"yahoo"). Only populated on the merged US
+	// path; nil elsewhere (the record-level Source then describes every field).
+	// JSON-serialized, so it round-trips through the DuckDB cache blob.
+	// Phase 10d per-field provenance (Option B).
+	FieldSources map[string]string
+
 	DeliveryDate             string
 	EarningsHistory          []AnnualFinancial
 	AnnualRevenue            []AnnualMetric
@@ -144,6 +163,22 @@ type Fundamentals struct {
 	NetProfitMargin float64 // Net profit margin as decimal
 	GrossMarginTTM  float64 // Gross margin TTM as decimal
 }
+
+// Provider tags used in Source and FieldSources values.
+const (
+	SourceSchwab = "schwab"
+	SourceEDGAR  = "edgar"
+	SourceYahoo  = "yahoo"
+)
+
+// Canonical field-name keys for FieldSources. Only the fields whose provenance
+// can differ from the record-level Source (the EDGAR-overlayable subset) are
+// tracked; other fields inherit the record-level Source.
+const (
+	FieldOperatingCashflow = "OperatingCashflow"
+	FieldNetIncome         = "NetIncome"
+	FieldFreeCashflow      = "FreeCashflow"
+)
 
 // IntradayData holds timestamp, open, and close prices for a stock.
 type IntradayData struct {

@@ -85,3 +85,41 @@ func TestMergeFundamentals_SchwabOnly(t *testing.T) {
 		t.Errorf("schwab-only base altered: %+v", merged)
 	}
 }
+
+func TestMergeFundamentals_FieldSources(t *testing.T) {
+	// EDGAR supplies OCF and FCF (non-zero) but not NetIncome (zero) → OCF/FCF
+	// are tagged edgar, NetIncome stays on the schwab base.
+	schwabBase := marketdata.Fundamentals{
+		FreeCashflow:      100,
+		OperatingCashflow: 0,
+		NetIncome:         90,
+	}
+	edgarPartial := marketdata.Fundamentals{
+		OperatingCashflow: 500,
+		FreeCashflow:      450,
+		// NetIncome deliberately zero → no override.
+	}
+
+	merged, _ := mergeFundamentals(schwabBase, edgarPartial, true, true)
+
+	if got := merged.FieldSources[marketdata.FieldFreeCashflow]; got != marketdata.SourceEDGAR {
+		t.Errorf("FreeCashflow source: want edgar, got %q", got)
+	}
+	if got := merged.FieldSources[marketdata.FieldOperatingCashflow]; got != marketdata.SourceEDGAR {
+		t.Errorf("OperatingCashflow source: want edgar, got %q", got)
+	}
+	if got := merged.FieldSources[marketdata.FieldNetIncome]; got != marketdata.SourceSchwab {
+		t.Errorf("NetIncome source: want schwab (EDGAR had none), got %q", got)
+	}
+}
+
+func TestMergeFundamentals_FieldSourcesNilWithoutEDGAR(t *testing.T) {
+	// No EDGAR overlay → FieldSources is nil; the record-level Source covers all.
+	merged, _ := mergeFundamentals(marketdata.Fundamentals{FreeCashflow: 100}, marketdata.Fundamentals{}, true, false)
+	if merged.FieldSources != nil {
+		t.Errorf("FieldSources: want nil without EDGAR, got %+v", merged.FieldSources)
+	}
+	if merged.Source != marketdata.SourceSchwab {
+		t.Errorf("Source: want schwab, got %q", merged.Source)
+	}
+}

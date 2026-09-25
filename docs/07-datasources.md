@@ -222,9 +222,13 @@ These constructed no Router and called `yfinance.*` directly, so US holdings got
 
 `^GSPC` used to come from Yahoo everywhere. `Router.GetBenchmarkSymbol` now returns `US:SPY` (Schwab-fetchable) for US portfolios when a Schwab client is present, and `Router.NormalizeBenchmarkSymbol` upgrades a configured `^GSPC`/`^SPX` to `US:SPY` — so the benchmark routes through Schwab with `^GSPC`/Yahoo as fallback. This realizes the Phase 5 "honest `US:SPY` baseline" decision.
 
-### Problem 4 — Provenance in the cache 🟧 GROUNDWORK DONE (Phase 10b / R17)
+### Problem 4 — Provenance in the cache ✅ SHIPPED (Phase 10b groundwork → Phase 10d surfacing)
 
-The DuckDB cache now carries a `source VARCHAR` column on both `prices` and `fundamentals` (idempotent `ADD COLUMN IF NOT EXISTS` migration), and the Router emits `slog` "which source served" logging on its Schwab→Yahoo fallback branches. The yfinance write path tags rows `"yahoo"`; Schwab/EDGAR-side tagging and per-source freshness arrive with the Phase 10c merger (Schwab fundamentals don't flow through these cache methods yet).
+The DuckDB cache carries a `source VARCHAR` column on both `prices` and `fundamentals` (idempotent `ADD COLUMN IF NOT EXISTS` migration), and the Router emits `slog` "which source served" logging on its Schwab→Yahoo fallback branches. Provenance is now recorded *and surfaced* end to end (Phase 10d):
+
+- **Per-record** — `marketdata.Fundamentals.Source` carries the merge tag (`schwab+edgar` / `schwab` / `edgar` / `yahoo`), set by the merger (US path) or the Yahoo write path. It rides through the cache blob, is persisted on the `selections` table (new `source` column), and renders as a **Source column** in `mycase pipeline show` and the selection-reasons report.
+- **Per-field** — `marketdata.Fundamentals.FieldSources` records which fields EDGAR authoritatively overlaid (FCF, OCF, net income); the selection-reasons report annotates each pick with `… | [source: EDGAR FCF, OCF]`.
+- **Still open** — filing-level detail (`[source: EDGAR 10-K 2025-Q4]`): `pkg/edgar` `mapFacts` has the form/period metadata on each fact but collapses it to plain values; surfacing the filing needs that plumbed up.
 
 ---
 
@@ -299,7 +303,7 @@ EDGAR facts being quarterly-stable means each company's `companyfacts.json` is f
 | Sector from CSV; derive `NetIncome`/`RegularPrice`; delete dead `GetCache()` | roadmap **Phase 10a** |
 | Wire the 7 bypass paths through the Router; `US:SPY` benchmark; `source` column + slog | roadmap **Phase 10b** / refactor **R17** |
 | `pkg/edgar` client + XBRL mapper + `FundamentalsMerger` | roadmap **Phase 10c** ✅ done |
-| Capability interfaces + provenance surfaced in reports | roadmap **Phase 10d** |
+| Capability interfaces + provenance surfaced in reports | roadmap **Phase 10d** — provenance surfacing ✅ done; capability interface split open |
 
 ---
 

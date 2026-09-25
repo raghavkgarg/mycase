@@ -458,6 +458,7 @@ func FetchFundamentals(ctx context.Context, tickers []string) (map[string]Fundam
 					DeliveryDate:             dlyDate,
 					DeliverableQty:           dlyQty,
 					DeliveryHistory:          dlyHistory,
+					Source:                   sourceYahoo,
 				}
 
 				results <- fetchResult{ticker: job.ticker, fund: fund}
@@ -482,6 +483,16 @@ func FetchFundamentals(ctx context.Context, tickers []string) (map[string]Fundam
 		} else {
 			// Skip this ticker but don't fail the whole execution (API discipline: fail gracefully).
 			slog.WarnContext(ctx, "fundamentals.ticker_skipped", "ticker", res.ticker, "err", res.err)
+		}
+	}
+
+	// Backfill provenance for any record whose Source is unset — the file cache
+	// and pre-provenance DuckDB blobs predate the Source field. This is the Yahoo
+	// producer, so an unset Source here is "yahoo".
+	for t, f := range fundamentals {
+		if f.Source == "" {
+			f.Source = sourceYahoo
+			fundamentals[t] = f
 		}
 	}
 

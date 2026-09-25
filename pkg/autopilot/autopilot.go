@@ -658,6 +658,7 @@ func pickResultToSelections(r *stockpicker.PickResult, prev map[string]cache.Sel
 			Weight: r.Weights[ticker],
 			Rank:   i + 1,
 			Sector: r.Sectors[ticker],
+			Source: r.Sources[ticker],
 			Action: "new",
 		}
 		if r.Scores != nil {
