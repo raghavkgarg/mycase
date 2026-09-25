@@ -130,6 +130,29 @@ CREATE TABLE IF NOT EXISTS stage1_shadow_results (
     created_at             TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (as_of_date, index_name, method, ticker)
 );
+
+CREATE TABLE IF NOT EXISTS pit_data_health (
+    as_of_date                 DATE,
+    index_name                 VARCHAR,
+    method                     VARCHAR,
+    total_candidates           INTEGER,
+    prices_max_date            DATE,
+    prices_stale_count         INTEGER,
+    delivery_max_date          DATE,
+    delivery_stale_count       INTEGER,
+    paired_candidates_count    INTEGER,
+    frozen_deliv_count         INTEGER,
+    frozen_rs_count            INTEGER,
+    frozen_vcp_count           INTEGER,
+    frozen_rvol_count          INTEGER,
+    zero_cfo_count             INTEGER,
+    zero_pat_count             INTEGER,
+    null_de_count              INTEGER,
+    dropped_holdings_count     INTEGER,
+    health_status              VARCHAR,
+    created_at                 TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (as_of_date, index_name, method)
+);
 `
 
 func (p *DB) initSchema(ctx context.Context) error {
@@ -725,6 +748,9 @@ JOIN pit_candidate_scores e
 WHERE m.method = 'multibagger' 
   AND e.method = 'earlymb'
   AND m.index_name = 'niftytotalmarket';
+
+CREATE OR REPLACE VIEW v_pit_data_health AS
+SELECT * FROM pit_data_health;
 `
 	_, err := p.db.ExecContext(ctx, viewDDL)
 	return err

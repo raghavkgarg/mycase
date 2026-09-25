@@ -3,6 +3,7 @@ package pithistory
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"slices"
 	"sort"
@@ -621,46 +622,81 @@ ORDER BY diff DESC;
 		}
 
 		// ==========================================
-		// 6. UPSTREAM DATA INTEGRITY & SILENT DROP SENTRY
+		// 6. UPSTREAM DATA INTEGRITY & FRESHNESS SENTRY
 		// ==========================================
-		fmt.Println("\n--- 6. DATA INTEGRITY & SILENT DROP DIAGNOSTICS ---")
-		alertQuery := `
-SELECT 
-    prev.ticker,
-    prev.raw_score,
-    prev.effective_score,
-    prev.final_weight
-FROM v_pit_candidate_scores prev
-JOIN v_pit_candidate_scores curr
-  ON prev.ticker = curr.ticker
- AND prev.index_name = curr.index_name
- AND prev.method = curr.method
-WHERE prev.as_of_date = ?
-  AND curr.as_of_date = ?
-  AND prev.index_name = ?
-  AND prev.method = ?
-  AND prev.selected = true
-  AND (curr.data_fetch_failed = true OR curr.rejection_reason LIKE 'DATA_FETCH_FAILED%' OR (curr.passed_stage1 = false AND (curr.rejection_reason IS NULL OR curr.rejection_reason = '')));
-`
-		alertRows, err := p.db.QueryContext(ctx, alertQuery, prevRun.AsOfDate, latestRun.AsOfDate, indexName, method)
-		if err == nil {
-			foundAlerts := false
-			for alertRows.Next() {
-				var ticker string
-				var prevRaw, prevEff, prevWeight float64
-				if err := alertRows.Scan(&ticker, &prevRaw, &prevEff, &prevWeight); err == nil {
-					foundAlerts = true
-					fmt.Printf("  [CRITICAL ALERT] %s was previously selected (Rank 1-3, Score: %.1f, Weight: %.1f%%) on %s,\n",
-						ticker, prevRaw, prevWeight*100.0, prevRun.AsOfDate)
-					fmt.Printf("                   but was silently dropped on %s with 0 bars (Upstream data fetch failed).\n",
-						latestRun.AsOfDate)
-					fmt.Printf("                   -> This is an API fetch failure, NOT a genuine technical/fundamental breakdown!\n")
+		fmt.Println("\n--- 6. DATA INTEGRITY & FRESHNESS SENTRY ---")
+		healthRep, hErr := p.AuditDataHealth(ctx, latestRun.AsOfDate, prevRun.AsOfDate, indexName, method)
+		if hErr == nil && healthRep != nil {
+			if sErr := p.SaveDataHealth(ctx, healthRep); sErr != nil {
+				slog.WarnContext(ctx, "pit.save_data_health_failed", "err", sErr)
+			}
+
+			// 1. Silent Drop Alerts
+			if len(healthRep.DroppedHoldingTickers) > 0 {
+				for _, ticker := range healthRep.DroppedHoldingTickers {
+					fmt.Printf("  [CRITICAL ALERT] %s was previously selected, but was silently dropped on %s\n", ticker, latestRun.AsOfDate)
+					fmt.Printf("                   -> This is an upstream data fetch failure, NOT a genuine technical/fundamental breakdown!\n")
 				}
+			} else {
+				fmt.Println("  • Active Holding Drops  : [OK] 0 portfolio holdings dropped due to upstream failures.")
 			}
-			alertRows.Close()
-			if !foundAlerts {
-				fmt.Println("  [OK] No active portfolio holdings were dropped due to upstream fetch failures.")
+
+			// 2. Temporal Recency
+			priceRecencyState := "🟢"
+			if healthRep.PricesStaleCount > 0 {
+				priceRecencyState = "🟡"
 			}
+			delivRecencyState := "🟢"
+			if healthRep.DeliveryStaleCount > 0 {
+				delivRecencyState = "🟡"
+			}
+			fmt.Printf("  • Temporal Recency Check:\n")
+			fmt.Printf("    - Price Series (OHLCV): %s (%d/%d aligned | %d stale) %s\n",
+				healthRep.PricesMaxDate, healthRep.TotalCandidates-healthRep.PricesStaleCount, healthRep.TotalCandidates, healthRep.PricesStaleCount, priceRecencyState)
+			fmt.Printf("    - Delivery Series     : %s (%d/%d aligned | %d stale) %s\n",
+				healthRep.DeliveryMaxDate, healthRep.TotalCandidates-healthRep.DeliveryStaleCount, healthRep.TotalCandidates, healthRep.DeliveryStaleCount, delivRecencyState)
+
+			// 3. Cross-Run Entropy (Freeze Detector)
+			if healthRep.PairedCandidatesCount > 0 {
+				fmt.Printf("  • Cross-Run Entropy (Freeze Sentry: %s -> %s):\n", prevRun.AsOfDate, latestRun.AsOfDate)
+				formatFreeze := func(pillarName string, frozenCount, total int, allowIlliquid bool) string {
+					pct := float64(frozenCount) / float64(total) * 100.0
+					if pct >= 10.0 {
+						return fmt.Sprintf("    - %-20s: %d frozen / %d (%.1f%%) 🔴 [CRITICAL: METRIC FROZEN]\n", pillarName, frozenCount, total, pct)
+					}
+					if allowIlliquid && frozenCount > 0 {
+						return fmt.Sprintf("    - %-20s: %d frozen / %d (%.1f%%) [OK: < 5%% illiquid baseline] 🟢\n", pillarName, frozenCount, total, pct)
+					}
+					return fmt.Sprintf("    - %-20s: %d frozen / %d (%.1f%%) [OK] 🟢\n", pillarName, frozenCount, total, pct)
+				}
+				fmt.Print(formatFreeze("Pillar 1 (Comp RS)", healthRep.FrozenRSCount, healthRep.PairedCandidatesCount, false))
+				fmt.Print(formatFreeze("Pillar 2 (VCP ATR)", healthRep.FrozenVCPCount, healthRep.PairedCandidatesCount, false))
+				fmt.Print(formatFreeze("Pillar 3 (RVOL Z)", healthRep.FrozenRVOLCount, healthRep.PairedCandidatesCount, false))
+				fmt.Print(formatFreeze("Pillar 4 (Deliv Δ)", healthRep.FrozenDelivCount, healthRep.PairedCandidatesCount, true))
+			}
+
+			// 4. Fundamental Quality Coverage
+			cfoPct := 100.0
+			patPct := 100.0
+			dePct := 100.0
+			if healthRep.TotalCandidates > 0 {
+				cfoPct = (1.0 - float64(healthRep.ZeroCFOCount)/float64(healthRep.TotalCandidates)) * 100.0
+				patPct = (1.0 - float64(healthRep.ZeroPATCount)/float64(healthRep.TotalCandidates)) * 100.0
+				dePct = (1.0 - float64(healthRep.NullDECount)/float64(healthRep.TotalCandidates)) * 100.0
+			}
+			fmt.Printf("  • Fundamental Coverage  : CFO (%.1f%%), PAT (%.1f%%), D/E (%.1f%%)\n", cfoPct, patPct, dePct)
+
+			// 5. System Health Summary
+			switch healthRep.HealthStatus {
+			case "OPTIMAL":
+				fmt.Println("  • System Data Health    : 🟢 OPTIMAL (All pillars dynamic & synchronized)")
+			case "DEGRADED":
+				fmt.Println("  • System Data Health    : 🟡 DEGRADED (Partial series staleness detected)")
+			case "CRITICAL_FROZEN":
+				fmt.Println("  • System Data Health    : 🔴 CRITICAL FROZEN (Pillar metric stagnation alert)")
+			}
+		} else {
+			fmt.Println("  [OK] No active portfolio holdings were dropped due to upstream fetch failures.")
 		}
 	}
 

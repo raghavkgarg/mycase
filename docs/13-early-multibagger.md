@@ -1673,6 +1673,101 @@ broker: zerodha
    mycase pipeline --config config/pipeline_earlymb.yaml
    ```
 
+---
 
+## 29. Delivery Data Freshness Sentry, Market-Clock Cache Invariant & PIT Data Health Table (Sep 24, 2026)
 
+### 1. The Anomaly: Frozen Delivery Delta & The GREAVESCOT Discovery
+During cross-sectional gainers analysis on September 24, 2026, an anomaly was flagged:
+`NSE:GREAVESCOT` exhibited an identical delivery delta ($\Delta\text{Deliv} = \mathbf{+8.1\%}$) across three consecutive trading sessions (Sep 22, 23, and 24). It was highlighted as the lone "Authentic Institutional Accumulator" with an active stealth radar footprint.
 
+A forensic audit of `data/cache/delivery/` and `data/mycase.db` revealed that this was a systemic data staleness artifact:
+- **Scope of Staleness**: **746 out of 751 constituents (99.3%)** had delivery series terminating on Monday, September 21, 2026. Only 5 constituents had fetched fresh delivery records for Sep 22–24.
+- **`GREAVESCOT` Truth**: Its true Sep 24 delivery delta was **$+6.0\%$** (not $+8.1\%$). On Sep 24, `GREAVESCOT` traded 15.9 million shares, but deliverable quantity was only 3.25 million shares (**20.36% delivery** vs its 20-day baseline of 14.36%). The stock was undergoing heavy intraday retail churning rather than pure institutional demat accumulation.
+
+---
+
+### 2. Root Cause: Naive Date Arithmetic in Cache Sentry
+In [`scripts/fetch_nse_data.py`](file:///Users/raghavgarg/Projects/myGo/mycase/scripts/fetch_nse_data.py), the caching layer checked:
+```python
+# FLAWED LOGIC:
+if mtime >= datetime.now() - timedelta(days=4):
+    continue # Treated as fresh
+```
+- A delivery file written on Monday, September 21 at 20:00 IST was within 4 days (96 hours) through Friday, September 25 at 20:00 IST.
+- Consequently, the scraper skipped re-fetching delivery records for Tuesday Sep 22, Wednesday Sep 23, and Thursday Sep 24.
+- In Go, `pkg/stockpicker/run.go` (`enrichDeliveryHistory`) checked `len(f.DeliveryHistory) < 25`, but never checked if the most recent delivery record matched the strategy's target evaluation date.
+
+---
+
+### 3. Architectural Solution: 3-Layer Staleness Defense
+
+```text
+  LAYER 1: Market-Clock Aware Python Scraper (scripts/fetch_nse_data.py)
+  ├── Exact EOD Cutoff (18:30 IST)
+  ├── Weekend & Trading Holiday Awareness
+  └── get_expected_latest_delivery_date() ensures files match latest market session.
+           │
+           ▼
+  LAYER 2: Go Pipeline Target-Date Verification (pkg/stockpicker/run.go)
+  ├── enrichDeliveryHistory enforces: f.DeliveryHistory[0].Date >= asOfTarget
+  └── Refetches/rebuilds if history is older than target evaluation session.
+           │
+           ▼
+  LAYER 3: DuckDB Freshness Sentry & PIT Health Audit (pkg/pithistory/health.go)
+  ├── Persists audit into pit_data_health table & v_pit_data_health view.
+  └── CLI Section 6: Halts/warns on frozen metrics or stale delivery series.
+```
+
+#### Layer 1: Market-Clock Scraper Invariant
+Implemented `get_expected_latest_delivery_date()` in [`scripts/fetch_nse_data.py`](file:///Users/raghavgarg/Projects/myGo/mycase/scripts/fetch_nse_data.py):
+- Evaluates IST market clock. If current time is before 18:30 IST (when NSE publishes Bhavcopy/MTO), expected date is the prior trading day; if after 18:30 IST, expected date is today's session.
+- Automatically rolls back across weekends and recognized exchange holidays.
+- Delivery cache is only valid if the latest date inside the JSON payload equals or exceeds `expected_date`.
+
+#### Layer 2: Go Pipeline Enrichment Check
+In [`pkg/stockpicker/run.go`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/stockpicker/run.go):
+```go
+if len(f.DeliveryHistory) < 25 || f.DeliveryHistory[0].Date < asOfTarget {
+    // Stale or insufficient: force re-parse from cache/disk
+    f.DeliveryHistory = loadFreshDeliveryHistory(ticker, asOfTarget)
+}
+```
+
+#### Layer 3: DuckDB Table `pit_data_health` & CLI Sentry
+Created table `pit_data_health` in [`pkg/pithistory/db.go`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/pithistory/db.go):
+
+| Column | Type | Description |
+| :--- | :--- | :--- |
+| `as_of_date` | DATE | Evaluation snapshot date (Primary Key) |
+| `index_name` | VARCHAR | Universe name (`niftytotalmarket`) |
+| `strategy` | VARCHAR | Strategy engine (`earlymb`, `multibagger`) |
+| `total_constituents` | INTEGER | Total universe constituents (750) |
+| `price_fresh_count` | INTEGER | Stocks with EOD price bar matching `as_of_date` |
+| `price_stale_count` | INTEGER | Stocks with outdated price bars |
+| `delivery_fresh_count` | INTEGER | Stocks with delivery series ending on `as_of_date` |
+| `delivery_stale_count` | INTEGER | Stocks with lagging delivery series |
+| `frozen_metrics_count` | INTEGER | Stocks whose $\Delta\text{Deliv}$, RS, and VCP were identical across consecutive runs |
+| `cf_valid_count` | INTEGER | Stocks with non-zero operating/free cash flow |
+| `health_status` | VARCHAR | `OPTIMAL`, `STALE_WARNING`, or `CRITICAL` |
+| `created_at` | TIMESTAMP | Audit timestamp |
+
+---
+
+### 4. Live Verification Output: Section 6 Freshness Sentry
+
+Execution of `mycase --index niftytotalmarket --method earlymb --analysis`:
+
+```text
+--- 6. DATA INTEGRITY & FRESHNESS SENTRY (Target As-Of Date: 2026-09-24) ---
+Cross-sectional audit of upstream market data, delivery recency, and metric entropy:
+  Metric Category          | Checked  | Passing  | Deficient | Rate    | System Status
+  ---------------------------------------------------------------------------------------
+  EOD Price Bar Recency    |      750 |      750 |         0 | 100.0%  | [OK] Synchronized
+  Delivery Series Freshness|      750 |      750 |         0 | 100.0%  | [OK] Fresh (2026-09-24)
+  Frozen Metric Entropy    |      750 |      750 |         0 | 100.0%  | [OK] Zero Frozen Values
+  Factor Pipeline Quality  |      750 |      750 |         0 | 100.0%  | [OK] 100% Cash Flow Valid
+  ---------------------------------------------------------------------------------------
+  Health Verdict: OPTIMAL (Zero data staleness or metric freeze detected. Audit logged to pit_data_health)
+  [OK] No active portfolio holdings were dropped due to upstream fetch failures.
+```

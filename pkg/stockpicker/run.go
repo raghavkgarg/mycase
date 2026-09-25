@@ -179,7 +179,11 @@ func RunWithResult(ctx context.Context, opts *Options) (*PickResult, error) {
 	// For EarlyMB, ensure Stage-1 survivors have full delivery history (>= 25 sessions)
 	// for Pillar 4 institutional accumulation delta scoring and PIT snapshotting.
 	if (opts.Method == "earlymb" || opts.Method == "early_multibagger") && len(activeKeys) > 0 {
-		enrichDeliveryHistory(ctx, activeKeys, fundamentals)
+		asOfTarget := opts.AsOfDate
+		if asOfTarget == "" {
+			asOfTarget = opts.clock().SettlementDate(time.Now()).Format("2006-01-02")
+		}
+		enrichDeliveryHistory(ctx, activeKeys, fundamentals, asOfTarget)
 	}
 
 	var selectedKeys []string
@@ -523,14 +527,21 @@ func getBenchmarkAndSlicedPricesVia(ctx context.Context, fetcher DataFetcher, in
 }
 
 // enrichDeliveryHistory checks if any Stage-1 survivor tickers are missing delivery history
-// (less than 25 settled sessions) and batch-fetches the complete series from NSE via Python,
+// (less than 25 settled sessions) or have stale delivery history (latest record < targetDate),
+// and batch-fetches the complete series from NSE via Python,
 // attaching the history to the in-memory fundamentals map and updating the DuckDB cache.
-func enrichDeliveryHistory(ctx context.Context, tickers []string, fundamentals map[string]yfinance.Fundamentals) {
+func enrichDeliveryHistory(ctx context.Context, tickers []string, fundamentals map[string]yfinance.Fundamentals, targetDate ...string) {
+	reqDate := ""
+	if len(targetDate) > 0 {
+		reqDate = targetDate[0]
+	}
 	var missing []string
 	for _, t := range tickers {
 		if strings.HasPrefix(t, "NSE:") || strings.HasPrefix(t, "BSE:") || strings.HasSuffix(t, ".NS") {
-			if f, ok := fundamentals[t]; ok && len(f.DeliveryHistory) < 25 {
-				missing = append(missing, t)
+			if f, ok := fundamentals[t]; ok {
+				if len(f.DeliveryHistory) < 25 || (reqDate != "" && len(f.DeliveryHistory) > 0 && f.DeliveryHistory[0].Date < reqDate) {
+					missing = append(missing, t)
+				}
 			}
 		}
 	}

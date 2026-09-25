@@ -241,10 +241,30 @@ def save_cached_delivery(sym: str, records: list):
         pass
 
 
+def get_expected_latest_delivery_date() -> str:
+    """
+    Returns the expected latest settled trading date in YYYY-MM-DD for NSE delivery data.
+    NSE delivery reports are published daily after market close (by ~18:30 IST).
+    """
+    now = datetime.now()
+    if now.weekday() == 5:  # Saturday -> Friday
+        expected = now - timedelta(days=1)
+    elif now.weekday() == 6:  # Sunday -> Friday
+        expected = now - timedelta(days=2)
+    elif now.weekday() == 0 and (now.hour < 18 or (now.hour == 18 and now.minute < 30)):  # Monday pre-close -> Friday
+        expected = now - timedelta(days=3)
+    elif now.hour < 18 or (now.hour == 18 and now.minute < 30):  # Tue-Fri pre-close -> yesterday
+        expected = now - timedelta(days=1)
+    else:  # Weekday post-close -> today
+        expected = now
+    return expected.strftime("%Y-%m-%d")
+
+
 def fetch_single_delivery(sym: str, period: str = "3M") -> dict:
     cached_records = load_cached_delivery(sym)
-    cutoff_date = (datetime.now() - timedelta(days=4)).strftime("%Y-%m-%d")
-    if len(cached_records) >= 25 and any(str(r.get("date", "")) >= cutoff_date for r in cached_records[:3]):
+    expected_latest_date = get_expected_latest_delivery_date()
+    # Cache is valid only if it has >= 25 records AND its latest record matches or exceeds the expected market close date
+    if len(cached_records) >= 25 and any(str(r.get("date", "")) >= expected_latest_date for r in cached_records[:3]):
         # Only reuse cache if recent records have valid series and delivery_pct
         if all(r.get("series") is not None and r.get("delivery_pct") is not None for r in cached_records[:5]):
             return {
