@@ -46,16 +46,16 @@ func mergeFundamentals(base marketdata.Fundamentals, edgarPartial marketdata.Fun
 		// Point values — overlay only when EDGAR supplied a non-zero value.
 		if edgarPartial.OperatingCashflow != 0 {
 			merged.OperatingCashflow = edgarPartial.OperatingCashflow
-			fieldSources[marketdata.FieldOperatingCashflow] = marketdata.SourceEDGAR
+			fieldSources[marketdata.FieldOperatingCashflow] = edgarFieldTag(edgarPartial, marketdata.FieldOperatingCashflow)
 		}
 		if edgarPartial.NetIncome != 0 {
 			merged.NetIncome = edgarPartial.NetIncome
-			fieldSources[marketdata.FieldNetIncome] = marketdata.SourceEDGAR
+			fieldSources[marketdata.FieldNetIncome] = edgarFieldTag(edgarPartial, marketdata.FieldNetIncome)
 		}
 		// FreeCashflow: EDGAR (OCF − capex) is authoritative; prefer it when set.
 		if edgarPartial.FreeCashflow != 0 {
 			merged.FreeCashflow = edgarPartial.FreeCashflow
-			fieldSources[marketdata.FieldFreeCashflow] = marketdata.SourceEDGAR
+			fieldSources[marketdata.FieldFreeCashflow] = edgarFieldTag(edgarPartial, marketdata.FieldFreeCashflow)
 		}
 
 		// Annual series — overlay only when EDGAR produced a non-empty series.
@@ -82,6 +82,19 @@ func pickSeries(overlay, base []marketdata.AnnualMetric) []marketdata.AnnualMetr
 		return overlay
 	}
 	return base
+}
+
+// edgarFieldTag returns the per-field provenance tag EDGAR recorded for a field
+// (e.g. "edgar:10-K FY2025"), falling back to the bare marketdata.SourceEDGAR
+// tag when EDGAR supplied no filing detail for it. This lets the merged record
+// attribute a value to a specific filing when known (Phase 10d, Option B2).
+func edgarFieldTag(edgarPartial marketdata.Fundamentals, field string) string {
+	if edgarPartial.FieldSources != nil {
+		if tag := edgarPartial.FieldSources[field]; tag != "" {
+			return tag
+		}
+	}
+	return marketdata.SourceEDGAR
 }
 
 // provenance describes which sources contributed to a merged record.

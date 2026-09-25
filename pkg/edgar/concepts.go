@@ -2,6 +2,7 @@ package edgar
 
 import (
 	"context"
+	"fmt"
 	"sort"
 
 	"github.com/raghavkgarg/mycase/pkg/marketdata"
@@ -86,6 +87,13 @@ func (c *Client) FetchFundamentals(ctx context.Context, tickers []string) (map[s
 // Fundamentals. Point values use the latest available fact; annual series use
 // FY/10-K facts sorted ascending and deduped by period end. FreeCashflow is
 // derived (operating cash flow − capex) only when both are present.
+//
+// It also records per-field provenance in f.FieldSources with filing detail —
+// e.g. "edgar:10-K FY2025" for a value taken from the FY2025 annual report — so
+// the datafetcher merger and the selection report can attribute a specific
+// number to a specific filing (Phase 10d, Option B2). Only the point/derived
+// fields EDGAR supplies here are tagged; the annual series inherit the
+// record-level "edgar" tag via the merger.
 func mapFacts(cf *companyFacts) marketdata.Fundamentals {
 	g := cf.Facts.USGAAP
 
@@ -101,24 +109,57 @@ func mapFacts(cf *companyFacts) marketdata.Fundamentals {
 		AnnualInterestExpense:    annualSeries(g, tagsInterestExpense),
 	}
 
-	// Point values: latest reported fact for cash flow / net income.
-	if v, ok := latestValue(g, tagsOperatingCashflow); ok {
+	fieldSources := make(map[string]string)
+
+	// Point values: latest reported fact for cash flow / net income, with the
+	// specific filing that supplied it recorded for provenance.
+	if v, src, ok := latestValueWithSource(g, tagsOperatingCashflow); ok {
 		f.OperatingCashflow = v
+		fieldSources[marketdata.FieldOperatingCashflow] = src
 	}
-	if v, ok := latestValue(g, tagsNetIncome); ok {
+	if v, src, ok := latestValueWithSource(g, tagsNetIncome); ok {
 		f.NetIncome = v
+		fieldSources[marketdata.FieldNetIncome] = src
 	}
 
 	// Authoritative FCF = latest annual operating cash flow − latest annual capex,
 	// only when both are present on the same (annual) basis. Otherwise leave zero
-	// and let the merger fall back to Schwab's TTM FCF.
-	if ocf, ok1 := latestAnnual(g, tagsOperatingCashflow); ok1 {
+	// and let the merger fall back to Schwab's TTM FCF. Provenance is attributed
+	// to the operating-cash-flow filing (the OCF and capex come from the same
+	// annual report for a given fiscal year).
+	if ocf, ocfSrc, ok1 := latestAnnualWithSource(g, tagsOperatingCashflow); ok1 {
 		if capex, ok2 := latestAnnual(g, tagsCapEx); ok2 {
 			f.FreeCashflow = ocf - capex
+			fieldSources[marketdata.FieldFreeCashflow] = ocfSrc
 		}
 	}
 
+	if len(fieldSources) > 0 {
+		f.FieldSources = fieldSources
+	}
+
 	return f
+}
+
+// filingTag formats an EDGAR field-source value carrying the filing that
+// supplied a fact — e.g. "edgar:10-K FY2025" or "edgar:10-Q Q2 2025". Falls back
+// to the bare marketdata.SourceEDGAR tag when the form is unknown.
+func filingTag(r factValue) string {
+	if r.Form == "" {
+		return marketdata.SourceEDGAR
+	}
+	period := r.FP
+	if period == "" {
+		return marketdata.SourceEDGAR + ":" + r.Form
+	}
+	if r.FY != 0 {
+		if period == "FY" {
+			period = fmt.Sprintf("FY%d", r.FY)
+		} else {
+			period = fmt.Sprintf("%s %d", period, r.FY)
+		}
+	}
+	return fmt.Sprintf("%s:%s %s", marketdata.SourceEDGAR, r.Form, period)
 }
 
 // usdFacts returns the USD-unit fact rows for a concept. EDGAR reports absolute
@@ -133,6 +174,25 @@ func usdFacts(cd conceptData) []factValue {
 // first that carries USD rows — a tag that is present but empty does not shadow
 // a later tag that has data.
 func latestValue(g map[string]conceptData, tags []string) (float64, bool) {
+	if r, ok := latestFact(g, tags); ok {
+		return r.Val, true
+	}
+	return 0, false
+}
+
+// latestValueWithSource is latestValue plus the provenance tag (filingTag) of
+// the winning fact — used to attribute a point value to a specific filing.
+func latestValueWithSource(g map[string]conceptData, tags []string) (float64, string, bool) {
+	if r, ok := latestFact(g, tags); ok {
+		return r.Val, filingTag(r), true
+	}
+	return 0, "", false
+}
+
+// latestFact returns the most recently filed USD fact across candidate tags
+// (by Filed date, tie-broken by period end), for whichever candidate first
+// carries data.
+func latestFact(g map[string]conceptData, tags []string) (factValue, bool) {
 	for _, t := range tags {
 		cd, ok := g[t]
 		if !ok {
@@ -148,9 +208,9 @@ func latestValue(g map[string]conceptData, tags []string) (float64, bool) {
 				best = r
 			}
 		}
-		return best.Val, true
+		return best, true
 	}
-	return 0, false
+	return factValue{}, false
 }
 
 // latestAnnual returns the value of the most recent full-year (FY / 10-K) fact
@@ -161,6 +221,43 @@ func latestAnnual(g map[string]conceptData, tags []string) (float64, bool) {
 		return 0, false
 	}
 	return series[len(series)-1].Value, true // series is ascending by year end
+}
+
+// latestAnnualWithSource returns the most recent full-year fact value across
+// candidate tags plus the provenance tag (filingTag) of the winning annual fact.
+// It mirrors annualSeries's selection (annual facts, most-recently-filed per
+// period end) but retains the winning factValue so its filing can be attributed.
+func latestAnnualWithSource(g map[string]conceptData, tags []string) (float64, string, bool) {
+	for _, t := range tags {
+		cd, ok := g[t]
+		if !ok {
+			continue
+		}
+		rows := usdFacts(cd)
+		if len(rows) == 0 {
+			continue
+		}
+		byEnd := make(map[string]factValue)
+		for _, r := range rows {
+			if !isAnnual(r) || r.End == "" {
+				continue
+			}
+			if prev, ok := byEnd[r.End]; !ok || r.Filed > prev.Filed {
+				byEnd[r.End] = r
+			}
+		}
+		if len(byEnd) == 0 {
+			continue
+		}
+		var latest factValue
+		for _, r := range byEnd {
+			if latest.End == "" || r.End > latest.End {
+				latest = r
+			}
+		}
+		return latest.Val, filingTag(latest), true
+	}
+	return 0, "", false
 }
 
 // annualSeries builds a deduped, ascending-by-period-end annual series from the

@@ -227,8 +227,7 @@ These constructed no Router and called `yfinance.*` directly, so US holdings got
 The DuckDB cache carries a `source VARCHAR` column on both `prices` and `fundamentals` (idempotent `ADD COLUMN IF NOT EXISTS` migration), and the Router emits `slog` "which source served" logging on its Schwab→Yahoo fallback branches. Provenance is now recorded *and surfaced* end to end (Phase 10d):
 
 - **Per-record** — `marketdata.Fundamentals.Source` carries the merge tag (`schwab+edgar` / `schwab` / `edgar` / `yahoo`), set by the merger (US path) or the Yahoo write path. It rides through the cache blob, is persisted on the `selections` table (new `source` column), and renders as a **Source column** in `mycase pipeline show` and the selection-reasons report.
-- **Per-field** — `marketdata.Fundamentals.FieldSources` records which fields EDGAR authoritatively overlaid (FCF, OCF, net income); the selection-reasons report annotates each pick with `… | [source: EDGAR FCF, OCF]`.
-- **Still open** — filing-level detail (`[source: EDGAR 10-K 2025-Q4]`): `pkg/edgar` `mapFacts` has the form/period metadata on each fact but collapses it to plain values; surfacing the filing needs that plumbed up.
+- **Per-field** — `marketdata.Fundamentals.FieldSources` records which fields EDGAR authoritatively overlaid (FCF, OCF, net income) **with the originating filing** (e.g. `edgar:10-K FY2025`); the EDGAR concept mapper captures each value's `Form`/`FP`/`FY`, and the selection-reasons report annotates each pick with `… | [source: EDGAR FCF (10-K FY2025), OCF (10-K FY2025)]`.
 
 ---
 

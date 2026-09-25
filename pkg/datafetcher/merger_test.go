@@ -123,3 +123,27 @@ func TestMergeFundamentals_FieldSourcesNilWithoutEDGAR(t *testing.T) {
 		t.Errorf("Source: want schwab, got %q", merged.Source)
 	}
 }
+
+func TestMergeFundamentals_FieldSourcesFilingDetailPassthrough(t *testing.T) {
+	// When the EDGAR partial carries filing detail on a field, the merged record
+	// must surface that detail (Option B2), not the bare "edgar" tag.
+	schwabBase := marketdata.Fundamentals{FreeCashflow: 100}
+	edgarPartial := marketdata.Fundamentals{
+		FreeCashflow: 450,
+		FieldSources: map[string]string{
+			marketdata.FieldFreeCashflow: "edgar:10-K FY2025",
+		},
+	}
+
+	merged, _ := mergeFundamentals(schwabBase, edgarPartial, true, true)
+
+	if got := merged.FieldSources[marketdata.FieldFreeCashflow]; got != "edgar:10-K FY2025" {
+		t.Errorf("FreeCashflow source: want edgar:10-K FY2025 passthrough, got %q", got)
+	}
+	// A field EDGAR overrode but supplied no detail for falls back to bare edgar.
+	edgarPartial2 := marketdata.Fundamentals{NetIncome: 600}
+	merged2, _ := mergeFundamentals(marketdata.Fundamentals{NetIncome: 90}, edgarPartial2, true, true)
+	if got := merged2.FieldSources[marketdata.FieldNetIncome]; got != marketdata.SourceEDGAR {
+		t.Errorf("NetIncome source: want bare edgar without detail, got %q", got)
+	}
+}

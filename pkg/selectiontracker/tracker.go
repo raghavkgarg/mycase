@@ -686,9 +686,14 @@ func (t *Tracker) SaveReport(identity, displayName, method string, existingHoldi
 
 // edgarFieldNote formats a compact per-field provenance marker listing the
 // fundamentals fields EDGAR authoritatively supplied for a ticker (Phase 10d,
-// Option B). fs maps canonical field name → provider tag; only fields whose
-// source is "edgar" are surfaced, since the row-level Source column already
-// conveys the base provider. Returns "" when no field came from EDGAR.
+// Options B1/B2). fs maps canonical field name → provider tag; only fields whose
+// source is EDGAR are surfaced, since the row-level Source column already conveys
+// the base provider. Returns "" when no field came from EDGAR.
+//
+// The tag value is either the bare "edgar" or the enriched "edgar:<filing>"
+// (e.g. "edgar:10-K FY2025", Option B2). When any field carries filing detail,
+// the note shows each field with its filing — "FCF (10-K FY2025)"; otherwise it
+// lists bare field labels — "FCF, OCF".
 //
 // The field ordering is fixed (FCF, then OCF, then Net Income) so the note is
 // stable across runs and diffable. Field labels are literals here rather than
@@ -706,7 +711,13 @@ func edgarFieldNote(fs map[string]string) string {
 	}
 	var edgarFields []string
 	for _, o := range order {
-		if fs[o.key] == "edgar" {
+		tag := fs[o.key]
+		if tag != "edgar" && !strings.HasPrefix(tag, "edgar:") {
+			continue
+		}
+		if filing := strings.TrimPrefix(tag, "edgar:"); filing != "" && filing != "edgar" {
+			edgarFields = append(edgarFields, fmt.Sprintf("%s (%s)", o.label, filing))
+		} else {
 			edgarFields = append(edgarFields, o.label)
 		}
 	}
