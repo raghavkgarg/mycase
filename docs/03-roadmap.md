@@ -136,7 +136,7 @@ provenance column. All three API clients (Schwab, EDGAR, Yahoo) are cache-first 
 by a shared rate limiter. See **Ch. 7 Data Sources**, **Ch. 8–9 EDGAR**, and **Ch. 10
 Storage** for how it works.
 
-**Phase 10d (partially shipped):**
+**Phase 10d (shipped):**
 
 - **Provenance surfacing — shipped.** Data provenance now flows end to end from the
   fetch/merge layer to the audit surfaces, at two granularities:
