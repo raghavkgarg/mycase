@@ -1,8 +1,10 @@
-# Mycase — Data Sources Reference
+# Data Sources Reference
 
-**Scope**: US equity data. The India/Yahoo paths belong to the India-Path (the earlier multi-market design).
+Market data is sourced per data type from the most authoritative provider that can supply
+it — the data model, the real API shapes, provenance, and the gap analysis. The design
+principle behind it is recorded as decision **D15** in `docs/04-architecture.md`.
 
-This chapter is the reference for how market data is sourced: the data model, the real API shapes, provenance, and the gap analysis. The design principle behind it — *source each data type from the most authoritative provider that can supply it* — is recorded as decision **D15** in `docs/04-architecture.md`.
+> **Scope**: US equity data. The India/Yahoo paths belong to the India-Path (the earlier multi-market design).
 
 ---
 
@@ -21,7 +23,7 @@ This chapter is the reference for how market data is sourced: the data model, th
 
 ## 1. Why This Doc Exists
 
-Two questions drove this document:
+Two questions frame the data-sourcing design:
 
 1. **How much do we still depend on Yahoo Finance, and for data we could get from better sources?**
 2. **Where does this data actually come from — exchanges, SEC, Treasury? Is Yahoo just the only *free* source?**

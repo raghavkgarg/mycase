@@ -1,17 +1,19 @@
 # Scuttlebutt & Live Qualitative Research Reporting Pipeline
 
-The Scuttlebutt Reporting System is an automated qualitative research pipeline integrated into the Go Mycase Stock Picker. It dynamically extracts, compiles, and verifies key fundamental, governance, stability, and operational indicators for selected stocks, outputting a daily consolidated report at `report/<index_name>_<strategy>/research/<YYYYMMDD>_scuttlebutt.txt`.
+# Scuttlebutt Research
+
+Scuttlebutt research is an automated qualitative pipeline in the stock picker. It extracts,
+compiles, and verifies key fundamental, governance, stability, and operational indicators
+for selected stocks, writing a daily consolidated report to
+`report/<index_name>_<strategy>/research/<YYYYMMDD>_scuttlebutt.txt`.
 
 ---
 
-## 1. Automation History & Python Transition
+## 1. Data collection scripts
 
-Originally, much of the qualitative data collation for the scuttlebutt reports (such as corporate actions, board resignations, related party alerts, and customer concentrations) was managed through manually maintained files or static offline checks.
+Qualitative data collation — corporate actions, board resignations, related-party alerts,
+customer concentrations, sector TAM — is handled by Python scripts invoked from Go:
 
-Following the core request:
-> *"as now we have new python nse live data can we check if we can automate this report?"*
-
-The system was fully automated using custom-written Python scripts called from Go:
 1. **`scripts/fetch_nse_data.py`**: Scrapes live NSE schedules, delivery accumulation volumes, related-party alerts, and board cessations/resignations.
 2. **`scripts/check_customer_concentration.py`**: Handles local PDF segment extraction, online report downloading, and auto-updating the JSON database caches.
 3. **`scripts/update_sector_tam.py`**: Maintains the Total Addressable Market (TAM) statistics per sector.

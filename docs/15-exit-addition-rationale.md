@@ -1,8 +1,7 @@
-# Portfolio Exit Vetting & Addition Drivers Documentation
+# Exit & Addition Rationale
 
-## Overview
-
-This document details the enhanced vetting and rationale tracking system implemented in `mycase`. The system ensures complete transparency for all portfolio movements during rebalancing:
+Every portfolio movement during a rebalance carries a recorded rationale, so the investor
+can audit why each stock left, entered, or changed weight:
 1. **Exiting Holdings**: Rigorously vetted with exact technical or fundamental safety filter failures or rank hysteresis drift reasons.
 2. **New Additions**: Highlight key operational and financial catalysts explaining why they entered the Top 20.
 3. **Weight Shifts (Increases & Reductions)**: Track rank and score deltas relative to golden copy holdings.

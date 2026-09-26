@@ -374,7 +374,7 @@ func LoadConstituents(filePath, indexName string) (*TickersSource, error) {
 			cleanIndex := strings.ToLower(strings.ReplaceAll(subIdx, " ", ""))
 			url, ok := csvLinks[cleanIndex]
 			if !ok {
-				return nil, fmt.Errorf("unsupported index '%s'. Please check docs/stockpicker.md for the list of supported indices", subIdx)
+				return nil, fmt.Errorf("unsupported index '%s'. Please check docs/18-runbook.md for the list of supported indices", subIdx)
 			}
 
 			slog.Info("constituents.download", "index", subIdx)

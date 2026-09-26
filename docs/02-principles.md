@@ -1,7 +1,10 @@
-# Mycase — Architecture Principles
+# Principles
 
-**Purpose**: Codify the durable architectural principles the system is built on, so future changes (and merges from divergent branches) can be evaluated against a stable rubric rather than ad-hoc judgment.
-**Related**: `docs/04-architecture.md` (current design + D-decisions), `.kiro/steering/architecture.md` (enforced layering), `docs/07-datasources.md` (data-source design).
+The durable architectural principles the system is built on, so changes — and merges from
+divergent branches — can be evaluated against a stable rubric rather than ad-hoc judgment.
+The current design and its D-decisions live in [Architecture](04-architecture.md); the
+mechanically-enforced subset is in `.kiro/steering/architecture.md`; the data-source design
+is in [Data Sources](07-datasources.md).
 
 ---
 

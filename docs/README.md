@@ -4,43 +4,17 @@ This is the book-form table of contents for `docs/`. Each document is a **chapte
 chapters are grouped into **modules** and ordered so the guide reads front-to-back —
 from *why the system exists* through *how it's built*, *what it does*, and *how to run
 it*, ending with the India-Path material. **Status and plans are not part of the reading
-spine** — they live in the Roadmap (Ch. 3), which is the one appendix-like chapter you
+spine** — they live in the Roadmap ([Appendix A](03-roadmap.md)), the one document you
 consult rather than read straight through.
 
-> **This structure is a working draft (Pass 1).** The module grouping and chapter
-> titles below are the source of truth for how the book reads; the *filenames*
-> (`NN-name.md`) are stable IDs and deliberately lag the titles for now. A later pass
-> will rename files to match their chapter titles and migrate the `docs/NN-*.md`
-> references embedded in Go source and steering. Until then, trust the **title +
-> module** here over the filename.
+Filenames are stable numeric IDs (`NN-slug.md`) and the slug matches the chapter title.
+Renaming a chapter is a deliberate, wholesale change (rename + migrate every `docs/NN-*.md`
+reference + build), never piecemeal.
 
----
-
-## How this book is written (governing rules)
-
-These rules are what keep the guide readable and stop it decaying back into a pile of
-change-logs. Apply them to every chapter, new or edited:
-
-1. **A chapter describes the system as it is, in the present tense.** "The Router caches
-   merged fundamentals" — not "Phase 10e made the Router cache fundamentals." A reader
-   should learn *how the system works today* without reconstructing its history.
-2. **Status and history are not chapter content.**
-   - *What's done / in progress / next* → the **Roadmap** (Ch. 3).
-   - *What changed and when* → **git history** (commits, PRs).
-   - No `Status:` headers, no "shipped in Phase N," no strikethrough `~~was broken~~ ✅
-     FIXED` archaeology inside a chapter. If you're tempted to write it, it belongs in
-     the roadmap or is already in git.
-3. **One chapter per subsystem or concept — never per phase, refactor, or change.** A
-   document titled by a *process* (`refactor`, `migration`, `phase-N`) is a smell:
-   retitle it by the *subsystem* it documents, or fold it into the roadmap if it's
-   purely status.
-4. **The module a chapter lives in supplies its context.** A terse title (`Value`,
-   `Rendering`, `Screener`) is fine because its module disambiguates it. Don't pad names
-   to be self-describing in isolation.
-5. **New durable docs join the guide as a numbered chapter in the right module and get
-   listed here.** Don't spawn satellite plan / per-feature process docs (impl plans, bug
-   trackers, one-off audits) — record plans in the roadmap; document a feature in its
-   chapter; let git hold the process.
+> **How the book is written lives in [Chapter 0 — The Style Guide](00-style-guide.md).**
+> Title convention, the present-tense rule, the ban on status/history furniture and
+> absolute-path links, structure and voice — Chapter 0 is the single source of truth and the
+> rubric every chapter is reviewed against. Read it before adding or editing a chapter.
 
 ---
 
@@ -50,9 +24,13 @@ change-logs. Apply them to every chapter, new or edited:
 
 | Ch. | Chapter | What it covers |
 |----:|---------|----------------|
+| 0 | [The Style Guide](00-style-guide.md) | How every chapter is written — the book's voice, structure, and aesthetic; the review rubric |
 | 1 | [Vision](01-vision.md) | Who it's for, the problem, what it sets out to build |
 | 2 | [Principles](02-principles.md) | Durable architectural principles — the review rubric for changes and merges |
-| 3 | [Roadmap](03-roadmap.md) | **Canonical status + plan.** Summary of what's shipped (with chapter pointers) + detail for upcoming phases. The one status document; not part of the front-to-back read |
+
+> Chapter 0 governs the book itself; Chapters 1–2 are where the front-to-back read begins.
+> The **Roadmap** — the one status-and-plan document — sits outside the numbered spine as
+> [Appendix A](03-roadmap.md).
 
 ## Module B — Architecture & Platform
 
@@ -119,6 +97,18 @@ the active US-Path focus.*
 
 ---
 
+## Appendices
+
+*Consulted, not read front-to-back.*
+
+| App. | Document | What it covers |
+|----:|----------|----------------|
+| A | [Roadmap](03-roadmap.md) | **Canonical status + plan.** What's shipped (with chapter pointers) + detail for upcoming phases. The one status document; not part of the reading spine. (Filename stays `03-roadmap.md` as a stable ID.) |
+
+---
+
 *Retired: the R-numbered refactor history (formerly `05-refactor.md`) is not a chapter —
-structural-change history lives in git, and the durable rules it once held now live in
-Ch. 2 (Principles), Ch. 4 (Architecture), and `.kiro/steering/`.*
+structural-change history lives in git, and the durable rules it once held now live in the
+[Principles](02-principles.md) and [Architecture](04-architecture.md) chapters and
+`.kiro/steering/`. The resolved-bug tracker (formerly `25-Bugs.md`) is likewise gone — a
+ledger of fixed bugs is git history, not a chapter.*

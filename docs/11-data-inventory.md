@@ -1,6 +1,7 @@
-# Data Directory Architecture & File Inventory (`data/`)
+# Data Directory Inventory
 
-This document provides a comprehensive, file-by-file and directory-by-directory audit of the `data/` folder in `mycase`. It explains:
+Every file and directory under `data/` — what it is, where it comes from, which code reads
+it, and whether it's safe to delete. For each entry:
 1. **What each file/folder is** and why it exists.
 2. **Provenance**: Where it came from (which CLI command, background job, scraper, or user action generated it).
 3. **Consumers**: Which Go packages or Python scripts read from it.

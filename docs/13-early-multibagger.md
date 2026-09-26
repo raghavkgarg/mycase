@@ -1,8 +1,8 @@
-# Early Multibagger (`earlymb`) Pre-Breakout Engine (v3.4)
+# Early Multibagger
 
 ## 1. Executive Summary & Architecture Philosophy
 
-The **Early Multibagger Engine v3.4** is an institutional-grade quantitative framework designed to detect high-traction compounders **1 to 3 weeks before** stage-2 breakout volume and price markups occur.
+The **Early Multibagger** engine (`earlymb`) is an institutional-grade quantitative framework that detects high-traction compounders **1 to 3 weeks before** stage-2 breakout volume and price markups occur.
 
 ### Core Architectural Principles:
 1. **Strict Gate vs Score Orthogonality**: Binary gates filter fundamental/event risk; 4 continuous scoring pillars differentiate winners across their full statistical distributions with zero metric overlap.
@@ -297,7 +297,7 @@ To guarantee that empirical reference bounds and weights are never overfitted in
 
 ### Stage-1 Hard Gates & Fallback Architecture
 
-Before candidates reach the scoring engine, binary Stage-1 filters eliminate ~85–88% of constituents in [`pkg/stockpicker/filters.go:450-653`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/stockpicker/filters.go#L450-L653):
+Before candidates reach the scoring engine, binary Stage-1 filters eliminate ~85–88% of constituents in `pkg/stockpicker/filters.go:450-653`:
 
 1. **Cash Flow Quality Gate (`min_cfo_pat: 0.25`)**:
    - Requires $\text{OperatingCashflow} > 0$ and $\frac{\text{OperatingCashflow}}{\text{NetIncome}} \ge 0.25$ (with $\text{FreeCashflow} > 0$ check when configured).
@@ -837,7 +837,7 @@ On September 11, 2026, investigations into identical factor score outputs betwee
 #### 2. Establishment of 21:00 IST as the Sole Daily Cutoff
 To eliminate upstream timing races, **21:00 IST (9:00 PM)** was established as the authoritative daily boundary across the system:
 * **`com.mycase.daily_sync.plist` & `scripts/daily_sync.sh`**: Schedule shifted from 16:00 to **21:00 IST** (Monday through Friday).
-* **Purge of Interim 16:00 Logic**: Removed intermediate 16:00 cache invalidation rules from [`pkg/cache/prices.go`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/cache/prices.go) and [`pkg/yfinance/prices.go`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/yfinance/prices.go), making 21:00 IST the sole cutoff:
+* **Purge of Interim 16:00 Logic**: Removed intermediate 16:00 cache invalidation rules from `pkg/cache/prices.go` and `pkg/yfinance/prices.go`, making 21:00 IST the sole cutoff:
   ```go
   // Post-market / EOD settlement boundary (21:00 IST):
   // 21:00 IST is the sole cutoff for the daily market cycle.
@@ -849,7 +849,7 @@ To eliminate upstream timing races, **21:00 IST (9:00 PM)** was established as t
   ```
 
 #### 3. EOD Market Date Resolution & Mathematical Cycle Model
-Implemented canonical EOD settlement resolution helpers in [`pkg/marketdata/marketdata.go`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/marketdata/marketdata.go):
+Implemented canonical EOD settlement resolution helpers in `pkg/marketdata/marketdata.go`:
 * **Trading Cycle Window**: Between 21:00 PM of Day $T$ and 20:59 PM of Day $T+1$, the effective settled market EOD date is Day $T$.
 * **Forward Availability**: Day $T+1$'s EOD file is recognized as only becoming available after 21:00 PM on Day $T+1$.
 * **Formulas**:
@@ -874,7 +874,7 @@ During the initial production execution of `./mycase db update --all --index nif
 #### 1. Bug 1: `nselib` 3-Month Window Fallback (`records_count: 1`)
 * **Root Cause**: The underlying library `nselib.capital_market.price_volume_and_deliverable_position_data` only supports literal string periods `["1D", "1W", "1M", "6M", "1Y"]`. Passing `period="3M"` was unhandled in `nselib`'s `if/elif` branches, silently falling back to `(today - 1 day)`. As a result, only **1 single trading session** was returned (`records_count: 1`).
 * **The Safety Invariant**: Because `CalculateDeliveryDelta` mathematically enforces a strict $\ge 25$ settled session invariant for the disjoint window ($5\text{D} + 20\text{D}$ baseline), it detected insufficient history, returned `ErrInsufficientDeliveryHistory`, and defaulted to neutral $\Delta = 0.0$ ($+0.0\%$).
-* **The Fix ([`scripts/fetch_nse_data.py`](file:///Users/raghavgarg/Projects/myGo/mycase/scripts/fetch_nse_data.py))**:
+* **The Fix (`scripts/fetch_nse_data.py`)**:
   When `period == "3M"`, the script computes an explicit calendar range of 100 days (`from_date` to `to_date`), fetching **64–72 settled trading sessions**, comfortably satisfying the $\ge 25$ session requirement.
 
 #### 2. Bug 2: Dirty NSE String Deserialization Crash (`"-"`)
@@ -886,18 +886,18 @@ During the initial production execution of `./mycase db update --all --index nif
   Because the error occurred in multi-symbol unmarshaling, the failure silently discarded delivery records for the entire batch of surviving stocks.
 * **The Fix**:
   1. Updated `sanitize_val` in `scripts/fetch_nse_data.py` to identify dirty tokens (`"-"`, `" - "`, `"N/A"`, `""`) and convert them to Python `None` (emitted as JSON `null`).
-  2. Implemented a resilient custom `UnmarshalJSON` for `DeliveryRecord` in [`pkg/marketdata/marketdata.go`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/marketdata/marketdata.go) utilizing `parseFlexibleFloat` to safely absorb string numbers, dirty tokens, and nulls into `float64(0.0)`.
+  2. Implemented a resilient custom `UnmarshalJSON` for `DeliveryRecord` in `pkg/marketdata/marketdata.go` utilizing `parseFlexibleFloat` to safely absorb string numbers, dirty tokens, and nulls into `float64(0.0)`.
   3. Purged stale 1-day and corrupted files from `data/cache/delivery/*.json`.
 
 #### 3. Bug 3: Script & Python Path Resolution Across Working Directories
 * **Root Cause**: When invoked from subdirectories, background Daemons, or alternate working directories, relative paths to `scripts/fetch_nse_data.py` and `.venv/bin/python3` broke silently.
-* **The Fix ([`pkg/yfinance/screener.go`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/yfinance/screener.go))**:
+* **The Fix (`pkg/yfinance/screener.go`)**:
   - Anchored path discovery to candidate search paths (`scripts/fetch_nse_data.py`, `../../scripts/fetch_nse_data.py`, `/Users/raghavgarg/Projects/myGo/mycase/scripts/fetch_nse_data.py`).
   - Automatically resolved absolute path for the Python binary (`.venv/bin/python3`) anchored to the project root.
   - Set `cmd.Dir = projectDir` and propagated explicit `stderr` diagnostics on exit failures rather than swallowing errors.
 
 #### 4. Architecture: Stage-1 Survivor Delivery Enrichment & Persistence
-* In [`pkg/stockpicker/run.go`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/stockpicker/run.go), `enrichDeliveryHistory` identifies all Stage-1 survivors lacking delivery series and triggers a single consolidated batch fetch (`FetchNselibDeliveryDataSeries`).
+* In `pkg/stockpicker/run.go`, `enrichDeliveryHistory` identifies all Stage-1 survivors lacking delivery series and triggers a single consolidated batch fetch (`FetchNselibDeliveryDataSeries`).
 * The resulting delivery series is updated in-memory on `Fundamentals` and immediately persisted to DuckDB's `fundamentals` table via `StoreFundamentalsCache`.
 * Subsequent pipeline stages, Incubator reports, and DuckDB snapshot persisting (`pit_candidate_scores`) now receive genuine, non-zero institutional delivery deltas:
   ```
@@ -964,7 +964,7 @@ Querying `v_pit_candidate_scores` across all 97 Stage-1 survivors on 2026-09-11 
 | **Insufficient History Fallbacks** | **`0` stocks (0.0%)** | `pillar4_insufficient_history = false` for all 97 stocks |
 
 #### 4. Ground-Truth Cache Verification: `NSE:CUPID`
-Tracing `NSE:CUPID` directly from disk cache ([`data/cache/delivery/CUPID.json`](file:///Users/raghavgarg/Projects/myGo/mycase/data/cache/delivery/CUPID.json)) with cutoff `2026-09-10` ($T-1$ under strict PIT lag):
+Tracing `NSE:CUPID` directly from disk cache (`data/cache/delivery/CUPID.json`) with cutoff `2026-09-10` ($T-1$ under strict PIT lag):
 * **Recent 5 Settled Sessions** (`2026-09-04` to `2026-09-10`):
   `[45.62%, 43.83%, 45.23%, 24.19%, 35.45%]` $\implies \overline{\text{Deliv}}_{5\text{D}} = \mathbf{38.86\%}$
 * **Baseline 20 Settled Sessions** (`2026-08-07` to `2026-09-03`):
@@ -1016,7 +1016,7 @@ For any stock whose natural delivery level is 60%–70% (typical for FMCG, MNC P
 
 ##### 5c. Disjoint Window Boundary Integrity (Off-by-One Check)
 
-Traced raw delivery records from [`data/cache/delivery/LALPATHLAB.json`](file:///Users/raghavgarg/Projects/myGo/mycase/data/cache/delivery/LALPATHLAB.json) to verify exact window boundaries:
+Traced raw delivery records from `data/cache/delivery/LALPATHLAB.json` to verify exact window boundaries:
 
 * **PIT Cutoff**: `2026-09-10` ($T-1$ under strict `lagDays=1`)
 * **Recent 5 Sessions**: `[2026-09-04, 2026-09-07, 2026-09-08, 2026-09-09, 2026-09-10]`
@@ -1287,29 +1287,29 @@ The audit uncovered four major systemic data vulnerabilities:
 - **Vulnerability**: In the NSE Bhavcopy / security-wise delivery API, Trade-to-Trade (T2T) segment stocks have `DeliverableQty = NaN` and `%DlyQttoTradedQty = '-'` because intraday squaring-off is prohibited by SEBI—**100% of all traded shares must be settled via delivery**. The Python scraper converted `"-"` and `NaN` into `null`, which Go deserialized into `0.0`. `CalculateDeliveryDelta` skipped `0.0` records, causing the window to reach back weeks or months into the past.
 - **Live Impact**: 61 stocks in cache had null delivery records. `NSE:DIACABS` showed a `+13.4%` delivery delta on Sep 11 using data from **July 28 – Aug 3 (40 days stale)**.
 - **Resolution**:
-  - In [`scripts/fetch_nse_data.py`](file:///Users/raghavgarg/Projects/myGo/mycase/scripts/fetch_nse_data.py), if the series is `BE`, `BZ`, or `ST`, the script enforces the SEBI invariant: `DeliverableQty = TotalTradedQuantity` and `DeliveryPct = 100.0%`.
-  - Added explicit `Series` field in `DeliveryRecord` struct in [`pkg/marketdata/marketdata.go`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/marketdata/marketdata.go).
+  - In `scripts/fetch_nse_data.py`, if the series is `BE`, `BZ`, or `ST`, the script enforces the SEBI invariant: `DeliverableQty = TotalTradedQuantity` and `DeliveryPct = 100.0%`.
+  - Added explicit `Series` field in `DeliveryRecord` struct in `pkg/marketdata/marketdata.go`.
   - Prioritized standard market sessions (`EQ`, `BE`) over block-deal (`BL`) window records for the same calendar date.
 
 #### 1B. Delivery Staleness — 10-Calendar-Day Recency Invariant
 - **Vulnerability**: `CalculateDeliveryDelta` validated that $\ge 25$ records existed, but never checked the timestamp of the latest record.
-- **Resolution**: Enforced a strict **10-calendar-day recency invariant** in [`pkg/yfinance/metrics_delivery.go`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/yfinance/metrics_delivery.go). If the latest delivery record is older than 10 calendar days (accounting for extended market holiday clusters and T+1 lag), `CalculateDeliveryDelta` returns `ErrStaleDeliveryHistory` and logs a staleness warning rather than calculating phantom accumulation from obsolete history.
+- **Resolution**: Enforced a strict **10-calendar-day recency invariant** in `pkg/yfinance/metrics_delivery.go`. If the latest delivery record is older than 10 calendar days (accounting for extended market holiday clusters and T+1 lag), `CalculateDeliveryDelta` returns `ErrStaleDeliveryHistory` and logs a staleness warning rather than calculating phantom accumulation from obsolete history.
 
 #### 2A. Cash Flow Quality Ingestion Breakthrough (Restoring 96.6% Dormant Gate)
 - **Vulnerability**: Yahoo Finance's `quoteSummary.financialData` card omits operating and free cash flow for 96.6% of Indian equities (625 out of 647 stocks in cache had `OperatingCashflow = 0.0 AND FreeCashflow = 0.0`). The Stage-1 cash flow gate (`if f.OperatingCashflow != 0 || f.FreeCashflow != 0`) was bypassed for almost the entire universe.
 - **Breakthrough**: Investigation revealed that Yahoo Finance's `fundamentals-timeseries` endpoint has **100% multi-year coverage** for Indian equities when querying `annualOperatingCashFlow` and `annualFreeCashFlow`.
 - **Resolution**:
-  - Added `annualOperatingCashFlow` and `annualFreeCashFlow` to `typesStr` in [`pkg/yfinance/yfinance.go`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/yfinance/yfinance.go).
+  - Added `annualOperatingCashFlow` and `annualFreeCashFlow` to `typesStr` in `pkg/yfinance/yfinance.go`.
   - Populated `AnnualOperatingCashFlow` and `AnnualFreeCashFlow` slices on `Fundamentals`.
   - Implemented automatic fallback to latest timeseries entries when summary card values are 0.0, restoring full operational integrity to the Cash Flow Quality Gate.
 
 #### 2B. Financial Sector ROE Quality Gate Bypass
-- **Vulnerability**: In [`pkg/stockpicker/filters.go`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/stockpicker/filters.go), `if f.ROE > 0 && f.ROE < minROE` allowed 79 Financial Services stocks with missing `ROE == 0.0` (including `BAJFINANCE`, `KOTAKBANK`, `LICI`) to bypass the filter entirely.
+- **Vulnerability**: In `pkg/stockpicker/filters.go`, `if f.ROE > 0 && f.ROE < minROE` allowed 79 Financial Services stocks with missing `ROE == 0.0` (including `BAJFINANCE`, `KOTAKBANK`, `LICI`) to bypass the filter entirely.
 - **Resolution**: Implemented `getEffectiveFinancialROE` helper that derives synthetic ROE via $\frac{\text{NetIncome}}{\text{MarketCap} / \text{PBRatio}}$ when reported ROE is missing or zero. Sub-threshold or unverified financials are strictly rejected (`effROE < minROE`).
 
 #### 3. Permanent Pre-Flight Data Integrity Guard
 - Created DuckDB view `v_data_integrity_check` in `data/mycase.db`.
-- Implemented `CheckDataIntegrity` in [`pkg/pithistory/analytics.go`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/pithistory/analytics.go) and wired it into `cmd/pit.go` and `cmd/db.go`. If $\ge 5\%$ of the universe has unverified/missing data, the pipeline prints a prominent warning banner before reports run.
+- Implemented `CheckDataIntegrity` in `pkg/pithistory/analytics.go` and wired it into `cmd/pit.go` and `cmd/db.go`. If $\ge 5\%$ of the universe has unverified/missing data, the pipeline prints a prominent warning banner before reports run.
 
 ---
 
@@ -1336,10 +1336,10 @@ Following data correction and empirical analysis, the governance status of the f
 
 | Strategy Rule | Previous Status | Current Status | Deployment Location | Quantitative Rationale |
 | :--- | :--- | :--- | :--- | :--- |
-| **Base Duration Graduated Scoring** | Shadow Mode | **LIVE IN PRODUCTION** | [`pkg/stockpicker/scoring.go`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/stockpicker/scoring.go), DuckDB macro `base_duration_multiplier` | Validated across 24 empirical samples with a **79.2% win rate** and **+3.22% average excess return**. Replaces brittle binary 4-week cliff with calibrated multipliers ($\ge 4\text{w}: 1.0\times, 2\text{-}3\text{w}: 0.75\times, 0\text{-}1\text{w}: 0.50\times$). |
+| **Base Duration Graduated Scoring** | Shadow Mode | **LIVE IN PRODUCTION** | `pkg/stockpicker/scoring.go`, DuckDB macro `base_duration_multiplier` | Validated across 24 empirical samples with a **79.2% win rate** and **+3.22% average excess return**. Replaces brittle binary 4-week cliff with calibrated multipliers ($\ge 4\text{w}: 1.0\times, 2\text{-}3\text{w}: 0.75\times, 0\text{-}1\text{w}: 0.50\times$). |
 | **ROCE Delivery Override** | Proposed Live | **RETAINED IN SHADOW (Tightened Bar)** | `stage1_shadow_results` table in `data/mycase.db` only | Empirical evidence (6 samples, 50% win rate, **-0.86% avg return**) is thin and negative. Production enforces strict legacy ROCE floor ($\ge 12.0\%$). Shadow threshold tightened: $\Delta\text{Deliv} \ge 9.0\%$ (was 6.0%), $\text{Comp RS} \ge 15.0\%$ (was 0.0%), $\text{VCP} \le 1.20$. |
 | **BFSI Promoter Exemption** | Shadow Mode | **SUSPENDED** | Diagnostic SQL query only | Correcting the ROE data expanded the legacy Financial Services pool naturally from **3 to 12 stocks** without needing an exemption. Urgent necessity is gone; rule suspended from active pipeline. |
-| **Data Integrity Pre-Flight Check** | Proposed | **LIVE IN PRODUCTION** | [`pkg/pithistory/analytics.go`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/pithistory/analytics.go), `mycase pit stats` | Permanent sentry preventing bad data feeds from silently producing phantom trading signals. |
+| **Data Integrity Pre-Flight Check** | Proposed | **LIVE IN PRODUCTION** | `pkg/pithistory/analytics.go`, `mycase pit stats` | Permanent sentry preventing bad data feeds from silently producing phantom trading signals. |
 
 #### 1. Base Duration Production Scoring Implementation
 ```go
@@ -1575,7 +1575,7 @@ To balance patient institutional compounding with tactical momentum capture, the
 ### 2. Air-Gapped Mutual Exclusion Engine (`pkg/pithistory/staging.go` & `cmd/pit.go`)
 When a holding is exited from Core Multibagger due to deceleration or rebalancing, it may experience sharp short-term momentum surges (e.g. `NSE:CUPID` surging +6% with a +174% composite RS). Without strict structural isolation, capital from the two strategies risks colliding or re-buying exited core stocks into the wrong mandate.
 
-The system implements the **Air-Gapped Mutual Exclusion Engine** in [`pkg/pithistory/staging.go`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/pithistory/staging.go) and [`cmd/pit.go`](file:///Users/raghavgarg/Projects/myGo/mycase/cmd/pit.go):
+The system implements the **Air-Gapped Mutual Exclusion Engine** in `pkg/pithistory/staging.go` and `cmd/pit.go`:
 ```bash
 # Generate kinetic satellite basket with strict exclusion of all active Core holdings:
 mycase pit stage --output data/earlymb_live.csv --exclude data/microsmall.csv --top 12
@@ -1613,11 +1613,11 @@ During live execution of `mycase pipeline --config config/pipeline_earlymb.yaml`
 ---
 
 ### 4. Selection Tracker Exit Rationale Accuracy Fix (`pkg/selectiontracker/tracker.go`)
-Previously, when existing holdings in `earlymb_live.csv` were dropped because effective scores fell below the regime cutoff ($10.4 < 30.0$), the exit summary table in [`tracker.go`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/selectiontracker/tracker.go) only evaluated `SafetyReasons`, `SectorCapDrops`, and `HysteresisDrops`. Because regime drops were stored under `ScoreThresholdDrops`, the report fell back to:
+Previously, when existing holdings in `earlymb_live.csv` were dropped because effective scores fell below the regime cutoff ($10.4 < 30.0$), the exit summary table in `tracker.go` only evaluated `SafetyReasons`, `SectorCapDrops`, and `HysteresisDrops`. Because regime drops were stored under `ScoreThresholdDrops`, the report fell back to:
 `Missing from index dataset or fetch error`
 
 This created the false impression that active stocks had disappeared from the index or failed network fetching.
-- **The Fix**: Added an explicit check for `t.ScoreThresholdDrops[ticker]` in [`pkg/selectiontracker/tracker.go`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/selectiontracker/tracker.go#L502).
+- **The Fix**: Added an explicit check for `t.ScoreThresholdDrops[ticker]` in `pkg/selectiontracker/tracker.go`.
 - **Corrected Report Output**:
   ```text
   =========================================================================================================
@@ -1636,7 +1636,7 @@ This created the false impression that active stocks had disappeared from the in
 ---
 
 ### 5. Dedicated Pipeline Automation (`config/pipeline_earlymb.yaml`)
-To operationalize the satellite book independently from the core multibagger book without requiring manual CLI flags, a dedicated pipeline specification was created in [`config/pipeline_earlymb.yaml`](file:///Users/raghavgarg/Projects/myGo/mycase/config/pipeline_earlymb.yaml):
+To operationalize the satellite book independently from the core multibagger book without requiring manual CLI flags, a dedicated pipeline specification was created in `config/pipeline_earlymb.yaml`:
 
 ```yaml
 indices:

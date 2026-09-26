@@ -1,123 +1,177 @@
 # mycase
 
-Portfolio basket and rebalancing engine for Indian equity markets (NSE/BSE).
+An automated US equity factor-tilt system. It picks stocks by a transparent quality +
+momentum score, sizes positions under sector and concentration caps, proposes orders for
+the investor to confirm, executes them through the Schwab Trader API, and then audits
+performance and watches the portfolio for drift between rebalances. It runs as a single Go
+binary on a quarterly cadence, with a behavioral-discipline layer that keeps a human in the
+loop before any order fires.
 
-Covers the full workflow: stock selection → weight optimization → order generation → backtesting → drift monitoring. Data from Yahoo Finance; execution via Zerodha Kite Connect. Runs without credentials in dry-run mode using `MockBroker`.
+Everything is local and auditable — no black-box scores. Every weight, filter, and cost is
+explainable from the output. US market data and brokerage come from Schwab; authoritative
+fundamentals come from SEC EDGAR; Yahoo Finance is the fallback. The same
+market-parameterized engine also drives a legacy **India-Path** (Zerodha + NSE/Yahoo) — see
+[Market paths](#market-paths).
+
+---
+
+## How it works
+
+A rebalance flows through a fixed pipeline, each stage feeding the next:
+
+1. **Pick** — score every constituent of the target index on the active strategy (US:
+   quality + momentum) and rank them. Hard filters eliminate unsuitable names; hysteresis
+   avoids churning holdings near the selection boundary.
+2. **Optimize** — turn the ranked survivors into target weights (inverse-volatility or
+   multi-factor), applying per-stock and per-sector caps and a micro-transaction filter.
+3. **Propose** — generate an order basket as a proposal. Nothing executes without explicit
+   investor confirmation (`--live` + a prompt).
+4. **Execute** — place orders through the broker with rate-limiting and automatic retry of
+   failures.
+5. **Audit & monitor** — track live performance versus the benchmark, run FIFO tax-lot
+   accounting and tax-loss harvesting (US), and run a background drift daemon that alerts
+   when holdings wander from targets.
+
+Prices and fundamentals are cached in a local DuckDB database (`data/mycase.db`), so warm
+re-runs are offline and API budgets are respected. Every external API response is archived
+to `data/raw/` for offline debugging.
 
 ---
 
 ## Install
 
-```bash
-go install github.com/raghavkgarg/mycase@latest
-```
-
-Or build from source:
+Requires **Go 1.27+**.
 
 ```bash
 git clone https://github.com/raghavkgarg/mycase
 cd mycase
-make build       # outputs ./bin/mycase
-make install     # installs to $GOPATH/bin
+make build       # builds ./dist/mycase (version-stamped)
+make install     # symlinks /usr/local/bin/mycase -> ./dist/mycase (sudo only if needed)
+mycase --version
 ```
 
-Requires Go 1.26+.
+`make install` deliberately **symlinks** the binary rather than copying it: `mycase` finds
+its `config/` and `data/` directories by following the symlink back to this project tree, so
+the installed command works from any directory. For a sudo-free user install use
+`make install PREFIX=~/.local`; to point a standalone `go install` binary at the tree, set
+`MYCASE_HOME`. See the [Runbook](docs/18-runbook.md) for the full resolution rules.
 
 ---
 
-## Quick Start
+## Quick start (US path)
 
 ```bash
-# 1. Pick top 15 small-cap stocks by multi-factor score
-mycase pick --index smallcap250 --method multibagger --top 15
+# One-time: authenticate with the Schwab Trader API
+mycase auth --broker schwab
 
-# 2. Optimize weights, cap at 15% per stock
+# 1. Pick the top 20 S&P 500 names by quality + momentum
+mycase pick --index sp500 --method us_quality_momentum --top 20
+
+# 2. Optimize weights, capping any single position at 15%
 mycase optimize --file data/candidates/... --method mfs --cap 0.15
 
-# 3. Backtest the portfolio over 3 years
-mycase backtest --file data/myportfolio.csv --capital 500000 \
-    --from 2022-01-01 --rebalance quarterly --benchmark ^NSEI
+# 3. Preview the order basket (execution requires --live + confirmation)
+mycase basket --live
 
-# 4. Execute basket orders (dry-run by default)
-mycase basket data/myportfolio
+# 4. Run the whole rebalance non-interactively
+mycase autopilot run
 ```
+
+`mycase pick` is read-only — it never places a trade. Order execution always requires the
+explicit `--live` flag and a confirmation prompt.
 
 ---
 
 ## Commands
 
-| Command | Description |
-|---------|-------------|
-| `pipeline` | Run the full workflow (pick → optimize → report → monitor) from `pipeline.yaml` |
-| `pick` | Score and rank stocks from built-in indices, CSVs, or Excel (.xlsx) files; auto-converts Excel input |
-| `optimize` | Compute target weights (inverse-volatility, MFS multi-factor, or equal-weight) |
-| `report` | Generate a plain-text selection rationale for each picked stock |
-| `performance` | Compute P&L from a purchase date to latest close (daily or intraday) |
-| `backtest` | Historical simulation: CAGR, Max Drawdown, Sharpe, Sortino, Alpha/Beta |
-| `monitor` | Interactive 4-pillar portfolio health simulation |
-| `basket` | Preview or execute Zerodha basket orders; applies micro-tx filter and tax warnings |
-| `holdings` | Snapshot of current live or mock holdings |
-| `merge combine` | Merge multiple portfolio CSVs into one |
-| `merge golden` | Update a golden copy CSV from a proposals CSV |
-| `daemon start` | Start the blocking drift monitoring loop (use `install` for launchd/systemd) |
-| `daemon check` | One-shot drift check against live holdings |
-| `daemon status` | Show last drift check result from `data/daemon_state.json` |
-| `daemon install` | Write launchd plist (macOS) or print systemd unit (Linux) |
-| `cache status` | Show DuckDB cache row counts and last fetch timestamps |
-| `cache clear` | Evict one ticker or wipe the entire price cache |
-| `convert` | Convert Excel (.xlsx) portfolio/ETF holdings file to clean CSV |
-| `auth` | Authenticate with Zerodha Kite Connect |
+Run `mycase <command> --help` for full flags. The main commands:
+
+| Command | What it does |
+|---------|--------------|
+| `pick` | Score and rank stocks from an index, CSV, or Excel file |
+| `optimize` | Compute target weights (inverse-volatility, multi-factor, or equal-weight) with sector/position caps |
+| `basket` | Preview or (with `--live`) execute broker order baskets |
+| `pipeline` | Run the full pick → report → execute workflow from a pipeline YAML |
+| `autopilot` | Non-interactive scheduled rebalance (quarterly/monthly), investor-in-the-loop preserved |
+| `scheduler` | Autonomous OS-timer orchestrator for the EOD / drift / rebalance cadences |
+| `report` | Generate a plain-text selection rationale per picked stock |
+| `backtest` | Historical simulation: CAGR, max drawdown, Sharpe, Sortino, alpha/beta |
+| `performance` | P&L from a purchase date to the latest close |
+| `monitor` | 4-pillar portfolio health scoring |
+| `daemon` | Background drift-monitoring loop with alerting (`start`/`check`/`status`/`install`) |
+| `holdings` | Snapshot of current broker (or mock) holdings |
+| `tax` | FIFO lot tracking and tax-loss harvesting (US) |
+| `returns` | Audited returns (HPR, XIRR/MWR, TWR), dividends, and rebalancing gains |
+| `db` | Manage the consolidated DuckDB database and daily EOD update runs |
+| `cache` | Inspect/manage the DuckDB price & fundamentals cache |
+| `raw` | Inspect the archived raw API responses (`data/raw/`) |
+| `pit` | Point-in-time research database + empirical calibration analytics |
+| `calibrate` | Rolling Spearman rank-IC and parameter calibration for strategy pillars |
+| `serve` | Start the web dashboard server |
+| `theme` | Theme lifecycle & exact-return engine (India-Path) |
+| `merge` | Combine candidate CSVs or update a golden-copy portfolio |
+| `convert` | Convert an Excel (.xlsx) holdings file to clean CSV |
+| `auth` | Authenticate with a broker (Schwab or Zerodha) |
 
 ---
 
 ## Configuration
 
-### `config/pipeline.yaml` — main config
+Config lives in `config/` and is read-only at runtime. Key files:
 
-```yaml
-indices: [smallcap250, nifty500]
-method: multibagger
-top_n: 20
-capital: 500000
-rebalance_tolerance: 0.10
-hysteresis_buffer: 5
-
-alerts:
-  drift_threshold: 0.05
-  channels: [telegram]
-  telegram_bot_token: ""    # or set MYCASE_TELEGRAM_TOKEN
-  telegram_chat_id: ""
-  discord_webhook_url: ""   # or set MYCASE_DISCORD_WEBHOOK
-```
-
-### `config/mfs.json` — scoring weights
-
-Per-strategy factor weights. Strategies: `balanced`, `aggressive`, `conservative`, `multibagger`. Weights must sum to 1.0 within each strategy.
-
-### Zerodha credentials
-
-Create `config/credentials.json`:
-```json
-{ "api_key": "...", "access_token": "..." }
-```
-
-Or run `mycase auth` to generate the access token from your API key and request token.
+- **`config/defaults.json`** — the active market path and its defaults (broker, market
+  clock, EOD index/method, pipeline YAML). Switch paths with `make use-us` / `make
+  use-india`, which copy `defaults.us.json` / `defaults.india.json` over it.
+- **`config/pipeline_us.yaml`** (US) / **`config/pipeline.yaml`** (India) — the pipeline
+  stages, indices, top-N, capital, tolerances, and alert channels.
+- **`config/mfs.json`** — per-strategy factor weights (must sum to 1.0 per strategy).
+- **`config/schwab.json`** — Schwab app credentials; **`config/schwab_token.json`** — OAuth
+  tokens. Both are git-ignored and never committed. Run `mycase auth --broker schwab` to
+  generate the token.
 
 ---
 
-## Data Files
+## Data
 
-- `data/*.csv` — golden copy portfolios (never modified programmatically except via `merge golden`)
-- `data/candidates/` — pick output CSVs
-- `data/.cache/` — Yahoo Finance JSON cache (auto-created, date-stamped)
-- `data/cache.db` — DuckDB persistent price and fundamentals cache
-- `data/daemon_state.json` — drift daemon last-check state
+- `data/mycase.db` — the consolidated DuckDB database: price & fundamentals cache, pipeline
+  run/proposal/selection state, tax lots, attribution, themes, and the holiday calendar.
+- `data/candidates/` — pick output and order proposals.
+- `data/raw/` — archived raw API responses for offline debugging (`mycase raw`).
+- `data/*.csv` — golden-copy portfolios, mutated only via `mycase merge golden`.
+
+---
+
+## Market paths
+
+The system is market-parameterized: one engine, two paths, selected by
+`config/defaults.json`.
+
+- **US-Path** (active) — Schwab + SEC EDGAR, NYSE calendar, `sp500` / `us_quality_momentum`.
+- **India-Path** (legacy) — Zerodha + NSE/Yahoo, NSE calendar, `niftytotalmarket` /
+  `multibagger` / `earlymb`. The strategy and subsystem chapters for this path are grouped
+  under Module F in the docs.
 
 ---
 
 ## Docs
 
-- [`docs/README.md`](docs/README.md) — **the guide index** (all chapters, grouped into modules)
-- [`docs/04-architecture.md`](docs/04-architecture.md) — algorithms, subtle implementation details, design decisions
-- [`docs/18-runbook.md`](docs/18-runbook.md) — usage guide, common workflows, all flags
-- [`docs/03-roadmap.md`](docs/03-roadmap.md) — status and upcoming work
+The full guide lives in [`docs/`](docs/README.md), written as a book grouped into modules.
+Start here:
+
+- [Guide index](docs/README.md) — all chapters, grouped into modules
+- [Architecture](docs/04-architecture.md) — layers, data flow, design decisions
+- [Runbook](docs/18-runbook.md) — every command with realistic workflows
+- [Roadmap](docs/03-roadmap.md) — status and upcoming work
+
+Contributing to the docs? Read [Chapter 0 — The Style Guide](docs/00-style-guide.md) first.
+
+---
+
+## Testing
+
+```bash
+make test            # unit tests (fast, offline)
+make test-race       # with the race detector
+make test-coverage   # + coverage.html
+make cleanup         # gofmt + go fix + go vet + staticcheck + govulncheck + check-deps
+```

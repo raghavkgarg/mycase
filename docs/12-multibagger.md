@@ -1,6 +1,8 @@
-# Robust Multibagger Stock Selection Scheme
+# Multibagger
 
-This document details the quantitative rules, quality filters, and diversification strategies implemented in the Go Mycase Multi-Factor Optimizer to identify high-conviction future **multibagger** stocks.
+The multibagger strategy identifies high-conviction future multibagger stocks (India
+micro/small/mid-cap) through quality filters, quantitative scoring, and diversification
+rules, implemented in the Mycase multi-factor optimizer.
 
 ---
 
@@ -273,7 +275,7 @@ flowchart TD
 
 ### Configuration vs. Hardcoded Logic
 
-To maintain flexibility, the engine balances configurable settings in [mfs.json](file:///Users/raghavgarg/Projects/myGo/mycase/config/mfs.json) with hardcoded quantitative checks in the Go packages.
+To maintain flexibility, the engine balances configurable settings in mfs.json with hardcoded quantitative checks in the Go packages.
 
 #### 1. Configurable Criteria (mfs.json)
 The 11 absolute safety/hard filters and strategy scoring weights are fully adjustable in the `config/mfs.json` file. 
@@ -308,7 +310,7 @@ For the `multibagger` method, the following filter parameters are mapped:
 * `"hysteresis_require_growth_acceleration"`: If true, existing holdings in the buffer zone forfeit buffer protection if sales growth decelerates ($TTM \le 3Y\text{ CAGR}$) (default `true` in `config/pipeline.yaml`).
 
 #### 2. Hardcoded Rules & Logics
-While all parameters and thresholds are now configurable in [mfs.json](file:///Users/raghavgarg/Projects/myGo/mycase/config/mfs.json), the underlying core mathematical check logic remains built into the Go packages:
+While all parameters and thresholds are now configurable in mfs.json, the underlying core mathematical check logic remains built into the Go packages:
 * **Operational Metrics Check (Asymmetric Entry vs. Exit Gate)**:
   - **New Candidate Entry Gate ($\ge 2/3$)**: A new entrant must satisfy at least **2 out of the following 3** conditions to qualify:
     1. **Sales Growth Accelerator**: TTM Revenue Growth exceeds 3-Year CAGR (`TTM Growth > 3-Year CAGR`).
@@ -584,21 +586,21 @@ The multibagger engine is designed to operate seamlessly both **during active tr
 
 ### 2. Intraday Noise Protection (`CleanIntradayNoise`)
 * During live market hours (09:15 to 15:45 IST), Yahoo Finance appends an incomplete, fluctuating "today" daily bar.
-* [`CleanIntradayNoise`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/marketdata/marketdata.go#L156-L195) detects active market hours and **strips the unconfirmed intraday bar**.
+* `CleanIntradayNoise` detects active market hours and **strips the unconfirmed intraday bar**.
 * **Why**: Indicators like the 200-Day SMA slope, Volatility Contraction (ATR), and 1-Year Relative Strength must be computed exclusively on **settled closing prices** to prevent premature or false filter liquidations triggered by intra-day noise.
 
 ### 3. Real-Time LTP Fetching During Basket Execution
 When `mycase pipeline` advances to Step 7 (Basket Execution & Order Placement):
 
-1. **Yahoo Live Streaming Quotes ([`yfinance.FetchQuotes`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/yfinance/prices.go#L84))**:
+1. **Yahoo Live Streaming Quotes (`yfinance.FetchQuotes`)**:
    - Queries `https://query1.finance.yahoo.com/v8/finance/chart/<TICKER>.NS?range=1d&interval=1d`.
    - Reads `chartRes.Chart.Result[0].Meta.RegularMarketPrice` (streaming live LTP).
-2. **Zerodha Kite Connect Fallback ([`z.client.GetQuote`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/broker/zerodha/zerodha.go#L74))**:
+2. **Zerodha Kite Connect Fallback (`z.client.GetQuote`)**:
    - If any symbol fails on Yahoo, the engine immediately calls Zerodha Kite Connect's quote API to fetch live exchange `LastPrice` directly from NSE.
 3. **Dynamic Order Sizing & Placement**:
    - **Order Quantity**: $\text{Quantity} = \text{round}\big(\frac{\text{Capital} \times \text{Weight}}{\text{LTP}}\big)$.
    - **Regular CNC Orders**: Placed at `math.Round(LTP * 10.0) / 10.0` (aligned with NSE tick size).
-   - **GTT Orders**: Formatted with dynamic trigger/limit offsets via [`market.CalculateGTTParams(ltp, txType)`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/market/market.go#L52):
+   - **GTT Orders**: Formatted with dynamic trigger/limit offsets via `market.CalculateGTTParams(ltp, txType)`:
      - **BUY**: Trigger = $\text{LTP} \times 1.003$ ($+0.3\%$), Limit = $\text{LTP} + ₹2.00$.
      - **SELL**: Trigger = $\text{LTP} \times 0.997$ ($-0.3\%$), Limit = $\text{LTP} - ₹2.00$.
 
@@ -646,7 +648,7 @@ mycase pit analysis --index small250 --method multibagger
 During the system-wide data integrity audit (see `docs/13-early-multibagger.md` §26, "System-Wide Data Integrity Audit"), a critical vulnerability was identified in how fundamental data was ingested for the multibagger strategy:
 
 * **The Core Vulnerability**: Yahoo Finance's `quoteSummary.financialData` card omitted operating and free cash flow for **96.6% of Indian stocks** (625 of 647 stocks). In Go, `OperatingCashflow` and `FreeCashflow` defaulted to `0.0`.
-* **The Dormant Safety Filters**: In [`pkg/stockpicker/filters.go`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/stockpicker/filters.go#L257), the Cash Flow Quality Gate was gated by:
+* **The Dormant Safety Filters**: In `pkg/stockpicker/filters.go`, the Cash Flow Quality Gate was gated by:
   ```go
   if f.OperatingCashflow != 0 || f.FreeCashflow != 0 {
       // Check CFO/PAT >= 25% and CROIC >= 6%
@@ -766,7 +768,7 @@ Under standard hysteresis rules (Top 20 target with buffer protection up to Rank
 ---
 
 ### 2. Upstream Sentry Technical Health Gate (`pkg/stockpicker/sentry_gate.go`)
-To eliminate falling knives without compromising the fundamental nature of the strategy, the system implements an **Upstream Technical Sentry Gate** directly inside [`SelectTopNMultibaggerWithCooldown`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/stockpicker/scoring.go):
+To eliminate falling knives without compromising the fundamental nature of the strategy, the system implements an **Upstream Technical Sentry Gate** directly inside `SelectTopNMultibaggerWithCooldown`:
 
 ```go
 // CheckSentryTrendRupture checks if a stock violates the Tier-3 Sentry Level-3 Trend Rupture criteria:
@@ -790,11 +792,11 @@ func CheckSentryTrendRupture(hist *yfinance.HistoricalData) (isRupture bool, rea
 
 ### 3. Lookback Horizon Alignment (260 Trading Bars vs 250 Calendar Bars)
 A subtle temporal discrepancy was diagnosed and resolved during live validation:
-- **The Issue**: [`pkg/cache/prices.go`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/cache/prices.go) previously computed the `"1y"` start date via `now.AddDate(-1, 0, 0)` (365 calendar days $\approx 248\text{--}250$ trading bars), and `sentry_gate.go` checked `lookback := min(len, 250)`. 
+- **The Issue**: `pkg/cache/prices.go` previously computed the `"1y"` start date via `now.AddDate(-1, 0, 0)` (365 calendar days $\approx 248\text{--}250$ trading bars), and `sentry_gate.go` checked `lookback := min(len, 250)`. 
 - **The Consequence**: `SARDAEN`'s peak (₹639.8 on 2025-09-16) and `SUMICHEM`'s peak (₹601.8 on 2025-09-22) occurred 255 to 261 trading sessions ago. They were truncated by 2 to 8 days in the 250-bar window, causing their calculated drawdowns to appear artificially under 20% in `stockpicker`. Meanwhile, the Holding Sentry queried DuckDB with `LIMIT 260` ($52\text{ weeks} \times 5\text{ days} = 260\text{ bars}$) and correctly flagged them.
 - **The Fix**:
-  1. Updated [`pkg/cache/prices.go`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/cache/prices.go) to `now.AddDate(-1, 0, -15)` (52 calendar weeks + 2-week buffer), returning $\ge 261$ trading sessions.
-  2. Updated [`pkg/stockpicker/sentry_gate.go`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/stockpicker/sentry_gate.go) lookback to `min(len, 260)`.
+  1. Updated `pkg/cache/prices.go` to `now.AddDate(-1, 0, -15)` (52 calendar weeks + 2-week buffer), returning $\ge 261$ trading sessions.
+  2. Updated `pkg/stockpicker/sentry_gate.go` lookback to `min(len, 260)`.
 - **Result**: Complete mathematical parity between the screening engine and the Holding Sentry audit.
 
 ---
@@ -806,7 +808,7 @@ Rather than forcing external bullpen substitutions (`PARKHOSPS`, `TIPSMUSIC`, `D
    - **`NSE:ENRIN`** (Rank #21, Score 39.2 | ROCE 27.4%, Inst Stake 55.6%) $\to$ **PROMOTED!**
    - **`NSE:NAM-INDIA`** (Rank #22, Score 39.1 | TTM Growth +15.1%, ROCE 35.5%, Inst Stake 89.7%) $\to$ **PROMOTED!**
    - **`NSE:RADICO`** (Rank #24, Score 38.4 | TTM Growth +3.7%, ROCE 23.6%, Inst Stake 32.3%) $\to$ **PROMOTED!**
-3. In [`cmd/pipeline.go`](file:///Users/raghavgarg/Projects/myGo/mycase/cmd/pipeline.go), the implicit fallback to `pre_microsmall.csv` was removed. For the Core pipeline, Sentry runs in **pure audit mode**:
+3. In `cmd/pipeline.go`, the implicit fallback to `pre_microsmall.csv` was removed. For the Core pipeline, Sentry runs in **pure audit mode**:
    ```text
    [Sentry Defense] Detected 3 Level-3 trend rupture(s) in active holdings — evicted upstream via in-strategy selection waterfall.
    ```
@@ -864,7 +866,7 @@ Decouples portfolio quality from arbitrary fixed stock counts:
 ```
 
 #### D. Unconditional Anti-Churn Cooldown Invariant
-* In [`pkg/stockpicker/scoring.go`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/stockpicker/scoring.go), the under-subscribed pool branch (`len(sortedKeys) <= topN`) was hardened to strictly enforce `IsOnCooldown` on all newcomers (`!isExisting`).
+* In `pkg/stockpicker/scoring.go`, the under-subscribed pool branch (`len(sortedKeys) <= topN`) was hardened to strictly enforce `IsOnCooldown` on all newcomers (`!isExisting`).
 * `NSE:ARVIND` (exited on 2026-08-26, 29d ago $\le$ 30d window, Raw Rank 19 > 5) is reliably blocked and categorized under `CooldownDrops`.
 * Evaluates true `RawRank` (19) rather than post-filter slice indices (16), keeping the reported rationale aligned with the table rank.
 

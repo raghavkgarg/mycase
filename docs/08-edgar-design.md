@@ -1,14 +1,16 @@
-# Phase 10c — SEC EDGAR Fundamentals: Design
+# EDGAR
 
-**Status**: ✅ IMPLEMENTED (Phase 10c shipped). This document records the design as built; see `pkg/edgar`, `pkg/datafetcher/merger.go`, and the Router `WithEDGAR` wiring.
-**Scope**: `pkg/edgar` client + XBRL concept mapper + `datafetcher.FundamentalsMerger`
-**References**: `docs/03-roadmap.md` Phase 10c, `docs/07-datasources.md` §4.3/§7, `docs/04-architecture.md` layering (R16), `docs/api-rules.md`
+The SEC EDGAR fundamentals client: a `pkg/edgar` client plus an XBRL concept mapper, whose
+output `datafetcher.FundamentalsMerger` overlays onto Schwab's TTM ratios. EDGAR is parsed
+directly — no commercial vendor — for authoritative, license-clean, quarterly-stable
+fundamentals. Related: `docs/07-datasources.md` (data-source design, D15),
+`docs/04-architecture.md` (layering), `.kiro/steering/api-rules.md` (network discipline).
 
 ---
 
-## 1. Decision on the open question (datasources.md §8.1)
+## 1. Why parse EDGAR directly
 
-**Parse EDGAR ourselves. No commercial vendor.** Rationale, grounded in the roadmap's own design constraints (§6 "local-first / no external dependencies beyond broker APIs and market data", "no black boxes / transparency"):
+**Parse EDGAR ourselves. No commercial vendor.** Rationale, grounded in the project's design constraints (local-first / no external dependencies beyond broker APIs and market data; no black boxes / transparency):
 
 - A paid vendor reintroduces exactly the thing Phase 10 exists to remove — trusting someone else's opaque parse of the SEC filing.
 - EDGAR is free + authoritative + no API key. The cost is XBRL tag drift, which is a bounded, well-understood problem (ordered candidate-tag lists per concept).

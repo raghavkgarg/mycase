@@ -1,4 +1,4 @@
-# Mycase — Runbook
+# Runbook
 
 Practical usage guide: common workflows, every command with realistic examples, and tips for the non-obvious parts.
 

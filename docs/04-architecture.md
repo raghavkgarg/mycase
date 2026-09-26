@@ -1,6 +1,8 @@
-# Mycase — Architecture Reference
+# Architecture Reference
 
-**Module**: `github.com/raghavkgarg/mycase` | **Go**: 1.27.0 | **Binary**: `mycase`
+The system design for `mycase` (`github.com/raghavkgarg/mycase`, Go 1.27, single binary):
+conceptual layers, the `cmd/pkg` breakdown, data flow, and the design decisions
+(D-decisions) behind them.
 
 > **Design-review rubric**: the durable architectural principles this design is built on — and how the current solution scores against them — live in [`docs/02-principles.md`](02-principles.md). Evaluate changes and cross-branch merges against that rubric. The mechanically-enforced subset is in `.kiro/steering/` (`architecture.md` = layering, `logging.md` = the two-channel rule, `api-rules.md` = network discipline).
 

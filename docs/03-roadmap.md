@@ -1,8 +1,9 @@
-# Mycase — Roadmap
+# Roadmap
+
+*The canonical status-and-plan document — Appendix A, consulted rather than read
+front-to-back.*
 
 **Goal**: An automated US equity system that delivers slight but consistent outperformance over the S&P 500 while eliminating emotional decision-making and manual busy work.
-
-**Updated**: September 2026
 
 **Target investor**: US-based individual investor using Schwab. The system supports two
 **market paths** — the **US-Path** (Schwab + SEC EDGAR, the active strategy focus) and the

@@ -1,13 +1,10 @@
 # EDGAR Facts Reference
 
-**Purpose**: catalogue the SEC EDGAR XBRL fact universe as it relates to Mycase.
-This is a *reference for product evolution* — the DuckDB `edgar_facts` cache stores
-only the compact subset we extract today (see [What we store](#what-we-store-today)),
-but the raw `companyfacts.json` carries ~500–1500 us-gaap concepts per company. When
-the strategy grows to need a new factor, this doc says which fact backs it and which
-candidate XBRL tags to add to the concept mapper.
-
-**Updated**: 2026-09-18
+A catalogue of the SEC EDGAR XBRL fact universe as it relates to Mycase — a reference for
+product evolution. The DuckDB `edgar_facts` cache stores only the compact subset we extract
+today (see [What we store](#what-we-store-today)), but the raw `companyfacts.json` carries
+~500–1500 us-gaap concepts per company. When the strategy grows to need a new factor, this
+chapter says which fact backs it and which candidate XBRL tags to add to the concept mapper.
 
 ---
 

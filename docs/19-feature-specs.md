@@ -1,6 +1,9 @@
-# Early Multibagger (EMB): Quantitative Architecture & Feature Specification
+# Feature Specs
 
-This document provides the authoritative engineering and quantitative specification for the **Early Multibagger (`earlymb`)** strategy in `mycase`. It formalizes the pre-breakout detection models, the **Three-Tier Portfolio Lifecycle**, longitudinal Point-in-Time (PIT) research engines, active holding sentries, and cross-strategy consensus integration with `multibagger`.
+The engineering and quantitative specification for the **Early Multibagger (`earlymb`)**
+strategy: the pre-breakout detection models, the **Three-Tier Portfolio Lifecycle**,
+longitudinal Point-in-Time (PIT) research engines, active holding sentries, and
+cross-strategy consensus with `multibagger`.
 
 ---
 
@@ -96,7 +99,7 @@ flowchart TD
 ## 3. Core Pre-Breakout Quantitative Engines
 
 ### A. Stage-1 Hard Gates & Elimination Topology (Pre-Scoring Filtration)
-Before any candidate receives a quantitative score across the 4 pillars, it must clear the binary **Stage-1 Hard Gates** implemented in [`pkg/stockpicker/filters.go:450-653`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/stockpicker/filters.go#L450-L653). These gates enforce strict fundamental survivability, balance sheet safety, and capital efficiency floors.
+Before any candidate receives a quantitative score across the 4 pillars, it must clear the binary **Stage-1 Hard Gates** implemented in `pkg/stockpicker/filters.go:450-653`. These gates enforce strict fundamental survivability, balance sheet safety, and capital efficiency floors.
 
 In production runs across the 750-stock universe, Stage-1 eliminates ~85–88% of candidates, yielding ~90–135 qualified survivors. The dominant elimination gates are:
 
@@ -132,7 +135,7 @@ In production runs across the 750-stock universe, Stage-1 eliminates ~85–88% o
 Every candidate that clears Stage-1 hard gates is evaluated across four mathematical pillars yielding a composite raw score ($0 - 100\text{ pts}$):
 
 > [!NOTE]
-> Pillar formulas below reference the **canonical specification** in [`docs/earlyMB.md`](file:///Users/raghavgarg/Projects/myGo/mycase/docs/earlyMB.md). Reference bounds are the fixed invariant bounds used in production scoring, with empirically calibrated P5/P95 bounds noted for context.
+> Pillar formulas below reference the **canonical specification** in [Early Multibagger](13-early-multibagger.md). Reference bounds are the fixed invariant bounds used in production scoring, with empirically calibrated P5/P95 bounds noted for context.
 
 1. **Pillar 1: Idiosyncratic Momentum (25 Points)**
    $$\text{Composite RS} = 0.40 \times \text{RS}_{1\text{M}} + 0.30 \times \text{RS}_{3\text{M}} + 0.30 \times \text{RS}_{12\text{M}}$$
@@ -165,7 +168,7 @@ Every candidate that clears Stage-1 hard gates is evaluated across four mathemat
 > The out-of-sample calibration figures above ($\text{Mean IC} = +0.017, \text{IR} = +0.16, \text{Hit Rate} = 55.6\%$) were evaluated under the legacy baseline formula $(\text{DeliveryPct} - 35\%)$, which granted an artificial subsidy to ~46% of the universe. In `data/mycase.db`, pre-migration runs are formally tagged `pillar4_uncalibrated = true`. Formal statistical recalibration over the disjoint baseline is pending accumulation of 30+ clean post-fix sessions.
 
 > [!IMPORTANT]
-> **Key Calibration Insight**: The out-of-sample IC results from [`earlyMB.md §6.4`](file:///Users/raghavgarg/Projects/myGo/mycase/docs/earlyMB.md#L219-L250) prove that **VCP Tightness and Composite RS are the dominant predictive pillars**. Delivery Delta is valuable as a timing/confirmation signal but noisy when used as a ranking multiplier. This directly informs the Coiled Spring Index decomposition below.
+> **Key Calibration Insight**: Out-of-sample IC results (see [Early Multibagger](13-early-multibagger.md)) show that **VCP Tightness and Composite RS are the dominant predictive pillars**. Delivery Delta is valuable as a timing/confirmation signal but noisy when used as a ranking multiplier. This directly informs the Coiled Spring Index decomposition below.
 
 ---
 
@@ -214,7 +217,7 @@ Applied as a binary **readiness flag** rather than a continuous multiplier:
 ### A. Qualification & Staging Rules
 A candidate in the PIT Incubator is automatically promoted to `data/pre_microsmall.csv` when:
 1. **Gate Clearance & Relief Channels**: Passes Stage-1 hard gates. If gated by specific fundamental or base duration thresholds, qualification is governed by the operational status of the three distinct relief channels established during shadow auditing:
-   - **`base_duration` (LIVE IN PRODUCTION)**: Replaces the binary 4-week base duration cliff with a graduated scoring multiplier ([`pkg/stockpicker/scoring.go`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/stockpicker/scoring.go) & DuckDB macro `base_duration_multiplier`: $\ge 4\text{w}: 1.0\times, 2\text{-}3\text{w}: 0.75\times, 0\text{-}1\text{w}: 0.50\times$). Candidates in fresh breakout zones are scored and qualified with appropriate base-maturity discounts rather than rejected. Validated across 24 empirical samples ($79.2\%$ win rate, $+3.22\%$ average return).
+   - **`base_duration` (LIVE IN PRODUCTION)**: Replaces the binary 4-week base duration cliff with a graduated scoring multiplier (`pkg/stockpicker/scoring.go` & DuckDB macro `base_duration_multiplier`: $\ge 4\text{w}: 1.0\times, 2\text{-}3\text{w}: 0.75\times, 0\text{-}1\text{w}: 0.50\times$). Candidates in fresh breakout zones are scored and qualified with appropriate base-maturity discounts rather than rejected. Validated across 24 empirical samples ($79.2\%$ win rate, $+3.22\%$ average return).
    - **`delivery_override` (RETAINED IN SHADOW — Tightened Bar)**: For ROCE / Capital Efficiency bottlenecks only: rescues candidates showing extraordinary institutional footprint ($\Delta_{\text{deliv}} \ge +9.0\%$, $\text{RS} \ge +15.0\%$, $\text{VCP} \le 1.20$). **Restricted to Shadow Mode tracking only** in `stage1_shadow_results`; does **not** generate live orders or pre-basket promotions due to weak empirical evidence ($-0.86\%$ average return across 6 initial test samples).
    - **`promoter_exempt` (SUSPENDED)**: Originally proposed to exempt regulated Financial Services institutions with dispersed promoter ownership; **shelved / suspended** after underlying fundamental data corrections naturally expanded the Financial Services survivor pool from 3 to 12 stocks without requiring a policy exemption.
 2. **Persistence**: Appears on the stealth radar for $\ge 2$ consecutive runs.
@@ -274,10 +277,10 @@ When an active holding in `data/microsmall.csv` triggers a Level 3 Trend Rupture
 
 ## 6. Longitudinal PIT Research & Deductions (DuckDB)
 
-With multi-week continuous PIT data (August 28, 2026 $\rightarrow$ Present), the system executes longitudinal institutional deductions. Currently implemented in [`analytics.go`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/pithistory/analytics.go) Sections 7–11.
+With multi-week continuous PIT data (August 28, 2026 $\rightarrow$ Present), the system executes longitudinal institutional deductions. Currently implemented in `analytics.go` Sections 7–11.
 
 > [!IMPORTANT]
-> **Hardcoded Lookback Cap**: [`analytics.go:306`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/pithistory/analytics.go#L306) currently limits `GetRunHistory` to 10 runs. This must be parametrized via the CLI `--days` flag (default 30) to display the full database history from Aug 28 onward.
+> **Hardcoded Lookback Cap**: `analytics.go:306` currently limits `GetRunHistory` to 10 runs. This must be parametrized via the CLI `--days` flag (default 30) to display the full database history from Aug 28 onward.
 
 ### A. Markov Gate Persistence ("Survival Streak")
 Under severe market regimes ($R \approx 0.20 - 0.25$), over $80\%$ of stocks fail Stage 1 daily. Stocks that survive Stage-1 hard gates **across 10–15+ consecutive sessions** form the **Fortress Core**:
@@ -369,7 +372,7 @@ $$\text{Score CV}_i = \frac{\sigma(\text{RawScore}_{i, t-N..t})}{\overline{\text
 | $> 0.30$ | **Volatile** — score flip-flops daily | **Downweight by 50%** or exclude until stabilization |
 
 > [!NOTE]
-> This directly relates to [Bug-001 in `Bugs_EMB.md`](file:///Users/raghavgarg/Projects/myGo/mycase/docs/Bugs_EMB.md): the 65 candidates exhibiting extreme score shifts (+/- 15–20 pts between runs) were a symptom of high score CV — not just a display overflow bug but a genuine signal quality issue.
+> A high score coefficient-of-variation is a genuine signal-quality issue, not merely a display concern: candidates exhibiting extreme score shifts (±15–20 pts between runs) indicate an unstable score, which the calibration work here is meant to surface and dampen.
 
 ### G. Regime-Conditional Forward Return Stratification
 Forward return calibration must account for the **market regime state at scoring time**:
@@ -461,7 +464,7 @@ When a stock exists in **both** `data/microsmall.csv` (live holding) and qualifi
 | Staged candidate was **recently exited** from live basket ($< 30$ days) | `🔴 RE-ENTRY RISK` | Churning risk — the same stock cycling in and out incurs unnecessary transaction costs. Suppress re-entry for 30 calendar days. |
 
 > [!NOTE]
-> **Live Foundation**: The consensus terminal renderer ([`analytics.go:1450-1523`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/pithistory/analytics.go#L1450-L1523)) already ingests `data/microsmall.csv` to flag `ACTIVE (w%)` holdings. The proposed Overlap Audit integrates Tier 2 (`data/pre_microsmall.csv`) into this pipeline to generate automated `REINFORCEMENT`, `FADING`, and `RE-ENTRY RISK` alerts.
+> **Live Foundation**: The consensus terminal renderer (`analytics.go:1450-1523`) already ingests `data/microsmall.csv` to flag `ACTIVE (w%)` holdings. The proposed Overlap Audit integrates Tier 2 (`data/pre_microsmall.csv`) into this pipeline to generate automated `REINFORCEMENT`, `FADING`, and `RE-ENTRY RISK` alerts.
 
 ---
 
@@ -483,23 +486,23 @@ When a stock exists in **both** `data/microsmall.csv` (live holding) and qualifi
 
 | Feature | Section | Code Location | Status |
 |---|---|---|---|
-| Pre-Breakout Incubator | §2 / Tier 1 | [`analytics.go:664-718`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/pithistory/analytics.go#L664-L718) | ✅ Live |
-| Multi-Run Accumulation Velocity | §6 | [`analytics.go:720-798`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/pithistory/analytics.go#L720-L798) | ✅ Live |
-| Stealth Radar & Graduation Audit | §6 | [`analytics.go:800-1010`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/pithistory/analytics.go#L800-L1010) | ✅ Live |
-| Shadow Mode Divergence | §6 | [`analytics.go:1122-1253`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/pithistory/analytics.go#L1122-L1253) | ✅ Live |
-| Dual-Conviction Consensus | §7 | [`analytics.go:1436-1538`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/pithistory/analytics.go#L1436-L1538) | ✅ Live |
-| Daily Top Gainers with Gate Overlay | §6 | [`analytics.go:1016-1120`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/pithistory/analytics.go#L1016-L1120) | ✅ Live |
-| Base Duration Graduated Scoring | §4A | [`scoring.go:34-45`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/stockpicker/scoring.go#L34-L45), DuckDB macro | ✅ Live in Production |
+| Pre-Breakout Incubator | §2 / Tier 1 | `analytics.go:664-718` | ✅ Live |
+| Multi-Run Accumulation Velocity | §6 | `analytics.go:720-798` | ✅ Live |
+| Stealth Radar & Graduation Audit | §6 | `analytics.go:800-1010` | ✅ Live |
+| Shadow Mode Divergence | §6 | `analytics.go:1122-1253` | ✅ Live |
+| Dual-Conviction Consensus | §7 | `analytics.go:1436-1538` | ✅ Live |
+| Daily Top Gainers with Gate Overlay | §6 | `analytics.go:1016-1120` | ✅ Live |
+| Base Duration Graduated Scoring | §4A | `scoring.go:34-45`, DuckDB macro | ✅ Live in Production |
 | Delivery Override Relief Channel | §4A | `stage1_shadow_results` in `data/mycase.db` | 🟡 Shadow Only (Tightened Bar) |
 | BFSI Promoter Exemption | §4A | Diagnostic query only | ⚪ Suspended (Shelved) |
-| Setup Quality & Ignition Signal (Coil Index) | §3C | [`staging.go:27-75`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/pithistory/staging.go#L27-L75) | ✅ Live in Production |
-| `data/pre_microsmall.csv` staging engine | §4 | [`staging.go:240-420`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/pithistory/staging.go#L240-L420) | ✅ Live in Production |
-| Holding Sentry (Level 1/2/3) | §5 | [`sentry.go:30-290`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/pithistory/sentry.go#L30-L290) | ✅ Live in Production |
-| Gate Churn Rate | §6E | [`analytics.go:1286-1355`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/pithistory/analytics.go#L1286-L1355) | ✅ Live in Production |
-| Score Stability CV | §6F | [`staging.go:77-105`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/pithistory/staging.go#L77-L105), [`analytics.go:680-720`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/pithistory/analytics.go#L680-L720) | ✅ Live in Production |
-| Regime-Conditional Forward Returns | §6G | [`analytics.go:1356-1407`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/pithistory/analytics.go#L1356-L1407) | ✅ Live in Production |
-| Live/Staged Overlap Audit | §7D | [`sentry.go:292-360`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/pithistory/sentry.go#L292-L360), [`analytics.go:1450-1523`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/pithistory/analytics.go#L1450-L1523) | ✅ Live in Production |
-| Uncap Lookback Window (fix `LIMIT 10`) | §6 | [`analytics.go:300-340`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/pithistory/analytics.go#L300-L340), [`cmd/pit.go:120-140`](file:///Users/raghavgarg/Projects/myGo/mycase/cmd/pit.go#L120-L140) | ✅ Live in Production |
+| Setup Quality & Ignition Signal (Coil Index) | §3C | `staging.go:27-75` | ✅ Live in Production |
+| `data/pre_microsmall.csv` staging engine | §4 | `staging.go:240-420` | ✅ Live in Production |
+| Holding Sentry (Level 1/2/3) | §5 | `sentry.go:30-290` | ✅ Live in Production |
+| Gate Churn Rate | §6E | `analytics.go:1286-1355` | ✅ Live in Production |
+| Score Stability CV | §6F | `staging.go:77-105`, `analytics.go:680-720` | ✅ Live in Production |
+| Regime-Conditional Forward Returns | §6G | `analytics.go:1356-1407` | ✅ Live in Production |
+| Live/Staged Overlap Audit | §7D | `sentry.go:292-360`, `analytics.go:1450-1523` | ✅ Live in Production |
+| Uncap Lookback Window (fix `LIMIT 10`) | §6 | `analytics.go:300-340`, `cmd/pit.go:120-140` | ✅ Live in Production |
 
 ---
 
