@@ -70,7 +70,7 @@ Two concrete techniques, both now in the tree:
 
 ### Golden-copy protection
 
-Golden-copy CSVs are mutated only through the explicit `mycase merge golden` command (`cmd/merge.go` → `csvloader.MergeGoldenCopy(src, dst)`, which preserves exited tickers at `0.0000` weight). No implicit overwrite path exists; the golden copy deliberately stays a file (Tier 2 in `docs/10-duckdb-migration.md`), so the merge is file→file.
+Golden-copy CSVs are mutated only through the explicit `mycase merge golden` command (`cmd/merge.go` → `csvloader.MergeGoldenCopy(src, dst)`, which preserves exited tickers at `0.0000` weight). No implicit overwrite path exists; the golden copy deliberately stays a file (Tier 2 in `docs/10-storage.md`), so the merge is file→file.
 
 ## 3. Configuration Management
 

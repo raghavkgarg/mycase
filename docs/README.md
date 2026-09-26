@@ -61,7 +61,7 @@ change-logs. Apply them to every chapter, new or edited:
 | Ch. | Chapter | What it covers |
 |----:|---------|----------------|
 | 4 | [Architecture Reference](04-architecture.md) | Layers, `cmd/pkg` breakdown, data flow, design decisions (D-decisions), package layering rule |
-| 6 | [Rendering](06-render.md) | CLI output (`pkg/render`) — tables, formatters, TTY-aware color |
+| 6 | [Rendering](06-rendering.md) | CLI output (`pkg/render`) — tables, formatters, TTY-aware color |
 | 24 | [Logging & Observability](24-logging.md) | Two-channel logging (`pkg/logging`, slog) + the raw-response archive (`pkg/rawcapture`/`rawstore`, `mycase raw` triage) |
 
 > Diagrams: `architecture-overview.d2` (source) / `architecture-overview.svg` (rendered)
@@ -76,7 +76,7 @@ change-logs. Apply them to every chapter, new or edited:
 | 7 | [Data Sources](07-datasources.md) | Schwab / EDGAR / Yahoo, provenance, gap analysis |
 | 8 | [EDGAR](08-edgar-design.md) | SEC EDGAR client + XBRL concept mapper |
 | 9 | [EDGAR Facts Reference](09-edgar-facts-reference.md) | The EDGAR XBRL fact universe — what we extract + future-factor candidates |
-| 10 | [Storage & Pipeline Persistence](10-duckdb-migration.md) | DuckDB-backed pipeline state — schema, run/proposal/selection tables, data flow |
+| 10 | [Storage & Pipeline Persistence](10-storage.md) | DuckDB-backed pipeline state — schema, run/proposal/selection tables, data flow |
 | 11 | [Data Directory Inventory](11-data-inventory.md) | Every file/dir under `data/`, provenance, keep/delete status |
 
 ## Module D — Strategies
@@ -87,10 +87,10 @@ change-logs. Apply them to every chapter, new or edited:
 |----:|---------|----------|
 | 12 | [Multibagger](12-multibagger.md) | India micro/small/mid-cap — 11 hard filters + 100-pt scoring |
 | 13 | [Early Multibagger](13-early-multibagger.md) | `earlymb` regime-gated pre-breakout engine (VCP/RVOL/pocket-pivot/delivery) |
-| 14 | [Value](14-value.md) | Large-cap Value — EPV-based, dual-path BFSI/industrial filters |
+| 14 | [Value](14-value-strategy.md) | Large-cap Value — EPV-based, dual-path BFSI/industrial filters |
 | 15 | [Exit & Addition Rationale](15-exit-addition-rationale.md) | Portfolio exit vetting & addition-driver tracking |
-| 16 | [Scuttlebutt Research](16-scuttlebutt.md) | Qualitative research reporting pipeline |
-| 17 | [Screener / nselib Integration](17-screener.md) | NSE `nselib` + Screener.in enrichment (India) |
+| 16 | [Scuttlebutt Research](16-scuttlebutt-research.md) | Qualitative research reporting pipeline |
+| 17 | [Screener / nselib Integration](17-screener-nselib.md) | NSE `nselib` + Screener.in enrichment (India) |
 
 > The active strategy, **US Quality-Momentum**, is specced inline in Ch. 4
 > (Architecture) rather than a standalone chapter. The India strategies above belong to the
@@ -115,7 +115,7 @@ the active US-Path focus.*
 | Ch. | Chapter | Subsystem |
 |----:|---------|-----------|
 | 22 | [Themes](22-themes.md) | Theme lifecycle DB (`pkg/themedb`) + exact-return engine (`pkg/themereturn`, `mycase returns`) |
-| 23 | [Static IP Setup](23-staticip.md) | Zerodha Kite static-IP (staticip.in) — the proxy `pkg/yfinance` bypasses for Yahoo |
+| 23 | [Static IP Setup](23-static-ip-setup.md) | Zerodha Kite static-IP (staticip.in) — the proxy `pkg/yfinance` bypasses for Yahoo |
 
 ---
 
