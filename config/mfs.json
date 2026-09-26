@@ -113,9 +113,34 @@
       "score_weight_vcp_tightness": 25.0,
       "score_weight_volume_footprint": 25.0,
       "score_weight_delivery_delta": 25.0
+    },
+    "fairprice": {
+      "min_market_cap": 5000000000,
+      "max_market_cap": 50000000000000,
+      "min_adv": 5000000,
+      "max_stocks_per_sector": 3,
+      "max_sector_weight_cap": 0.25,
+      "max_stock_weight_cap": 0.08,
+      "score_weight_upside": 25.0,
+      "score_weight_mos_band": 15.0,
+      "score_weight_agreement": 10.0,
+      "score_weight_convergence": 10.0,
+      "score_weight_roce": 10.0,
+      "score_weight_cfo_pat": 8.0,
+      "score_weight_debt_safety": 7.0,
+      "score_weight_revenue_cagr": 8.0,
+      "score_weight_earnings_accel": 7.0
     }
   },
   "strategies": {
+    "fairprice": {
+      "roe": 0.20,
+      "operating_margins": 0.20,
+      "pb_ratio": 0.20,
+      "market_cap": 0.15,
+      "net_debt_ebitda": 0.15,
+      "return": 0.10
+    },
     "aggressive": {
       "sharpe": 0.15,
       "sortino": 0.10,

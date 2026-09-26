@@ -153,6 +153,33 @@ CREATE TABLE IF NOT EXISTS pit_data_health (
     created_at                 TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (as_of_date, index_name, method)
 );
+
+CREATE TABLE IF NOT EXISTS pit_fairprice_scores (
+    as_of_date              DATE,
+    index_name              VARCHAR,
+    method                  VARCHAR,
+    ticker                  VARCHAR,
+    sector                  VARCHAR,
+    cmp                     DOUBLE,
+    fair_price_ensemble     DOUBLE,
+    fair_price_dcf          DOUBLE,
+    fair_price_epv          DOUBLE,
+    fair_price_graham       DOUBLE,
+    fair_price_relative     DOUBLE,
+    fair_price_peg          DOUBLE,
+    upside_pct              DOUBLE,
+    verdict                 VARCHAR,
+    pessimistic_fp          DOUBLE,
+    optimistic_fp           DOUBLE,
+    valid_model_count       INTEGER,
+    model_cv                DOUBLE,
+    confidence_score        DOUBLE,
+    wacc_used               DOUBLE,
+    raw_score               DOUBLE,
+    final_weight            DOUBLE,
+    created_at              TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (as_of_date, index_name, method, ticker)
+);
 `
 
 func (p *DB) initSchema(ctx context.Context) error {
@@ -163,6 +190,9 @@ func (p *DB) initSchema(ctx context.Context) error {
 	_, _ = p.db.ExecContext(ctx, "ALTER TABLE pit_candidate_scores ADD COLUMN IF NOT EXISTS data_fetch_failed BOOLEAN DEFAULT false;")
 	_, _ = p.db.ExecContext(ctx, "ALTER TABLE pit_candidate_scores ADD COLUMN IF NOT EXISTS pillar4_uncalibrated BOOLEAN DEFAULT false;")
 	_, _ = p.db.ExecContext(ctx, "ALTER TABLE pit_candidate_scores ADD COLUMN IF NOT EXISTS pillar4_insufficient_history BOOLEAN DEFAULT false;")
+	_, _ = p.db.ExecContext(ctx, "ALTER TABLE pit_candidate_scores ADD COLUMN IF NOT EXISTS fair_price DOUBLE DEFAULT 0.0;")
+	_, _ = p.db.ExecContext(ctx, "ALTER TABLE pit_candidate_scores ADD COLUMN IF NOT EXISTS upside_pct DOUBLE DEFAULT 0.0;")
+	_, _ = p.db.ExecContext(ctx, "ALTER TABLE pit_candidate_scores ADD COLUMN IF NOT EXISTS mos_verdict VARCHAR DEFAULT '';")
 	_, _ = p.db.ExecContext(ctx, "ALTER TABLE pit_runs ADD COLUMN IF NOT EXISTS pillar4_uncalibrated BOOLEAN DEFAULT false;")
 	// Clean out any artificial dummy index placeholder rows (e.g. DUMMYINXGN, DUMMYTRVN)
 	_, _ = p.db.ExecContext(ctx, "DELETE FROM pit_candidate_scores WHERE UPPER(ticker) LIKE '%DUMMY%';")
@@ -215,8 +245,9 @@ INSERT OR REPLACE INTO pit_candidate_scores (
     as_of_date, index_name, method, ticker, sector,
     passed_stage1, data_fetch_failed, rejection_reason, raw_score, effective_score,
     composite_rs, vcp_ratio, rvol_z_score, decayed_pp, delivery_delta,
-    selected, final_weight, forward_return_21d, pillar4_uncalibrated, pillar4_insufficient_history
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+    selected, final_weight, forward_return_21d, pillar4_uncalibrated, pillar4_insufficient_history,
+    fair_price, upside_pct, mos_verdict
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 `
 	stmt, err := tx.PrepareContext(ctx, candidateQuery)
 	if err != nil {
@@ -248,9 +279,36 @@ INSERT OR REPLACE INTO pit_candidate_scores (
 			nil, // forward return initialized to NULL, backfilled after 21 trading sessions
 			isUncalibrated,
 			c.Pillar4InsufficientHistory,
+			c.FairPrice,
+			c.UpsidePct,
+			c.MOSVerdict,
 		)
 		if err != nil {
 			return fmt.Errorf("insert candidate %s: %w", c.Ticker, err)
+		}
+
+		if c.FairPrice > 0 {
+			_, _ = tx.ExecContext(ctx, `
+INSERT OR REPLACE INTO pit_fairprice_scores (
+    as_of_date, index_name, method, ticker, sector,
+    cmp, fair_price_ensemble, upside_pct, verdict,
+    pessimistic_fp, optimistic_fp, raw_score, final_weight, created_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP);
+`,
+				snap.AsOfDate,
+				canonIndex,
+				snap.Method,
+				c.Ticker,
+				c.Sector,
+				0.0,
+				c.FairPrice,
+				c.UpsidePct,
+				c.MOSVerdict,
+				c.FairPrice*0.80,
+				c.FairPrice*1.15,
+				c.RawScore,
+				c.FinalWeight,
+			)
 		}
 	}
 
@@ -615,7 +673,10 @@ SELECT
     p.final_weight,
     p.forward_return_21d,
     p.pillar4_uncalibrated,
-    p.pillar4_insufficient_history
+    p.pillar4_insufficient_history,
+    p.fair_price,
+    p.upside_pct,
+    p.mos_verdict
 FROM pit_candidate_scores p
 JOIN index_constituents c ON p.ticker = c.ticker
 WHERE p.index_name = 'niftytotalmarket'
@@ -647,7 +708,10 @@ SELECT
     p.final_weight,
     p.forward_return_21d,
     p.pillar4_uncalibrated,
-    p.pillar4_insufficient_history
+    p.pillar4_insufficient_history,
+    p.fair_price,
+    p.upside_pct,
+    p.mos_verdict
 FROM pit_candidate_scores p
 JOIN index_constituents c ON p.ticker = c.ticker
 WHERE p.index_name = 'niftytotalmarket'
@@ -659,6 +723,26 @@ WHERE p.index_name = 'niftytotalmarket'
         AND existing.method = p.method 
         AND existing.ticker = p.ticker
   );
+
+CREATE OR REPLACE VIEW v_fairprice_alpha_tracking AS
+SELECT 
+    fp.as_of_date,
+    fp.ticker,
+    fp.sector,
+    fp.method,
+    fp.cmp AS entry_cmp,
+    fp.fair_price_ensemble,
+    fp.upside_pct,
+    fp.verdict,
+    fp.model_cv,
+    LEAD(fp.cmp, 1) OVER (PARTITION BY fp.ticker, fp.method ORDER BY fp.as_of_date) AS realized_cmp_next,
+    ((LEAD(fp.cmp, 1) OVER (PARTITION BY fp.ticker, fp.method ORDER BY fp.as_of_date) - fp.cmp) / fp.cmp) * 100.0 AS forward_21d_return,
+    CASE 
+        WHEN fp.upside_pct > 15.0 AND LEAD(fp.cmp, 1) OVER (PARTITION BY fp.ticker, fp.method ORDER BY fp.as_of_date) > fp.cmp THEN 1
+        WHEN fp.upside_pct < -10.0 AND LEAD(fp.cmp, 1) OVER (PARTITION BY fp.ticker, fp.method ORDER BY fp.as_of_date) < fp.cmp THEN 1
+        ELSE 0
+    END AS directionally_accurate
+FROM pit_fairprice_scores fp;
 
 CREATE OR REPLACE VIEW v_pit_runs AS
 SELECT * FROM pit_runs

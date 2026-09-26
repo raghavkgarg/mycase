@@ -773,7 +773,11 @@ func SelectTopNMultibaggerWithCooldown(
 
 		_, ttmGrowth, cagr3y := yfinance.CalculateSalesGrowth(&f)
 		roceVal, _ := GetLatestROCE(&f)
-		driverStr := fmt.Sprintf("TTM Growth: %+.1f%% (3Y: %+.1f%%), ROCE: %.1f%%, Inst Stake: %.1f%%", ttmGrowth*100.0, cagr3y*100.0, roceVal*100.0, f.HeldPercentInstitutions*100.0)
+		metricName := "ROCE"
+		if f.Sector == "Financial Services" {
+			metricName = "ROE"
+		}
+		driverStr := fmt.Sprintf("TTM Growth: %+.1f%% (3Y: %+.1f%%), %s: %.1f%%, Inst Stake: %.1f%%", ttmGrowth*100.0, cagr3y*100.0, metricName, roceVal*100.0, f.HeldPercentInstitutions*100.0)
 		if f.DeliveryPct > 0 {
 			driverStr += fmt.Sprintf(", Delivery: %.1f%%", f.DeliveryPct)
 		}

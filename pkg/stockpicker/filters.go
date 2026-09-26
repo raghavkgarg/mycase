@@ -132,6 +132,27 @@ func filterMetricsBeforeDate(metrics []yfinance.AnnualMetric, asOf time.Time, la
 }
 
 func getLatestROCE(f *yfinance.Fundamentals, asOf time.Time, lagDays int) (float64, bool) {
+	if f == nil {
+		return 0.0, false
+	}
+	// For Financial Services (Banks/NBFCs), customer deposits are classified as liabilities,
+	// rendering standard corporate ROCE inapplicable. Fall back to Return on Equity (ROE).
+	if f.Sector == "Financial Services" {
+		if f.ROE > 0 {
+			return f.ROE, true
+		}
+		if f.ReturnOnAssets > 0 {
+			return f.ReturnOnAssets * 10.0, true
+		}
+		if f.NetIncome > 0 && f.PBRatio > 0 && f.MarketCap > 0 {
+			bookVal := f.MarketCap / f.PBRatio
+			if bookVal > 0 {
+				return f.NetIncome / bookVal, true
+			}
+		}
+		return 0.0, false
+	}
+
 	incomes := filterMetricsBeforeDate(f.AnnualOperatingIncome, asOf, lagDays)
 	assets := filterMetricsBeforeDate(f.AnnualTotalAssets, asOf, lagDays)
 	liabs := filterMetricsBeforeDate(f.AnnualCurrentLiabilities, asOf, lagDays)
@@ -154,6 +175,19 @@ func getLatestROCE(f *yfinance.Fundamentals, asOf time.Time, lagDays int) (float
 
 // Get3YearAvgROCE calculates the average Return on Capital Employed across the last 3 fiscal years.
 func Get3YearAvgROCE(f *yfinance.Fundamentals, asOf time.Time, lagDays int) (float64, bool) {
+	if f == nil {
+		return 0.0, false
+	}
+	if f.Sector == "Financial Services" {
+		if f.ROE > 0 {
+			return f.ROE, true
+		}
+		if f.ReturnOnAssets > 0 {
+			return f.ReturnOnAssets * 10.0, true
+		}
+		return 0.0, false
+	}
+
 	incomes := filterMetricsBeforeDate(f.AnnualOperatingIncome, asOf, lagDays)
 	assets := filterMetricsBeforeDate(f.AnnualTotalAssets, asOf, lagDays)
 	liabs := filterMetricsBeforeDate(f.AnnualCurrentLiabilities, asOf, lagDays)
@@ -386,6 +420,77 @@ func checkCROIC(f *yfinance.Fundamentals, minCROIC float64, asOf time.Time, lagD
 	return false, latestCROIC, true
 }
 
+func isEligibleFairPrice(
+	t string,
+	f yfinance.Fundamentals,
+	hardFilters *config.HardFilters,
+	closes []float64,
+	stats *FilterStats,
+	mkt marketfmt.Market,
+) (bool, string) {
+	minMCap := hardFilters.MinMarketCap
+	if minMCap <= 0 {
+		minMCap = 5e9 // ₹500 Cr
+	}
+	maxMCap := hardFilters.MaxMarketCap
+	if maxMCap <= 0 {
+		maxMCap = 5e13 // ₹50,000 Cr
+	}
+	if f.MarketCap < minMCap || f.MarketCap > maxMCap {
+		stats.EliminatedSize++
+		return false, fmt.Sprintf("Market Cap limit check failed (Market Cap: %s)", marketfmt.Compact(f.MarketCap, mkt))
+	}
+
+	price := f.RegularPrice
+	if price == 0 && len(closes) > 0 {
+		price = closes[len(closes)-1]
+	}
+	adv := f.AverageVolume * price
+	minADV := hardFilters.MinADV
+	if minADV <= 0 {
+		minADV = 5e6 // ₹50 Lakhs
+	}
+	if adv < minADV {
+		stats.EliminatedLiquidity++
+		return false, fmt.Sprintf("ADV check failed (%s < %s limit)", marketfmt.Compact(adv, mkt), marketfmt.Compact(minADV, mkt))
+	}
+
+	if f.PBRatio <= 0 {
+		stats.EliminatedLeverage++
+		return false, "Negative or zero book value (negative net worth)"
+	}
+	if f.TTMRevenue <= 0 && len(f.AnnualRevenue) == 0 {
+		stats.EliminatedCashFlow++
+		return false, "Zero or unverified revenue"
+	}
+
+	if len(f.AnnualRevenue) < 2 && len(f.AnnualOperatingIncome) < 2 {
+		stats.EliminatedEarningsTrend++
+		return false, "Insufficient annual statements (< 2 years)"
+	}
+
+	// Quality / Solvency Pre-Filter: Value Trap Prevention
+	// Companies undergoing persistent operating losses (e.g. ABFRL, TMPV)
+	// must not qualify merely because distressed stock prices create superficial upside.
+	if f.Sector == "Financial Services" {
+		if f.NetIncome <= 0 && f.ROE <= 0 {
+			stats.EliminatedEarningsTrend++
+			return false, "Loss-making financial institution (Net Income <= 0 and ROE <= 0)"
+		}
+	} else {
+		nOp := len(f.AnnualOperatingIncome)
+		hasPositiveOpIncome := nOp > 0 && f.AnnualOperatingIncome[nOp-1].Value > 0
+		roceVal, okROCE := GetLatestROCE(&f)
+		hasPositiveROCE := okROCE && roceVal > 0
+		if !hasPositiveOpIncome && !hasPositiveROCE && f.NetIncome <= 0 {
+			stats.EliminatedEarningsTrend++
+			return false, "Chronic operating loss / negative ROCE (distressed value trap)"
+		}
+	}
+
+	return true, ""
+}
+
 // isEligible checks if a ticker constituent passes all safety and fundamental filters.
 func isEligible(
 	t string,
@@ -400,6 +505,10 @@ func isEligible(
 	isExisting bool,
 	mkt marketfmt.Market,
 ) (bool, string) {
+	if method == "fairprice" {
+		return isEligibleFairPrice(t, f, hardFilters, closes, stats, mkt)
+	}
+
 	// Soft-band tolerance adjustments for existing portfolio holdings (anti-churn preservation)
 	minROCE := hardFilters.MinROCE
 	minCROIC := hardFilters.MinCROIC
@@ -943,7 +1052,7 @@ func check200DaySMATrend(prices []float64, minRatio float64) (bool, string) {
 
 	// 1. Buffer Ratio Floor check (e.g. latestPrice must be >= 95% of 200-SMA)
 	if ratio < minRatio {
-		return false, fmt.Sprintf("Below 200-Day SMA ratio floor (%.2f < %.2f limit)", ratio, minRatio)
+		return false, fmt.Sprintf("Below 200-Day SMA ratio floor (%.4f < %.2f limit)", ratio, minRatio)
 	}
 
 	// 2. Slope / Trend check: If price is currently below the 200-SMA line (ratio < 1.0),

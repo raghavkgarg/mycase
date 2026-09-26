@@ -112,6 +112,7 @@ func main() {
 			return nil
 		},
 		Commands: []*cli.Command{
+			mycmd.GoldenCommand,
 			mycmd.ReturnsCommand,
 			mycmd.PipelineCommand,
 			mycmd.AutopilotCommand,
@@ -144,6 +145,9 @@ func main() {
 				return mycmd.RunDBUpdateDirect(ctx, true, c.String("index"), c.String("method"), 10, c.Bool("dry-run"), "")
 			}
 			if c.Bool("analysis") {
+				if c.String("method") == "golden" {
+					return mycmd.RunGoldenAnalysis(ctx, c.String("index"))
+				}
 				return mycmd.RunPitAnalysisDirect(ctx, c.String("index"), c.String("method"), c.String("market"))
 			}
 			return cli.ShowAppHelp(c)

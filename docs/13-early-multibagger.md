@@ -1,5 +1,11 @@
 # Early Multibagger (`earlymb`) Pre-Breakout Engine (v3.4)
 
+> **Document Structure**: This document is organized into five logical parts — from architectural specification through analytical pipeline, operational infrastructure, master reference, and engineering history. For the chronological development narrative, see [Part V: Engineering History](#part-v-engineering-history--forensic-record).
+
+---
+
+# Part I: Core Architecture
+
 ## 1. Executive Summary & Architecture Philosophy
 
 The **Early Multibagger Engine v3.4** is an institutional-grade quantitative framework designed to detect high-traction compounders **1 to 3 weeks before** stage-2 breakout volume and price markups occur.
@@ -53,7 +59,7 @@ graph TD
 
 ## 2. Stage 1: Binary Hard Safety & Event Gates
 
-Constituents failing any of these gates are immediately disqualified without score dilution. **Note**: Stage 1 contains no VCP threshold so that Stage 2 scores VCP across its complete un-truncated distribution. Furthermore, Base Duration has graduated from a binary elimination gate to a production continuous scoring multiplier in Stage 2 (`BaseDurationMultiplier`: $\ge 4\text{w} \to 1.0$, $2\text{-}3\text{w} \to 0.75$, $0\text{-}1\text{w} \to 0.50$).
+Constituents failing any of these gates are immediately disqualified without score dilution. **Note**: Stage 1 contains no VCP threshold so that Stage 2 scores VCP across its complete un-truncated distribution.
 
 | Gate | Exact Requirement | Quantitative Purpose |
 | :--- | :--- | :--- |
@@ -66,6 +72,72 @@ Constituents failing any of these gates are immediately disqualified without sco
 | **7. Governance Floor** | Promoter $\ge 25\%$, Pledged $\le 5\%$ (15-day lag) | Avoids promoter debt and margin-call liquidation traps. |
 | **8. Liquidity & Impact Cost** | $\text{ADV} \ge ₹1\text{ Cr}$ | Ensures trades can be executed at scale with minimal slippage. |
 
+### Stage-1 Hard Gates & Fallback Architecture
+
+Before candidates reach the scoring engine, binary Stage-1 filters eliminate ~85–88% of constituents in [`pkg/stockpicker/filters.go:450-653`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/stockpicker/filters.go#L450-L653):
+
+1. **Cash Flow Quality Gate (`min_cfo_pat: 0.25`)**:
+   - Requires $\text{OperatingCashflow} > 0$ and $\frac{\text{OperatingCashflow}}{\text{NetIncome}} \ge 0.25$ (with $\text{FreeCashflow} > 0$ check when configured).
+   - Existing holdings enjoy a $20\%$ relaxation buffer ($\text{CFO} / \text{PAT} \ge 0.20$).
+   - **Empirical Dominance**: Accounts for **23%–25%+ of all eliminations** ("Weak Cash Conversion (CFO < PAT)"), serving as the single largest safety filter in the entire pipeline.
+   - **Timeseries Fallback**: Yahoo Finance's `quoteSummary.financialData` card omits operating and free cash flow for ~96.6% of Indian equities. The engine falls back to `fundamentals-timeseries` endpoint (`annualOperatingCashFlow` and `annualFreeCashFlow`) which has **100% multi-year coverage** for Indian equities. (See [Appendix §A.3](#a3-data-integrity-audit--diacabs-forensic-resolution) for forensic discovery details.)
+
+2. **Capital Efficiency (ROCE) Hard Gate with 3-Year Fallback (`min_roce: 0.12`)**:
+   - Requires latest $\text{ROCE} \ge 12.0\%$ (or $7.0\%$ floor for cyclicals, capital goods, and recent listings).
+   - **3-Year Fallback (`Get3YearAvgROCE`)**: If latest single-year ROCE is depressed due to cyclicality or capex expansion, the engine evaluates average ROCE across the last 3 visible fiscal years (accounting for 45-day filing lag). If 3-year average $\ge 12.0\%$, candidate passes.
+   - Existing holdings buffer: $10.2\%$ ($15\%$ relaxation).
+
+3. **Financial Services (BFSI) Sector-Specific Substitution**:
+   - Standard ROCE is structurally distorted by bank/NBFC deposit liabilities. ROCE is dropped entirely and replaced with an **ROE Quality Gate**: $\text{ROE} \ge 12.0\%$.
+   - **Synthetic ROE Derivation**: When reported ROE is missing or zero, `getEffectiveFinancialROE` derives synthetic ROE via $\frac{\text{NetIncome}}{\text{MarketCap} / \text{PBRatio}}$. Sub-threshold or unverified financials are strictly rejected.
+
+4. **Cash Return on Invested Capital (CROIC) Gate with 3-Year Fallback (`min_croic: 0.06`)**:
+   - Evaluates $\text{CROIC} = \frac{\text{FCF}}{\text{Invested Capital}} \ge 6.0\%$, with 3-year average fallback via `Get3YearAvgCROIC` and a $4.8\%$ buffer for existing holdings.
+
+### Graduated Base Duration Scoring (Live Production)
+
+Replaces binary 4-week rejection with an orthogonal graduated score multiplier (`BaseDurationMultiplier`):
+$$\text{Score} = (P_1 + P_2 + P_3 + P_4) \times M_{\text{base}}$$
+- **$0$ to $1$ Week Base**: Eligible for selection with $M_{\text{base}} = 0.50$ (fresh breakout discount).
+- **$2$ to $3$ Weeks Base**: Eligible for selection with $M_{\text{base}} = 0.75$.
+- **$\ge 4$ Weeks Base**: Full score ($M_{\text{base}} = 1.00$).
+- **Status**: **LIVE in Production**. Empirically validated across 24 historical samples (79.2% win rate, +3.22% average excess return).
+
+```go
+// BaseDurationMultiplier returns the graduated production scoring multiplier
+// based on continuous weeks consolidated in the base zone (Price >= 85% 52W High):
+func BaseDurationMultiplier(weeksInZone int) float64 {
+    switch {
+    case weeksInZone >= 4:
+        return 1.00 // Full score for mature institutional bases
+    case weeksInZone >= 2:
+        return 0.75 // 25% discount for 2-3 week bases
+    default:
+        return 0.50 // 50% discount for fresh 0-1 week breakouts
+    }
+}
+```
+
+```sql
+-- DuckDB Analytical Macro in data/mycase.db
+CREATE OR REPLACE MACRO base_duration_multiplier(weeks_in_zone) AS (
+    CASE 
+        WHEN weeks_in_zone >= 4 THEN 1.0
+        WHEN weeks_in_zone >= 2 THEN 0.75
+        ELSE 0.50
+    END
+);
+```
+
+### Strategy Rule Governance Matrix
+
+| Strategy Rule | Status | Deployment Location | Quantitative Rationale |
+| :--- | :--- | :--- | :--- |
+| **Base Duration Graduated Scoring** | **LIVE IN PRODUCTION** | [`pkg/stockpicker/scoring.go`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/stockpicker/scoring.go), DuckDB macro `base_duration_multiplier` | Validated across 24 empirical samples with a **79.2% win rate** and **+3.22% average excess return**. |
+| **ROCE Delivery Override** | **RETAINED IN SHADOW** | `stage1_shadow_results` table in `data/mycase.db` only | Empirical evidence (6 samples, 50% win rate, **-0.86% avg return**) is thin and negative. Shadow threshold: $\Delta\text{Deliv} \ge 9.0\%$, $\text{Comp RS} \ge 15.0\%$, $\text{VCP} \le 1.20$. |
+| **BFSI Promoter Exemption** | **SUSPENDED** | Diagnostic SQL query only | Correcting ROE data expanded legacy Financial Services pool naturally from **3 to 12 stocks** without needing an exemption. |
+| **Data Integrity Pre-Flight Check** | **LIVE IN PRODUCTION** | [`pkg/pithistory/analytics.go`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/pithistory/analytics.go) | Permanent sentry preventing bad data feeds from silently producing phantom trading signals. |
+
 ---
 
 ## 3. Continuous Market Regime Sentry & Dynamic Thresholding
@@ -73,6 +145,10 @@ Constituents failing any of these gates are immediately disqualified without sco
 Instead of a single-day binary cutoff at Nifty $\ge$ 50 DMA (which causes daily whipsaw and misses early basing inflection points), the engine calculates a **Continuous Market Regime Multiplier ($R_{\text{regime}} \in [0.20, 1.00]$)**:
 
 $$R_{\text{regime}} = \text{Clamp}\left(0.20 + 0.60 \times \left(\frac{\text{Sessions Above 50 DMA}}{20}\right) + 0.50 \times \text{Clamp}\left(\frac{\text{Nifty Close} - \text{50 DMA}}{0.10 \times \text{50 DMA}}, \, -0.40, \, +0.40\right), \, 0.20, \, 1.00\right)$$
+
+Where:
+- $\text{Persistence Ratio} = \frac{\text{Sessions Above 50-DMA in Last 20 Sessions}}{20}$
+- $\text{Scaled Distance} = \text{clamp}\left(\frac{\text{Close} - \text{SMA}_{50}}{0.10 \times \text{SMA}_{50}}, -0.40, +0.40\right)$
 
 ### Worked Verification Examples:
 * **Strong Bull Trend** (20/20 sessions above, $+4\%$ above 50 DMA):
@@ -85,10 +161,8 @@ $$R_{\text{regime}} = \text{Clamp}\left(0.20 + 0.60 \times \left(\frac{\text{Ses
   $$0.20 + 0.60(0.0) + 0.50(-0.40) = 0.20 + 0.00 - 0.20 = 0.00 \to \text{Clamped to Floor } \mathbf{0.20}$$
 
 ### Dynamic Selection Bar (Threshold Scaling):
-To dynamically raise the selection bar during market weakness and preserve capital:
 $$\text{Effective Score}_i = \text{Raw Score}_i \times R_{\text{regime}}$$
 $$\text{Selection Condition}: \text{Effective Score}_i \ge \text{Min Score Threshold} \quad (\text{Default Prior: } 30.0)$$
-
 $$\text{Equivalent Raw Score Requirement} = \frac{\text{Min Score Threshold}}{R_{\text{regime}}}$$
 
 * **Bull Market ($R = 1.0$)**: Requires $\text{Raw Score} \ge 30.0$.
@@ -98,11 +172,36 @@ $$\text{Equivalent Raw Score Requirement} = \frac{\text{Min Score Threshold}}{R_
 > [!NOTE]
 > The working prior of $30.0$ is scheduled for empirical percentile calibration (e.g., target $P_{40}$ of historical training Stage-1 survivors) once rolling PIT backtest snapshots are generated.
 
+### Live Case Study: Capital Preservation (September 24, 2026)
+
+During live execution of `mycase pipeline --config config/pipeline_earlymb.yaml`:
+- **Nifty 50 Close**: ₹23,446.80
+- **Nifty 50 50-DMA**: ₹24,033.41 ($\text{Distance} = -2.44\% \to \text{Scaled Distance} = -0.2441$)
+- **Persistence**: Only 5 of last 20 trading sessions closed above 50-DMA ($0.25$)
+- **Calculated $R_{\text{regime}}$**:
+  $$R_{\text{regime}} = 0.20 + (0.60 \times 0.25) + (0.50 \times -0.2441) = \mathbf{0.2280}$$
+- **Screening Outcome**:
+  - 136 constituents passed Stage-1 safety filters.
+  - The highest raw pre-breakout score was `NSE:IKS` at **45.8**.
+  - Its effective score was $45.8 \times 0.2280 = \mathbf{10.4}$, far below the `min_effective_score_threshold: 30.0`.
+  - **Capital Preservation Action**: The engine eliminated all 136 candidates at the regime cutoff, allocating **100% of portfolio weight to `CASH_RESERVE`**.
+
+### First-Class 100% Cash Defense Pipeline Support
+* **Dedicated Cash Defense Report (`cmd/report.go`)**: When a portfolio has 0 active equities, the reporting engine generates an authoritative `03_portfolio_report.txt` stating `100% CASH DEFENSE (0 Equities Selected)`.
+* **Graceful Pipeline Skipping (`cmd/pipeline.go`)**: When 0 equities are selected, the pipeline automatically skips downstream simulation steps (Performance simulation, Trailing stop monitoring, Zerodha authentication, Basket execution).
+
+---
+
 ## 4. Stage 2: 100-Point Pure Orthogonal Scoring Matrix
 
 Every pillar is mapped through **Fixed Empirical Reference Bounds $[x_{\min}^{\text{ref}}, x_{\max}^{\text{ref}}]$**, ensuring pool-size invariance and temporal stability:
 
 $$\text{Score}(x, \, \text{target\_pts}) = \text{target\_pts} \times \text{Clamp}\left(\frac{x - x_{\min}^{\text{ref}}}{x_{\max}^{\text{ref}} - x_{\min}^{\text{ref}}}, \, 0.0, \, 1.0\right)$$
+
+### Architectural Invariant: Strict 4-Pillar Orthogonality & Research Layer Partitioning
+* **Orthogonality & Double-Counting Avoidance**: Multi-session score acceleration is mathematically a derivative of expanding Composite RS and volume contraction. Directly adding temporal velocity heuristics as an additive boost to live raw scores would double-count momentum already captured in Pillar 1.
+* **Empirical Quantile Calibration Integrity**: The Stage-1 survivor distribution ($P_{90}, P_{75}, P_{50}, P_{40}, P_{25}$) must describe the exact population evaluated against the regime cutoff. Any post-hoc score mutation corrupts the empirical calibration reference.
+* **Strict Research Layer Partitioning**: The 100-point orthogonal matrix ($P_1 + P_2 + P_3 + P_4 = 100\text{ pts}$) remains pure. Multi-session velocity trajectories are strictly partitioned to the DuckDB analytical engine (Section 7 Launchpad) and the Pre-Breakout Incubator Watchlist.
 
 ---
 
@@ -147,24 +246,46 @@ $$\text{Pillar 3 Score} = \text{Score}_{\text{RVOL}} + \text{Score}_{\text{PP}} 
   - **Disjoint Baseline ($\overline{\text{Delivery}}_{20\text{D Baseline}}$)**: Arithmetic mean of the 20 trading sessions immediately prior to the recent window ($t-24 \dots t-5$).
   - **Orthogonality / Zero Self-Contamination**: Disjoint windowing guarantees that an institutional buying burst in the last 5 days does not artificially pull up the baseline against which it is evaluated.
   - **Data History Requirement**: Requires $\ge 25$ confirmed settled sessions (with T+1 PIT lag). If $< 25$ sessions exist, returns neutral delta ($0.0$).
-* **Reference Bounds**: $[-10\%, \, +15\%]$ delta vs baseline (recalibrated from legacy $[-10\%, +30\%]$; see Section 20).
+  - **Fetch-Failure Exclusion**: `DeliveryPct <= 0` records are stripped before any averaging. Eliminates silent worst-case scoring from HTTP failures or NSE rate limiting.
+  - **Trade-to-Trade (BE/BZ/ST) Series**: SEBI mandates 100% delivery for T2T segment stocks. When `DeliverableQty = NaN`, the SEBI invariant is enforced: `DeliverableQty = TotalTradedQuantity` and `DeliveryPct = 100.0%`.
+  - **10-Calendar-Day Recency Invariant**: If the latest delivery record is older than 10 calendar days, `CalculateDeliveryDelta` returns `ErrStaleDeliveryHistory` rather than calculating phantom accumulation from obsolete history.
+* **Reference Bounds**: $[-10\%, \, +15\%]$ delta vs baseline.
 * **Formula**:
   $$\text{Pillar 4 Score} = 25.0 \times \text{Clamp}\left(\frac{\Delta\text{Delivery} - (-0.10)}{0.15 - (-0.10)}, \, 0.0, \, 1.0\right)$$
 
+> [!WARNING]
+> **Pillar 4 Bounds Recalibration History**: The reference bounds were originally $[-10\%, +30\%]$ when the legacy formula used a hardcoded 35% flat baseline that artificially inflated deltas. Under the canonical disjoint self-relative formula (deployed Sep 11, 2026), the cross-sectional distribution is centered at $0.0\%$ with $\sigma = 5.36\%$. The upper bound was tightened from $+30\%$ to $+15\%$ ($\approx +2.8\sigma$) to restore the full dynamic scoring range. See [Appendix §A.2](#a2-pillar-4-delivery-delta-design-evolution) for the complete forensic investigation.
+
+**Canonical Metric Implementation** ([`pkg/yfinance/metrics_delivery.go`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/yfinance/metrics_delivery.go)):
+$$\Delta\text{Delivery} = \overline{\text{Delivery}}_{5\text{D}}\ (t-4 \dots t) - \overline{\text{Delivery}}_{20\text{D Baseline}}\ (t-24 \dots t-5)$$
+
+**Refactored Call Sites (7 total):**
+All production paths call the canonical `yfinance.GetDeliveryDelta`:
+1. `ScoreEarlyMultibagger` (Pillar 4 scoring)
+2. `SelectTopNEarlyMultibagger` (driver explanation strings)
+3. PIT snapshot assembly (`run.go`)
+4. Incubator watchlist delta (`incubator.go`)
+5. Score velocity booster (`velocity.go`)
+6. Snapshot healer / retry engine (`retry.go`)
+7. Rolling IC/IR calibration engine (`calibrate.go`, anchored to historical `evalTS`)
+
 ---
 
-## 5. Point-in-Time (PIT) Data Lag Parameters
+## 5. Point-in-Time (PIT) Data Architecture & Empirical Calibration
+
+### 5.1. PIT Data Lag Parameters
 
 To eliminate lookahead bias in backtests and live execution:
 * **`fundamentals_lag_days: 45`**: 45-day lag on quarterly financial statements (conservative filing offset).
 * **`shareholding_lag_days: 15`**: 15-day lag for quarterly promoter/institution shareholding disclosures.
 * **`delivery_data_lag_days: 1`**: T+1 settlement delivery lag.
 
----
+### 5.2. Survivorship-Bias-Free Universe Reconstruction
 
-## 6. Point-in-Time (PIT) Universe Reconstruction & Empirical IC Calibration Engine
-
-The quantitative pipeline features a dedicated Point-in-Time (PIT) constituent resolver (`pkg/universe/resolver.go`) and a rolling Spearman Rank Information Coefficient (IC) calibration engine (`pkg/backtest/calibrate.go`).
+* **The Problem**: In small-cap and micro-cap universes, constituents churn frequently. Backtesting against *current* index constituents creates survivorship bias.
+* **The Solution** ([`pkg/universe/resolver.go`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/universe/resolver.go)):
+  - Periodic constituent snapshots are stored immutably in `data/universe_snapshots/{index}_{YYYYMMDD}.csv`.
+  - `universe.GetConstituentsForDate(index, dateT)` loads the exact constituent roster active on that date.
 
 ```mermaid
 graph TD
@@ -179,84 +300,672 @@ graph TD
     G --> I["Output 2: Information Ratio IR_k & Statistical Out-of-Sample Validation"]
 ```
 
----
+### 5.3. Rolling Zero-Lookahead Simulation Mechanics
 
-### 1. Survivorship-Bias-Free Universe Reconstruction (`pkg/universe/resolver.go`):
-* **The Problem**: In small-cap and micro-cap universes, constituents churn frequently as companies grow, deteriorate, or undergo delisting. Backtesting a historical period against *current* index constituents creates survivorship bias, artificially inflating performance by only testing companies that survived to the present.
-* **The Solution**: 
-  - Periodic constituent snapshots are stored immutably in `data/universe_snapshots/{index}_{YYYYMMDD}.csv`.
-  - When evaluating an historical date $T$, `universe.GetConstituentsForDate(index, dateT)` automatically identifies and loads the exact constituent roster that was active on that date.
+([`pkg/backtest/calibrate.go`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/backtest/calibrate.go)):
 
----
-
-### 2. Rolling Zero-Lookahead Simulation Mechanics (`pkg/backtest/calibrate.go`):
-1. **Sliding Time Window**: Stepping chronologically by $N$ trading days (default `--step 21`, approximately monthly):
-   - At each evaluation date $T$, price and volume data is strictly sliced up to date $T$ ($t \le T$).
-   - Point-in-Time filing lag offsets are enforced (45 days for quarterly statements, 15 days for shareholding).
+1. **Sliding Time Window**: Stepping chronologically by $N$ trading days (default `--step 21`, approximately monthly). At each evaluation date $T$, price and volume data is strictly sliced up to date $T$ ($t \le T$).
 2. **Realized Forward Return Horizon**:
-   - For every stock $i$ that survives Stage 1, the realized 21-day forward return is measured:
-     $$R_{i, \, t \to t+21\text{D}} = \frac{P_{i, \, t+21} - P_{i, \, t}}{P_{i, \, t}}$$
+   $$R_{i, \, t \to t+21\text{D}} = \frac{P_{i, \, t+21} - P_{i, \, t}}{P_{i, \, t}}$$
 3. **Cross-Sectional Spearman Rank Correlation ($\text{IC}_{k, t}$)**:
-   - For each pillar $k$, values across all surviving stocks are converted to fractional ranks ($R(x)$ and $R(y)$) handling ties by average rank.
-   - The Spearman rank correlation measures monotonic alignment with forward returns:
-     $$\text{IC}_{k, t} = \frac{\sum_{i} \left(R(x_i) - \overline{R(x)}\right)\left(R(y_i) - \overline{R(y)}\right)}{\sqrt{\sum_i \left(R(x_i) - \overline{R(x)}\right)^2 \sum_i \left(R(y_i) - \overline{R(y)}\right)^2}}$$
+   $$\text{IC}_{k, t} = \frac{\sum_{i} \left(R(x_i) - \overline{R(x)}\right)\left(R(y_i) - \overline{R(y)}\right)}{\sqrt{\sum_i \left(R(x_i) - \overline{R(x)}\right)^2 \sum_i \left(R(y_i) - \overline{R(y)}\right)^2}}$$
 4. **Information Ratio ($\text{IR}_k$) and Statistical Significance ($t$-Stat)**:
    $$\text{IR}_k = \frac{\overline{\text{IC}}_k}{\sigma(\text{IC}_k)}, \quad t\text{-Stat} = \text{IR}_k \times \sqrt{N_{\text{periods}}}$$
 
----
+### 5.4. Train / Test Split Methodology:
+* **In-Sample Training Window (First 70%)**: Derives empirical $P_5$ and $P_{95}$ reference bounds and computes preliminary pillar weights.
+* **Held-Out Evaluation Window (Last 30%)**: Applies frozen training bounds out-of-sample.
 
-### 3. Chronological Train / Test Split Methodology:
-To guarantee that empirical reference bounds and weights are never overfitted in-sample:
-* **In-Sample Training Window (First 70% of chronological periods)**:
-  - Derives the true empirical $P_5$ and $P_{95}$ reference bounds ($x_{\min}^{\text{ref}}, x_{\max}^{\text{ref}}$) exclusively from historical Stage-1 survivors.
-  - Computes the initial Information Ratio ($\text{IR}_k$) and preliminary pillar weights.
-* **Held-Out Evaluation Window (Last 30% of chronological periods)**:
-  - Applies the frozen training bounds and weights out-of-sample to unseen market periods.
-  - Measures out-of-sample predictive power ($\text{Mean IC} > 0$, positive hit rate).
+### 5.5. Data Integrity & Freshness Sentry (Section 6 of DuckDB Analytics)
 
----
+A 3-layer staleness defense ensures all factor inputs are synchronized to the target evaluation date:
 
-### 4. Verified Empirical Calibration Results (3-Year Rolling History, 30 Periods):
+```text
+  LAYER 1: Market-Clock Aware Python Scraper (scripts/fetch_nse_data.py)
+  ├── Exact EOD Cutoff (18:30 IST)
+  ├── Weekend & Trading Holiday Awareness
+  └── get_expected_latest_delivery_date() ensures files match latest market session.
+           │
+           ▼
+  LAYER 2: Go Pipeline Target-Date Verification (pkg/stockpicker/run.go)
+  ├── enrichDeliveryHistory enforces: f.DeliveryHistory[0].Date >= asOfTarget
+  └── Refetches/rebuilds if history is older than target evaluation session.
+           │
+           ▼
+  LAYER 3: DuckDB Freshness Sentry & PIT Health Audit (pkg/pithistory/health.go)
+  ├── Persists audit into pit_data_health table & v_pit_data_health view.
+  └── CLI Section 6: Halts/warns on frozen metrics or stale delivery series.
+```
 
-#### In-Sample Training Stats (First 21 Periods - 70% Split):
-| Pillar Metric | Mean IC | Std IC | Information Ratio ($\text{IR}$) | $t$-Stat | Positive IC % |
-| :--- | :--- | :--- | :--- | :--- | :--- |
-| **1. Composite RS** | -0.0655 | 0.1674 | -0.391 | -1.79 | 33.3% |
-| **2. VCP Tightness (Inv)** | -0.0182 | 0.1876 | -0.097 | -0.45 | 47.6% |
-| **3A. Winsorized RVOL Z** | -0.0324 | 0.0976 | -0.332 | -1.52 | 28.6% |
-| **3B. Decayed Pocket Pivot** | -0.0069 | 0.0874 | -0.079 | -0.36 | 47.6% |
-| **4. Delivery Delta** | -0.0883 | 0.1217 | -0.726 | -3.33 | 33.3% |
-
-#### Held-Out Evaluation Stats (Last 9 Periods - Out-of-Sample 30% Split):
-| Pillar Metric | Mean IC | Std IC | Information Ratio ($\text{IR}$) | $t$-Stat | Positive IC % |
-| :--- | :--- | :--- | :--- | :--- | :--- |
-| **1. Composite RS** | **+0.0685** | 0.1225 | **+0.559** | +1.68 | **77.8%** |
-| **2. VCP Tightness (Inv)** | **+0.0807** | 0.1458 | **+0.554** | +1.66 | **55.6%** |
-| **3A. Winsorized RVOL Z** | -0.0706 | 0.1730 | -0.408 | -1.22 | 44.4% |
-| **3B. Decayed Pocket Pivot** | -0.1075 | 0.1382 | -0.778 | -2.33 | 11.1% |
-| **4. Delivery Delta** | **+0.0171** | 0.1069 | **+0.160** | +0.48 | **55.6%** |
-| **Raw Composite Score** | **+0.0523** | 0.1160 | **+0.451** | +1.35 | **66.7%** |
-| **Effective Score ($\times R_{\text{regime}}$)** | **+0.0523** | 0.1160 | **+0.451** | +1.35 | **66.7%** |
-
-#### Derived Empirical $P_5 \text{ to } P_{95}$ Reference Bounds:
-* **Composite RS Bound**: $[-8.3\%, \, +49.9\%]$
-* **VCP ATR Ratio Bound**: $[0.57, \, 1.38]$
-* **RVOL Z-Score Bound**: $[-0.84\sigma, \, +0.94\sigma]$
-* **Decayed PP Bound**: $[0.00, \, 3.43]$
-* **Delivery Delta Bound**: $[-10.8\%, \, +30.3\%]$
-
-#### Key Statistical Insights:
-1. **Pillar 2 (VCP Tightness) Validation**: In the held-out out-of-sample window, lower ATR ratios (tighter consolidations) statistically predicted positive 21-day forward excess returns ($\text{Mean IC} = \mathbf{+0.0807}$, $\text{IR} = \mathbf{+0.554}$).
-2. **Pillar 1 (Composite RS) Robustness**: Composite RS delivered a **$+0.0685$ Mean IC with a $77.8\%$ positive hit rate** across out-of-sample test periods.
-3. **Delivery Delta Reference Bound Accuracy**: The empirical training distribution for Delivery Delta settled at **$[-10.8\%, +30.3\%]$**, which matches our predefined theoretical bounds ($[-10\%, +30\%]$).
-
-> [!WARNING]
-> **Pillar 4 Calibration Pre-Dates Disjoint Baseline Migration**:
-> The Delivery Delta metrics above ($\text{Mean IC} = \mathbf{+0.0171}, \text{IR} = \mathbf{+0.160}, \text{Hit Rate} = \mathbf{55.6\%}$) were evaluated on the legacy arbitrary baseline ($\text{DeliveryPct} - 35\%$), which granted artificial subsidies to ~46% of the universe. In accordance with Section 17 and Section 27, all historical records using this legacy baseline are tagged `pillar4_uncalibrated = true` in `data/mycase.db`. Fresh IC/IR calibration on clean disjoint baseline records ($\overline{\text{Deliv}}_{5\text{D}} - \overline{\text{Deliv}}_{20\text{D Baseline}}$) will be re-run once sufficient post-migration trading sessions accumulate. Note that Setup Quality is mathematically insulated as it relies exclusively on Pillars 1 & 2.
+**Live Verification Output:**
+```text
+--- 6. DATA INTEGRITY & FRESHNESS SENTRY (Target As-Of Date: 2026-09-24) ---
+  Metric Category          | Checked  | Passing  | Deficient | Rate    | System Status
+  ---------------------------------------------------------------------------------------
+  EOD Price Bar Recency    |      750 |      750 |         0 | 100.0%  | [OK] Synchronized
+  Delivery Series Freshness|      750 |      750 |         0 | 100.0%  | [OK] Fresh (2026-09-24)
+  Frozen Metric Entropy    |      750 |      750 |         0 | 100.0%  | [OK] Zero Frozen Values
+  Factor Pipeline Quality  |      750 |      750 |         0 | 100.0%  | [OK] 100% Cash Flow Valid
+  Health Verdict: OPTIMAL (Zero data staleness or metric freeze detected.)
+```
 
 ---
 
-## 7. Configuration Specification (`config/mfs.json`)
+# Part II: Analytical Pipeline — The 12-Section DuckDB Engine
+
+## 6. Pipeline Overview & Section Map
+
+The `mycase --index niftytotalmarket --method earlymb --analysis` command executes a comprehensive multi-section DuckDB analytical engine. Following the September 25, 2026 unification of the old Sections 7 and 8, the pipeline is numbered as follows:
+
+```text
+  Section | Title                                      | Purpose
+  --------+--------------------------------------------+----------------------------------------
+  1       | Stage-1 Funnel Breakdown                   | Constituent elimination taxonomy
+  2       | Sector Allocation & Concentration           | Survivor sector distribution
+  3       | Rolling Quantile Correlation Matrix          | Score percentile evolution across dates
+  4       | VCP Contraction Heatmap                     | Volatility compression rankings
+  5       | Significant Score Shifts (Gainers/Decliners)| Top positive/negative ΔScore(1D)
+  6       | Data Integrity & Freshness Sentry           | 3-layer staleness defense audit
+  7       | Pre-Breakout Launchpad (2D Unified)         | Spatial + temporal runway classification
+  8       | Near-Miss Radar & Radar Alpha Audit         | Institutional footprints blocked by gates
+  9       | Top Gainers & Radar Attribution             | Cross-sectional price movers + delivery
+  10      | Shadow Mode Divergence                      | Relief rules evaluated in parallel
+  11      | Gate Churn Rate & Pool Stability Oscillator  | Constituent stability across runs
+  12      | Regime-Conditional Forward Return Stratification | Alpha by regime quintile
+```
+
+### Conservation Invariants:
+$$\text{Initial Pool} \equiv \text{DataFetchFailed} + \text{Stage1Eliminated} + \text{Stage1Survivors}$$
+$$\text{Stage-1 Survivors} \equiv \text{RegimeRejected} + \text{SectorCapped} + \text{RankLimited} + \text{FinalSelected}$$
+
+---
+
+## 7. Section 7: Pre-Breakout Launchpad — Runway & Accumulation Velocity
+
+### 7.1. Architectural Motivation: The 2D Synthesis
+
+Prior to September 25, 2026, pre-breakout candidates were evaluated through two disconnected lenses (old Sections 7 and 8). This introduced three fatal errors:
+
+* **Type-I Error (Speculative Velocity Trap)**: Candidates sorted purely by single-day score acceleration masked the reality of loose volatility and zero delivery.
+* **Type-II Error (Disconnected Conviction)**: High-conviction setups required mentally merging disparate rows across two tables.
+* **Bearish Masking Bug**: Stocks undergoing severe score decay were labeled `COILING` ("Basing; awaiting catalyst") because any stock with VCP ≤ 1.0 that didn't meet strict positive thresholds fell into a catch-all.
+
+The unified **2D Pre-Breakout Launchpad** in [`pkg/pithistory/analytics.go`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/pithistory/analytics.go) and [`pkg/pithistory/bottleneck.go`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/pithistory/bottleneck.go) synthesizes spatial base anatomy and temporal velocity into a single, high-fidelity table.
+
+```text
+                               ┌────────────────────────────────────────────────────────┐
+                               │           STAGE-1 SURVIVORS (132 STOCKS)               │
+                               └──────────────────────────┬─────────────────────────────┘
+                                                          │
+                               ┌──────────────────────────┴─────────────────────────────┐
+                               ▼                                                        ▼
+                 [ SPATIAL / STRUCTURAL ANATOMY ]                        [ TEMPORAL / KINETIC VELOCITY ]
+                 • VCP Ratio: ATR_5 / ATR_20                             • 1D Delta: S(T0) - S(T1)
+                 • Delivery Delta: ΔDeliv (Disjoint)                     • 3D Delta: S(T0) - S(T2)
+                 • Composite RS: 60% 3M + 40% 1M                         • Multi-run Monotonicity (S0>S1>S2)
+                 • Factor Stability: Score CV                            • Section 5 Decliner Cross-Check
+                               │                                                        │
+                               └──────────────────────────┬─────────────────────────────┘
+                                                          ▼
+                                      ┌───────────────────────────────────────┐
+                                      │       2D LAUNCHPAD STATE MATRIX       │
+                                      ├───────────────────────────────────────┤
+                                      │ Tier 1: LAUNCHPAD-ARMED               │
+                                      │ Tier 2: COIL-COMPRESS                 │
+                                      │ Tier 3: STEALTH-HIGH / STEALTH-LOW    │
+                                      │ Tier 4: BASE-STRONG                   │
+                                      │ Tier 5: BASE-ACCUM                    │
+                                      │ Tier 6: VELOCITY-POP                  │
+                                      └───────────────────────────────────────┘
+```
+
+### 7.2. Launchpad State Priority Rules (Tiers 1–6)
+
+```text
+                           ┌───────────────────────────────────────────────┐
+                           │            STAGE-1 SURVIVOR ENTRY             │
+                           └───────────────────────┬───────────────────────┘
+                                                   │
+                ┌──────────────────────────────────┴──────────────────────────────────┐
+                ▼                                                                     │
+   [ VCP <= 0.70 AND Deliv >= +6.0%                                                   │
+     AND (1D Δ >= +3.0 OR CONSEC-SURGE) ] ──► YES ──► [ LAUNCHPAD-ARMED ] (Tier 1)    │
+                │ NO                                                                  │
+                ▼                                                                     │
+   [ VCP <= 0.45 AND |1D Δ| <= 2.5 ]      ──► YES ──► [ COIL-COMPRESS ]   (Tier 2)    │
+                │ NO                                                                  │
+                ▼                                                                     │
+   [ Deliv >= +8.0% AND 1D Δ >= 0 ]       ──► YES ──► Score CV <= 0.08?               │
+                │                                      ├── YES ──► [ STEALTH-HIGH ]   │
+                │                                      └── NO  ──► [ STEALTH-LOW ]    │
+                │ NO                                                                  │
+                ▼                                                                     │
+   [ Composite RS >= +30.0% ]             ──► YES ──► [ BASE-STRONG ]     (Tier 4)    │
+                │ NO                                                                  │
+                ▼                                                                     │
+   [ 1D Δ >= +4.0pt AND                                                               │
+     (VCP > 0.85 OR Deliv < +2.0%) ]      ──► YES ──► [ VELOCITY-POP ]    (Tier 6)    │
+                │ NO                                                                  │
+                ▼                                                                     │
+   [ Default Baseline Survivor ]          ──────────► [ BASE-ACCUM ]      (Tier 5)    │
+```
+
+**Decision Rules:**
+1. **Tier 1: `LAUNCHPAD-ARMED`**: $\text{VCP} \le 0.70 \land \Delta\text{Deliv} \ge +6.0\% \land (\Delta_{1\text{D}} \ge +3.0\text{ pt} \lor \text{CONSEC-SURGE})$. Maximum coiled spring energy with active institutional volume expansion.
+2. **Tier 2: `COIL-COMPRESS`**: $\text{VCP} \le 0.45 \land |\Delta_{1\text{D}}| \le 2.5\text{ pt}$. Extreme volatility exhaustion ($\text{ATR}_5 < 45\% \text{ of ATR}_{20}$). Waiting for volume ignition.
+3. **Tier 3A: `STEALTH-HIGH`**: $\Delta\text{Deliv} \ge +8.0\% \land \Delta_{1\text{D}} \ge 0 \land \text{Score CV} \le 0.08$. Methodical, quiet institutional accumulation.
+4. **Tier 3B: `STEALTH-LOW`**: $\Delta\text{Deliv} \ge +8.0\% \land \Delta_{1\text{D}} \ge 0 \land \text{Score CV} > 0.08$. Real delivery with wider score variance.
+5. **Tier 4: `BASE-STRONG`**: $\text{Composite RS} \ge +30.0\%$. Established relative strength market leaders.
+6. **Tier 5: `BASE-ACCUM`**: Baseline Stage-1 survivor not meeting Tiers 1–4.
+7. **Tier 6: `VELOCITY-POP`**: $\Delta_{1\text{D}} \ge +4.0\text{ pt} \land (\text{VCP} > 0.85 \lor \Delta\text{Deliv} < +2.0\%)$. Unconfirmed momentum spike.
+
+### 7.3. Directional Velocity Pattern Dispatch
+
+Implemented in `ClassifyVelocityPattern()` in [`pkg/pithistory/bottleneck.go`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/pithistory/bottleneck.go#L647):
+
+```text
+Priority 1: Section 5 Decliner OR 1D Δ <= -5.0pt OR 3D Δ <= -8.0pt  ──► FADE-SHARP
+Priority 2: 1D Δ is NULL (No prior run baseline)                     ──► NEW-ENTRY
+Priority 3: 1D Δ >= +5.0pt                                           ──► VELOCITY-BREAKOUT
+Priority 4: S(T0) > S(T1) + 0.5 AND S(T1) > S(T2) + 0.5             ──► CONSEC-SURGE
+Priority 5: S(T0) > S(T1) AND S(T1) < S(T2)                          ──► RECOVERY-ACCUM
+Priority 6: 1D Δ >= +2.0pt                                           ──► STEADY-ACCUM
+Priority 7: VCP <= 0.45 AND |1D Δ| <= 2.5pt AND 3D Δ >= -5.0pt       ──► COILING
+Priority 8: 3D Δ < 0.0pt OR 1D Δ <= -1.5pt                           ──► FADE-MILD
+Priority 9: Default Low-Variance Squeeze                             ──► COILING
+```
+
+### 7.4. Diagnostic Footprint Generation Matrix
+
+The diagnostic footprint is generated by `FormatDiagnosticFootprint()` via deterministic rules:
+
+| Condition | Target State | Factor Thresholds | Generated Footprint | Tactical Meaning |
+| :--- | :--- | :--- | :--- | :--- |
+| Severe Drop | Any / `FADE-SHARP` | $\Delta_{1\text{D}} \le -4.0$ | `⚠ Confirmed drop (-X.Xpt)` | Single-day factor breakdown |
+| Severe Bleed | Any / `FADE-SHARP` | $\Delta_{3\text{D}} \le -8.0$ | `⚠ Multi-day bleed (-XX.Xpt)` | Multi-session factor decay |
+| Base Fatigue | `BASE-STRONG` / `FADE-MILD` | - | `Base holds; score fading` | RS base intact, momentum slowing |
+| Armed Inflows| `LAUNCHPAD-ARMED` | $\Delta\text{Deliv} \ge +10\%$ | `Tight coil + heavy inflows` | Prime setup with massive demat absorption |
+| Armed Volume | `LAUNCHPAD-ARMED` | $\Delta\text{Deliv} < +10\%$ | `Volume expansion into base` | Breakout volume expanding |
+| Coil Squeeze | `COIL-COMPRESS` | $\Delta\text{Deliv} < 0\%$ | `Extreme volatility squeeze` | Volume dry-up; supply exhausted |
+| Coil Energy | `COIL-COMPRESS` | $\Delta\text{Deliv} \ge 0\%$ | `Energy coil awaiting volume` | Waiting for buyer volume |
+| Stealth High | `STEALTH-HIGH` | $\text{CV} \le 0.05$ | `CV 0.0X: High conviction` | Elite methodical accumulation |
+| Stealth Med | `STEALTH-HIGH` | $0.05 < \text{CV} \le 0.08$ | `CV 0.0X: Methodical intake` | Steady accumulation |
+| Stealth Low | `STEALTH-LOW` | $\text{CV} > 0.08$ | `CV 0.XX: Noisier intake` | Accumulation with wider spread |
+| Mature RS | `BASE-STRONG` | $\text{RS} \ge +100\%$ | `Mature RS leader base` | Triple-digit RS market leader |
+| Holding Base | `BASE-STRONG` | `RECOVERY/CONSEC` | `Post-breakout base holding` | Consolidating gains |
+| Transient | `VELOCITY-POP` | $\Delta\text{Deliv} < +2\%$ | `Transient spike; unconfirmed` | Pop without institutional backing |
+| Baseline | `BASE-ACCUM` | - | `Basing; awaiting catalyst` | Normal Stage-1 consolidation |
+
+### 7.5. Single-Pass DuckDB Analytical CTE Query
+
+In [`pkg/pithistory/analytics.go`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/pithistory/analytics.go#L713-L833), the unified launchpad runs as a single-pass relational CTE in DuckDB:
+
+```sql
+WITH date_ranks AS (
+    SELECT DISTINCT as_of_date
+    FROM pit_candidate_scores
+    WHERE index_name = ? AND method = ? AND as_of_date <= ?
+    ORDER BY as_of_date DESC
+    LIMIT 5
+),
+t_dates AS (
+    SELECT 
+        MAX(CASE WHEN rn = 1 THEN as_of_date END) AS d_t0,
+        MAX(CASE WHEN rn = 2 THEN as_of_date END) AS d_t1,
+        MAX(CASE WHEN rn = 3 THEN as_of_date END) AS d_t2
+    FROM (SELECT as_of_date, ROW_NUMBER() OVER (ORDER BY as_of_date DESC) as rn 
+          FROM (SELECT as_of_date FROM date_ranks LIMIT 3))
+),
+score_stats AS (
+    SELECT s.ticker,
+           ROUND(COALESCE(STDDEV_POP(s.raw_score) / NULLIF(AVG(s.raw_score), 0), 0.0), 2) AS score_cv
+    FROM pit_candidate_scores s
+    JOIN date_ranks d ON s.as_of_date = d.as_of_date
+    WHERE s.index_name = ? AND s.method = ?
+    GROUP BY s.ticker
+),
+survivor_scores AS (
+    SELECT 
+        s.ticker, s.as_of_date, s.sector, s.raw_score, s.effective_score,
+        s.vcp_ratio, s.delivery_delta, s.composite_rs, s.passed_stage1,
+        COALESCE(s.data_fetch_failed, false) AS data_fetch_failed
+    FROM pit_candidate_scores s
+    CROSS JOIN t_dates d
+    WHERE s.index_name = ? AND s.method = ?
+      AND s.as_of_date IN (d.d_t0, d.d_t1, d.d_t2)
+),
+aligned_trajectories AS (
+    SELECT 
+        s0.ticker,
+        COALESCE(NULLIF(s0.sector, ''), 'Unknown') as sector,
+        s0.effective_score, s0.raw_score AS s_t0,
+        s1.raw_score AS s_t1, s2.raw_score AS s_t2,
+        s0.vcp_ratio, s0.delivery_delta, s0.composite_rs,
+        COALESCE(ss.score_cv, 0.0) AS score_cv,
+        CASE WHEN s1.raw_score > 0 AND s1.passed_stage1 AND NOT s1.data_fetch_failed 
+             THEN ROUND(s0.raw_score - s1.raw_score, 1) ELSE NULL END AS delta_1d,
+        CASE WHEN s2.raw_score > 0 AND s2.passed_stage1 AND NOT s2.data_fetch_failed 
+             THEN ROUND(s0.raw_score - s2.raw_score, 1) ELSE NULL END AS delta_3d
+    FROM survivor_scores s0
+    CROSS JOIN t_dates d
+    LEFT JOIN survivor_scores s1 ON s0.ticker = s1.ticker AND s1.as_of_date = d.d_t1
+    LEFT JOIN survivor_scores s2 ON s0.ticker = s2.ticker AND s2.as_of_date = d.d_t2
+    LEFT JOIN score_stats ss ON s0.ticker = ss.ticker
+    WHERE s0.as_of_date = d.d_t0 AND s0.passed_stage1 = true AND NOT s0.data_fetch_failed
+),
+classified_runway AS (
+    SELECT *, CASE 
+        WHEN vcp_ratio <= 0.70 AND delivery_delta >= 0.06 
+             AND (delta_1d >= 3.0 OR (s_t0 > s_t1 + 0.5 AND s_t1 > s_t2 + 0.5))
+            THEN 'LAUNCHPAD-ARMED'
+        WHEN vcp_ratio <= 0.45 AND (delta_1d IS NULL OR ABS(delta_1d) <= 2.5)
+            THEN 'COIL-COMPRESS'
+        WHEN delivery_delta >= 0.08 AND (delta_1d >= 0 OR delta_1d IS NULL)
+            THEN CASE WHEN score_cv <= 0.08 THEN 'STEALTH-HIGH' ELSE 'STEALTH-LOW' END
+        WHEN composite_rs >= 0.30 THEN 'BASE-STRONG'
+        WHEN delta_1d >= 4.0 AND (vcp_ratio > 0.85 OR delivery_delta < 0.02)
+            THEN 'VELOCITY-POP'
+        ELSE 'BASE-ACCUM'
+    END AS launchpad_state
+    FROM aligned_trajectories
+)
+SELECT ticker, sector, effective_score,
+    ROUND((? - s_t0), 1) AS hurdle_gap,
+    vcp_ratio, delivery_delta, composite_rs, score_cv,
+    s_t0, COALESCE(s_t1, 0.0), COALESCE(s_t2, 0.0),
+    delta_1d, delta_3d, launchpad_state
+FROM classified_runway
+WHERE (hurdle_gap <= 120.0) OR (delta_1d >= 3.0)
+ORDER BY CASE launchpad_state
+    WHEN 'LAUNCHPAD-ARMED' THEN 1 WHEN 'COIL-COMPRESS' THEN 2
+    WHEN 'STEALTH-HIGH' THEN 3 WHEN 'STEALTH-LOW' THEN 3
+    WHEN 'BASE-STRONG' THEN 4 WHEN 'BASE-ACCUM' THEN 5
+    WHEN 'VELOCITY-POP' THEN 6 ELSE 7
+END ASC, effective_score DESC
+LIMIT 20;
+```
+
+### 7.6. Production Output (2026-09-25)
+
+```text
+--- 7. PRE-BREAKOUT LAUNCHPAD: RUNWAY & ACCUMULATION VELOCITY (2026-09-25) ---
+Macro Regime Multiplier: 0.2000 | Current Hurdle: 150.0 pts (Stage-1 Survivors Active Runway & Multi-Run Trajectory)
+
+  Ticker          | Sector       |   Eff |    Hurdle |   VCP | Deliv   | Comp    |  1D Δ |  3D Δ | Launchpad       | Velocity          | Diagnostic Footprint    
+                  |              | Score |       Gap | Ratio | Delta   | RS      |  (pt) |  (pt) | State           | Pattern           |                         
+  ---------------------------------------------------------------------------------------------------------------------------------------------------------
+  NSE:BALRAMCHIN  | Cons Defens  |   8.5 |  +107.3pt |  0.69 |  +11.8% |  +27.6% |  +4.3 | +12.0 | LAUNCHPAD-ARMED | CONSEC-SURGE      | Tight coil + heavy inflows
+  NSE:EPL         | Cons Cycl    |   6.4 |  +117.8pt |  0.62 |   +6.3% |   +8.1% |  +4.0 |  +6.7 | LAUNCHPAD-ARMED | CONSEC-SURGE      | Volume expansion into base
+  NSE:PARKHOSPS   | Healthcare   |   8.6 |  +107.1pt |  0.38 |   -1.5% |  +31.1% |  +1.5 |  +1.5 | COIL-COMPRESS   | COILING           | Extreme volatility squeeze
+  NSE:TIPSMUSIC   | Communicat   |   8.2 |  +109.1pt |  0.36 |   +0.8% |  +11.3% |  -2.1 |  -3.8 | COIL-COMPRESS   | COILING           | Energy coil awaiting volume
+  NSE:RUBICON     | Healthcare   |   9.9 |  +100.5pt |  0.60 |   +8.8% |  +57.2% |  +0.4 |  +4.3 | STEALTH-HIGH    | COILING           | CV 0.07: Methodical intake
+  NSE:GLAXO ⚠     | Healthcare   |   7.4 |  +113.1pt |  0.66 |  +10.3% |   +6.9% |  -5.6 |  +5.8 | BASE-ACCUM      | FADE-SHARP        | ⚠ Confirmed drop (-5.6pt)
+  NSE:IKS ⚠       | Healthcare   |   6.7 |  +116.4pt |  1.42 |   +0.6% |  +15.1% |  -5.5 | -12.2 | BASE-ACCUM      | FADE-SHARP        | ⚠ Confirmed drop (-5.5pt)
+```
+
+### 7.7. In-Depth Case Studies
+
+1. **`NSE:BALRAMCHIN` (Textbook Tier-1 Armed Breakout)**: $\text{VCP} = 0.69$, $\Delta\text{Deliv} = +11.8\%$. In old Section 7, it was buried as `STEALTH-LOW` ($\text{CV} = 0.15$). In the unified Launchpad, its +12.0pt 3-day surge and massive delivery vault it to **Rank #1** as `LAUNCHPAD-ARMED`.
+2. **`NSE:PARKHOSPS` & `NSE:TIPSMUSIC` (Coiled Springs)**: VCP 0.38 and 0.36 respectively. Extreme volatility exhaustion ($\text{ATR}_5 < 38\% \text{ of ATR}_{20}$). High-pressure coils awaiting volume.
+3. **`NSE:RUBICON` (Stealth Runway Leader)**: Eff Score 9.9, closest to hurdle. $\text{CV} = 0.07$ — lowest factor volatility in the universe. Quiet, methodical accumulation.
+4. **`NSE:GLAXO ⚠` & `NSE:IKS ⚠` (Unmasked Breakdowns)**: Previously labeled `COILING` ("Basing; awaiting catalyst"). Now correctly `FADE-SHARP` with ⚠ symbols, protecting capital from deteriorating setups.
+
+### 7.8. UTF-8 Rune Width Padding (`PadVisible`)
+
+Terminal column shearing was eliminated via `PadVisible()` in [`pkg/pithistory/bottleneck.go`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/pithistory/bottleneck.go#L639). By counting visual runes (`utf8.RuneCountInString`) rather than raw bytes, the 3-byte unicode `⚠` in `NSE:GLAXO ⚠` does not push subsequent columns to the right.
+
+---
+
+## 8. Section 8: Stealth Accumulation & Near-Miss Radar
+
+### 8.1. Quantitative Specification
+- **Target Population**: $\text{passed\_stage1} = \text{false} \land \neg\text{data\_fetch\_failed}$.
+- **Accumulation Sentry**: $\text{Delivery Delta} \ge +0.08$ ($+8.0\%$).
+- **Trend Guard**: $\text{Composite RS} \ge 0.0\%$ (non-negative relative strength).
+- **Taxonomy**: Classifies bottleneck gates into `[Fixable]` (ROCE, base duration) vs `[Structural]` (DSO, leverage, SMA trend).
+
+### 8.2. Elimination Gate Code Taxonomy
+
+In [`pkg/pithistory/bottleneck.go`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/pithistory/bottleneck.go), every gate is classified into an 11-character, fixed-width machine code:
+
+```text
+    ┌──────────────────────────┐         ┌────────────────────────────────────────────────────────┐
+    │ Rejection Reason String  │ ──────► │ ClassifyBottleneckGate(reason, sector, pat, ocf, fcf)  │
+    └──────────────────────────┘         └──────────────────────────┬─────────────────────────────┘
+                                                                    │
+                 ┌──────────────────────────────────────────────────┴────────────────────────────────┐
+                 ▼                                                  ▼                                ▼
+       [ Cash Flow Category ]                             [ Operational / Quality ]            [ Technical / Structural ]
+       • CF-LOSS: NI < 0                                  • DSO-MILD: +15% <= ΔDSO < +20%      • 52W-NEAR: 80% <= P/H < 85%
+       • CF-LAG:  PAT > 0, FCF < 0                        • DSO-SEVERE: +20% <= ΔDSO < +35%    • SMA-BORDER: Ratio ~0.9497
+       • CF-NORM: Bank/Developer OCF < 0                  • ROCE-BORDER: 10% <= ROCE < 12%     • SMA-DECLINE: 200-SMA Slope < 0
+       • CF-NODATA: Unparsed OCF                          • ROCE-WEAK: 5% <= ROCE < 10%        • SMA-BREAK: Ratio < 0.90
+```
+
+#### Cash Flow Quality Gate (`classifyCashFlow`)
+```go
+func classifyCashFlow(pat, ocf, fcf float64, sector string) BottleneckDetail {
+    switch {
+    case pat < 0:
+        return BottleneckDetail{Code: "CF-LOSS", Detail: fmt.Sprintf("NI -₹%.1fCr, FCF %+.1fCr", math.Abs(pat)/1e7, fcf/1e7)}
+    case ocf == 0:
+        return BottleneckDetail{Code: "CF-NODATA", Detail: fmt.Sprintf("OCF unreported (%s)", formatConciseSector(sector))}
+    case isLenderOrDeveloper(sector):
+        return BottleneckDetail{Code: "CF-NORM", Detail: fmt.Sprintf("PAT ₹%.1fCr, OCF %+.1fCr (%s-norm)", pat/1e7, ocf/1e7, formatConciseSector(sector))}
+    default:
+        return BottleneckDetail{Code: "CF-LAG", Detail: fmt.Sprintf("PAT ₹%.1fCr, FCF %+.1fCr", pat/1e7, fcf/1e7)}
+    }
+}
+```
+* **`CF-NORM`**: Banking/NBFC (`NSE:CGCL`) and Real Estate (`NSE:BRIGADE`) naturally deploy cash into loan books and inventory — negative OCF is an operational norm.
+* **`CF-LAG`**: Companies with high PAT but negative FCF (e.g. `NSE:HFCL`: PAT ₹572.6Cr, FCF -₹723.4Cr) flagged for working capital absorption.
+
+#### Capital Efficiency Gate (`classifyROCE`)
+$$\text{ROCE} = \frac{\text{EBIT}}{\text{Total Assets} - \text{Current Liabilities}} \times 100\%$$
+* `ROCE-BORDER` ($10.0\% \le \text{ROCE} < 12.0\%$): Within 2pp of passing (e.g. `NSE:WELENT`: ROCE 10.6%).
+* `ROCE-WEAK` ($5.0\% \le \text{ROCE} < 10.0\%$): Mediocre capital productivity.
+* `ROCE-POOR` ($0.0\% \le \text{ROCE} < 5.0\%$): Sub-par return.
+* `ROCE-NEG` ($\text{ROCE} < 0.0\%$): Active capital destruction.
+
+#### Moving Average Trend Gate (`classifySMA`)
+Evaluates $R_{\text{SMA}} = \frac{\text{Close}}{\text{SMA}_{200}}$ and 20-day slope:
+* `SMA-BORDER`: $R \ge 0.93$, slope non-negative. 4-decimal precision for near-threshold cases (e.g. `Ratio ~0.9497 (<0.0003 short)`).
+* `SMA-DECLINE`: $R \ge 0.90$, but 200-SMA slope actively falling.
+* `SMA-BREAK`: $R < 0.90$, deep macro trend breakdown.
+
+### 8.3. Radar Alpha Audit
+
+Tracks candidates from first radar detection through Stage-1 clearance. Answers: **What is the empirical opportunity cost of waiting for accounting filters?**
+
+```text
+  --- Graduated Stocks Performance (Radar Alpha Audit: First-Seen Date -> Clear Date) ---
+  • Latest Session (2026-09-25): No new graduations (Most Recent Cohort: 2026-09-24 | 2/2, +4.17% Alpha)
+  Ticker          | Channel             | First Seen | Clear Date | Incub (Hits) |   Entry (₹) |   Clear (₹) | Radar Return
+  NSE:RRKABEL     | natural_clear       | 2026-09-17 | 2026-09-24 | 7d (2x)      |   ₹2,390.50 |   ₹2,529.80 |       +5.83%
+  NSE:STYL        | natural_clear       | 2026-09-22 | 2026-09-24 | 2d (2x)      |     ₹361.25 |     ₹370.35 |       +2.52%
+  Rolling Win Rate: 2/2 (100.0%) | Average Radar Return: +4.17%
+```
+
+---
+
+## 9. Section 9: Daily Top Price Gainers & Radar Attribution
+
+Surfaces top 15 single-session percentage gainers across the Nifty Total Market, cross-referencing price momentum against institutional delivery confirmation.
+
+### Volume Confirmation Gate
+$$\text{Acc} = \begin{cases} \mathbf{YES} & \text{if } \Delta\text{Deliv} \ge +6.0\% \\ \mathbf{NO} & \text{if } \Delta\text{Deliv} < +6.0\% \end{cases}$$
+
+### Radar Footprint Overlap Taxonomy
+* **`INCUBATED HIT`**: Stage-1 qualified, active on Section 7 Launchpad, with $\text{Acc} = \text{YES}$. Highest-confidence signal.
+* **`INCUBATED`**: Stage-1 qualified, gaining on normal liquidity.
+* **`GRADUATED`**: Was on near-miss radar, cleared Stage 1 today.
+* **`ACTIVE RADAR`**: Currently on near-miss radar.
+* **`COINCIDENT POP`**: Appeared in both radar and gainers simultaneously.
+* **`-`**: No EBM pipeline connection.
+
+---
+
+## 10. Sections 10–12: Shadow Mode, Churn & Stratification
+
+### Section 10: Stage-1 Shadow Mode Divergence
+Evaluates relief rules in shadow mode before live deployment. Three channels:
+- `base_duration`: Rescues candidates with base $< 4\text{w}$ if $\text{VCP} \le 0.50$.
+- `delivery_override`: Relaxes ROCE floor from $12.0\%$ to $10.0\%$ if $\Delta\text{Deliv} \ge +8.0\%$.
+- `promoter_exempt`: Relaxes promoter pledge filters for debt-free companies.
+
+### Section 11: Gate Churn Rate & Pool Stability Oscillator
+$$\text{Churn Rate} = \frac{|\mathcal{S}_{T_0} \setminus \mathcal{S}_{T_1}| + |\mathcal{S}_{T_1} \setminus \mathcal{S}_{T_0}|}{|\mathcal{S}_{T_0} \cup \mathcal{S}_{T_1}|} \times 100\%$$
+$$\text{Jaccard Stability Index} = \frac{|\mathcal{S}_{T_0} \cap \mathcal{S}_{T_1}|}{|\mathcal{S}_{T_0} \cup \mathcal{S}_{T_1}|}$$
+Signals regime changes when churn spikes $> 25\%$.
+
+### Section 12: Regime-Conditional Forward Return Stratification
+$$\text{Alpha}_{T+k} = \mathbf{E}\left[ R_{i, T+k} - R_{\text{Nifty}, T+k} \mid R_{\text{regime}} \ge 0.60 \right] \text{ vs } \mathbf{E}\left[ R_{i, T+k} - R_{\text{Nifty}, T+k} \mid R_{\text{regime}} < 0.60 \right]$$
+Proves Stage-1 survivors exhibit heavy positive forward alpha in bull regimes, while cash preservation dominates in bear regimes.
+
+---
+
+# Part III: Operational Infrastructure
+
+## 11. Database Architecture: Unified `data/mycase.db`
+
+### Consolidated Architecture
+All research data is stored in a single ACID-compliant **DuckDB OLAP Database** (`data/mycase.db`), consolidating legacy `data/cache.db` and `data/pit_history.db` into 14 tables and views across 4 domains:
+- **Market data**: `prices`, `fundamentals`, `cache_meta`
+- **Research & PIT**: `pit_runs`, `pit_candidate_scores`, `index_constituents`, `v_pit_candidate_scores`, `v_pit_runs`
+- **Staging & proposals**: `pipeline_runs`, `index_picks`, `proposals`, `selections`
+- **Theme lifecycle**: `theme_rebalances`, `theme_history`
+
+### Core Table Schemas
+
+```sql
+-- 1. Run Metadata & Funnel Accounting
+CREATE TABLE IF NOT EXISTS pit_runs (
+    as_of_date         DATE,
+    index_name         VARCHAR,
+    method             VARCHAR,
+    regime_multiplier  DOUBLE,
+    total_constituents INTEGER,
+    stage1_survivors   INTEGER,
+    selected_count     INTEGER,
+    created_at         TIMESTAMP,
+    pillar4_uncalibrated BOOLEAN DEFAULT false,
+    pillar4_insufficient_history BOOLEAN DEFAULT false,
+    PRIMARY KEY (as_of_date, index_name, method)
+);
+
+-- 2. Granular Candidate Metrics
+CREATE TABLE IF NOT EXISTS pit_candidate_scores (
+    as_of_date         DATE,
+    index_name         VARCHAR,
+    method             VARCHAR,
+    ticker             VARCHAR,
+    sector             VARCHAR,
+    passed_stage1      BOOLEAN,
+    rejection_reason   VARCHAR,
+    raw_score          DOUBLE,
+    effective_score    DOUBLE,
+    composite_rs       DOUBLE,
+    vcp_ratio          DOUBLE,
+    rvol_z_score       DOUBLE,
+    decayed_pp         DOUBLE,
+    delivery_delta     DOUBLE,
+    selected           BOOLEAN,
+    final_weight       DOUBLE,
+    forward_return_21d DOUBLE,
+    data_fetch_failed  BOOLEAN DEFAULT false,
+    pillar4_uncalibrated BOOLEAN DEFAULT false,
+    pillar4_insufficient_history BOOLEAN DEFAULT false,
+    PRIMARY KEY (as_of_date, index_name, method, ticker)
+);
+
+-- 3. Canonical Index Constituent Roster
+CREATE TABLE IF NOT EXISTS index_constituents (
+    index_name VARCHAR,
+    ticker     VARCHAR,
+    PRIMARY KEY (index_name, ticker)
+);
+```
+
+### Dynamic Sub-Index Relational Views
+Because the **Nifty Total Market (750 constituents)** is the strict superset of all sub-indices, scores are physically stored once under `niftytotalmarket`. Dynamic SQL views provide seamless sub-index access:
+
+```sql
+CREATE VIEW IF NOT EXISTS v_pit_candidate_scores AS
+SELECT s.as_of_date, c.index_name, s.method, s.ticker, s.sector,
+    s.passed_stage1, s.rejection_reason, s.raw_score, s.effective_score,
+    s.composite_rs, s.vcp_ratio, s.rvol_z_score, s.decayed_pp,
+    s.delivery_delta, s.selected, s.final_weight, s.forward_return_21d,
+    s.data_fetch_failed, s.pillar4_uncalibrated, s.pillar4_insufficient_history
+FROM pit_candidate_scores s
+JOIN index_constituents c ON s.ticker = c.ticker
+WHERE s.index_name = 'niftytotalmarket';
+```
+
+**Index Name Canonicalization** (`NormalizeIndexName`): `small250` → `smallcap250`, `micro250` → `microcap250`, case-insensitive (`nifty50` → `NIFTY50`).
+
+### Data Health Audit Table (`pit_data_health`)
+
+| Column | Type | Description |
+| :--- | :--- | :--- |
+| `as_of_date` | DATE | Evaluation snapshot date |
+| `price_fresh_count` | INTEGER | Stocks with EOD bar matching `as_of_date` |
+| `delivery_fresh_count` | INTEGER | Stocks with delivery series ending on `as_of_date` |
+| `frozen_metrics_count` | INTEGER | Stocks with identical metrics across runs |
+| `health_status` | VARCHAR | `OPTIMAL`, `STALE_WARNING`, or `CRITICAL` |
+
+---
+
+## 12. CLI Command & Daily Operations Reference
+
+| Action | Command | Purpose |
+| :--- | :--- | :--- |
+| **Unified EOD Database Update** | `mycase --database --update` *(or `mycase -db -u`)* | Single post-market run: warms market cache, executes PIT screening on `niftytotalmarket`, syncs themes. |
+| **DB Table Status** | `mycase db stats` | Row counts, online status, and domain breakdown across 14 tables/views. |
+| **Daily PIT Update** | `mycase pit update --index niftytotalmarket --method earlymb --top 10` | Full screening pipeline with DB persistence. |
+| **DuckDB Analysis** | `mycase --index niftytotalmarket --method earlymb --analysis` | Comprehensive 12-section analytical engine. |
+| **PIT Retry** | `mycase pit retry --index niftytotalmarket --method earlymb --date YYYY-MM-DD` | Re-runs failed candidates without re-evaluating entire universe. |
+| **Empirical Quantiles** | `mycase pit stats --index microcap250 --method earlymb` | Rolling score distributions ($P_{40}, P_{50}, P_{75}, P_{90}$). |
+| **Ticker History** | `mycase pit stats --ticker INOXINDIA` | Chronological score trajectory for a specific stock. |
+| **Combined Picker** | `mycase pick --index microcap250_smallcap250 --method earlymb --top 10` | Live 2-stage gating across combined universe. |
+| **Rolling IC Calibration** | `mycase calibrate --index niftytotalmarket --method earlymb --step 21 --forward 21` | Spearman Rank IC, IR, empirical bounds on 70/30 split. |
+| **Save Constituent Snapshot** | `mycase calibrate --index niftytotalmarket --save-snapshot` | Immutable roster to `data/universe_snapshots/`. |
+| **Execution Basket** | `mycase basket --file data/candidates/index_picks/niftytotalmarket_earlymb.csv --capital 100000` | Integer share quantities for broker execution. |
+| **Sentry Monitoring** | `mycase monitor --file data/microsmall.csv --strategy earlymb` | Trailing stop-loss, EMA breakdown, filing health. |
+| **Full Pipeline** | `mycase pipeline --index niftytotalmarket --strategy earlymb` | Screening → optimization → basket → reporting. |
+| **Dual-Conviction Consensus** | `mycase pit consensus --top 15` | Cross-strategy `multibagger + earlymb` consensus scores. |
+| **Satellite Staging** | `mycase pit stage --output data/earlymb_live.csv --exclude data/microsmall.csv --top 12` | Air-gapped satellite basket excluding core holdings. |
+
+---
+
+## 13. EOD Cycle Architecture & Automated 9:00 PM Boundary
+
+### Upstream Exchange Settlement Windows
+* **NSE Equity Trading Close**: 15:30 IST. Closing Auction Session ends ~15:40 IST.
+* **NSE Official Bhavcopy (PR.zip)**: Published 16:15–16:45 IST.
+* **NSE Delivery (MTO file)**: Published 16:30–18:00 IST.
+* **Yahoo Finance Daily Candles**: Settled 17:00–18:30 IST.
+
+### 21:00 IST as the Sole Daily Cutoff
+To eliminate upstream timing races:
+* **LaunchAgent** (`~/Library/LaunchAgents/com.mycase.daily_sync.plist`): Schedule set to **21:00 IST** Monday–Friday.
+* **Market Date Resolution**:
+  $$\text{EffectiveEODDate}(t) = \begin{cases} t_{\text{date}} & \text{if } t.\text{Hour}() \ge 21 \\ t_{\text{date}} - 1\text{ day} & \text{if } t.\text{Hour}() < 21 \end{cases}$$
+* **Idempotent Skip Guard**: `HasRun` detection prevents redundant double-runs. Override with `--force` (`-f`).
+* **NSE Holiday Calendar**: Automatically verifies exchange calendar before initiating data pulls.
+
+### Settlement Cutoff Logic
+```go
+// Post-market / EOD settlement boundary (21:00 IST):
+if nowIST.Hour() >= 21 && modIST.Hour() < 21 {
+    return false // stale: refetch
+}
+```
+
+### Intraday Truncation
+`CleanIntradayNoiseAsOf(asOf time.Time)` enforces a strict **15:45 IST settlement buffer**. When running before 15:45 IST on trading day $T$, the in-progress partial bar is dropped, anchoring calculations to finalized $T_{-1}$ close.
+
+---
+
+## 14. Two-Book "Core & Satellite" Portfolio System
+
+### Architecture
+
+```text
+                               ┌────────────────────────────────────────────────────────┐
+                               │           NIFTY TOTAL MARKET (750 STOCKS)              │
+                               └──────────────────────────┬─────────────────────────────┘
+                                                          │
+                    ┌─────────────────────────────────────┴─────────────────────────────────────┐
+                    ▼                                                                           ▼
+      ┌───────────────────────────┐                                               ┌───────────────────────────┐
+      │   BOOK 1: CORE COMPOUNDER │                                               │ BOOK 2: KINETIC SATELLITE │
+      ├───────────────────────────┤                                               ├───────────────────────────┤
+      │ File: data/microsmall.csv │                                               │ File: earlymb_live.csv    │
+      │ Strategy: multibagger     │                                               │ Strategy: earlymb         │
+      │ Horizon: 6 to 18 months   │                                               │ Horizon: 2 to 8 weeks     │
+      │ Top N: 20 Holdings        │                                               │ Top N: 12 Holdings        │
+      │ Target: Cash Flow Quality │                                               │ Target: Pre-Breakout VCP  │
+      │         & ROCE Growth     │                                               │         & Delivery Delta  │
+      └─────────────┬─────────────┘                                               └─────────────┬─────────────┘
+                    │               ┌─────────────────────────────────────────┐                 │
+                    └──────────────►│ Air-Gapped Mutual Exclusion (--exclude) │◄────────────────┘
+                                    │ (Zero Stock Duplication Guaranteed)     │
+                                    └─────────────────────────────────────────┘
+```
+
+### Air-Gapped Mutual Exclusion Engine
+([`pkg/pithistory/staging.go`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/pithistory/staging.go)):
+```bash
+mycase pit stage --output data/earlymb_live.csv --exclude data/microsmall.csv --top 12
+```
+Any ticker with active weight $>0$ in `data/microsmall.csv` is automatically pruned from the satellite candidate pool before ranking.
+
+### Dedicated Pipeline Automation
+[`config/pipeline_earlymb.yaml`](file:///Users/raghavgarg/Projects/myGo/mycase/config/pipeline_earlymb.yaml):
+```yaml
+indices:
+  - niftytotalmarket
+golden_copy_path:
+  - data/earlymb_live.csv
+strategy: 
+  - earlymb
+top_n: 
+  - 12
+capital: 
+  - 100000
+sentry: true
+broker: zerodha
+```
+
+### Daily Operating Rhythm
+```bash
+# 1. Core Fundamental Book:
+mycase pipeline --config config/pipeline.yaml --strategy multibagger --golden data/microsmall.csv
+
+# 2. Kinetic Momentum Satellite Book:
+mycase pipeline --config config/pipeline_earlymb.yaml
+```
+
+---
+
+# Part IV: Master Reference & Lexicon
+
+## 15. Master Metric Lexicon
+
+```text
+       ┌───────────┐         ┌────────────────────────┐         ┌─────────────────────────┐
+       │ Raw Score │ ──────► │ Regime Multiplier (R)  │ ──────► │ Effective Score (Eff)   │
+       └───────────┘         └────────────────────────┘         └─────────────────────────┘
+             │                            │                                  │
+             │                            ▼                                  ▼
+             │               ┌────────────────────────┐         ┌─────────────────────────┐
+             └─────────────► │ Dynamic Hurdle (30/R)  │ ──────► │ Hurdle Gap (Hurdle - S) │
+                             └────────────────────────┘         └─────────────────────────┘
+```
+
+| Metric | Type | Formulation | Range | Interpretation |
+| :--- | :---: | :--- | :---: | :--- |
+| **Eff Score** | `float64` | $S_{\text{eff}} = S_{\text{raw}} \times R_{\text{regime}}$ | $[0, 100]$ | Macro-scaled score for basket entry. |
+| **Macro Regime ($R$)** | `float64` | $0.20 + 0.60 \times P_{\text{persist}} + 0.50 \times D_{\text{scaled}}$ | $[0.20, 1.00]$ | Continuous Nifty 50 50-DMA sentry. |
+| **Current Hurdle** | `float64` | $H = 30.0 / R_{\text{regime}}$ | $[30, 150]$ | Raw point hurdle. At $R=0.20$, Hurdle=150pt → 100% cash. |
+| **Hurdle Gap** | `float64` | $G_H = H - S_{\text{raw}}$ | $(-\infty, 150]$ | Remaining distance. Formatted `+XX.Xpt` or `QUALIFIED`. |
+| **VCP Ratio** | `float64` | $\text{ATR}_{5} / \text{ATR}_{20}$ | $[0.10, 3.0+]$ | $<1.0$ = compression; $\le 0.45$ = extreme coiling. |
+| **Deliv Delta** | `float64` | $\overline{\text{Deliv}}_{5\text{D}} - \overline{\text{Deliv}}_{20\text{D}}$ | $[-10\%, +15\%]$ | Disjoint institutional absorption. $\ge +6\%$ confirms accumulation. |
+| **Comp RS** | `float64` | $0.60 \times \text{RS}_{3\text{M}} + 0.40 \times \text{RS}_{1\text{M}}$ | $(-\infty, +\infty)$ | Outperformance vs index. $>+30\%$ = institutional leader. |
+| **Score CV** | `float64` | $\sigma / \mu$ across last 5 runs | $[0, 1+]$ | $\le 0.05$ = high conviction; $> 0.08$ = erratic. |
+| **1D Δ** | `float64` | $S(T_0) - S(T_1)$ | $(-\infty, +\infty)$ | Single-day score shift. NULL if no prior run. |
+| **3D Δ** | `float64` | $S(T_0) - S(T_2)$ | $(-\infty, +\infty)$ | 3-session trajectory shift. |
+| **Launchpad State** | `string` | Priority-tiered spatial classification | 6 Tiers | `LAUNCHPAD-ARMED` through `VELOCITY-POP`. |
+| **Velocity Pattern** | `string` | Directional kinetic trajectory | 8 Patterns | `FADE-SHARP` through `COILING`. |
+| **Diagnostic Footprint** | `string` | Deterministic tactical assessment | Contextual | E.g. `Tight coil + heavy inflows`. |
+| **⚠ Flag** | `symbol` | Section 5 decliner cross-link | Binary | Score collapse $\ge 4.0\text{ pt}$. |
+| **Incub (Hits)** | `string` | $\text{Days} (\text{Run Count})$ | Contextual | E.g. `7d (2x)`. |
+| **Radar Alpha** | `float64` | $(P_{\text{clear}} - P_{\text{entry}}) / P_{\text{entry}}$ | $(-\infty, +\infty)$ | Opportunity cost of waiting for Stage-1 clearance. |
+| **Acc** | `string` | $\Delta\text{Deliv} \ge +6\% \to$ YES | YES / NO | Volume confirmation on daily gainers. |
+
+---
+
+## 16. Configuration Specification (`config/mfs.json`)
 
 ```json
 "early_multibagger": {
@@ -295,1479 +1004,214 @@ To guarantee that empirical reference bounds and weights are never overfitted in
 }
 ```
 
-### Stage-1 Hard Gates & Fallback Architecture
-
-Before candidates reach the scoring engine, binary Stage-1 filters eliminate ~85–88% of constituents in [`pkg/stockpicker/filters.go:450-653`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/stockpicker/filters.go#L450-L653):
-
-1. **Cash Flow Quality Gate (`min_cfo_pat: 0.25`)**:
-   - Requires $\text{OperatingCashflow} > 0$ and $\frac{\text{OperatingCashflow}}{\text{NetIncome}} \ge 0.25$ (with $\text{FreeCashflow} > 0$ check when configured).
-   - Existing holdings enjoy a $20\%$ relaxation buffer ($\text{CFO} / \text{PAT} \ge 0.20$).
-   - **Empirical Dominance**: Accounts for **23%–25%+ of all eliminations** ("Weak Cash Conversion (CFO < PAT)"), serving as the single largest safety filter in the entire pipeline.
-
-2. **Capital Efficiency (ROCE) Hard Gate with 3-Year Fallback (`min_roce: 0.12`)**:
-   - Requires latest $\text{ROCE} \ge 12.0\%$ (or $7.0\%$ floor for cyclicals, capital goods, and recent listings).
-   - **3-Year Fallback (`Get3YearAvgROCE`)**: If latest single-year ROCE is depressed due to cyclicality or capex expansion, the engine evaluates average ROCE across the last 3 visible fiscal years (accounting for 45-day filing lag). If 3-year average $\ge 12.0\%$, candidate passes.
-   - Existing holdings buffer: $10.2\%$ ($15\%$ relaxation).
-
-3. **Financial Services (BFSI) Sector-Specific Substitution**:
-   - Standard ROCE is structurally distorted by bank/NBFC deposit liabilities. ROCE is dropped entirely and replaced with an **ROE Gate**: $\text{ROE} \ge 12.0\%$.
-
-4. **Cash Return on Invested Capital (CROIC) Gate with 3-Year Fallback (`min_croic: 0.06`)**:
-   - Evaluates $\text{CROIC} = \frac{\text{FCF}}{\text{Invested Capital}} \ge 6.0\%$, with 3-year average fallback via `Get3YearAvgCROIC` and a $4.8\%$ buffer for existing holdings.
-
 ---
 
-## 8. Point-in-Time Research Database (Unified `data/mycase.db`)
+## 17. Quantitative Operational Runbook
 
-To ensure institutional reproducibility, eliminate lookahead bias, and enable instant empirical recalibration, the quantitative architecture maintains a unified, embedded **DuckDB OLAP Database** (`data/mycase.db`).
-
-### Consolidated Architecture & Elimination of Redundant DBs
-Previously, the system maintained two separate DuckDB files:
-- `data/cache.db`: Ephemeral price/fundamental market data and pipeline runs.
-- `data/pit_history.db`: Historical point-in-time candidate scores and runs.
-
-On **September 11, 2026**, both databases were merged into a single ACID-compliant master analytical store: **`data/mycase.db`**. All legacy database files were purged.
-
-### Table Schemas in `data/mycase.db`:
-```sql
--- 1. Run Metadata & Funnel Accounting
-CREATE TABLE IF NOT EXISTS pit_runs (
-    as_of_date         DATE,
-    index_name         VARCHAR,
-    method             VARCHAR,
-    regime_multiplier  DOUBLE,
-    total_constituents INTEGER,
-    stage1_survivors   INTEGER,
-    selected_count     INTEGER,
-    created_at         TIMESTAMP,
-    pillar4_uncalibrated BOOLEAN DEFAULT false,
-    pillar4_insufficient_history BOOLEAN DEFAULT false,
-    PRIMARY KEY (as_of_date, index_name, method)
-);
-
--- 2. Granular Candidate Metrics (Master Table: niftytotalmarket)
-CREATE TABLE IF NOT EXISTS pit_candidate_scores (
-    as_of_date         DATE,
-    index_name         VARCHAR,
-    method             VARCHAR,
-    ticker             VARCHAR,
-    sector             VARCHAR,
-    passed_stage1      BOOLEAN,
-    rejection_reason   VARCHAR,
-    raw_score          DOUBLE,
-    effective_score    DOUBLE,
-    composite_rs       DOUBLE,
-    vcp_ratio          DOUBLE,
-    rvol_z_score       DOUBLE,
-    decayed_pp         DOUBLE,
-    delivery_delta     DOUBLE,
-    selected           BOOLEAN,
-    final_weight       DOUBLE,
-    forward_return_21d DOUBLE,
-    data_fetch_failed  BOOLEAN DEFAULT false,
-    pillar4_uncalibrated BOOLEAN DEFAULT false,
-    pillar4_insufficient_history BOOLEAN DEFAULT false,
-    PRIMARY KEY (as_of_date, index_name, method, ticker)
-);
-
--- 3. Canonical Index Constituent Roster Table
-CREATE TABLE IF NOT EXISTS index_constituents (
-    index_name VARCHAR,
-    ticker     VARCHAR,
-    PRIMARY KEY (index_name, ticker)
-);
-```
-
-### Dynamic Sub-Index Relational Views (`v_pit_candidate_scores` & `v_pit_runs`)
-**The Redundancy Problem:**
-Historically, daily screening was independently executed across multiple sub-indices (`NIFTY50`, `microcap250`, `smallcap250`, `small250`, `microcap250_smallcap250`). Because the **Nifty Total Market (750 stocks)** is the mathematical superset of all these sub-indices, physically scoring each sub-index caused 1,592 redundant duplicate rows in `pit_candidate_scores` and repeated heavy API evaluations.
-
-**The Solution: Relational Slicing via Dynamic Views:**
-Sub-index physical rows were purged from `pit_candidate_scores`. Instead, the system evaluates and persists scores **strictly once** for `niftytotalmarket`, and creates dynamic SQL views backed by `index_constituents`:
-
-```sql
-CREATE VIEW IF NOT EXISTS v_pit_candidate_scores AS
-SELECT 
-    s.as_of_date,
-    c.index_name,
-    s.method,
-    s.ticker,
-    s.sector,
-    s.passed_stage1,
-    s.rejection_reason,
-    s.raw_score,
-    s.effective_score,
-    s.composite_rs,
-    s.vcp_ratio,
-    s.rvol_z_score,
-    s.decayed_pp,
-    s.delivery_delta,
-    s.selected,
-    s.final_weight,
-    s.forward_return_21d,
-    s.data_fetch_failed,
-    s.pillar4_uncalibrated,
-    s.pillar4_insufficient_history
-FROM pit_candidate_scores s
-JOIN index_constituents c ON s.ticker = c.ticker
-WHERE s.index_name = 'niftytotalmarket';
-
-CREATE VIEW IF NOT EXISTS v_pit_runs AS
-SELECT 
-    s.as_of_date,
-    c.index_name,
-    s.method,
-    MAX(r.regime_multiplier) AS regime_multiplier,
-    COUNT(c.ticker) AS total_constituents,
-    COUNT(CASE WHEN s.passed_stage1 THEN 1 END) AS stage1_survivors,
-    COUNT(CASE WHEN s.selected THEN 1 END) AS selected_count,
-    MAX(r.created_at) AS created_at,
-    BOOL_OR(s.pillar4_uncalibrated) AS pillar4_uncalibrated,
-    BOOL_OR(s.pillar4_insufficient_history) AS pillar4_insufficient_history
-FROM pit_candidate_scores s
-JOIN index_constituents c ON s.ticker = c.ticker
-LEFT JOIN pit_runs r ON s.as_of_date = r.as_of_date 
-                    AND r.index_name = 'niftytotalmarket' 
-                    AND s.method = r.method
-WHERE s.index_name = 'niftytotalmarket'
-GROUP BY s.as_of_date, c.index_name, s.method;
-```
-
-**Benefits:**
-1. **Zero Data Duplication**: Scores exist in a single physical row under `niftytotalmarket`.
-2. **100% Backward Compatibility**: Queries like `mycase pit stats --index microcap250` or `--index NIFTY50` query `v_pit_candidate_scores` seamlessly and return identical sub-index statistics.
-3. **Canonicalization**: `NormalizeIndexName` canonicalizes aliases (`small250` → `smallcap250`) transparently.
-
-### Real-Time SQL Analytical Queries:
-DuckDB calculates rolling empirical quantiles across Stage-1 survivors in sub-milliseconds:
-```sql
-SELECT 
-    quantile_cont(raw_score, 0.90) AS p90_top_decile,
-    quantile_cont(raw_score, 0.75) AS p75_top_quartile,
-    quantile_cont(raw_score, 0.50) AS p50_median,
-    quantile_cont(raw_score, 0.40) AS p40_empirical_cutoff,
-    quantile_cont(raw_score, 0.25) AS p25_lower_quartile
-FROM v_pit_candidate_scores
-WHERE passed_stage1 = true 
-  AND index_name = 'microcap250'
-  AND (data_fetch_failed = false OR data_fetch_failed IS NULL)
-  AND as_of_date >= CURRENT_DATE - INTERVAL 60 DAY;
+```text
+    STEP 1: REGIME SENTRY CHECK (Section 6 & Header)
+    ├── R_regime < 0.60?  ──► ENFORCE CASH PRESERVATION (Hurdle = 150pt). No live entries.
+    └── R_regime >= 0.60? ──► NORMAL CAPITAL DEPLOYMENT (Hurdle = 30-50pt).
+                 │
+                 ▼
+    STEP 2: SECTION 5 DECLINER QUARANTINE
+    └── Check Section 5 Negative Decliners. Any stock shedding >= 4.0pt is tagged ⚠.
+        QUARANTINE from buy basket.
+                 │
+                 ▼
+    STEP 3: SECTION 7 LAUNCHPAD SCAN
+    ├── Rank #1 Priority: LAUNCHPAD-ARMED (VCP <= 0.70, Deliv >= +6%, CONSEC-SURGE).
+    ├── Rank #2 Priority: COIL-COMPRESS (VCP <= 0.45). Add to limit-order watch.
+    ├── Rank #3 Priority: STEALTH-HIGH (Score CV <= 0.08, Deliv >= +8%).
+    └── Disqualify: FADE-SHARP or ⚠ tagged stocks.
+                 │
+                 ▼
+    STEP 4: SECTION 8 & 9 TACTICAL CROSS-CHECK
+    ├── Section 8: Monitor 52W-NEAR candidates for imminent clearance.
+    └── Section 9: Validate gainers via Acc flag. Only buy with Acc = YES.
 ```
 
 ---
 
-## 9. Quantitative Engineering Hardening & Verification
-
-All core mathematical components, boundary conditions, and funnel flows are protected by unit regression suites:
-
-### 1. Data Anchoring Boundary (Priority 1)
-* **Settlement Cutoff**: `CleanIntradayNoiseAsOf(asOf time.Time)` enforces a strict **15:45 IST settlement buffer** (15:30 close + 15m settlement auction).
-* **Intraday Truncation**: When running before 15:45 IST on trading day $T$, the in-progress partial bar is dropped, anchoring calculations strictly to finalized $T_{-1}$ close.
-* **CI Idempotency Test (`TestPickDeterminism`)**: Simulates 10:00 AM vs 14:30 PM queries on day $T$, proving **byte-identical raw scores, effective scores, ranks, and weights**.
-
-### 2. Point-in-Time Filing Lag Enforcement (Priority 3)
-* `filterMetricsBeforeDate` excludes financial statements reported after `AsOfDate - fundamentals_lag_days` (45 days), preventing lookahead bias in ROCE and margin calculations.
-
-### 3. Structural Funnel Accounting & Count Conservation (Priority 6)
-* `SelectionFunnel.Validate()` enforces the exact conservation identity:
-  $$\text{Stage-1 Survivors} \equiv \text{RegimeRejected} + \text{SectorCapped} + \text{RankLimited} + \text{FinalSelected}$$
-* Verified in `TestSelectionFunnel_NonZeroStagesValidation` with active eliminations across all stages.
-
-### 4. Metric-by-Metric Closed-Form Correctness
-Verified in `pkg/yfinance/metrics_earlymb_test.go` and `pkg/stockpicker/bounds_test.go`:
-* **Market Regime Formula**: Exact matches on Strong Bull ($R = 1.00$), Mild Correction ($R = 0.23$), and Severe Downtrend ($R = 0.20$).
-* **Composite RS**: Exact 40/30/30 multi-horizon weighting.
-* **Pure VCP Tightness**: Exact $\text{ATR}_{10} / \text{ATR}_{60}$ ratio computation ($0.3925$).
-* **Decayed Pocket Pivot**: Exact exponential decay $w_d = e^{-0.25 \times d}$ and intensity ceiling.
-* **Delivery Delta**: Accurate linear normalization across $[-10\%, +30\%]$.
-
----
-
-## 10. CLI Command & Daily Operations Cheat Sheet
-
-| Action | Command | Purpose |
-| :--- | :--- | :--- |
-| **Unified EOD Database Update** | `mycase --database --update` *(or `mycase -db -u`)* | **Single post-market run (4:00 PM IST)**: Warms market cache, executes daily PIT screening on `niftytotalmarket`, and syncs theme rebalances into `data/mycase.db`. |
-| **Consolidated DB Table Status** | `mycase db stats` | Displays row counts, online status, and domain breakdown across all 14 tables/views in `data/mycase.db`. |
-| **Daily PIT Update & DB Persistence** | `mycase pit update --index niftytotalmarket --method earlymb --top 10` | Runs the full daily screening pipeline and persists candidate scores directly into `data/mycase.db`. |
-| **Deep Quantitative Deduction Analysis (DuckDB)** | `mycase --index niftytotalmarket --method earlymb --analysis` | Executes comprehensive 8-section DuckDB analytical deductions (funnel breakdown, regime sentry, rolling quantiles, sector defense, score shifts, silent drops, pre-breakout runway incubator, and multi-run velocity). |
-| **Point-in-Time Failed Ticker Recovery** | `mycase pit retry --index niftytotalmarket --method earlymb --date YYYY-MM-DD` | Re-runs historical prices and fundamentals specifically for failed candidates, healing snapshots without re-evaluating the full 750-stock universe. |
-| **View DuckDB Empirical Quantiles** | `mycase pit stats --index microcap250 --method earlymb` | Queries `v_pit_candidate_scores` in `data/mycase.db` for rolling empirical score distributions ($P_{40}, P_{50}, P_{75}, P_{90}$). |
-| **Track Candidate Score History** | `mycase pit stats --ticker INOXINDIA` | Displays chronological score, VCP ATR, RVOL, and selection trajectory for a specific stock in `data/mycase.db`. |
-| **Combined MicroCap + SmallCap Picker** | `mycase pick --index microcap250_smallcap250 --method earlymb --top 10` | Executes live 2-stage gating and invariant 4-pillar selection across combined 500-stock universe. |
-| **Run Rolling IC Calibration** | `mycase calibrate --index niftytotalmarket --method earlymb --step 21 --forward 21` | Evaluates multi-period Spearman Rank IC, IR, and empirical bounds on a 70/30 train/test split. |
-| **Save Constituent Snapshot** | `mycase calibrate --index niftytotalmarket --save-snapshot` | Saves immutable constituent roster to `data/universe_snapshots/` to eliminate survivorship bias. |
-| **Generate Execution Basket** | `mycase basket --file data/candidates/index_picks/niftytotalmarket_earlymb.csv --capital 100000` | Calculates exact integer share quantities for broker execution. |
-| **Run Sentry Monitoring** | `mycase monitor --file data/microsmall.csv --strategy earlymb` | Monitors trailing stop-loss, EMA breakdown, and quarterly filing health for active portfolio holdings. |
-| **Run Full Pipeline** | `mycase pipeline --index niftytotalmarket --strategy earlymb` | Executes screening, optimization, basket generation, and reporting in a single command. *(Note: If `--index` is omitted, defaults to indices in `config/pipeline.yaml`)* |
-| **Pre-Breakout Incubator Watchlist** | Auto-generated: `data/candidates/index_picks/<index>_earlymb_incubator.csv` | Automatically generated on every run, listing top runway setups ranked by Hurdle Gap and VCP tightness with breakout pivot triggers (`52W High * 0.98`). |
-
----
-
-## 11. Live Production Learnings & Empirical Validation (Aug 2026)
-
-Two consecutive live Point-in-Time screening runs (2026-08-26 and 2026-08-27) across 502 unique index constituents validated the quantitative engine's behavior under real market conditions:
-
-### 1. Market Regime Sentry Capital Defense
-* **2026-08-26 ($R_{\text{regime}} = 0.767$)**: Healthy market momentum allowed 7 stocks to pass the effective score cutoff ($\ge 30.0$) with normalized weights.
-* **2026-08-27 ($R_{\text{regime}} = 0.6558$)**: Market momentum weakened, dynamically elevating the raw score hurdle to $30.0 / 0.6558 = 45.74$.
-* **Empirical Outcome**: Out of 52 Stage-1 survivors, **51 candidates were rejected by the regime sentry**, leaving only 1 stock (`NSE:TIPSMUSIC` at Raw: 49.2, Eff: 32.3) qualified. The sentry automatically slammed the brakes, preventing false breakouts during macro weakness.
-
-### 2. Live Pillar Sensitivity & Case Studies
-* **Case Study 1: `NSE:INOXINDIA` (Successful Pre-Breakout Capture & Lifecycle Handoff)**
-  * **08-26 (Pre-Breakout Snapshot)**: Selected at **13.8% portfolio weight** with Raw Score `37.2` (VCP Ratio: `0.354` tight coil, RVOL Z: `-0.98` dry volume, Delivery Delta: `+13.7%` stealth accumulation).
-  * **08-27 (Breakout Realization)**: Surged **+12% in a single day**, capturing the complete stage-2 breakout move.
-  * **Post-Breakout Lifecycle Handoff**: Following the +12% expansion, volatility expanded (`VCP Ratio: 0.682`) and heavy intraday volume diluted delivery %, correctly transitioning the stock out of the "pre-breakout coil" state and into the active momentum (`multibagger`) domain.
-* **Case Study 2: `NSE:PARKHOSPS` (Macro Regime Dominance)**
-  * **08-26 Snapshot**: Selected with Raw Score `36.2`, Eff Score `27.8` ($13.5\%$ weight).
-  * **08-27 Snapshot**: Raw score strengthened to `45.6`, but effective score reached `29.9` ($45.6 \times 0.6558$), missing the $30.0$ threshold by $0.1\text{ pt}$.
-  * **Pillar Driver**: Demonstrates macro regime dominance—even an individually improving setup is sidelined when macro tailwinds are absent.
-
-### 3. Explicit Cash Allocation (`allow_cash_on_sector_cap_exhaustion`)
-* **Sector Cap vs Cash Preservation**: With only 1 qualifying winner (`TIPSMUSIC`) in a single sector (`Communication Services`), the $25\%$ sector cap bound allocation to $25.00\%$.
-* **Transparent Output**: Rather than silently losing the remaining $75\%$, the engine explicitly allocates `CASH_RESERVE | 0.7500`, ensuring the portfolio reconciles to $1.0000$ with transparent capital preservation.
-
-### 4. Closed-Loop Dual Invariant Test Architecture
-To prevent divergence across in-memory tracking, CLI reporting, and OLAP storage:
-* **Memory Invariant** (`TestTracker_RawAndEffectiveScoreConsistency`): Asserts that raw and effective scores remain strictly partitioned in `selectiontracker.Tracker`.
-* **Storage Invariant** (`TestDuckDB_RegimeMultiplierConsistency`): Asserts that $100\%$ of candidate rows in `data/mycase.db` satisfy $\text{EffectiveScore} \equiv \text{RawScore} \times R_{\text{regime}}$ across both winner and rejection paths.
-* **Unified Reporting Schema**: CLI tables and text reports explicitly display `Raw Score` and `Eff Score` columns side-by-side.
-
----
-
-## 12. Nifty Total Market Scale, Quantitative Hardening & Data Reliability (Sep 2026)
-
-Expanding the Point-in-Time screening universe from 500 stocks (MicroCap + SmallCap 250) to the **Nifty Total Market (750 Constituents)** surfaced critical operational insights, leading to the quantitative hardening of the data ingestion and calibration layers:
-
-### 1. Hard Gate Attrition Dynamics across Total Market (750 Stocks)
-Across the full 750-constituent universe, Stage-1 binary filters enforce strict quality control, yielding a consistent **~12.9% pass rate (97 survivors)**:
-* **Downtrend (< 200-Day SMA)**: **39.5% of eliminations (258 stocks)** — single largest filter bottleneck, eliminating secular laggards.
-* **Low ROCE (< 12%)**: **22.5% of eliminations (147 stocks)** — second largest bottleneck, eliminating structurally inefficient business models.
-* **Proximity to 52W High (< 85%)**: **10.1% of eliminations (66 stocks)** — ensures stocks have established relative market sponsorship.
-* **Base Duration Floor (< 4 Weeks)**: **9.3% of eliminations (61 stocks)** — filters fleeting technical noise.
-* **Low Promoter Stake (< 25%)**: **8.3% of eliminations (54 stocks)** — filters governance / agency risks.
-* **Working Capital Deterioration (DSO)**: **5.1% of eliminations (33 stocks)** — catches early balance sheet stress.
-
-### 2. Separation of Upstream Data Fetch Failures from Stage-1 Rejections (P0-1)
-* **Problem**: Previously, constituents failing historical bar fetch (e.g. rate limits or provider connection drops) defaulted to `passed_stage1 = false` with empty rejection reasons, contaminating Stage-1 survivor percentile calculations ($P_{90}/P_{75}/P_{50}/P_{40}/P_{25}$) and threshold calibrations.
-* **Solution**:
-  1. **Retry Engine with Backoff**: `FetchHistoricalPrices` runs initial concurrent batches (15 workers), followed by up to 2 retry passes with exponential backoff (`1.5s`, `3.0s`) at reduced concurrency (5 workers).
-  2. **First-Class Status**: Added `DataFetchFailed` to `selectiontracker.Tracker`, `CandidateScoreDetail`, and DuckDB (`pit_candidate_scores.data_fetch_failed`).
-  3. **Strict Quantile Cleanliness**: `GetEmpiricalQuantiles` enforces `WHERE passed_stage1 = true AND (data_fetch_failed = false OR data_fetch_failed IS NULL)`, eliminating distribution contamination.
-  4. **Hard Warning Sentry**: Raises a prominent terminal warning block if data fetch failures exceed **5.0%** of the pool.
-  5. **Two-Tier Conservation Invariant**:
-     $$\text{Initial Pool} \equiv \text{DataFetchFailed} + \text{Stage1Eliminated} + \text{Stage1Survivors}$$
-     $$\text{Stage-1 Survivors} \equiv \text{RegimeRejected} + \text{SectorCapped} + \text{RankLimited} + \text{FinalSelected}$$
-
-### 3. Outlier Sanity Guardrails & Investigation (CUPID +249.2% Composite RS) (P0-2)
-* **Forensic Investigation**: Raw analysis surfaced `NSE:CUPID` with an extreme Composite RS of `+249.2%`. A forensic audit of raw OHLCV bars and corporate action logs from Yahoo Finance confirmed:
-  - **Stock Splits**: 5:1 stock split on March 9, 2026 (`Ratio: 5:1`), preceded by a 10:1 split + 1:1 bonus in April 2024.
-  - **Price Series Integrity**: Yahoo Finance's historical series is cleanly split-adjusted across the March 9, 2026 event (`[2026-03-06] Close: ₹80.44` vs `[2026-03-09] Close: ₹91.60`). There is **zero unadjusted price jump**.
-  - **Closed-Form Arithmetic Verification**: The +249.2% reading reproduces exactly from an authentic 8.1x rally from **₹34.52 (2025-09-01) to ₹280.46 (2026-08-31)**:
-    - 12-Month Gain: $\frac{280.46 - 34.52}{34.52} = \mathbf{+712.45\%}$
-    - 3-Month Gain: $\frac{280.46 - 129.80}{129.80} = \mathbf{+116.07\%}$
-    - 1-Month Gain: $\frac{280.46 - 230.60}{230.60} = \mathbf{+21.61\%}$
-    $$\text{Composite RS} = 0.40(21.61\%) + 0.30(116.07\%) + 0.30(712.45\%) - 8.00\% = \mathbf{+249.2\%}$$
-* **Scoring & Clamp Behavior**: Pillar 1's invariant reference bounds $[-30\%, +70\%]$ properly clamped score contribution to 25.0/25.0 pts, preventing score distortion.
-* **Metric Sanity Sentry**: A warning sentry in `CalculateCompositeRS` flags $|\text{CompositeRS}| > 100\%$ with `⚠️ [METRIC SANITY NOTICE [TICKER]]` (deduplicated per process) for transparent human inspection.
-
-### 4. Structural Diff Distinction for "Silent Drops" (P0-3)
-* **Problem**: When an active portfolio holding dropped out due to upstream API unavailability (e.g. `NSE:LAURUSLABS`), diff reports marked it as a normal exit (`RemovedSelections`), masking the failure as a fundamental breakdown.
-* **Solution**: `DiffSnapshots` now checks `curr.Candidates[t].DataFetchFailed`. Holdings dropped due to data unavailability are routed to `DataDroppedSelections`:
-  ```text
-  🚨 [ACTION REQUIRED: DATA FETCH FAILURE ON ACTIVE HOLDINGS] (1): NSE:LAURUSLABS
-      ⚠️  These active holdings were NOT dropped by technical or fundamental gates; upstream data fetch failed!
-  ```
-
-### 5. Targeted PIT Retry & Self-Healing Architecture
-* **Targeted Recovery Engine (`mycase pit retry`)**: Re-evaluates only failed candidates (`data_fetch_failed = true` or empty rejection reasons) without re-running the entire 750-stock universe.
-* **2026-09-01 Run Healing Results**:
-  - Retried 74 constituents; **successfully recovered 72 (97.3% recovery rate)**.
-  - 12 candidates passed Stage 1; 60 were properly categorized by genuine fundamental criteria (25 Downtrend, 17 Low ROCE, 8 Base Duration, 4 Low Promoter, 4 52W High, 1 DSO, 1 Market Cap).
-  - **Restored `NSE:LAURUSLABS`**: Raw Score **47.3 pts**, Effective Score **26.4 pts**, Composite RS **+50.3%**, sits at **#2 in the Runway Incubator**.
-* **Two-Layer Daily Automation (`scripts/run_pit_daily.sh`)**:
-  - **Layer 1 (In-Process)**: `FetchHistoricalPrices` performs concurrent retries with exponential backoff (`1.5s`, `3.0s`, 5 workers).
-  - **Layer 2 (Post-Run Self-Healing)**: Daily shell runner automatically executes `mycase pit retry ... || true` as a secondary defense-in-depth safety net.
-
-### 6. Artificial Index Placeholder Filtration
-* **Exchange Demerger Placeholders**: NSE constituent files periodically include synthetic placeholders (e.g., `DUMMYINXGN`, `DUMMYTRVN`) representing pending spin-offs or demerger entitlements.
-* **Automated Ingestion Rejection**: `IsDummyTicker` automatically skips any symbol containing `"DUMMY"` during CSV parsing and web downloads in `loader.go`.
-* **Zero Drop Invariant**: Normalizes the Nifty Total Market universe to exactly **750 genuine operating companies** with **0.0% data drop rates** ($97 \text{ Survivors} + 653 \text{ Eliminated} = 750$).
-
-### 7. Uniform Authoritative Delta Continuity Guards
-* **Downstream Bug Discovery**: Investigating CUPID's presence in Section 8 revealed that transitioning from a failed fetch placeholder (`raw_score = 0.0` on $T_{-1}$) to an active evaluation (`raw_score = 38.0` on $T$) generated an artificial $+38\text{ pt}$ delta, falsely misclassified as a "Velocity Breakout (+5pt Δ)".
-* **Authoritative Invariant**: To guarantee that zero-score placeholders never contaminate derived metrics, a uniform continuity guard was established using `RawScore > 0` as the authoritative ground truth:
-  $$\text{PassedStage1}_T \land \text{PassedStage1}_{T-1} \land \neg\text{DataFetchFailed}_T \land \neg\text{DataFetchFailed}_{T-1} \land \text{RawScore}_T > 0 \land \text{RawScore}_{T-1} > 0$$
-* **Uniform Implementation across Surfaces**:
-  1. `DiffSnapshots` (`pkg/stockpicker/diff.go`): Enforces `pDet.RawScore > 0 && cDet.RawScore > 0 && !pDet.DataFetchFailed && !cDet.DataFetchFailed`.
-  2. **Section 5 (Significant Score Shifts)** (`pkg/pithistory/analytics.go`): Enforces `curr.raw_score > 0.0 AND prev.raw_score > 0.0 AND data_fetch_failed = false`.
-  3. **Section 8 (Accumulation Velocity)** (`pkg/pithistory/analytics.go`): Enforces `curr.raw_score > 0.0 AND prev.raw_score > 0.0 AND data_fetch_failed = false`.
-* **Result**: Complete elimination of phantom score shifts and velocity artifacts.
-
-### 8. Dynamic Sector Concentration & Sentry Transparency (Section 4)
-* **Dynamic Anchoring**: Section 4 anchors directly to `latestRun.AsOfDate`, eliminating confusing fallback dates.
-* **Transparent Allocation State**: Explicitly displays macro regime defense:
-  ```text
-  --- 4. SECTOR CONCENTRATION & SECTOR CAP DEFENSE (2026-09-01) ---
-    * Portfolio Allocation State: 100% Cash Preservation (0 stocks selected under Regime R=0.5584, Hurdle=53.7 pt)
-    * Sector Distribution of Qualified Stage-1 Survivors (97 stocks):
-  ```
-
-### 9. Pre-Breakout Incubator (The Runway Watchlist) & Multi-Run Velocity
-* **The Runway Incubator (Section 7)**: Solves the "0 selected during market pullbacks" operational dilemma. While the Market Regime Sentry elevates the hurdle during corrective regimes ($R_{\text{regime}} = 0.5584 \implies \text{Hurdle} = 53.7\text{ pt}$), high-quality Stage-1 survivors are ranked by **Hurdle Gap** ($\frac{30.0}{R_{\text{regime}}} - \text{RawScore}$), VCP ATR tightness ($< 0.65$), and Delivery Delta ($> +20\%$).
-  * *Top Runway Setups*: `NSE:NAVINFLUOR` (Raw: 48.6, Hurdle Gap: +5.1pt, VCP: 0.61, Deliv: +26.6%), `NSE:LAURUSLABS` (Raw: 47.3, Hurdle Gap: +6.4pt, Deliv: +17.5%), `NSE:PARKHOSPS` (Raw: 45.7, Hurdle Gap: +8.0pt, VCP: 0.64, Deliv: +40.3%).
-* **Multi-Run Accumulation Velocity (Section 8)**: Tracks day-over-day score compounding and delivery expansion across consecutive runs ($T_{-2} \to T_{-1} \to T$). Captures 3-session institutional accumulation surges (e.g. `PARKHOSPS` rising $26.1 \to 44.3 \to 45.7$, `SCHAEFFLER` rising $9.0 \to 27.9 \to 37.5$, `SKFINDUS` rising $12.7 \to 34.6 \to 38.6$) before stage-2 price breakouts occur.
-
-### 10. Operational Status: Shift to Empirical Observation Mode
-The quantitative engine and data pipeline are fully hardened. Active development shifts to automated data collection:
-1. Daily cron execution via `scripts/run_pit_daily.sh` accumulating 20–30 daily PIT snapshots.
-2. Tracking out-of-sample forward returns on top incubator compounders (`NAVINFLUOR`, `LAURUSLABS`, `PARKHOSPS`).
-3. Running out-of-sample Spearman Rank IC/IR calibration once 4–6 weeks of clean data accumulate.
-
-### 11. First-Class 100% Cash Defense Pipeline Support
-* **The Defensive Regime Edge Case**: Under restrictive market regimes (e.g. $R_{\text{regime}} = 0.5584 \implies \text{Hurdle} = 53.7\text{ pt}$), it is mathematically and strategically intended that **0 stocks qualify** for portfolio execution. In prior versions, updating the golden copy CSV with 0 active selections left the file with zero data rows, causing Step 3 (`report`) to crash with `CSV file contains no data rows`.
-* **First-Class Cash Defense Architecture**:
-  1. **Dedicated Cash Defense Report (`cmd/report.go`)**: When a portfolio has 0 active equities, the reporting engine generates an authoritative `03_portfolio_report.txt` stating `100% CASH DEFENSE (0 Equities Selected)`, detailing the active regime sentry cutoff and 100.0% cash reserve allocation.
-  2. **Active Holdings Detection (`pkg/csvloader/pipeline_csv.go`)**: `CountActiveHoldings` checks whether the portfolio has active positions ($w > 0$).
-  3. **Graceful Pipeline Skipping (`cmd/pipeline.go`)**: When 0 equities are selected, the pipeline automatically skips downstream simulation steps (Performance simulation, Trailing stop monitoring simulator, Zerodha authentication, and Basket execution) that require open positions, concluding smoothly with complete summary artifacts.
-
-### 12. Architectural Invariant: Strict 4-Pillar Orthogonality & Research Layer Partitioning
-* **Orthogonality & Double-Counting Avoidance**: Multi-session score acceleration (the rate of change of score across daily PIT runs) is mathematically a derivative of expanding Composite RS and volume contraction. Directly adding temporal velocity heuristics as an additive boost to live raw scores would double-count momentum already captured in Pillar 1, violating the strict orthogonal pillar design.
-* **Empirical Quantile Calibration Integrity**: The Stage-1 survivor distribution ($P_{90}, P_{75}, P_{50}, P_{40}, P_{25}$) printed during live execution must describe the exact population evaluated against the regime cutoff. Any post-hoc score mutation introduces an ordering discrepancy that corrupts the empirical calibration reference needed for future $P_{40}$ threshold tuning.
-* **Strict Research Layer Partitioning**: The 100-point orthogonal matrix ($P_1 + P_2 + P_3 + P_4 = 100\text{ pts}$) remains pure and unadulterated. Multi-session velocity trajectories and survival persistence are strictly partitioned to:
-  1. **DuckDB Section 8 Analytics**: For multi-month empirical IC/IR tracking and research.
-  2. **The Pre-Breakout Incubator Watchlist (`data/candidates/index_picks/<index>_earlymb_incubator.csv`)**: Generated automatically on every run to supply pre-calculated breakout pivots (`52W High * 0.98`) for top coiling setups.
-
-### 13. Transparent Ticker Identification in Metric Sanity Sentries
-* **Candidate Attribution**: The outlier sentry in `CalculateCompositeRS` (`math.Abs(compositeRS) > 1.0`) now accepts the candidate ticker symbol as an argument and outputs:
-  ```text
-  ⚠️  [METRIC SANITY NOTICE [NSE:CUPID]] Extreme Composite RS detected: +238.5% (1M: +22.0%, 3M: +103.9%, 12M: +661.9%). Verify for unadjusted corporate actions / splits.
-  ```
-* **Thread-Safe Process Deduplication**: Uses an in-memory thread-safe cache (`sanityNoticeSet`) to ensure each extreme outlier is announced **exactly once per execution**, eliminating repetitive console spam across scoring, snapshotting, and incubator passes.
-
-### 14. Pillar 4 Structural Delivery Delta Refactor: Disjoint Windowing & Fetch-Failure Defense (Sep 10, 2026)
-
-Investigation into why `NSE:DATAPATTNS` was selected by the `multibagger` strategy but missed by `earlymb` despite a 6.5% gain in 5 days surfaced a structural implementation divergence in Pillar 4 (Institutional Accumulation Delta) that affected all scoring paths.
-
-#### Root Cause: Three Compounding Bugs in the Original Pillar 4 Implementation
-
-**Bug 1 — Flat constant baseline instead of per-stock rolling baseline:**
-The codebase was computing `(f.DeliveryPct / 100.0) - 0.35`, subtracting a hardcoded flat 35% constant instead of the spec's per-stock 20-day rolling baseline ($\overline{\text{Delivery}}_{20\text{D Baseline}}$). This erased the cross-sectional normalization the spec was designed to provide — a low-float stock that normally runs 15% delivery and a high-float stock that normally runs 55% delivery were judged against the identical yardstick, which the spec's own design history explicitly rejected.
-
-**Bug 2 — Single-day snapshot instead of 5-day rolling average:**
-The "5D" component was actually a single day's delivery percentage (`Records[0]`), not a 5-day rolling average. This caused massive single-session noise: any block trade, retail churn day, or exchange settlement anomaly produced violent Pillar 4 swings of $\pm 19$ pts day-to-day (on a 25-point scale).
-
-**Bug 3 — Fetch failures silently became worst-case scores (the RUBICON pattern):**
-When the delivery fetch returned 0% (due to HTTP failure, NSE rate limiting, or empty response), the flat-constant formula produced $0.0 - 0.35 = -0.35$, the worst possible Pillar 4 input. This silently persisted for consecutive days — `NSE:RUBICON` showed `delivery_delta = -0.3500` for 5 consecutive days (Aug 27 through Sep 2), functionally identical to the "fetch failure silently counted as rejection" bug fixed earlier in Section 12.2.
-
-#### Severity Evidence from Historical DuckDB Data
-
-| Ticker | Date Range | Delivery Delta Swing | Pattern |
-|---|---|---|---|
-| **VMART** | 09-09 → 09-10 | `+0.3379 → -0.0050` | 34.3pp single-day flip |
-| **APARINDS** | 09-08 → 09-10 | `+0.1806 → +0.0146` | 16.6pp two-day drop |
-| **RUBICON** | 08-27 → 09-02 | `+0.1948 → -0.3500` (5 consecutive days) | Fetch failure → worst-case score |
-
-#### Fix: Disjoint Rolling Delivery Delta with Fetch-Failure Exclusion
-
-**Data Ingestion (`scripts/fetch_nse_data.py`, `pkg/yfinance/screener.go`, `pkg/yfinance/yfinance.go`):**
-- Python scraper fetches 3 months of delivery history from NSE with disk-backed JSON caching (`data/cache/delivery/{SYMBOL}.json`) and automatic merge/deduplication across runs.
-- `FetchNselibDeliveryDataSeries` returns the complete chronological `[]DeliveryRecord` series (not just `Records[0]`).
-- `fund.DeliveryHistory` populated for every NSE constituent during `FetchFundamentals`.
-
-**Canonical Metric Calculation (`pkg/yfinance/metrics_delivery.go`):**
-$$\Delta\text{Delivery} = \overline{\text{Delivery}}_{5\text{D}}\ (t-4 \dots t) - \overline{\text{Delivery}}_{20\text{D Baseline}}\ (t-24 \dots t-5)$$
-
-- **Disjoint Windowing**: Recent 5 settled sessions vs. previous 20 sessions. Zero self-contamination — an institutional buying burst in the last 5 days cannot artificially inflate the baseline.
-- **Strict PIT Lag**: Records beyond $\text{AsOfDate} - \text{lagDays}$ (T+1) are excluded before windowing.
-- **Fetch-Failure Exclusion**: `DeliveryPct <= 0` records are stripped before any averaging. This catches both JSON `null` → Go `float64` zero-value deserialization and genuine 0% fetch failures. Eliminates the RUBICON pattern entirely.
-- **Insufficient History**: Returns `ErrInsufficientDeliveryHistory` if $< 25$ valid sessions exist after stripping. `GetDeliveryDelta` falls back to neutral $\Delta = 0.0$ ($6.25$ pts on the $[-10\%, +30\%]$ scale).
+# Part V: Engineering History & Forensic Record
 
 > [!NOTE]
-> **Known accepted limitation**: The `<= 0` filter catches null/zero fetch failures but cannot detect a corrupt-but-plausible non-zero value (e.g., NSE returning 0.5% for a genuinely missing day). Under 5D averaging, the magnitude of such an error is small. Per-stock distributional anomaly detection would catch this but is disproportionate to the risk.
+> This appendix preserves the forensic investigations, bug discoveries, and production hardening events in condensed form. Each section includes the date, root cause, and resolution for traceability.
 
-**Refactored Call Sites (7 total):**
-All production paths that previously used `(f.DeliveryPct / 100.0) - 0.35` now call the canonical `yfinance.GetDeliveryDelta`:
-1. `ScoreEarlyMultibagger` (Pillar 4 scoring)
-2. `SelectTopNEarlyMultibagger` (driver explanation strings)
-3. PIT snapshot assembly (`run.go`)
-4. Incubator watchlist delta (`incubator.go`)
-5. Score velocity booster (`velocity.go`)
-6. Snapshot healer / retry engine (`retry.go`)
-7. Rolling IC/IR calibration engine (`calibrate.go`, anchored to historical `evalTS`)
+## A.1. Live Production Learnings (Aug–Sep 2026)
 
-**DuckDB Schema Migration & Historical Tagging:**
-- Added `pillar4_uncalibrated BOOLEAN DEFAULT false` and `pillar4_insufficient_history BOOLEAN DEFAULT false` columns to `pit_runs` and `pit_candidate_scores`.
-- All historical rows through 2026-09-10 automatically tagged `pillar4_uncalibrated = TRUE` on schema migration, ensuring future IC/IR calibration excludes pre-fix data.
-- Past PIT snapshots are **immutable** — they are event logs of what the engine actually evaluated on those dates, not retroactively rewritten.
+### Market Regime Case Studies (Aug 26–27, 2026)
+* **Aug 26 ($R = 0.767$)**: 7 stocks passed. `NSE:INOXINDIA` selected at 13.8% weight (VCP: 0.354, Deliv: +13.7%).
+* **Aug 27 ($R = 0.6558$)**: Only 1 stock (`NSE:TIPSMUSIC`, Raw: 49.2, Eff: 32.3) qualified. 51 of 52 survivors rejected by regime.
+* **`NSE:INOXINDIA` Lifecycle**: Selected Aug 26 → surged +12% Aug 27 → correctly transitioned out as VCP expanded.
+* **`NSE:PARKHOSPS` Regime Dominance**: Raw score improved to 45.6 on Aug 27 but missed $30.0$ threshold by $0.1\text{ pt}$ ($45.6 \times 0.6558 = 29.9$).
 
-**Insufficient History Transparency (`pkg/stockpicker/snapshot.go`):**
-- `CandidateScoreDetail` carries `Pillar4InsufficientHistory bool` through to DuckDB.
-- When flagged, PIT analysis surfaces the ticker with an explicit insufficient-history marker rather than silently blending a neutral score.
-
-#### Test Coverage
-
-| Test | What it Verifies |
-|---|---|
-| `TestCalculateDeliveryDelta_ExactWorkedExample` | $\overline{\text{Deliv}}_{5\text{D}} = 0.45$, $\overline{\text{Deliv}}_{20\text{D}} = 0.30$, $\Delta = +0.1500$ |
-| `TestCalculateDeliveryDelta_DisjointIsolation` | 80% spike in recent 5 days does not contaminate 25% baseline |
-| `TestCalculateDeliveryDelta_InsufficientHistory` | Error on $< 25$ days; neutral fallback $\Delta = 0.0$ |
-| `TestCalculateDeliveryDelta_PITLagEnforced` | Unsettled session at $T$ excluded when `lagDays=1` |
-| `TestDeliveryRecord_NullJSONUnmarshalsToZero` | Pins Go JSON `null` → `float64` 0.0 behavior the filter relies on |
-| `TestCalculateDeliveryDelta_ZeroDeliveryRecordsExcluded` | 5 fetch-failure days at 0% are stripped; window built from valid data only |
-| `TestDeliveryDelta_CrossCallSiteConsistency` | Identical inputs produce identical delta, score, and driver strings across all call sites |
-
----
-
-### 15. Live Verification Checklist & Production Results (Sep 11, 2026)
-
-The Pillar 4 disjoint delivery delta fix was deployed and validated in production on **September 11, 2026** against the full `niftytotalmarket` run. All validation criteria passed:
-
-#### Check 1: `pillar4_uncalibrated` flag correctness & Full Historical Backfill — [PASSED & COMPLETED]
-- Initial state on Sep 11:
-  - New rows (`2026-09-11`): `pillar4_uncalibrated = false`.
-  - Historical rows (Aug 26 through `2026-09-10`): tagged `pillar4_uncalibrated = true`.
-- **Subsequent Full Historical Backfill (Sep 14, 2026)**:
-  - Recalculated calibrated disjoint delivery deltas across all historical dates (`2026-08-26` through `2026-09-10`) with bounds `[-0.10, +0.15]`.
-  - **Current State**: `pillar4_uncalibrated = false` across **100% of all dates and candidate scores in `data/mycase.db`**. The entire database history is now fully calibrated without legacy subsidy artifacts (see Section 27).
-
-#### Check 2: Swing magnitude reduction on known-volatile tickers — [PASSED]
-- Day-to-day delivery swings on volatile tickers (`VMART`, `APARINDS`, `RUBICON`) dropped from wild single-day 30+ pp swings to smooth variations within expected bounds ($< 10$ pp).
-
-#### Check 3: RUBICON fetch-failure defense — [PASSED]
-- `RUBICON` evaluated cleanly against genuine historical delivery series; the legacy flat `-0.3500` artifact was completely eliminated.
-
-#### Check 4: `pillar4_insufficient_history` flag — [PASSED]
-- 0 out of 97 Stage-1 survivors triggered insufficient history fallbacks; all 97 had full 3-month settled series ($\ge 64$ sessions), with `pillar4_insufficient_history = false`.
-
-#### Check 5: Cross-sectional Avg DelivΔ stability in Section 3 quantiles — [PASSED & INVESTIGATED]
-- Reported `Avg DelivΔ = +0.2%` for Sep 11 (vs `+13.0%` on Sep 10). Deep-dive investigation confirmed that eliminating the legacy static 35% offset properly centered the self-relative market distribution at 0.0% (Mean: `+0.20%`, Median: `+0.00%`, 49 positive / 47 negative). See Section 19 for the complete empirical analysis.
-
----
-
-### 16. Database Consolidation, Sub-Index Deduplication & Single EOD Update (Sep 11, 2026)
-
-On September 11, 2026, the data storage, point-in-time architecture, and scheduled execution layers were overhauled to resolve file fragmentation, eliminate physical row duplication, and establish a single post-market EOD operational sequence.
-
-#### 1. Consolidation into Unified Master Analytical Database (`data/mycase.db`)
-* **Legacy State**: Market data cache (`data/cache.db`, ~49 MB) and research history (`data/pit_history.db`, ~4.4 MB) were maintained as separate DuckDB files. This required dual connection lifecycles, disparate transaction boundaries, and awkward cross-database joins.
-* **Master Consolidated Store**: Merged all 14 tables and views into **`data/mycase.db`**.
-  - Market data domain: `prices`, `fundamentals`, `cache_meta`
-  - Research & PIT domain: `pit_runs`, `pit_candidate_scores`, `index_constituents`, `v_pit_candidate_scores`, `v_pit_runs`
-  - Staging & proposals domain: `pipeline_runs`, `index_picks`, `proposals`, `selections`
-  - Theme lifecycle domain: `theme_rebalances`, `theme_history`
-* **Clean Purge**: Legacy database files `data/cache.db` and `data/pit_history.db` were safely backed up to `data/backups/archive_pre_cleanup_20260911.tar.gz` and permanently removed from disk, saving **~53.5 MB**.
-
-#### 2. Root Cause Analysis: Cross-Sub-Index Row Duplication in `pit_candidate_scores`
-* **The Problem**: Previously, daily screening was executed independently for individual sub-indices:
-  - `NIFTY50` (50 stocks)
-  - `microcap250` (250 stocks)
-  - `smallcap250` (250 stocks)
-  - `small250` (alias for smallcap250)
-  - `microcap250_smallcap250` (500 stocks)
-  - `niftytotalmarket` (750 stocks)
-* **The Mathematical Redundancy**: Because the **Nifty Total Market (750 constituents)** is the strict superset of all these sub-indices, scoring each sub-index individually physically inserted identical score rows ($1,592\text{ redundant rows}$ in `pit_candidate_scores` and $7\text{ duplicate runs}$ in `pit_runs`). It also triggered redundant HTTP calls and multiple executions of the heavy screening pipeline.
-
-#### 3. Relational Sub-Index Slicing via Dynamic Views (`v_pit_candidate_scores`)
-* **Purge of Physical Duplicates**: All redundant sub-index rows were deleted from `pit_candidate_scores`, leaving strictly canonical `niftytotalmarket` records.
-* **Canonical Roster Seeding**: Built the canonical `index_constituents` table in `mycase.db` seeded from `data/universe_snapshots/` (`NIFTY50.csv`, `microcap250.csv`, `smallcap250.csv`, `microcap250_smallcap250.csv`).
-* **Dynamic Views**:
-  - `v_pit_candidate_scores`: Joins `pit_candidate_scores` (filtered on `index_name = 'niftytotalmarket'`) against `index_constituents`.
-  - `v_pit_runs`: Reaggregates stage-1 survivors, selected counts, and regime multipliers by joining against `index_constituents` on the fly.
-* **Seamless Compatibility**:
-  ```bash
-  # Queries v_pit_candidate_scores on the fly with ZERO physical duplicate rows:
-  mycase pit stats --index microcap250 --method earlymb
-  mycase pit stats --index smallcap250 --method earlymb
-  mycase pit stats --index NIFTY50 --method earlymb
-  ```
-* **Individual Ticker Trajectory Deduplication (`--ticker <SYMBOL>`)**:
-  When querying an individual stock (e.g. `mycase pit stats --ticker AFFLE`), stocks that belong to multiple indices are not duplicated across synthetic view slices. The engine automatically queries the canonical records and partitions by `(as_of_date, method)` with `ROW_NUMBER()`, ensuring strictly a single chronological trajectory entry per date and method. Explicit `--index` and `--method` filters remain supported when specific sub-universe inspection is requested.
-
-
-#### 4. Index Name Canonicalization
-* Implemented `NormalizeIndexName` in `pkg/pithistory/analytics.go` and `pkg/pithistory/db.go`.
-* Automatically resolves common aliases:
-  - `small250` $\to$ `smallcap250`
-  - `micro250` $\to$ `microcap250`
-  - `microcap250,smallcap250` $\to$ `microcap250_smallcap250`
-  - Case-insensitive (`nifty50` $\to$ `NIFTY50`)
-
-#### 5. Guardrails Against Orphaned Drafts & Typo Keys
-* **Transactional Staging**: Added deferred `DeleteRunData` rollbacks in `cmd/pipeline.go` so aborted or failed optimization runs do not leave orphaned draft rows in `pipeline_runs`, `index_picks`, and `proposals`.
-* **Date Key Validation**: Implemented strict sanity bounds (`minYear = 2000`, `maxYear = currentYear + 1`) in `pkg/cache/prices.go` and `pkg/yfinance/` to prevent typo year keys (e.g. `2026-09-08_1970-01-01` or year `0001`) from entering `cache_meta`.
-
-#### 6. Single Unified Post-Market Update Sequence (`21:00 IST / 9:00 PM`)
-To replace fragmented ad-hoc terminal runs, a single unified update command is executed daily:
-```bash
-mycase db update --all --index niftytotalmarket --method earlymb --top 10
-# Or global flag:
-mycase -db -u
-```
-**Execution Pipeline (runs once post-market after 21:00 IST close):**
-1. **Market Data Sync**: Warms daily OHLCV bars and fundamentals for all active holdings and index constituents.
-2. **PIT Screening**: Executes the full 4-pillar earlyMB screening across `niftytotalmarket` (750 stocks) and commits a single master set of scores into `pit_candidate_scores`.
-3. **Theme Lifecycle Sync**: Scans active themes (`microsmall`, `aitheme`, `modularmicro`, `myall`, `hydrogen`) and backfills turnover events and version history into `theme_rebalances`.
-
-**Automated Daemon Scheduling:**
-Scheduled via macOS LaunchAgent (`~/Library/LaunchAgents/com.mycase.daily_sync.plist`):
-```xml
-<key>StartCalendarInterval</key>
-<dict>
-    <key>Hour</key>
-    <integer>21</integer>
-    <key>Minute</key>
-    <integer>0</integer>
-</dict>
-```
-Runs autonomously Monday through Friday at 21:00 IST with zero human intervention required. Running at 21:00 IST ensures that NSE Bhavcopy, Security-wise Deliverable Positions (MTO), and Yahoo Finance daily candles are fully settled and published before ingestion.
-
----
-
-### 17. EOD Cycle Architecture & Automated 9:00 PM Boundary (Sep 11, 2026)
-
-#### 1. Root Cause Analysis: Upstream Exchange Settlement Windows
-On September 11, 2026, investigations into identical factor score outputs between consecutive dates revealed the upstream data release schedule on the Indian markets:
-* **NSE Equity Trading Close**: Continuous order matching ends at **15:30 IST**. Closing Auction Session (CAS) concludes at **15:35–15:40 IST**.
-* **NSE Official Bhavcopy (PR.zip / CSV)**: Published between **16:15 and 16:45 IST**.
-* **NSE Security-wise Deliverables (MTO file)**: Requires clearing member settlement across depositories (CDSL/NSDL). The official `MTO_DDMMYYYY.DAT` file is typically published between **16:30 and 18:00 IST** (and occasionally later during high-volume sessions).
-* **Yahoo Finance Daily Candles**: Settles and publishes finalized daily OHLCV bars for NSE symbols between **17:00 and 18:30 IST**.
-* **Operational Flaw of 16:00 Run**: Running at 16:00 IST (4:00 PM) created race conditions where either partial intraday bars or stale prior-day caches were ingested because delivery files and settled candles were not yet published on exchange servers.
-
-#### 2. Establishment of 21:00 IST as the Sole Daily Cutoff
-To eliminate upstream timing races, **21:00 IST (9:00 PM)** was established as the authoritative daily boundary across the system:
-* **`com.mycase.daily_sync.plist` & `scripts/daily_sync.sh`**: Schedule shifted from 16:00 to **21:00 IST** (Monday through Friday).
-* **Purge of Interim 16:00 Logic**: Removed intermediate 16:00 cache invalidation rules from [`pkg/cache/prices.go`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/cache/prices.go) and [`pkg/yfinance/prices.go`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/yfinance/prices.go), making 21:00 IST the sole cutoff:
-  ```go
-  // Post-market / EOD settlement boundary (21:00 IST):
-  // 21:00 IST is the sole cutoff for the daily market cycle.
-  // If current time is at or after official sync (>= 21:00 IST) on a trading day,
-  // but data was fetched prior to 21:00 IST, it is considered stale so the confirmed EOD snapshot is pulled.
-  if nowIST.Hour() >= 21 && modIST.Hour() < 21 {
-      return false
-  }
-  ```
-
-#### 3. EOD Market Date Resolution & Mathematical Cycle Model
-Implemented canonical EOD settlement resolution helpers in [`pkg/marketdata/marketdata.go`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/marketdata/marketdata.go):
-* **Trading Cycle Window**: Between 21:00 PM of Day $T$ and 20:59 PM of Day $T+1$, the effective settled market EOD date is Day $T$.
-* **Forward Availability**: Day $T+1$'s EOD file is recognized as only becoming available after 21:00 PM on Day $T+1$.
-* **Formulas**:
-  $$\text{EffectiveEODDate}(t) = \begin{cases} t_{\text{date}} & \text{if } t.\text{Hour}() \ge 21 \\ t_{\text{date}} - 1\text{ day} & \text{if } t.\text{Hour}() < 21 \end{cases}$$
-
-#### 4. Idempotent Skip Guard (`HasRun` Detection)
-To prevent redundant or accidental double-runs during the trading day:
-* When `./mycase db update` or `./mycase pit update` is triggered, the system checks whether a valid snapshot for the effective EOD date already exists in `data/mycase.db` (`v_pit_runs`).
-* If the run for the target date is already present, the PIT screening calculation is skipped automatically, printing:
-  ```
-  ✓ File available for 2026-09-10. Latest file is of 10th and 11th file will be available after 21:00 PM 11th Sep.
-  Skipping redundant PIT screening calculation.
-  ```
-* **Override Support**: Added `--force` (`-f`) flag across commands (`mycase db update -f`, `mycase pit update -f`) for manual re-evaluations when desired.
-
----
-
-### 18. Live NSE Delivery Ingestion Debugging & Resiliency Overhaul (Sep 11, 2026)
-
-During the initial production execution of `./mycase db update --all --index niftytotalmarket --method earlymb --top 10` on September 11, 2026, the pre-breakout incubator table showed flat $+0.0\%$ delivery deltas across all Stage-1 survivor candidates (e.g. `CUPID: +0.0%`, `ASAHIINDIA: +0.0%`, `IPCALAB: +0.0%`). Investigation uncovered three distinct bugs spanning the Python data adapter, exchange data formatting, and Go IPC deserialization.
-
-#### 1. Bug 1: `nselib` 3-Month Window Fallback (`records_count: 1`)
-* **Root Cause**: The underlying library `nselib.capital_market.price_volume_and_deliverable_position_data` only supports literal string periods `["1D", "1W", "1M", "6M", "1Y"]`. Passing `period="3M"` was unhandled in `nselib`'s `if/elif` branches, silently falling back to `(today - 1 day)`. As a result, only **1 single trading session** was returned (`records_count: 1`).
-* **The Safety Invariant**: Because `CalculateDeliveryDelta` mathematically enforces a strict $\ge 25$ settled session invariant for the disjoint window ($5\text{D} + 20\text{D}$ baseline), it detected insufficient history, returned `ErrInsufficientDeliveryHistory`, and defaulted to neutral $\Delta = 0.0$ ($+0.0\%$).
-* **The Fix ([`scripts/fetch_nse_data.py`](file:///Users/raghavgarg/Projects/myGo/mycase/scripts/fetch_nse_data.py))**:
-  When `period == "3M"`, the script computes an explicit calendar range of 100 days (`from_date` to `to_date`), fetching **64–72 settled trading sessions**, comfortably satisfying the $\ge 25$ session requirement.
-
-#### 2. Bug 2: Dirty NSE String Deserialization Crash (`"-"`)
-* **Root Cause**: On market holidays, newly listed securities, or corporate action adjustment days, the NSE API publishes dirty strings like `"-"`, `" - "`, `"N/A"`, or `""` for numerical fields (`%DlyQttoTradedQty` / `DeliverableQty`).
-* **Silent Batch Drop**: In `scripts/fetch_nse_data.py`, `sanitize_val` was returning `str(val)` (`"-"`), which caused Go's `json.Unmarshal` to fail with:
-  ```
-  json: cannot unmarshal string into Go struct field DeliveryRecord.DeliveryPct of type float64
-  ```
-  Because the error occurred in multi-symbol unmarshaling, the failure silently discarded delivery records for the entire batch of surviving stocks.
-* **The Fix**:
-  1. Updated `sanitize_val` in `scripts/fetch_nse_data.py` to identify dirty tokens (`"-"`, `" - "`, `"N/A"`, `""`) and convert them to Python `None` (emitted as JSON `null`).
-  2. Implemented a resilient custom `UnmarshalJSON` for `DeliveryRecord` in [`pkg/marketdata/marketdata.go`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/marketdata/marketdata.go) utilizing `parseFlexibleFloat` to safely absorb string numbers, dirty tokens, and nulls into `float64(0.0)`.
-  3. Purged stale 1-day and corrupted files from `data/cache/delivery/*.json`.
-
-#### 3. Bug 3: Script & Python Path Resolution Across Working Directories
-* **Root Cause**: When invoked from subdirectories, background Daemons, or alternate working directories, relative paths to `scripts/fetch_nse_data.py` and `.venv/bin/python3` broke silently.
-* **The Fix ([`pkg/yfinance/screener.go`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/yfinance/screener.go))**:
-  - Anchored path discovery to candidate search paths (`scripts/fetch_nse_data.py`, `../../scripts/fetch_nse_data.py`, `/Users/raghavgarg/Projects/myGo/mycase/scripts/fetch_nse_data.py`).
-  - Automatically resolved absolute path for the Python binary (`.venv/bin/python3`) anchored to the project root.
-  - Set `cmd.Dir = projectDir` and propagated explicit `stderr` diagnostics on exit failures rather than swallowing errors.
-
-#### 4. Architecture: Stage-1 Survivor Delivery Enrichment & Persistence
-* In [`pkg/stockpicker/run.go`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/stockpicker/run.go), `enrichDeliveryHistory` identifies all Stage-1 survivors lacking delivery series and triggers a single consolidated batch fetch (`FetchNselibDeliveryDataSeries`).
-* The resulting delivery series is updated in-memory on `Fundamentals` and immediately persisted to DuckDB's `fundamentals` table via `StoreFundamentalsCache`.
-* Subsequent pipeline stages, Incubator reports, and DuckDB snapshot persisting (`pit_candidate_scores`) now receive genuine, non-zero institutional delivery deltas:
-  ```
-  Ticker          | Sector             | Raw Score | Eff Score | Hurdle Gap | VCP ATR  | Comp RS  | Deliv Δ   
-  ---------------------------------------------------------------------------------------------------------
-  NSE:CUPID       | Consumer Defensive |      41.3 |     12.3 |    +59.8pt |     0.57 |  +199.0% |     +9.3% 
-  NSE:ASAHIINDIA  | Consumer Cyclical  |      34.9 |     10.4 |    +66.2pt |     0.40 |   +14.2% |     +4.6% 
-  NSE:IPCALAB     | Healthcare         |      34.1 |     10.1 |    +67.0pt |     0.50 |   +30.5% |     +5.8% 
-  ```
-
----
-
-### 19. Investigation & Production Validation: Cross-Sectional Avg DelivΔ Normalization (+0.2% on Sep 11, 2026)
-
-#### 1. Observation & Initial Discrepancy
-Following the live production execution of `./mycase --index niftytotalmarket --method earlymb --analysis` on September 11, 2026, Section 3 of the PIT deep analysis report displayed a dramatic drop in the cross-sectional average delivery delta (`Avg DelivΔ`):
-
-```
-As-Of Date   | P90    | P75    | P50    | P40    | P25    | Avg RS   | Avg VCP  | Avg RVOL | Avg DelivΔ
--------------------------------------------------------------------------------------------------------
-2026-08-31   |   42.9 |   37.8 |   33.3 |   32.0 |   28.0 |   +16.1% |     0.90 |    -0.05 |    +20.2%
-2026-09-01   |   38.9 |   33.4 |   27.6 |   26.4 |   22.9 |   +17.1% |     0.93 |    +0.01 |    +11.6%
-2026-09-02   |   38.8 |   33.4 |   27.8 |   26.3 |   22.9 |   +17.4% |     0.93 |    +0.01 |    +11.6%
-2026-09-03   |   39.7 |   35.4 |   29.2 |   28.0 |   23.9 |   +19.1% |     0.93 |    -0.01 |    +13.5%
-2026-09-04   |   39.9 |   34.6 |   29.0 |   27.6 |   24.4 |   +18.4% |     0.93 |    -0.04 |    +13.9%
-2026-09-07   |   37.9 |   33.2 |   29.4 |   27.9 |   25.6 |   +17.1% |     0.94 |    -0.15 |    +14.2%
-2026-09-08   |   38.1 |   34.5 |   29.5 |   28.5 |   26.0 |   +17.2% |     0.95 |    -0.17 |    +15.2%
-2026-09-09   |   38.1 |   34.2 |   29.5 |   28.8 |   26.2 |   +20.0% |     0.95 |    -0.16 |    +15.2%
-2026-09-10   |   36.5 |   33.7 |   29.2 |   27.4 |   24.2 |   +19.4% |     0.96 |    -0.24 |    +13.0%
-2026-09-11   |   29.5 |   24.3 |   19.7 |   18.3 |   16.1 |   +19.6% |     0.97 |    -0.25 |     +0.2%
+### Transparent Ticker Identification in Metric Sanity Sentries
+Outlier sentry in `CalculateCompositeRS` (`|compositeRS| > 1.0`) outputs ticker-attributed warnings with thread-safe process deduplication (`sanityNoticeSet`):
+```text
+⚠️  [METRIC SANITY NOTICE [NSE:CUPID]] Extreme Composite RS detected: +238.5%
 ```
 
-The metric hovered consistently between `+11.6%` and `+20.2%` through September 10, then dropped sharply to `+0.2%` on September 11. An investigation was conducted across DuckDB (`data/mycase.db`) and raw NSE delivery caches (`data/cache/delivery/*.json`) to verify whether this was an arithmetic truncation, missing data, or an expected statistical phenomenon.
+### CUPID Outlier Investigation
+`NSE:CUPID` at +249.2% Composite RS was forensically verified as authentic: 8.1x rally from ₹34.52 to ₹280.46. Pillar 1's clamped bounds properly limited score to 25.0/25.0 pts.
 
-#### 2. Root Cause: Static Arbitrary Baseline vs Self-Relative Disjoint Window
-The shift is the direct mathematical consequence of the Pillar 4 disjoint delivery delta implementation going live on Sep 11:
+---
 
-1. **Pre-Sep 11 Legacy Implementation (`(DeliveryPct / 100.0) - 0.35`)**:
-   - Subtracted an arbitrary, hardcoded constant of **35% (0.35)** from each stock's delivery percentage.
-   - Because median deliverable volume on the National Stock Exchange (NSE) hovers around 48%–50%, subtracting 35% systematically shifted the universe average up to `~50% - 35% = +15%`.
-   - It did **not** measure accumulation relative to the stock's own history; it merely measured whether a stock's absolute delivery exceeded 35%. All historical records through Sep 10 are preserved and tagged with `pillar4_uncalibrated = true`.
+## A.2. Pillar 4 Delivery Delta: Design Evolution
 
-2. **Sep 11 Canonical Implementation ($\overline{\text{Deliv}}_{5\text{D}} - \overline{\text{Deliv}}_{20\text{D Baseline}}$)**:
-   - Evaluates each stock's recent 5-day average delivery against its **own historical 20-day disjoint baseline** ($t-24 \dots t-5$).
-   - Comparing recent 5-day delivery to the preceding 20-day baseline across a diversified cross-section of stocks is a **self-relative, mean-zero measurement**: roughly half the market exhibits higher recent delivery than their trailing month, and roughly half exhibits lower delivery.
-   - On a normal trading session, the cross-sectional arithmetic mean across the entire universe **must mathematically center near 0.0%**.
+### Original Bugs (Pre-Sep 10, 2026)
+Three compounding bugs in the original Pillar 4 implementation:
+1. **Flat constant baseline**: `(f.DeliveryPct / 100.0) - 0.35` instead of per-stock rolling baseline.
+2. **Single-day snapshot**: `Records[0]` instead of 5-day rolling average, causing ±19pt day-to-day swings.
+3. **Fetch failures → worst-case scores**: HTTP 0% → `0.0 - 0.35 = -0.35` persisted silently (the RUBICON pattern).
 
-#### 3. Empirical DuckDB Distribution (Sep 11, 2026)
-Querying `v_pit_candidate_scores` across all 97 Stage-1 survivors on 2026-09-11 confirmed a clean, symmetrical distribution centered at 0.0%:
+### Disjoint Refactor (Sep 10, 2026)
+Canonical implementation deployed:
+$$\Delta\text{Delivery} = \overline{\text{Delivery}}_{5\text{D}}\ (t-4 \dots t) - \overline{\text{Delivery}}_{20\text{D Baseline}}\ (t-24 \dots t-5)$$
+With fetch-failure exclusion, PIT lag enforcement, and insufficient history error handling.
 
-| Distribution Metric | Value (2026-09-11) | Analytical Context |
+### Cross-Sectional Normalization Validation (Sep 11, 2026)
+Post-deployment, cross-sectional Avg DelivΔ dropped from +13% to +0.2%. Investigation confirmed:
+* **Mean**: +0.20%, **Median**: +0.00%, 49 positive / 47 negative tickers.
+* Universe-wide score drop (-8.22 pts avg) was 98% attributable to Pillar 4 subsidy removal.
+* Disjoint window boundaries verified with zero overlap and correct PIT lag.
+
+### Bounds Recalibration (Sep 11, 2026)
+Upper bound tightened from +30% to +15% ($\approx +2.8\sigma$) to restore dynamic scoring range. Impact: `IPCALAB` P4 rose from 13.7 to 21.9 pts; `CUPID` from 12.0 to 19.3 pts.
+
+### NSE Ingestion Debugging (Sep 11, 2026)
+Three bugs in the delivery data pipeline:
+1. `nselib` didn't support `period="3M"`, silently returning 1 day.
+2. NSE dirty strings (`"-"`, `"N/A"`) crashed Go JSON unmarshaling.
+3. Script path resolution failed across working directories.
+
+### Delivery Freshness Sentry (Sep 24, 2026)
+`NSE:GREAVESCOT` showed identical +8.1% delta across 3 sessions — 99.3% of delivery series were stale. Fixed via 3-layer market-clock aware caching.
+
+### Historical Backfill (Sep 14, 2026)
+All dates `2026-08-26` through `2026-09-10` recalculated with canonical bounds. `pillar4_uncalibrated = false` across 100% of database.
+
+---
+
+## A.3. Data Integrity Audit & DIACABS Forensic Resolution (Sep 13, 2026)
+
+### Four Systemic Vulnerabilities
+1. **Trade-to-Trade (BE/BZ/ST) null delivery**: 61 stocks had null records. `DIACABS` used 40-day stale data. **Fix**: SEBI 100% delivery invariant.
+2. **10-Calendar-Day Recency**: No timestamp check on latest record. **Fix**: `ErrStaleDeliveryHistory`.
+3. **Cash Flow Quality Bypass**: 96.6% of stocks had zero OCF/FCF from summary card. **Fix**: Timeseries endpoint fallback.
+4. **Financial ROE Bypass**: `ROE == 0.0` bypassed filter for 79 BFSI stocks. **Fix**: Synthetic balance-sheet ROE derivation.
+
+### DIACABS Narrative Retirement
+| Dimension | Pre-Audit | Post-Audit |
 | :--- | :--- | :--- |
-| **Stage-1 Survivors Evaluated** | `97` stocks | Complete survivor pool for `niftytotalmarket` |
-| **Cross-Sectional Arithmetic Mean** | **`+0.002014` (`+0.20%`)** | Centers near 0.0% as expected for self-relative baselines |
-| **Cross-Sectional Median** | **`+0.000025` (`+0.00%`)** | Virtually zero median |
-| **Standard Deviation** | `5.36%` (`0.053629`) | Healthy cross-sectional dispersion |
-| **25th Percentile (P25)** | `-2.85%` | Moderate distribution zone |
-| **75th Percentile (P75)** | `+3.36%` | Moderate accumulation zone |
-| **Max Accumulation** | `+11.87%` (`NSE:IPCALAB`) | Extreme institutional absorption |
-| **Max Distribution** | `-14.43%` (`NSE:NH`) | Heavy institutional selling / cooling |
-| **Positive Delta Tickers ($\Delta > 0$)** | **`49` stocks (50.5%)** | Accumulating relative to trailing 20-day baseline |
-| **Negative Delta Tickers ($\Delta < 0$)** | **`47` stocks (48.5%)** | Distributing / cooling relative to trailing baseline |
-| **Zero Delta Tickers ($\Delta = 0.0$)** | **`1` stock (1.0%)** | `NSE:QPOWER` |
-| **Insufficient History Fallbacks** | **`0` stocks (0.0%)** | `pillar4_insufficient_history = false` for all 97 stocks |
-
-#### 4. Ground-Truth Cache Verification: `NSE:CUPID`
-Tracing `NSE:CUPID` directly from disk cache ([`data/cache/delivery/CUPID.json`](file:///Users/raghavgarg/Projects/myGo/mycase/data/cache/delivery/CUPID.json)) with cutoff `2026-09-10` ($T-1$ under strict PIT lag):
-* **Recent 5 Settled Sessions** (`2026-09-04` to `2026-09-10`):
-  `[45.62%, 43.83%, 45.23%, 24.19%, 35.45%]` $\implies \overline{\text{Deliv}}_{5\text{D}} = \mathbf{38.86\%}$
-* **Baseline 20 Settled Sessions** (`2026-08-07` to `2026-09-03`):
-  `20 sessions` $\implies \overline{\text{Deliv}}_{20\text{D}} = \mathbf{29.60\%}$
-* **Computed Delivery Delta**:
-  $$\Delta\text{Delivery} = 38.86\% - 29.60\% = \mathbf{+9.26\%} \quad (\text{Reported in CLI: } \mathbf{+9.3\%})$$
-
-#### 5. Follow-Up: Near-Universal 8–22 pt Score Drop — Second-Order Effect Investigation
-
-A follow-up observation noted that almost every stock in the 97-name survivor pool dropped 8–22 points on Sep 11 (e.g., `LALPATHLAB -22.8`, `UNITDSPR -20.6`, `SKFINDUS -20.1`, `USHAMART -20.1`, `CASTROLIND -19.0`). This raised the question: is this a legitimate consequence of the formula change, or does it indicate a subtler bug (e.g., off-by-one in the disjoint window boundary, or the 20D baseline accidentally landing on an anomalous period)?
-
-##### 5a. Pillar-by-Pillar Score Decomposition
-
-The total score change (`s11 - s10`) was decomposed into Pillar 4 contribution vs. the other three pillars (Composite RS, VCP Tightness, Volume Footprint) for the biggest movers:
-
-| Ticker | Total Score Δ | Pillar 4 Δ | Other 3 Pillars Δ |
-| :--- | :---: | :---: | :---: |
-| `NSE:LALPATHLAB` | **`-22.8 pt`** | **`-20.2 pt`** | `-2.7 pt` |
-| `NSE:UNITDSPR` | **`-20.6 pt`** | **`-20.5 pt`** | `-0.1 pt` |
-| `NSE:SKFINDUS` | **`-20.1 pt`** | **`-19.7 pt`** | `-0.3 pt` |
-| `NSE:USHAMART` | **`-20.1 pt`** | **`-20.7 pt`** | `+0.6 pt` |
-| `NSE:NH` | **`-20.0 pt`** | **`-19.9 pt`** | `-0.2 pt` |
-| `NSE:CASTROLIND` | **`-19.0 pt`** | **`-17.3 pt`** | `-1.7 pt` |
-| `NSE:PIDILITIND` | **`-18.5 pt`** | **`-18.5 pt`** | `+0.1 pt` |
-| `NSE:SUNPHARMA` | **`-17.6 pt`** | **`-17.4 pt`** | `-0.2 pt` |
-| `NSE:APOLLOHOSP` | **`-17.3 pt`** | **`-17.2 pt`** | `-0.1 pt` |
-
-**Universe-wide averages across all 97 matched survivors:**
-* Average Total Score Shift: **`-8.22 pts`**
-* Average Pillar 4 Shift: **`-8.06 pts`** (98.0% of the entire shift)
-* Average Other Pillars Shift: **`-0.16 pts`** (virtually zero)
-
-The other three pillars are flat — the entire drop is isolated to Pillar 4. This is not a market regime effect or a windowing bug; it is the direct, expected consequence of removing the legacy subsidy.
-
-##### 5b. The "Free 25 Points" Legacy Subsidy Explained
-
-Under the old formula `delivDelta = (DeliveryPct / 100.0) - 0.35`, the Pillar 4 bounds map `[-10%, +30%]` to `[0 pts, 25 pts]`:
-
-$$\text{Pillar 4 Points} = 25.0 \times \frac{\Delta + 0.10}{0.40}$$
-
-For any stock whose natural delivery level is 60%–70% (typical for FMCG, MNC Pharma, large-cap industrials), the old delta was `~65% - 35% = +30%`, awarding **23–25 points out of 25 every single day for free**, regardless of whether institutional accumulation was occurring. Under the canonical disjoint formula, those same stocks now compare recent delivery to their own baseline:
-
-| Ticker | Old Δ (Sep 10) | Old P4 Pts | New Δ (Sep 11) | New P4 Pts | P4 Drop |
-| :--- | :---: | :---: | :---: | :---: | :---: |
-| `NSE:LALPATHLAB` | `+26.4%` | `22.8 pts` | `-5.8%` | `2.6 pts` | **`-20.2 pts`** |
-| `NSE:UNITDSPR` | `+32.9%` | `25.0 pts` | `-2.9%` | `4.5 pts` | **`-20.5 pts`** |
-| `NSE:CASTROLIND` | `+27.3%` | `23.3 pts` | `-0.4%` | `6.0 pts` | **`-17.3 pts`** |
-| `NSE:SUNPHARMA` | `+31.3%` | `25.0 pts` | `+2.1%` | `7.6 pts` | **`-17.4 pts`** |
-
-##### 5c. Disjoint Window Boundary Integrity (Off-by-One Check)
-
-Traced raw delivery records from [`data/cache/delivery/LALPATHLAB.json`](file:///Users/raghavgarg/Projects/myGo/mycase/data/cache/delivery/LALPATHLAB.json) to verify exact window boundaries:
-
-* **PIT Cutoff**: `2026-09-10` ($T-1$ under strict `lagDays=1`)
-* **Recent 5 Sessions**: `[2026-09-04, 2026-09-07, 2026-09-08, 2026-09-09, 2026-09-10]`
-  `[51.6%, 39.5%, 55.3%, 48.4%, 61.4%]` $\implies \overline{\text{Deliv}}_{5\text{D}} = \mathbf{51.26\%}$
-* **Baseline 20 Sessions**: `[2026-08-07 through 2026-09-03]`
-  `[62.7%, 50.5%, 67.1%, 64.6%, 68.6% ...]` $\implies \overline{\text{Deliv}}_{20\text{D}} = \mathbf{57.10\%}$
-* **Overlap**: **Zero**. Baseline ends `2026-09-03`, recent starts `2026-09-04`.
-* **Total settled sessions in cache**: 71 ($\gg 25$ minimum)
-* **Baseline levels sane?**: **Yes** — `LALPATHLAB` is a diagnostic pathology chain that routinely trades at 55%–65% delivery; the 57.1% baseline is completely typical.
-
-#### 6. Conclusion & Verification Verdict
-The `+0.2%` figure and the near-universal 8–22 pt score drops are **verified exact, bug-free, and economically sound**:
-1. **Bias Purged**: The legacy static 35% offset that artificially inflated previous cross-sectional averages to `+13% ~ +15%` is gone.
-2. **Score Drop Fully Explained**: 98.0% of the universe-wide average score shift (`-8.06` of `-8.22` pts) is attributable solely to Pillar 4, with the other three pillars contributing virtually zero. This is the expected one-time recalibration from removing the legacy subsidy.
-3. **True Signal Isolation**: Institutional standouts (`IPCALAB: +11.9%`, `GOKULAGRO: +10.5%`, `CUPID: +9.3%`, `BOSCHLTD: +8.6%`) now cleanly contrast against distributing stocks (`NH: -14.4%`, `GLAXO: -13.4%`, `EMCURE: -12.8%`).
-4. **No Off-by-One**: Disjoint window boundaries verified with zero overlap, correct PIT lag enforcement, and sane baseline levels for the biggest movers.
-5. **Pillar 4 Invariant Validated**: The end-to-end pipeline (NSE fetch $\to$ disk cache $\to$ Go unmarshal $\to$ disjoint moving average $\to$ DuckDB PIT persistence $\to$ analytics reporting) is fully confirmed in live production.
-
----
-
-### 20. Pillar 4 Bounds Recalibration: Aligning Min/Max to Empirical Distribution (Sep 11, 2026)
-
-#### 1. The Pre-Breakout Detection Hurdle
-Following the deployment and validation of the disjoint delivery delta formula, an audit of pre-breakout selection sensitivity revealed a structural hurdle:
-
-* **The Problem**: Under the legacy formula, `DeliveryDeltaBounds` were calibrated to `[-0.10, +0.30]` (`[-10%, +30%]`) when arbitrary 35% subtractions produced artificial deltas up to `+35%`.
-* **Empirical Reality**: Under the canonical self-relative disjoint formula ($\overline{\text{Deliv}}_{5\text{D}} - \overline{\text{Deliv}}_{20\text{D Baseline}}$), the cross-sectional distribution is centered at `0.0%` with a standard deviation of `5.36%`. Across the entire 97-stock survivor universe on September 11, 2026:
-  - Max institutional accumulation was **`+11.87%`** (`NSE:IPCALAB`).
-  - Strong accumulation sat at **`+9.26%`** (`NSE:CUPID`).
-  - Max distribution was **`-14.43%`** (`NSE:NH`).
-* **The "Dead Zone"**: Because the upper bound remained at `+30%`, the highest scoring stock in the entire market (`IPCALAB`) achieved only:
-  $$\text{P4} = 25.0 \times \frac{0.1187 - (-0.10)}{0.30 - (-0.10)} = 25.0 \times \frac{0.2187}{0.40} = \mathbf{13.7\text{ pts (out of 25)}}$$
-  The entire upper `44%` of the Pillar 4 score range (`[14, 25] pts`) was mathematically unreachable. This structurally compressed raw scores across the universe, preventing even stellar pre-breakout setups from meeting the 30-point effective selection hurdle unless market regime $R$ reached historically unprecedented highs ($R \ge 0.65$–$0.80$).
-
-#### 2. Recalibration: Tightening Bounds to `[-0.10, +0.15]`
-To align the scoring model with the true empirical distribution of disjoint delivery deltas, `DeliveryDeltaBounds` was updated across the engine:
-
-$$\text{DeliveryDeltaBounds} = \text{ScoreBounds}\{\text{Min}: -0.10, \; \text{Max}: 0.15\}$$
-
-* **Lower Bound (`-10%`)**: Maintained at `-10%`. Stocks experiencing heavy cooling/distribution ($\le -10\%$) receive 0 points.
-* **Upper Bound (`+15%`)**: Reduced from `+30%` to `+15%` ($\approx +2.8\sigma$ in cross-sectional distribution). Exceptional institutional accumulation ($\ge +15\%$) achieves full 25 points.
-* **Neutral Point (`0%`)**: A stock trading at its historical baseline ($\Delta = 0.0\%$) now receives:
-  $$25.0 \times \frac{0.0 - (-0.10)}{0.15 - (-0.10)} = 25.0 \times \frac{0.10}{0.25} = \mathbf{10.0\text{ pts}}$$
-  (vs. 6.25 pts previously).
-
-#### 3. Impact on Institutional Accumulators
-Tightening the bounds widens the dynamic spread between genuine accumulators and the rest of the market:
-
-| Ticker | Delivery Δ | P4 (Old: `[-10%, +30%]`) | P4 (New: `[-10%, +15%]`) | P4 Gain | Raw Score Impact |
-| :--- | :---: | :---: | :---: | :---: | :---: |
-| `NSE:IPCALAB` | `+11.9%` | `13.7 pts` | **`21.9 pts`** | **`+8.2 pts`** | `41.7` $\to$ **`49.9`** |
-| `NSE:CUPID` | `+9.3%` | `12.0 pts` | **`19.3 pts`** | **`+7.3 pts`** | `46.9` $\to$ **`54.2`** |
-| `NSE:BOSCHLTD` | `+8.6%` | `11.6 pts` | **`18.6 pts`** | **`+7.0 pts`** | `35.2` $\to$ **`42.2`** |
-| `NSE:SIEMENS` | `+8.2%` | `11.4 pts` | **`18.2 pts`** | **`+6.8 pts`** | `34.1` $\to$ **`40.9`** |
-| Neutral Stock | `0.0%` | `6.3 pts` | **`10.0 pts`** | `+3.7 pts` | — |
-| Distributing Stock | `-10.0%` | `0.0 pts` | **`0.0 pts`** | `0.0 pts` | Unchanged floor |
-
-With this recalibration, top setups like `CUPID` (raw score `54.2`) and `IPCALAB` (raw score `49.9`) can clear the 30-point effective hurdle at realistic market regimes ($R \ge 0.55$ and $R \ge 0.60$ respectively), restoring the Early-MB strategy's ability to identify and select stealth institutional accumulation before the technical breakout occurs.
-
-#### 4. Code & Test Verification
-The change was applied consistently across all call-sites and verified:
-1. `pkg/stockpicker/bounds.go`: Updated `DeliveryDeltaBounds = ScoreBounds{Min: -0.10, Max: 0.15}`.
-2. `pkg/backtest/calibrate.go`: Updated inline bounds clamp formula to `(delivDelta - (-0.10)) / (0.15 - (-0.10))`.
-3. `pkg/stockpicker/bounds_test.go`: Verified worked-example assertions for `+15%` (25.0 pts) and `+2.5%` (12.5 pts).
-4. `pkg/stockpicker/delivery_invariant_test.go`: Verified invariant scoring consistency for canonical delivery delta output.
-5. All tests in repository pass with `go test ./...`.
-
----
-
-### 21. Quantitative Sentry & Shadow Mode Philosophy (Plain-English Overview)
-
-To understand what each section is actually doing, in plain terms, and why we built it that way:
-
-#### Section 9: "Near-Miss Radar" — The Watchlist of Stocks Your Strategy Almost Bought
-Your strategy has hard rules (called "Stage-1 gates") that a stock must pass to even be considered for buying — things like "must have decent profitability," "must be in an uptrend long enough," "must have real promoter ownership." Section 9 answers: **which stocks are showing strong buying signals (big delivery volume, strong relative strength) but are getting blocked by just one of these rules?**
-
-Each row shows: how long the stock's been on this watchlist, whether it eventually "graduated" (passed the rules and became eligible), and exactly which rule is blocking it.
-
-**The sub-table under it — "Graduated Stocks Performance"** — is the report card for this whole idea. It asks: *when a stock finally does graduate and become eligible, did waiting actually cost us money?* It tracks the price from the day the stock first showed up on the watchlist to the day it graduated. Right now, of 5 stocks that graduated, only 2 made money in that waiting period — so the jury's still out on whether this watchlist idea has real value, but it's early days (only 5 data points).
-
-#### Section 10: "Top Gainers" — A Sanity Check on What's Actually Moving in the Market
-This just lists the biggest price gainers each day, regardless of whether your strategy likes them, and tells you why your strategy is (or isn't) buying them. The key addition we made here is the **delivery volume check** — because a stock can jump 15% in price purely on speculation/trading, with no real buyers taking delivery of shares. So we added a flag: `Real Accum? YES/NO` — meaning, is this price move backed by real institutional-style buying, or is it just noise? Turned out almost all the big gainers were noise (no real delivery), except one — `DIACABS` — which had both a big price move *and* real delivery volume, meaning it's a genuine signal, not a fluke.
-
-#### Why Sections 9 and 10 Connect: The "DUAL RADAR HIT"
-When a stock shows up in *both* lists — it's a top gainer with real volume backing, AND it's already been flagged on your near-miss watchlist — that's your highest-confidence signal. `DIACABS` initially appeared as the only stock doing this.
-
-> [!WARNING]
-> **Post-Audit Retraction & Data Integrity Notice (Sep 13, 2026)**:
-> The initial September 11 observation regarding `NSE:DIACABS` was subsequently revealed by a full system data audit to be a **data artifact**, not a true market signal. Due to missing Trade-to-Trade (`BE` series) delivery data, the system reached back 40 days to calculate a stale `+13.4%` delivery delta. Furthermore, unpopulated cash flow fields masked deeply negative FY26 Operating Cash Flow (-₹80.43 Cr). Post-correction, DIACABS failed the Cash Flow Quality Gate and was legitimately eliminated. The "golden compounder" narrative has been formally retired. See Section 26 for the complete forensic audit and resulting production rule changes.
-
-#### What We Found from 9 & 10 Together: Rules Too Strict in Specific Spots
-Looking at *why* good stocks were getting blocked, one reason showed up over and over: a rule that says "profitability (ROCE) must be above 12%." But that rule doesn't make sense for every kind of business — banks and fast-growing tech/platform companies often run lower on this metric by design, not because they're bad businesses. So we decided: instead of scrapping the rule, let's make an **exception** — if a stock is being blocked *only* by this rule, but it's showing strong buying volume and strength, let it through anyway. Same idea for a rule about "how many weeks a stock has been trading sideways before breaking out" — instead of a hard yes/no, we made it a sliding scale, so a stock that just started breaking out gets counted, just with a smaller score, rather than being ignored completely.
-
-#### Section 11: "Shadow Mode" — Testing New Rules Without Risking Real Money Yet
-This is the safety net for the above changes. Instead of switching your actual rules immediately, we run the **new, relaxed rules in parallel** — silently, just for observation — while your live strategy keeps using the old, strict rules. Section 11 shows the difference: with the old rules, only 99 stocks passed. With the new, relaxed rules, 172 stocks would have passed. That's a big jump, so before trusting it, we checked two things:
-1. **Which exact rule rescued each stock** (labeled `delivery_override`, `promoter_exempt_bfsi`, `graduated_scoring`) — so we can track performance by *type* of exception, not just lump them all together.
-2. **Did this create a hidden risk — like ending up with too many bank stocks?** (the "Sector Cap Defense Audit" sub-table) — because relaxing the rule for banks let in 25 more bank candidates. We checked: does your portfolio's existing "max 3 stocks per sector" limit still protect you? Answer: **yes** — even with 28 eligible bank stocks now on the table, your portfolio can still only ever buy 3 of them. So the extra eligible stocks don't create extra risk, they just give the strategy a bigger, better pool to *choose* the best 3 from.
-
-#### The Bottom Line, in One Sentence
-> **We built a system to catch good stocks your strict rules were unfairly blocking, tested loosening those rules safely in the background without touching real trades, and confirmed the loosening doesn't blow up your risk controls — but we're still waiting for enough real-world results before switching the new rules on for good.**
-
----
-
-### 22. Section 9: Stealth Accumulation & Near-Miss Radar (Expanded Tolerance Sentry)
-
-#### 1. Empirical Forensic Origin
-An audit of single-session percentage gainers across the Nifty Total Market on September 11, 2026 revealed that high-conviction compounders exhibited massive institutional accumulation footprints ($\Delta \text{Deliv} \ge +10\%$ to $+24\%$) **24 to 48 hours prior** to explosive volume and price markups (`TDPOWERSYS` $+12.2\%$ Deliv Δ, `BLACKBUCK` $+24.3\%$, `BBOX` $+10.4\%$). However, all were eliminated by binary Stage-1 gates (`DSO Deterioration`, `Far from 52W High`, `ROCE < 12%`).
-
-#### 2. Quantitative Specification
-- **Target Population**: $\text{passed\_stage1} = \text{false} \land \neg\text{data\_fetch\_failed}$.
-- **Accumulation Sentry**: $\text{Delivery Delta} \ge +0.08$ ($+8.0\%$ self-relative delivery expansion above 20-day baseline).
-- **Trend Guard**: $\text{Composite RS} \ge 0.0\%$ (strictly non-negative 1-year relative strength vs index).
-- **Taxonomy**: Classifies bottleneck gates into `[Fixable]` (ROCE, base duration) vs `[Structural]` (DSO deterioration, leverage, promoter floor, SMA trend).
-
-#### 3. Output Snapshot (`mycase pit stats --analysis`)
-
-```text
---- 9. STEALTH ACCUMULATION & NEAR-MISS RADAR (Tracked Watchlist: Deliv Δ >= +8.0% | Non-Negative RS) ---
-Tracking institutional footprints blocked by Stage-1 gates, persistence across runs, and graduation alerts:
-  Ticker          | Sector          | First Seen | Days | 1D Chg  | Deliv Δ | Comp RS | VCP   | Gate Type    | Primary Bottleneck Gate     
-  -----------------------------------------------------------------------------------------------------------------------------------------
-  NSE:DIACABS     | Industrials     | 2026-09-11 |   1d |  +4.99% |  +13.4% |  +69.8% |  0.87 | [Fixable]    | Low ROCE (< 12.0%)          
-  NSE:ABDL        | Cons Defensive  | 2026-08-28 |   7d |  +3.44% |  +11.5% |   +7.7% |  0.89 | [Fixable]    | Base: 0w < 4w               
-  NSE:DEVYANI     | Cons Cyclical   | 2026-08-31 |   5d |  +1.51% |  +10.2% |   +0.7% |  0.51 | [Fixable]    | Low ROCE (< 12.0%)          
-  NSE:TI          | Cons Defensive  | 2026-08-28 |  11d |  -2.64% |   +9.5% |   +9.7% |  1.12 | [Structural] | DSO Deterioration (+83.7%)  
-  NSE:CONCORDBIO  | Healthcare      | 2026-08-28 |   8d |  +3.64% |   +9.4% |   +4.3% |  1.09 | [Fixable]    | Base: 1w < 4w               
-  ... [13 candidates tracked; full list via CLI]
-
-  --- Graduated Stocks Performance (Radar Alpha Audit: First-Seen Date -> Clear Date) ---
-  Quantifying pre-breakout radar predictive value and opportunity cost of waiting for Stage-1 clearance:
-  Ticker          | Sector          | Channel             | First Seen | Clear Date | Incub (Hits) |   Entry (₹) |   Clear (₹) | Radar Return
-  -----------------------------------------------------------------------------------------------------------------------------------
-  NSE:BLACKBUCK   | Technology      | natural_clear       | 2026-08-28 | 2026-09-11 | 14d (5x)     |     ₹588.15 |     ₹628.15 |       +6.80%
-  NSE:ABDL        | Cons Defensive  | base_duration       | 2026-09-09 | 2026-09-11 | 2d (2x)      |     ₹604.15 |     ₹632.50 |       +4.69%
-  NSE:CONCORDBIO  | Healthcare      | base_duration       | 2026-09-10 | 2026-09-11 | 1d (1x)      |   ₹1,452.80 |   ₹1,505.70 |       +3.64%
-  NSE:NAM-INDIA   | Financial Serv  | promoter_exempt     | 2026-09-01 | 2026-09-11 | 10d (5x)     |   ₹1,178.90 |   ₹1,189.60 |       +0.91%
-  NSE:AGARWALEYE  | Healthcare      | delivery_override   | 2026-08-28 | 2026-09-11 | 14d (1x)     |     ₹507.80 |     ₹508.40 |       +0.12%
-  NSE:SUDEEPPHRM  | Healthcare      | base_duration       | 2026-08-31 | 2026-09-11 | 11d (3x)     |   ₹1,209.70 |   ₹1,202.80 |       -0.57%
-  NSE:INDIANB     | Financial Serv  | delivery_override   | 2026-09-03 | 2026-09-11 | 8d (1x)      |     ₹888.75 |     ₹853.50 |       -3.97%
-  Rolling Win Rate: 5/7 (71.4%) | Average Radar Return: +1.66% (Alpha left on table by waiting for formal Stage-1 pass)
-  Channel Breakdown: natural_clear: 1/1 (100.0%, avg +6.80%) | base_duration: 2/3 (66.7%, avg +2.59%) | promoter_exempt: 1/1 (100.0%, avg +0.91%) | delivery_override: 1/2 (50.0%, avg -1.92%)
-```
-
----
-
-### 23. Section 10: Daily Top Price Gainers (Universe Cross-Section)
-
-#### 1. Quantitative Purpose
-Surfaces actual single-session percentage gainers across the index universe ($T-1 \to T$), cross-referencing price momentum against institutional delivery confirmation, Stage-1 qualification, and radar status.
-- **Real Accumulation Flag (`Accum: YES / NO`)**: Identifies authentic accumulation ($\Delta\text{Deliv} \ge +6.0\%$) from speculative retail gap-ups with negative delivery.
-- **Dynamic Price Change Column**: Automatically evaluates session time-span, printing `1D Gain` for consecutive trading sessions and `% Price Chg` for multi-day or holiday intervals.
-- **Graduated Radar Tagging (`GRADUATED` / `ACTIVE RADAR` / `DUAL HIT`)**: Automatically flags high-conviction candidates linked from Section 9 (e.g. `NSE:BLACKBUCK` showing `GRADUATED`).
-
-#### 2. Output Snapshot (`mycase pit stats --analysis`)
-
-```text
---- 10. DAILY TOP PRICE GAINERS (2026-09-10 -> 2026-09-11 | niftytotalmarket) ---
-Cross-sectional price gainers across the index universe, delivery volume confirmation, and EBM qualification:
-  Ticker          |    Prev (₹) |   Close (₹) | 1D Gain     | Deliv Δ | Accum | Comp RS | Gate Type    | Stage-1 Bottleneck           | Radar       
-  --------------------------------------------------------------------------------------------------------------------------------------
-  NSE:AWFIS       |     ₹249.60 |     ₹293.20 |     +17.47% |   -7.8% | NO    |   -8.4% | [Structural] | Below 200-SMA (0.86 < 0.95)  | -           
-  NSE:PINELABS    |     ₹173.17 |     ₹202.17 |     +16.75% |   -5.7% | NO    |  +17.3% | [Fixable]    | Low ROCE (< 12.0%)           | -           
-  NSE:BBOX        |     ₹744.85 |     ₹800.80 |      +7.51% |   -8.8% | NO    |  +17.4% | [Structural] | Far from 52W High (74.3%)    | -           
-  NSE:PWL         |     ₹126.73 |     ₹136.10 |      +7.39% |   +0.2% | NO    |  +13.9% | [Fixable]    | Low ROCE (< 12.0%)           | -           
-  NSE:BLACKBUCK   |     ₹585.90 |     ₹628.15 |      +7.21% |   +5.8% | NO    |  +11.8% | [CLEARED]    | Stage-1 Qualified            | GRADUATED   
-  NSE:AIIL        |     ₹512.30 |     ₹544.35 |      +6.26% |   -7.2% | NO    |   -3.7% | [Structural] | Financial Services weak r... | -           
-  NSE:CCAVENUE    |      ₹15.36 |      ₹16.29 |      +6.05% |   -9.6% | NO    |  +10.3% | [Fixable]    | Low ROCE (< 12.0%)           | -           
-  NSE:PTCIL       |  ₹22,385.00 |  ₹23,630.00 |      +5.56% |   -0.5% | NO    |  +42.1% | [Structural] | Cash Flow Quality check f... | -           
-  NSE:TDPOWERSYS  |     ₹762.75 |     ₹804.90 |      +5.53% |   -0.5% | NO    |  +76.9% | [Structural] | DSO Deterioration (+16.3%)   | -           
-  NSE:YESBANK     |      ₹22.30 |      ₹23.48 |      +5.29% |   -3.1% | NO    |   +8.1% | [Structural] | Low Financial ROE (< 12%)    | -           
-  NSE:STLTECH     |     ₹854.75 |     ₹897.40 |      +4.99% |   +0.0% | NO    | +223.0% | [Structural] | Low Interest Coverage (ra... | -           
-  NSE:DIACABS     |     ₹351.50 |     ₹369.05 |      +4.99% |   +6.6% | YES   |  +67.9% | [Structural] | Cash Flow Quality check f... | -           
-  ... [15 daily gainers tracked; full list via CLI]
-```
-
----
-
-### 24. Early Multibagger Strategy Filter Hardening
-
-Following empirical deduction from Sections 9 and 10, three targeted enhancements refine the Stage-1 Hard Gates:
-
-#### 1. Combined ROCE-Relief Gate (Strict Legacy in Production | Tightened Delivery Override in Shadow)
-- **Production Implementation**: Legacy ROCE floor ($\text{ROCE} \ge 12.0\%$) remains strictly enforced in production.
-- **Financial Services**: ROCE calculation dropped due to banking balance sheet distortion; replaced with an **ROE Quality Gate** ($\text{ROE} \ge 12.0\%$).
-- **Technology & Consumer Cyclical Recent Listings**: For asset-light or reinvesting recent listings ($< 4$ years of annual filings or $< 500$ daily bars), fundamental floor lowered to **$7.0\%$**.
-- **Shadow Mode Institutional Footprint Override (Tightened Bar)**:
-  $$\text{Shadow\_ROCE\_Pass} = (\text{ROCE} \ge \text{Floor}) \lor (\text{Deliv } \Delta \ge +9.0\% \land \text{Comp RS} \ge +15.0\% \land \text{VCP ATR} \le 1.20)$$
-  - **Status**: Kept in **Shadow Mode only**; NOT enforced in live production. Early out-of-sample data showed -0.86% average return across 6 samples, requiring further validation under corrected data.
-  - **Blocked in Production**: Even high-volume gainers must satisfy fundamental quality floors before capital is deployed.
-
-#### 2. Graduated Base Duration Scoring Multiplier (PROMOTED TO LIVE PRODUCTION)
-Replaces binary 4-week rejection with an orthogonal graduated score multiplier in production scoring (`BaseDurationMultiplier`):
-$$\text{Score} = (P_1 + P_2 + P_3 + P_4) \times M_{\text{base}}$$
-- **$0$ to $1$ Week Base**: Eligible for selection with $M_{\text{base}} = 0.50$ (fresh breakout discount).
-- **$2$ to $3$ Weeks Base**: Eligible for selection with $M_{\text{base}} = 0.75$.
-- **$\ge 4$ Weeks Base**: Full score ($M_{\text{base}} = 1.00$).
-- **Status**: **LIVE in Production**. Empirically validated across 24 historical samples (79.2% win rate, +3.22% average excess return).
-
-#### 3. Regulated Sector Promoter Stake Exemption (SUSPENDED)
-- **Status**: **SUSPENDED**. Following the systemic data audit and ROE calculation fix, the Financial Services survivor pool expanded from 3 to 12 stocks naturally without requiring an exemption. Retained as a manual diagnostic query only.
-
----
-
-### 25. Stage-1 Shadow Mode Architecture & Sector Cap Defense Audit (Section 11)
-
-To safeguard live capital while accumulating 20–30 empirical samples for the Radar Alpha Audit, relief rules run in **Shadow Mode**:
-- **Production Gate**: Legacy Stage-1 hard gates remain strictly enforced for real portfolio allocation.
-- **Shadow Gate**: Evaluates relief rules in parallel and persists decisions to `stage1_shadow_results` in `data/mycase.db`.
-
-#### Output Snapshot (`mycase pit stats --analysis` or `--shadow`)
-
-```text
---- 11. STAGE-1 SHADOW MODE DIVERGENCE (Legacy Gate vs Relief Gate | 2026-09-11) ---
-Evaluating relief rules in shadow mode to accumulate empirical evidence before live deployment:
-  Ticker          | Sector          | Status   | Relief Channel       | Deliv Δ | Comp RS | VCP   | Mult   | Legacy Bottleneck Reason    
-  ----------------------------------------------------------------------------------------------------------------------------------------
-  NSE:DIACABS     | Industrials     | RESCUED  | delivery_override    |  +13.4% |  +69.8% |  0.87 |  1.00x | Low ROCE (< 12.0%)          
-  NSE:ABDL        | Cons Defensive  | RESCUED  | graduated_scoring    |  +11.5% |   +7.7% |  0.89 |  0.50x | Base: 0w < 4w               
-  NSE:DEVYANI     | Cons Cyclical   | RESCUED  | delivery_override    |  +10.2% |   +0.7% |  0.51 |  1.00x | Low ROCE (< 12.0%)          
-  NSE:CONCORDBIO  | Healthcare      | RESCUED  | graduated_scoring    |   +9.4% |   +4.3% |  1.09 |  0.50x | Base: 1w < 4w               
-  NSE:INDUSINDBK  | Financial Serv  | RESCUED  | promoter_exempt_bfsi |   +8.5% |  +12.0% |  1.12 |  1.00x | Low Promoter (16.3% < 25%)  
-  ... [73 candidates rescued across channels; full list via CLI]
-
-  Shadow Gate Summary for 2026-09-11 (niftytotalmarket | earlymb):
-  • Legacy Stage-1 Survivors : 99 / 750 (13.2%)
-  • Shadow Stage-1 Survivors : 172 / 750 (22.9%)
-  • Total Candidates Rescued : 73 (Delivery Override: 12 | BFSI Promoter: 21 | Base Duration -> Scoring: 40)
-  • Sector Distribution Check: Financial Services: 25 (34.2%) | Industrials: 14 (19.2%) | Healthcare: 10 (13.7%) | Basic Materials: 8 (11.0%) | Consumer Cyclical: 7 (9.6%) | Consumer Defensive: 4 (5.5%) | Energy: 3 (4.1%) | Technology: 1 (1.4%) | Communication Services: 1 (1.4%)
-
-  Sector Cap Defense Audit on Shadow Pool (MaxStocksPerSector = 3 | MaxSectorWeightCap = 25.0%):
-  Sector             | Shadow Pool | Legacy Pool |   Rescued | Max Allocatable | Excess Absorbed
-  ----------------------------------------------------------------------------------------------
-  Industrials        |          32 |          18 |        14 |               3 |              29
-  Cons Cyclical      |          31 |          24 |         7 |               3 |              28
-  Healthcare         |          31 |          21 |        10 |               3 |              28
-  Financial Serv     |          28 |           3 |        25 |               3 |              25
-  Basic Materials    |          17 |           9 |         8 |               3 |              14
-  Technology         |          13 |          12 |         1 |               3 |              10
-  Cons Defensive     |          13 |           9 |         4 |               3 |              10
-  Energy             |           5 |           2 |         3 |               3 |               2
-  Communication      |           2 |           1 |         1 |               2 |               0
-  * Sector Cap Defense Verified: Portfolio allocation cannot exceed 3 holdings or 25% weight per sector.
-```
-
----
-
-## 26. System-Wide Data Integrity Audit, DIACABS Forensic Resolution & Production Rule Deployment (Sep 13, 2026)
-
-### 1. The Comprehensive Data Integrity Audit & Root Causes
-
-A deep-dive investigation into anomalous signals—triggered by `NSE:DIACABS` displaying a `+13.4%` delivery delta despite having zero confirmed trading bars in September and failing ROCE while carrying negative operating cash flow—led to a full-system audit of all data sources, transformations, and filters across Go and Python components (the four systemic vulnerabilities and their resolutions are detailed in the subsections below).
-
-The audit uncovered four major systemic data vulnerabilities:
-
-```
-                            DATA PIPELINE VULNERABILITY & RESOLUTION
-                            
-  [NSE Bhavcopy / MTO] -------------> [Go Memory / Disk Cache] -------------> [Strategy Gates & Scoring]
-          |                                     |                                     |
-  1A. Trade-to-Trade (BE)               2A. Timeseries OCF/FCF                2B. Financial ROE Bypass:
-      NaN/'-' -> null -> 0.0                omitted in typesStr;                  ROE == 0.0 bypassed filter;
-      caused 40-day stale deltas.           96.6% of stocks skipped               closed via synthetic
-      FIX: SEBI 100% invariant.             Cash Flow Quality Gate.               balance-sheet ROE derivation.
-                                            FIX: Timeseries fallback.
-```
-
-#### 1A. Trade-to-Trade (`BE/BZ/ST`) Series Ingestion Bug & 40-Day Delivery Staleness
-- **Vulnerability**: In the NSE Bhavcopy / security-wise delivery API, Trade-to-Trade (T2T) segment stocks have `DeliverableQty = NaN` and `%DlyQttoTradedQty = '-'` because intraday squaring-off is prohibited by SEBI—**100% of all traded shares must be settled via delivery**. The Python scraper converted `"-"` and `NaN` into `null`, which Go deserialized into `0.0`. `CalculateDeliveryDelta` skipped `0.0` records, causing the window to reach back weeks or months into the past.
-- **Live Impact**: 61 stocks in cache had null delivery records. `NSE:DIACABS` showed a `+13.4%` delivery delta on Sep 11 using data from **July 28 – Aug 3 (40 days stale)**.
-- **Resolution**:
-  - In [`scripts/fetch_nse_data.py`](file:///Users/raghavgarg/Projects/myGo/mycase/scripts/fetch_nse_data.py), if the series is `BE`, `BZ`, or `ST`, the script enforces the SEBI invariant: `DeliverableQty = TotalTradedQuantity` and `DeliveryPct = 100.0%`.
-  - Added explicit `Series` field in `DeliveryRecord` struct in [`pkg/marketdata/marketdata.go`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/marketdata/marketdata.go).
-  - Prioritized standard market sessions (`EQ`, `BE`) over block-deal (`BL`) window records for the same calendar date.
-
-#### 1B. Delivery Staleness — 10-Calendar-Day Recency Invariant
-- **Vulnerability**: `CalculateDeliveryDelta` validated that $\ge 25$ records existed, but never checked the timestamp of the latest record.
-- **Resolution**: Enforced a strict **10-calendar-day recency invariant** in [`pkg/yfinance/metrics_delivery.go`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/yfinance/metrics_delivery.go). If the latest delivery record is older than 10 calendar days (accounting for extended market holiday clusters and T+1 lag), `CalculateDeliveryDelta` returns `ErrStaleDeliveryHistory` and logs a staleness warning rather than calculating phantom accumulation from obsolete history.
-
-#### 2A. Cash Flow Quality Ingestion Breakthrough (Restoring 96.6% Dormant Gate)
-- **Vulnerability**: Yahoo Finance's `quoteSummary.financialData` card omits operating and free cash flow for 96.6% of Indian equities (625 out of 647 stocks in cache had `OperatingCashflow = 0.0 AND FreeCashflow = 0.0`). The Stage-1 cash flow gate (`if f.OperatingCashflow != 0 || f.FreeCashflow != 0`) was bypassed for almost the entire universe.
-- **Breakthrough**: Investigation revealed that Yahoo Finance's `fundamentals-timeseries` endpoint has **100% multi-year coverage** for Indian equities when querying `annualOperatingCashFlow` and `annualFreeCashFlow`.
-- **Resolution**:
-  - Added `annualOperatingCashFlow` and `annualFreeCashFlow` to `typesStr` in [`pkg/yfinance/yfinance.go`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/yfinance/yfinance.go).
-  - Populated `AnnualOperatingCashFlow` and `AnnualFreeCashFlow` slices on `Fundamentals`.
-  - Implemented automatic fallback to latest timeseries entries when summary card values are 0.0, restoring full operational integrity to the Cash Flow Quality Gate.
-
-#### 2B. Financial Sector ROE Quality Gate Bypass
-- **Vulnerability**: In [`pkg/stockpicker/filters.go`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/stockpicker/filters.go), `if f.ROE > 0 && f.ROE < minROE` allowed 79 Financial Services stocks with missing `ROE == 0.0` (including `BAJFINANCE`, `KOTAKBANK`, `LICI`) to bypass the filter entirely.
-- **Resolution**: Implemented `getEffectiveFinancialROE` helper that derives synthetic ROE via $\frac{\text{NetIncome}}{\text{MarketCap} / \text{PBRatio}}$ when reported ROE is missing or zero. Sub-threshold or unverified financials are strictly rejected (`effROE < minROE`).
-
-#### 3. Permanent Pre-Flight Data Integrity Guard
-- Created DuckDB view `v_data_integrity_check` in `data/mycase.db`.
-- Implemented `CheckDataIntegrity` in [`pkg/pithistory/analytics.go`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/pithistory/analytics.go) and wired it into `cmd/pit.go` and `cmd/db.go`. If $\ge 5\%$ of the universe has unverified/missing data, the pipeline prints a prominent warning banner before reports run.
-
----
-
-### 2. Forensic Autopsy: Deconstructing & Retiring the "DIACABS Golden Setup" Narrative
-
-`NSE:DIACABS` was previously flagged in Section 21 and Section 23 as a high-conviction "DUAL RADAR HIT" and the prime candidate justifying the Stage-1 Delivery Override rule. A forensic audit of the post-correction data proved that this signal was a complete data artifact:
-
-| Diagnostic Dimension | Pre-Audit Reading (False Signal) | Post-Audit Reading (Corrected Data) | Forensic Reality |
-| :--- | :--- | :--- | :--- |
-| **Delivery Delta ($\Delta\text{Deliv}$)** | **`+13.4%`** | **`+6.62%`** | Pre-audit delta used 40-day stale July data due to `BE` series nulls. Fresh September data shows normal +6.6%. |
-| **Operating Cash Flow (FY26)** | Unpopulated (`0.0`) | **`-₹80.43 Cr`** | Timeseries data revealed company burned ₹80.4 Cr cash despite reporting ₹101 Cr accounting net profit. |
-| **Cash Flow Quality Gate** | **SILENT PASS** (skipped) | **FAILED (BLOCKED)** | Gate was skipped due to 0.0 default. Correctly eliminated post-fix. |
-| **ROCE (Capital Efficiency)** | `10.28%` (Yahoo Gross Assets) | `10.28%` | Asset approach uses gross un-restructured pre-CIRP balance sheet. |
-| **Stage-1 Status** | **RESCUED** (delivery override) | **BLOCKED** (`Cash Flow Quality check failed`) | Eliminated legitimately by fundamental safety floors. |
+| Delivery Delta | +13.4% | +6.62% (stale data corrected) |
+| Operating Cash Flow | 0.0 (unpopulated) | -₹80.43 Cr |
+| Stage-1 Status | RESCUED (delivery override) | BLOCKED (Cash Flow Quality failed) |
 
 > [!IMPORTANT]
-> **Definitive Conclusion**: `NSE:DIACABS` was not a golden institutional accumulation compounder. It was an earnings-cash divergence setup (-₹80.43 Cr OCF) that was falsely rescued by a stale delivery calculation and a dormant cash flow filter. The narrative of DIACABS as a proof-of-concept for delivery override has been **retired**.
+> `NSE:DIACABS` was not a golden compounder. It was an earnings-cash divergence setup falsely rescued by stale delivery and a dormant cash flow filter. The narrative has been **retired**.
 
 ---
 
-### 3. Strategy Rule Status & Production Governance Matrix
-
-Following data correction and empirical analysis, the governance status of the four candidate strategy rules has been locked in:
-
-| Strategy Rule | Previous Status | Current Status | Deployment Location | Quantitative Rationale |
-| :--- | :--- | :--- | :--- | :--- |
-| **Base Duration Graduated Scoring** | Shadow Mode | **LIVE IN PRODUCTION** | [`pkg/stockpicker/scoring.go`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/stockpicker/scoring.go), DuckDB macro `base_duration_multiplier` | Validated across 24 empirical samples with a **79.2% win rate** and **+3.22% average excess return**. Replaces brittle binary 4-week cliff with calibrated multipliers ($\ge 4\text{w}: 1.0\times, 2\text{-}3\text{w}: 0.75\times, 0\text{-}1\text{w}: 0.50\times$). |
-| **ROCE Delivery Override** | Proposed Live | **RETAINED IN SHADOW (Tightened Bar)** | `stage1_shadow_results` table in `data/mycase.db` only | Empirical evidence (6 samples, 50% win rate, **-0.86% avg return**) is thin and negative. Production enforces strict legacy ROCE floor ($\ge 12.0\%$). Shadow threshold tightened: $\Delta\text{Deliv} \ge 9.0\%$ (was 6.0%), $\text{Comp RS} \ge 15.0\%$ (was 0.0%), $\text{VCP} \le 1.20$. |
-| **BFSI Promoter Exemption** | Shadow Mode | **SUSPENDED** | Diagnostic SQL query only | Correcting the ROE data expanded the legacy Financial Services pool naturally from **3 to 12 stocks** without needing an exemption. Urgent necessity is gone; rule suspended from active pipeline. |
-| **Data Integrity Pre-Flight Check** | Proposed | **LIVE IN PRODUCTION** | [`pkg/pithistory/analytics.go`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/pithistory/analytics.go), `mycase pit stats` | Permanent sentry preventing bad data feeds from silently producing phantom trading signals. |
-
-#### 1. Base Duration Production Scoring Implementation
-```go
-// BaseDurationMultiplier returns the graduated production scoring multiplier
-// based on continuous weeks consolidated in the base zone (Price >= 85% 52W High):
-func BaseDurationMultiplier(weeksInZone int) float64 {
-    switch {
-    case weeksInZone >= 4:
-        return 1.00 // Full score for mature institutional bases
-    case weeksInZone >= 2:
-        return 0.75 // 25% discount for 2-3 week bases
-    default:
-        return 0.50 // 50% discount for fresh 0-1 week breakouts
-    }
-}
-```
-
-```sql
--- DuckDB Analytical Macro in data/mycase.db
-CREATE OR REPLACE MACRO base_duration_multiplier(weeks_in_zone) AS (
-    CASE 
-        WHEN weeks_in_zone >= 4 THEN 1.0
-        WHEN weeks_in_zone >= 2 THEN 0.75
-        ELSE 0.50
-    END
-);
-```
-
-#### 2. Tightened Shadow Delivery Override Specification
-```sql
--- Synchronized in SyncShadowResults (pkg/pithistory/db.go)
-CASE 
-    WHEN c.passed_stage1 THEN TRUE
-    WHEN (c.rejection_reason LIKE '%ROCE%' OR c.rejection_reason LIKE '%Capital Efficiency%')
-         AND c.delivery_delta >= 0.09 
-         AND c.composite_rs >= 0.15 
-         AND c.vcp_ratio <= 1.20 
-    THEN TRUE
-    ELSE FALSE
-END AS shadow_stage1_pass
-```
-
----
-
-### 4. Clean Production Screening Results (September 11 Re-Run)
-
-Following the complete database purge of stale fundamentals, caches, and delivery series, a fresh end-to-end execution of `./mycase db update --index niftytotalmarket --method earlymb --top 10 --force` was executed on September 13, 2026.
-
-#### Verification Findings:
-1. **Zero Data Ingestion Failures**: All 750 constituents parsed cleanly with complete multi-year cash flow series and fresh September delivery records.
-2. **Authentic Cash Flow Elimination**: Low-quality earnings and cash-burning turnarounds were successfully eliminated across the universe.
-3. **DIACABS Status Transformation**:
-   ```text
-   • Pre-Audit:  pass=true  | channel=delivery_override | deliv_delta=0.1335 | cause=Low ROCE
-   • Post-Audit: pass=false | channel=blocked           | deliv_delta=0.0662 | cause=Cash Flow Quality check failed
-   ```
-4. **Clean Survivor Pool**: The Stage-1 survivor pool reflects 100% verified fundamental and technical criteria, with Base Duration graduated scoring properly discounting fresh setups while allowing mature compounders to lead the portfolio allocation.
-
----
-
-## 27. System-Wide Quantitative Hardening, Historical Recalibration Backfill & Bug Fixes (Sep 14, 2026)
-
-Following live production execution, data reconciliation, and audit of the Stage-1 elimination funnel and Point-in-Time analytics, seven high-priority systemic issues were resolved and validated across Go and Python codebases (each documented in the per-bug subsections below). In addition, the Point-in-Time history was fully restored and 100% recalibrated.
-
-### 1. Full Historical Recalibration Backfill & Sep 10 Snapshot Restoration
-1. **Restoration of Sep 10 Snapshot**:
-   - The missing historical run for `2026-09-10` was restored directly from `data/pit_snapshots/niftytotalmarket_earlymb_2026-09-10.json` into `data/mycase.db`.
-   - All 750 candidate scores and run metadata were fully ingested, ensuring unbroken chronological continuity.
-2. **Backfill of Disjoint Delivery Deltas Across Entire History**:
-   - Recalculated calibrated disjoint delivery deltas ($\overline{\text{Deliv}}_{5\text{D}} - \overline{\text{Deliv}}_{20\text{D Baseline}}$) with canonical bounds `[-0.10, +0.15]` across all runs in `data/mycase.db` from `2026-08-26` through `2026-09-10`.
-   - Updated raw scores, effective scores, and regime scalings consistently across 19 runs (9 `earlymb` runs, 10 `multibagger` runs).
-   - **Result**: `pillar4_uncalibrated = false` across **100% of all dates and runs in `mycase.db`**. The database is now mathematically unified without legacy subsidy discontinuities.
-
----
-
-### 2. Resolution of Bugs 001 through 007
-
-#### Bug-001: Score Shift Partitioning & Methodology Discontinuity Guard (Section 5)
-- **Problem**: Threshold `|diff| >= 4.0` without partitioning dumped dozens of rows to the console. Furthermore, comparing uncalibrated with calibrated runs falsely presented methodology upgrades as technical breakdowns.
-- **Fix**:
-  - Partitioned Section 5 into **Top 10 Positive Gainers** (ordered by `diff DESC`) and **Top 10 Negative Decliners** (ordered by `diff ASC`).
-  - Added universe summary metrics: `Total Shifts (|Δ| >= 4.0 pts): X candidates (Y gainers, Z decliners)`.
-  - Added an automated **Calibration Discontinuity Warning Banner** if consecutive runs span uncalibrated-to-calibrated dates.
-
-#### Bug-002: Stale Delivery Thresholds Recalibrated (Sections 7 & 8)
-- **Problem**: Hardcoded legacy delivery thresholds (`deliv > 0.20` and `deliv > 0.30`) remained in Section 7 and Section 8 after the canonical bounds shifted from `[-10%, +30%]` to `[-10%, +15%]`. High-conviction setups like `NSE:IPCALAB` (+10.0% Deliv Δ) and `NSE:AGARWALEYE` (+9.2%) failed to receive institutional accumulation tags.
-- **Fix**:
-  - Lowered Section 7 threshold to `deliv >= 0.06` (+6.0%) for `"Tight VCP Coil + Heavy Deliv"` and `deliv >= 0.08` (+8.0%) for `"Stealth Institutional Accum"`.
-  - Lowered Section 8 threshold to `deliv >= 0.08` (+8.0%) for `"Stealth Institutional Absorption"`.
-  - `IPCALAB` and `AGARWALEYE` are now properly recognized and classified.
-
-#### Bug-003: Comprehensive Elimination Bottleneck Taxonomy (Section 1)
-- **Problem**: 205 out of 616 eliminated stocks (33.3% blindspot) fell into a generic `"Other Hard Filter"` catch-all because SQL `rejectionQuery` lacked `CASE` branches for newer fundamental filters.
-- **Fix**:
-  - Added explicit SQL branches for:
-    - `Weak Cash Conversion (CFO < PAT)` (captures 173 stocks)
-    - `Financial Services Gated (ROE/RS)` (captures 32 stocks)
-    - `High Promoter Pledging (> 20%)`
-    - `Operating Margin Deterioration`
-  - **Result**: Reduced `Other Hard Filter` from **205 stocks (33.3%) to exactly 0 stocks (0.0%)**, achieving 100% transparent attribution.
-
-#### Bug-004: Graduated Radar Linking (Section 10)
-- **Problem**: Section 10's price gainers table evaluated radar status strictly on whether `passed_stage1 = false`. Stocks that were on the near-miss radar and graduated today (clearing Stage 1) printed `-` under the `Radar` column.
-- **Fix**:
-  - Collected graduated tickers from Section 9's radar audit and linked them into Section 10.
-  - Graduated stocks (e.g. `NSE:BLACKBUCK`) now display `"GRADUATED"` under the `Radar` column.
-
-#### Bug-005: Multi-Run Accumulation Velocity Precedence & Noise Inversion (Section 8)
-- **Problem**: Float precision noise between unrounded scores (`32.61 > 32.58` = +0.03 pt) triggered `"3-Session Consecutive Surge"` over single-session explosive breakouts (`sT0 >= sT1 + 5.0`).
-- **Fix**:
-  - Prioritized `"Velocity Breakout (+5pt Δ)"` when `sT0 >= sT1 + 5.0`.
-  - Enforced a minimum increment for consecutive surges (`sT0 > sT1 + 0.5 && sT1 > sT2 + 0.5`).
-
-#### Bug-006: Dynamic Price Change Column Header (Section 10)
-- **Problem**: Column header was hardcoded as `"1D Gain"` even when runs spanned multi-day intervals or holidays (e.g. 2026-09-09 to 2026-09-11).
-- **Fix**:
-  - Evaluated trading calendar day distance between runs.
-  - Prints `"1D Gain"` for consecutive trading days, and `"% Price Chg"` for multi-day gaps.
-
-#### Bug-007: Radar Graduation `Days` Ambiguity & Legacy Uncalibrated Run Leak (Section 9)
-- **Problem**:
-  - In Section 9, `Days` showed `1d` for intervals like `First Seen: 2026-08-28 | Clear Date: 2026-09-11` (a 14-calendar-day span) because the query selected `COUNT(DISTINCT as_of_date) AS days_on_radar`.
-  - Uncalibrated August 28 data leaked phantom entries (`JAMNAAUTO`, `MANORAMA`) into the radar due to the old legacy subsidy formula.
-- **Fix**:
-  - Computed `elapsed_days = CAST((curr.as_of_date - pr.first_seen_date) AS INT)`.
-  - Formatted the column as `Incub (Hits)` (`%dd (%dx)`), e.g. `14d (5x)` or `10d (5x)`.
-  - Added filter `AND (pillar4_uncalibrated = false OR pillar4_uncalibrated IS NULL)`.
-  - Backfilled calibrated scores for August 26–28, completely purging legacy subsidy phantom records.
-
----
-
-### 3. NSE Exchange Holiday Calendar Integration in Daily Sync
-- **The Issue**: LaunchAgent runs (`com.mycase.daily_sync.plist`) scheduled for 21:00 IST ran on NSE trading holidays, triggering API calls when exchanges were closed.
-- **The Solution**:
-  - Integrated NSE holiday calendar checking into `scripts/fetch_nse_data.py` and daily sync routines.
-  - Automatically verifies exchange trading calendar before initiating data pulls, preventing redundant scraping and empty cache writes on market holidays.
-
----
-
-### 4. Strategy Stratification, Nifty Total Market Consolidation & Consensus Radar (September 14, 2026)
-
-#### A. Production vs. Testing Stratification
-To maintain strict operational discipline, the dual strategies are stratified into distinct operational domains on the shared **`niftytotalmarket`** master universe (750 stocks):
-* **Live Production Engine (`multibagger`)**: Authoritative live strategy driving active theme capital (`data/microsmall.csv`) and executable broker orders (`mycase basket`).
-* **Quant Research & Incubator Radar (`earlymb`)**: Testing engine detecting pre-breakout institutional accumulation and volatility contraction 1–3 weeks before stage-2 markups. It generates research signals and radar watchlists without placing live broker orders.
-
-#### B. Master Universe Consolidation & Sub-Index Dynamic Slicing
-* **Pure Master Base**: All Indian equity research is stored under `index_name = 'niftytotalmarket'` in `pit_runs` and `pit_candidate_scores`.
-* **Database Cleanup**: Purged 2,446 redundant sub-index physical records (`small250`, `smallcap250`, `microcap250`, `microsmall`, `microcap250_smallcap250`) from `data/mycase.db`.
-* **Relational Projections**: Dynamic SQL views `v_pit_candidate_scores` and `v_pit_runs` project any sub-index (e.g. SmallCap 250, MicroCap 250) on-the-fly via `index_constituents` table with zero physical duplication.
-* **Canonical Ingestion**: `SaveRunSnapshot` normalizes all incoming index names via `NormalizeIndexName()`, preventing future alias fragmentation.
-
-#### C. Cross-Strategy Consensus View & CLI Command
-The dynamic view `v_strategy_consensus` joins `multibagger` and `earlymb` factor scores on `(as_of_date, ticker)`:
-$$\text{Consensus Score} = \text{Multibagger Effective Score} + \text{EarlyMB Effective Score}$$
-
-##### CLI Execution:
-```bash
-# Display top 15 consensus leaders for the latest common date
-mycase pit consensus
-
-# Custom lookback and candidate depth
-mycase pit consensus --date 2026-09-11 --top 20
-```
-
-##### Sample Output:
-```
-====================================================================
-  TOP DUAL-CONVICTION LEADERS (2026-09-11) — NIFTY TOTAL MARKET   
-====================================================================
-Live Prod Strategy : multibagger (Capital Compounder)
-Testing Radar      : earlymb (Pre-Breakout Momentum)
-Universe           : niftytotalmarket (750 Stocks)
-As-Of Date         : 2026-09-11
-------------------------------------------------------------------------------------------------------------
-Rank  Ticker           Sector              Consensus  MB Score   EarlyMB    VCP   Deliv Δ  Stage-1       Portfolio
-----  ------           ------              ---------  --------   -------    ---   -------  -------       ---------
-1     NSE:MCX          Financial Serv          64.86     57.03      7.84   0.95     -1.6%  PASS / PASS   ACTIVE (6.1%)
-2     NSE:TMCV         Cons Cyclical           63.54     56.63      6.91   1.05     +3.6%  PASS / PASS   ACTIVE (5.9%)
-3     NSE:NETWEB       Technology              59.67     50.90      8.78   0.79     +6.9%  PASS / PASS   ACTIVE (5.4%)
-4     NSE:MANORAMA     Cons Defensive          57.65     48.39      9.26   1.18     +3.3%  PASS / PASS   ACTIVE (5.2%)
-5     NSE:CHENNPETRO   Energy                  56.66     52.07      4.59   1.00     -6.5%  PASS / PASS   ACTIVE (5.6%)
-6     NSE:NAVINFLUOR   Basic Materials         55.41     47.69      7.72   0.74     -0.1%  PASS / PASS   ACTIVE (5.1%)
-7     NSE:VARROC       Cons Cyclical           55.18     46.95      8.23   1.49     -0.3%  PASS / PASS   ACTIVE (5.1%)
-8     NSE:LAURUSLABS   Healthcare              51.47     45.40      6.07   1.01    -11.9%  PASS / PASS   ACTIVE (4.9%)
-9     NSE:LUMAXTECH    Cons Cyclical           50.21     41.73      8.48   1.05     +3.2%  PASS / PASS   ACTIVE (4.6%)
-10    NSE:SMLMAH       Cons Cyclical           50.07     45.25      4.82   1.42     -0.3%  PASS / PASS   ACTIVE (4.9%)
-============================================================================================================
-```
-
----
-
-## 28. Two-Book "Core & Satellite" Portfolio System & Dedicated Satellite Pipeline (September 24, 2026)
-
-### 1. Architectural Philosophy: The Dual-Book Mandate
-To balance patient institutional compounding with tactical momentum capture, the portfolio architecture was bifurcated into two mutually exclusive, independently executed books:
-
-```text
-                               ┌────────────────────────────────────────────────────────┐
-                               │           NIFTY TOTAL MARKET (750 STOCKS)              │
-                               └──────────────────────────┬─────────────────────────────┘
-                                                          │
-                    ┌─────────────────────────────────────┴─────────────────────────────────────┐
-                    ▼                                                                           ▼
-      ┌───────────────────────────┐                                               ┌───────────────────────────┐
-      │   BOOK 1: CORE COMPOUNDER │                                               │ BOOK 2: KINETIC SATELLITE │
-      ├───────────────────────────┤                                               ├───────────────────────────┤
-      │ File: data/microsmall.csv │                                               │ File: earlymb_live.csv    │
-      │ Strategy: multibagger     │                                               │ Strategy: earlymb         │
-      │ Horizon: 6 to 18 months   │                                               │ Horizon: 2 to 8 weeks     │
-      │ Top N: 20 Holdings        │                                               │ Top N: 12 Holdings        │
-      │ Target: Cash Flow Quality │                                               │ Target: Pre-Breakout VCP  │
-      │         & ROCE Growth     │                                               │         & Delivery Delta  │
-      └─────────────┬─────────────┘                                               └─────────────┬─────────────┘
-                    │                                                                           │
-                    │               ┌─────────────────────────────────────────┐                 │
-                    └──────────────►│ Air-Gapped Mutual Exclusion (--exclude) │◄────────────────┘
-                                    │ (Zero Stock Duplication Guaranteed)     │
-                                    └─────────────────────────────────────────┘
-```
-
-1. **Book 1: Core Fundamental Compounder (`data/microsmall.csv`)**:
-   - **Engine**: `multibagger`
-   - **Mandate**: Long-term capital compounding backed by audited balance-sheet quality, cash realization (CFO/PAT $\ge 25\%$), high ROCE/CROIC, and upstream technical defense via the In-Strategy Sentry Gate.
-   - **Capital Horizon**: 6 to 18 months.
-2. **Book 2: Kinetic Momentum Satellite (`data/earlymb_live.csv`)**:
-   - **Engine**: `earlymb`
-   - **Mandate**: Tactical swing capture of high-traction setups displaying tight volatility contraction (VCP $\le 1.0$), institutional delivery accumulation, and strong relative strength.
-   - **Capital Horizon**: 2 to 8 weeks.
-
----
-
-### 2. Air-Gapped Mutual Exclusion Engine (`pkg/pithistory/staging.go` & `cmd/pit.go`)
-When a holding is exited from Core Multibagger due to deceleration or rebalancing, it may experience sharp short-term momentum surges (e.g. `NSE:CUPID` surging +6% with a +174% composite RS). Without strict structural isolation, capital from the two strategies risks colliding or re-buying exited core stocks into the wrong mandate.
-
-The system implements the **Air-Gapped Mutual Exclusion Engine** in [`pkg/pithistory/staging.go`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/pithistory/staging.go) and [`cmd/pit.go`](file:///Users/raghavgarg/Projects/myGo/mycase/cmd/pit.go):
-```bash
-# Generate kinetic satellite basket with strict exclusion of all active Core holdings:
-mycase pit stage --output data/earlymb_live.csv --exclude data/microsmall.csv --top 12
-```
-
-#### Mechanics:
-- Any ticker present with active weight $>0$ in `data/microsmall.csv` (e.g. `MCX`, `TMCV`, `CHENNPETRO`, `NETWEB`, `MANORAMA`) is automatically pruned from the satellite candidate pool before setup quality ranking and inverse-volatility risk parity allocation.
-- High-momentum swing leaders (`NSE:CUPID`, `NSE:PARKHOSPS`, `NSE:TIPSMUSIC`, `NSE:DCBBANK`, `NSE:RUBICON`) are staged in their appropriate satellite book with **zero overlap** with the core fundamental book.
-
----
-
-### 3. Continuous Market Regime Sentry ($R_{\text{regime}}$) & Empirical Capital Preservation
-Early Multibagger v3.4 replaces fragile binary index gates with a continuous, smoothed Market Regime Multiplier:
-$$R_{\text{regime}} = 0.20 + (0.60 \times \text{Persistence Ratio}) + (0.50 \times \text{Scaled Distance})$$
-$$\text{Effective Score} = \text{Raw Score} \times R_{\text{regime}}$$
-
-Where:
-- $\text{Persistence Ratio} = \frac{\text{Sessions Above 50-DMA in Last 20 Sessions}}{20}$
-- $\text{Scaled Distance} = \text{clamp}\left(\frac{\text{Close} - \text{SMA}_{50}}{0.10 \times \text{SMA}_{50}}, -0.40, +0.40\right)$
-
-#### Real-World Case Study (September 24, 2026):
-During live execution of `mycase pipeline --config config/pipeline_earlymb.yaml`:
-- **Nifty 50 Close**: ₹23,446.80
-- **Nifty 50 50-DMA**: ₹24,033.41 ($\text{Distance} = -2.44\% \to \text{Scaled Distance} = -0.2441$)
-- **Persistence**: Only 5 of last 20 trading sessions closed above 50-DMA ($0.25$)
-- **Calculated $R_{\text{regime}}$**:
-  $$R_{\text{regime}} = 0.20 + (0.60 \times 0.25) + (0.50 \times -0.2441) = \mathbf{0.2280}$$
-- **Screening Outcome**:
-  - 136 constituents passed Stage-1 safety filters.
-  - The highest raw pre-breakout score was `NSE:IKS` at **45.8**.
-  - Its effective score was $45.8 \times 0.2280 = \mathbf{10.4}$, far below the `min_effective_score_threshold: 30.0`.
-  - **Capital Preservation Action**: The engine eliminated all 136 candidates at the regime cutoff, allocating **100% of portfolio weight to `CASH_RESERVE`**.
-  - **Institutional Value**: Rather than forcing high-beta, pre-breakout swing trades into an index that is breaking down below its 50-DMA, the strategy automatically preserves cash until the broader market regains an uptrend ($R_{\text{regime}} \ge 0.60$).
-
----
-
-### 4. Selection Tracker Exit Rationale Accuracy Fix (`pkg/selectiontracker/tracker.go`)
-Previously, when existing holdings in `earlymb_live.csv` were dropped because effective scores fell below the regime cutoff ($10.4 < 30.0$), the exit summary table in [`tracker.go`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/selectiontracker/tracker.go) only evaluated `SafetyReasons`, `SectorCapDrops`, and `HysteresisDrops`. Because regime drops were stored under `ScoreThresholdDrops`, the report fell back to:
-`Missing from index dataset or fetch error`
-
-This created the false impression that active stocks had disappeared from the index or failed network fetching.
-- **The Fix**: Added an explicit check for `t.ScoreThresholdDrops[ticker]` in [`pkg/selectiontracker/tracker.go`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/selectiontracker/tracker.go#L502).
-- **Corrected Report Output**:
-  ```text
-  =========================================================================================================
-                                 REMOVED ACTIVE HOLDINGS (EXITS)
-  =========================================================================================================
-  Ticker           | Sector               | Raw Score | Eff Score | Raw Rank | Exit Reason
-  ---------------------------------------------------------------------------------------------------------
-  NSE:AVALON       | Technology           |      39.9 |       9.1 | 7        | Effective Score (9.1) below Regime Minimum Threshold (30.0) [Raw Score: 39.9, R_regime: 0.2280]
-  NSE:BALRAMCHIN   | Consumer Defensive   |      30.7 |       7.0 | 20       | Effective Score (7.0) below Regime Minimum Threshold (30.0) [Raw Score: 30.7, R_regime: 0.2280]
-  NSE:CUPID        | Consumer Defensive   |      42.1 |       9.6 | 5        | Effective Score (9.6) below Regime Minimum Threshold (30.0) [Raw Score: 42.1, R_regime: 0.2280]
-  NSE:DCBBANK      | Financial Services   |      43.6 |       9.9 | 4        | Effective Score (9.9) below Regime Minimum Threshold (30.0) [Raw Score: 43.6, R_regime: 0.2280]
-  NSE:RUBICON      | Healthcare           |      45.2 |      10.3 | 2        | Effective Score (10.3) below Regime Minimum Threshold (30.0) [Raw Score: 45.2, R_regime: 0.2280]
-  NSE:TIPSMUSIC    | Communication Services |      44.7 |      10.2 | 3        | Effective Score (10.2) below Regime Minimum Threshold (30.0) [Raw Score: 44.7, R_regime: 0.2280]
-  ```
-
----
-
-### 5. Dedicated Pipeline Automation (`config/pipeline_earlymb.yaml`)
-To operationalize the satellite book independently from the core multibagger book without requiring manual CLI flags, a dedicated pipeline specification was created in [`config/pipeline_earlymb.yaml`](file:///Users/raghavgarg/Projects/myGo/mycase/config/pipeline_earlymb.yaml):
-
-```yaml
-indices:
-  - niftytotalmarket
-golden_copy_path:
-  - data/earlymb_live.csv
-strategy: 
-  - earlymb
-top_n: 
-  - 12
-capital: 
-  - 100000
-purchase_date: 
-  - "2026-01-01"
-rebalance_tolerance_pct: 
-  - 0.25
-hysteresis_rank_buffer: 
-  - 5
-cooldown_days: 
-  - 30
-cooldown_bypass_rank: 
-  - 5
-sentry: true
-broker: zerodha
-```
-
-#### Daily Operating Rhythm:
-1. **Core Fundamental Book**:
-   ```bash
-   mycase pipeline --config config/pipeline.yaml --strategy multibagger --golden data/microsmall.csv
-   ```
-2. **Kinetic Momentum Satellite Book**:
-   ```bash
-   mycase pipeline --config config/pipeline_earlymb.yaml
-   ```
-
----
-
-## 29. Delivery Data Freshness Sentry, Market-Clock Cache Invariant & PIT Data Health Table (Sep 24, 2026)
-
-### 1. The Anomaly: Frozen Delivery Delta & The GREAVESCOT Discovery
-During cross-sectional gainers analysis on September 24, 2026, an anomaly was flagged:
-`NSE:GREAVESCOT` exhibited an identical delivery delta ($\Delta\text{Deliv} = \mathbf{+8.1\%}$) across three consecutive trading sessions (Sep 22, 23, and 24). It was highlighted as the lone "Authentic Institutional Accumulator" with an active stealth radar footprint.
-
-A forensic audit of `data/cache/delivery/` and `data/mycase.db` revealed that this was a systemic data staleness artifact:
-- **Scope of Staleness**: **746 out of 751 constituents (99.3%)** had delivery series terminating on Monday, September 21, 2026. Only 5 constituents had fetched fresh delivery records for Sep 22–24.
-- **`GREAVESCOT` Truth**: Its true Sep 24 delivery delta was **$+6.0\%$** (not $+8.1\%$). On Sep 24, `GREAVESCOT` traded 15.9 million shares, but deliverable quantity was only 3.25 million shares (**20.36% delivery** vs its 20-day baseline of 14.36%). The stock was undergoing heavy intraday retail churning rather than pure institutional demat accumulation.
-
----
-
-### 2. Root Cause: Naive Date Arithmetic in Cache Sentry
-In [`scripts/fetch_nse_data.py`](file:///Users/raghavgarg/Projects/myGo/mycase/scripts/fetch_nse_data.py), the caching layer checked:
-```python
-# FLAWED LOGIC:
-if mtime >= datetime.now() - timedelta(days=4):
-    continue # Treated as fresh
-```
-- A delivery file written on Monday, September 21 at 20:00 IST was within 4 days (96 hours) through Friday, September 25 at 20:00 IST.
-- Consequently, the scraper skipped re-fetching delivery records for Tuesday Sep 22, Wednesday Sep 23, and Thursday Sep 24.
-- In Go, `pkg/stockpicker/run.go` (`enrichDeliveryHistory`) checked `len(f.DeliveryHistory) < 25`, but never checked if the most recent delivery record matched the strategy's target evaluation date.
-
----
-
-### 3. Architectural Solution: 3-Layer Staleness Defense
-
-```text
-  LAYER 1: Market-Clock Aware Python Scraper (scripts/fetch_nse_data.py)
-  ├── Exact EOD Cutoff (18:30 IST)
-  ├── Weekend & Trading Holiday Awareness
-  └── get_expected_latest_delivery_date() ensures files match latest market session.
-           │
-           ▼
-  LAYER 2: Go Pipeline Target-Date Verification (pkg/stockpicker/run.go)
-  ├── enrichDeliveryHistory enforces: f.DeliveryHistory[0].Date >= asOfTarget
-  └── Refetches/rebuilds if history is older than target evaluation session.
-           │
-           ▼
-  LAYER 3: DuckDB Freshness Sentry & PIT Health Audit (pkg/pithistory/health.go)
-  ├── Persists audit into pit_data_health table & v_pit_data_health view.
-  └── CLI Section 6: Halts/warns on frozen metrics or stale delivery series.
-```
-
-#### Layer 1: Market-Clock Scraper Invariant
-Implemented `get_expected_latest_delivery_date()` in [`scripts/fetch_nse_data.py`](file:///Users/raghavgarg/Projects/myGo/mycase/scripts/fetch_nse_data.py):
-- Evaluates IST market clock. If current time is before 18:30 IST (when NSE publishes Bhavcopy/MTO), expected date is the prior trading day; if after 18:30 IST, expected date is today's session.
-- Automatically rolls back across weekends and recognized exchange holidays.
-- Delivery cache is only valid if the latest date inside the JSON payload equals or exceeds `expected_date`.
-
-#### Layer 2: Go Pipeline Enrichment Check
-In [`pkg/stockpicker/run.go`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/stockpicker/run.go):
-```go
-if len(f.DeliveryHistory) < 25 || f.DeliveryHistory[0].Date < asOfTarget {
-    // Stale or insufficient: force re-parse from cache/disk
-    f.DeliveryHistory = loadFreshDeliveryHistory(ticker, asOfTarget)
-}
-```
-
-#### Layer 3: DuckDB Table `pit_data_health` & CLI Sentry
-Created table `pit_data_health` in [`pkg/pithistory/db.go`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/pithistory/db.go):
-
-| Column | Type | Description |
+## A.4. Production Hardening Changelog (Sep 2026)
+
+### Nifty Total Market Scale (750 Stocks) — Sep 2026
+* **Hard Gate Attrition**: ~12.9% pass rate. Largest bottlenecks: Downtrend (39.5%), Low ROCE (22.5%), 52W High (10.1%).
+* **Data Fetch Failure Separation**: `DataFetchFailed` as first-class field, with 2-pass retry engine and 5% warning sentry.
+* **Uniform Continuity Guard**: `RawScore > 0` as authoritative ground truth across all delta computations.
+* **Zero-Unclassified Funnel**: Section 1 `Other Hard Filter` reduced from 205 stocks (33.3%) to 0 stocks (0.0%).
+
+### Bug Fixes (Sep 14, 2026)
+| Bug | Problem | Fix |
 | :--- | :--- | :--- |
-| `as_of_date` | DATE | Evaluation snapshot date (Primary Key) |
-| `index_name` | VARCHAR | Universe name (`niftytotalmarket`) |
-| `strategy` | VARCHAR | Strategy engine (`earlymb`, `multibagger`) |
-| `total_constituents` | INTEGER | Total universe constituents (750) |
-| `price_fresh_count` | INTEGER | Stocks with EOD price bar matching `as_of_date` |
-| `price_stale_count` | INTEGER | Stocks with outdated price bars |
-| `delivery_fresh_count` | INTEGER | Stocks with delivery series ending on `as_of_date` |
-| `delivery_stale_count` | INTEGER | Stocks with lagging delivery series |
-| `frozen_metrics_count` | INTEGER | Stocks whose $\Delta\text{Deliv}$, RS, and VCP were identical across consecutive runs |
-| `cf_valid_count` | INTEGER | Stocks with non-zero operating/free cash flow |
-| `health_status` | VARCHAR | `OPTIMAL`, `STALE_WARNING`, or `CRITICAL` |
-| `created_at` | TIMESTAMP | Audit timestamp |
+| **001** | Section 5 shifts unpaginated; calibration discontinuity | Partitioned into Top 10 Positive/Negative; calibration warning banner |
+| **002** | Stale delivery thresholds (+20%/+30%) after bounds change | Lowered to +6%/+8% |
+| **003** | 205 stocks in generic `Other Hard Filter` | Added SQL branches for CFO, ROE, Pledging, Margin |
+| **004** | Graduated radar stocks showed `-` in Section 10 | Linked graduated tickers from Section 9 |
+| **005** | Float precision (+0.03pt) triggered `CONSEC-SURGE` | Prioritized `VELOCITY-BREAKOUT`; minimum increment enforced |
+| **006** | Hardcoded `1D Gain` header on multi-day intervals | Dynamic `1D Gain` vs `% Price Chg` |
+| **007** | `Days` showed `1d` for 14-day spans; phantom radar entries | Elapsed calendar days; uncalibrated run filter |
+
+### Selection Tracker Fix (Sep 24, 2026)
+Exit rationale for regime drops fell back to `Missing from index`. Fixed by checking `ScoreThresholdDrops[ticker]`:
+```text
+NSE:CUPID | Effective Score (9.6) below Regime Minimum Threshold (30.0) [Raw Score: 42.1, R_regime: 0.2280]
+```
 
 ---
 
-### 4. Live Verification Output: Section 6 Freshness Sentry
+## A.5. Empirical IC Calibration Results (3-Year Rolling, 30 Periods)
 
-Execution of `mycase --index niftytotalmarket --method earlymb --analysis`:
+### In-Sample Training Stats (First 21 Periods — 70% Split):
+| Pillar Metric | Mean IC | Std IC | IR | $t$-Stat | Positive IC % |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **1. Composite RS** | -0.0655 | 0.1674 | -0.391 | -1.79 | 33.3% |
+| **2. VCP Tightness (Inv)** | -0.0182 | 0.1876 | -0.097 | -0.45 | 47.6% |
+| **3A. Winsorized RVOL Z** | -0.0324 | 0.0976 | -0.332 | -1.52 | 28.6% |
+| **3B. Decayed Pocket Pivot** | -0.0069 | 0.0874 | -0.079 | -0.36 | 47.6% |
+| **4. Delivery Delta** | -0.0883 | 0.1217 | -0.726 | -3.33 | 33.3% |
 
-```text
---- 6. DATA INTEGRITY & FRESHNESS SENTRY (Target As-Of Date: 2026-09-24) ---
-Cross-sectional audit of upstream market data, delivery recency, and metric entropy:
-  Metric Category          | Checked  | Passing  | Deficient | Rate    | System Status
-  ---------------------------------------------------------------------------------------
-  EOD Price Bar Recency    |      750 |      750 |         0 | 100.0%  | [OK] Synchronized
-  Delivery Series Freshness|      750 |      750 |         0 | 100.0%  | [OK] Fresh (2026-09-24)
-  Frozen Metric Entropy    |      750 |      750 |         0 | 100.0%  | [OK] Zero Frozen Values
-  Factor Pipeline Quality  |      750 |      750 |         0 | 100.0%  | [OK] 100% Cash Flow Valid
-  ---------------------------------------------------------------------------------------
-  Health Verdict: OPTIMAL (Zero data staleness or metric freeze detected. Audit logged to pit_data_health)
-  [OK] No active portfolio holdings were dropped due to upstream fetch failures.
+### Held-Out Evaluation Stats (Last 9 Periods — 30% Split):
+| Pillar Metric | Mean IC | Std IC | IR | $t$-Stat | Positive IC % |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **1. Composite RS** | **+0.0685** | 0.1225 | **+0.559** | +1.68 | **77.8%** |
+| **2. VCP Tightness (Inv)** | **+0.0807** | 0.1458 | **+0.554** | +1.66 | **55.6%** |
+| **3A. Winsorized RVOL Z** | -0.0706 | 0.1730 | -0.408 | -1.22 | 44.4% |
+| **3B. Decayed Pocket Pivot** | -0.1075 | 0.1382 | -0.778 | -2.33 | 11.1% |
+| **4. Delivery Delta** | **+0.0171** | 0.1069 | **+0.160** | +0.48 | **55.6%** |
+| **Raw Composite Score** | **+0.0523** | 0.1160 | **+0.451** | +1.35 | **66.7%** |
+
+### Derived Empirical Bounds:
+* **Composite RS**: $[-8.3\%, \, +49.9\%]$
+* **VCP ATR Ratio**: $[0.57, \, 1.38]$
+* **RVOL Z-Score**: $[-0.84\sigma, \, +0.94\sigma]$
+* **Decayed PP**: $[0.00, \, 3.43]$
+* **Delivery Delta**: $[-10.8\%, \, +30.3\%]$
+
+> [!WARNING]
+> **Pillar 4 Calibration Pre-Dates Disjoint Baseline Migration**: The Delivery Delta IC/IR metrics above were evaluated on the legacy arbitrary baseline. Fresh calibration on clean disjoint baseline records will be re-run once sufficient post-migration trading sessions accumulate. Setup Quality is insulated as it relies exclusively on Pillars 1 & 2.
+
+---
+
+## A.6. Quantitative Engineering & Test Coverage
+
+### Data Anchoring Boundary
+* **Settlement Cutoff**: `CleanIntradayNoiseAsOf(asOf time.Time)` enforces strict **15:45 IST settlement buffer**.
+* **CI Idempotency Test (`TestPickDeterminism`)**: 10:00 AM vs 14:30 PM queries produce **byte-identical** scores, ranks, and weights.
+
+### Structural Funnel Accounting
+* `SelectionFunnel.Validate()` enforces:
+  $$\text{Stage-1 Survivors} \equiv \text{RegimeRejected} + \text{SectorCapped} + \text{RankLimited} + \text{FinalSelected}$$
+
+### Closed-Loop Dual Invariant Test Architecture
+* **Memory Invariant** (`TestTracker_RawAndEffectiveScoreConsistency`): Raw and effective scores strictly partitioned.
+* **Storage Invariant** (`TestDuckDB_RegimeMultiplierConsistency`): 100% of rows satisfy $\text{Eff} \equiv \text{Raw} \times R$.
+
+### Metric-by-Metric Correctness
+Verified in `pkg/yfinance/metrics_earlymb_test.go` and `pkg/stockpicker/bounds_test.go`:
+* Market Regime: Exact matches on Bull ($R = 1.00$), Correction ($R = 0.23$), Downtrend ($R = 0.20$).
+* Composite RS: Exact 40/30/30 weighting.
+* VCP Tightness: Exact ATR ratio ($0.3925$).
+* Decayed Pocket Pivot: Exact exponential decay $w_d = e^{-0.25 \times d}$.
+* Delivery Delta: Accurate normalization across $[-10\%, +15\%]$.
+
+### Delivery Delta Test Suite
+| Test | Verification |
+| :--- | :--- |
+| `TestCalculateDeliveryDelta_ExactWorkedExample` | $\Delta = +0.1500$ |
+| `TestCalculateDeliveryDelta_DisjointIsolation` | 80% spike doesn't contaminate baseline |
+| `TestCalculateDeliveryDelta_InsufficientHistory` | Error on $< 25$ days; neutral fallback |
+| `TestCalculateDeliveryDelta_PITLagEnforced` | Unsettled session excluded |
+| `TestDeliveryRecord_NullJSONUnmarshalsToZero` | Go JSON `null` → 0.0 |
+| `TestCalculateDeliveryDelta_ZeroDeliveryRecordsExcluded` | Fetch-failure days stripped |
+| `TestDeliveryDelta_CrossCallSiteConsistency` | Identical results across all 7 call sites |
+
+### Launchpad & Bottleneck Test Suite
+24 unit tests in [`pkg/pithistory/bottleneck_test.go`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/pithistory/bottleneck_test.go):
+```bash
+go test -v ./pkg/pithistory -run "TestClassifyVelocityPattern|TestFormatDiagnosticFootprint|TestColorizeLaunchpadState|TestPadVisible"
 ```
+1. `ClassifyVelocityPattern`: Correctly identifies `FADE-SHARP`, `FADE-MILD`, `CONSEC-SURGE`, `COILING` without conflation.
+2. `FormatDiagnosticFootprint`: Deterministic explanations tied to numeric thresholds.
+3. `ColorizeLaunchpadState`: ANSI colors within terminal width budgets.
+4. `PadVisible`: Visible rune length via `utf8.RuneCountInString`, zero column misalignment from 3-byte `⚠`.

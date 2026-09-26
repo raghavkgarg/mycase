@@ -27,6 +27,9 @@ type DriverMetrics struct {
 	Momentum1Y  float64 // 12-month price momentum (fraction)
 	FCFYield    float64 // free cash flow / market cap (fraction)
 	ROIC        float64 // return on invested capital (fraction)
+	FairPrice   float64 // intrinsic fair price per share
+	UpsidePct   float64 // (FairPrice - CMP) / CMP * 100
+	MOSVerdict  string  // DEEPLY_UNDERVALUED, UNDERVALUED, etc.
 }
 
 // Tracker records the lifecycle of tickers during the selection process.
@@ -641,12 +644,24 @@ func (t *Tracker) SaveReport(identity, displayName, method string, existingHoldi
 		})
 		writeLine("%-16s | %-20s | %-9s | %-9s | %-8s | %s\n", "Ticker", "Sector", "Raw Score", "Eff Score", "Raw Rank", "Rejection Reason")
 		writeLine("---------------------------------------------------------------------------------------------------------\n")
+		cutoffRank := 40
+		if selectedCount+35 > cutoffRank {
+			cutoffRank = selectedCount + 35
+		}
+		omittedCount := 0
 		for _, r := range rejectedCandidates {
+			if r.rank > cutoffRank {
+				omittedCount++
+				continue
+			}
 			sec := sectors[r.ticker]
 			if sec == "" {
 				sec = "Unknown"
 			}
 			writeLine("%-16s | %-20s | %9.1f | %9.1f | %-8d | %s\n", r.ticker, sec, r.rawScore, r.effectiveScore, r.rank, r.reason)
+		}
+		if omittedCount > 0 {
+			writeLine("... and %d additional lower-ranked candidates (rank > %d) omitted\n", omittedCount, cutoffRank)
 		}
 	}
 	writeLine("\n")

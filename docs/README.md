@@ -52,6 +52,7 @@ change-logs. Apply them to every chapter, new or edited:
 |----:|---------|----------------|
 | 1 | [Vision](01-vision.md) | Who it's for, the problem, what it sets out to build |
 | 2 | [Principles](02-principles.md) | Durable architectural principles — the review rubric for changes and merges |
+| 27 | [Philosophy](27-Philosophy.md) | Momentum/Quality vs. Deep Value — reconciling market downturns, quality premiums, value traps, and the Golden Intersection |
 | 3 | [Roadmap](03-roadmap.md) | **Canonical status + plan.** Summary of what's shipped (with chapter pointers) + detail for upcoming phases. The one status document; not part of the front-to-back read |
 
 ## Module B — Architecture & Platform
@@ -88,6 +89,8 @@ change-logs. Apply them to every chapter, new or edited:
 | 12 | [Multibagger](12-multibagger.md) | India micro/small/mid-cap — 11 hard filters + 100-pt scoring |
 | 13 | [Early Multibagger](13-early-multibagger.md) | `earlymb` regime-gated pre-breakout engine (VCP/RVOL/pocket-pivot/delivery) |
 | 14 | [Value](14-value.md) | Large-cap Value — EPV-based, dual-path BFSI/industrial filters |
+| 26 | [Predictive Fair Price](26-fairprice.md) | 5-Model Ensemble Intrinsic Valuation & Cross-Strategy Enrichment |
+| 28 | [Golden Triangle](28-golden.md) | Multi-Strategy Quantitative Convergence Engine (EMB + MB + Fair Price) |
 | 15 | [Exit & Addition Rationale](15-exit-addition-rationale.md) | Portfolio exit vetting & addition-driver tracking |
 | 16 | [Scuttlebutt Research](16-scuttlebutt.md) | Qualitative research reporting pipeline |
 | 17 | [Screener / nselib Integration](17-screener.md) | NSE `nselib` + Screener.in enrichment (India) |

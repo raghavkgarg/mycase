@@ -82,6 +82,9 @@ type QuoteSummaryResponse struct {
 				DebtToEquity struct {
 					Raw float64 `json:"raw"`
 				} `json:"debtToEquity"`
+				CurrentPrice struct {
+					Raw float64 `json:"raw"`
+				} `json:"currentPrice"`
 			} `json:"financialData"`
 			DefaultKeyStatistics struct {
 				PegRatio struct {
