@@ -491,8 +491,8 @@ func formatDriverStringFromMetrics(method string, s cache.Selection) string {
 	}
 }
 
-// fetchFundamentalsVia uses the DataFetcher if available, otherwise falls back to yfinance.
-func fetchFundamentalsVia(ctx context.Context, fetcher DataFetcher, tickers []string) (map[string]yfinance.Fundamentals, error) {
+// fetchFundamentalsVia uses the FundamentalsSource if available, otherwise falls back to yfinance.
+func fetchFundamentalsVia(ctx context.Context, fetcher FundamentalsSource, tickers []string) (map[string]yfinance.Fundamentals, error) {
 	if fetcher != nil {
 		slog.InfoContext(ctx, "pick.fundamentals_fetch", "source", "router", "count", len(tickers))
 		return fetcher.FetchFundamentals(ctx, tickers)
@@ -501,17 +501,17 @@ func fetchFundamentalsVia(ctx context.Context, fetcher DataFetcher, tickers []st
 	return yfinance.FetchFundamentals(ctx, tickers)
 }
 
-// fetchHistoricalPricesVia uses the DataFetcher if available for historical data,
+// fetchHistoricalPricesVia uses the PriceSource if available for historical data,
 // otherwise falls back to the direct yfinance concurrent pool.
-func fetchHistoricalPricesVia(ctx context.Context, fetcher DataFetcher, rawTickers []string) (map[string]*yfinance.HistoricalData, []string, []string) {
+func fetchHistoricalPricesVia(ctx context.Context, fetcher PriceSource, rawTickers []string) (map[string]*yfinance.HistoricalData, []string, []string) {
 	if fetcher == nil {
 		return FetchHistoricalPrices(ctx, rawTickers)
 	}
 	return fetchHistoricalPricesWithFetcher(ctx, fetcher, rawTickers)
 }
 
-// getBenchmarkAndSlicedPricesVia routes the benchmark fetch through the DataFetcher if available.
-func getBenchmarkAndSlicedPricesVia(ctx context.Context, fetcher DataFetcher, indexName string, activeKeys []string, fullHistory map[string]*yfinance.HistoricalData, rangeStr string) (map[string][]float64, []float64, error) {
+// getBenchmarkAndSlicedPricesVia routes the benchmark fetch through the PriceSource if available.
+func getBenchmarkAndSlicedPricesVia(ctx context.Context, fetcher PriceSource, indexName string, activeKeys []string, fullHistory map[string]*yfinance.HistoricalData, rangeStr string) (map[string][]float64, []float64, error) {
 	benchSym := GetBenchmarkSymbolForIndex(indexName, activeKeys)
 	benchmarkPrices, err := FetchBenchmarkPricesResilient(ctx, fetcher, benchSym, rangeStr)
 	if err != nil {

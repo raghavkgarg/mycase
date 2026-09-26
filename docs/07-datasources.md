@@ -270,6 +270,17 @@ type SectorSource interface {
 - new `edgar.Client` implements `FundamentalsSource` (statement fields).
 - `csvloader`/constituents implements `SectorSource`.
 
+> **Shipped (Phase 10d), with one deviation.** `stockpicker.DataFetcher` is now a
+> *composed* interface over `PriceSource` (`FetchHistoricalDataWithTimestamps` +
+> `FetchHistoricalPrices`) and `FundamentalsSource` (`FetchFundamentals`); `*datafetcher.Router`
+> satisfies all of them. `SectorSource` was **not** added as a router capability: in
+> practice sector never flows through the router — it is backfilled from the constituents
+> CSV by `stockpicker.InjectSectors` (Phase 10a), a better GICS source than any provider
+> endpoint — so a router `SectorSource` would be dead surface. The ordered Schwab→Yahoo
+> fallback is consolidated into one generic `usPrimaryWithYahooFallback` helper used by
+> both quotes and the fundamentals Schwab-leg; single-ticker historical keeps a deliberate
+> no-fallback policy (documented in `router.go`).
+
 ### Composite fundamentals (merge, don't just fall back)
 
 The key insight from [§5](#5-capability-matrix--gap-analysis): no single source is complete for US fundamentals. A `FundamentalsMerger` (in `pkg/datafetcher`, composing sources with no upward imports) applies a per-field source-of-record precedence:
@@ -302,7 +313,7 @@ EDGAR facts being quarterly-stable means each company's `companyfacts.json` is f
 | Sector from CSV; derive `NetIncome`/`RegularPrice`; delete dead `GetCache()` | roadmap **Phase 10a** |
 | Wire the 7 bypass paths through the Router; `US:SPY` benchmark; `source` column + slog | roadmap **Phase 10b** / refactor **R17** |
 | `pkg/edgar` client + XBRL mapper + `FundamentalsMerger` | roadmap **Phase 10c** ✅ done |
-| Capability interfaces + provenance surfaced in reports | roadmap **Phase 10d** — provenance surfacing ✅ done; capability interface split open |
+| Capability interfaces + provenance surfaced in reports | roadmap **Phase 10d** ✅ done (provenance + PriceSource/FundamentalsSource split + consolidated fallback) |
 
 ---
 

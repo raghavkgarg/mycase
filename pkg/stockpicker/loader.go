@@ -513,9 +513,9 @@ retryLoop:
 	return fullHistory, activeKeys, failedKeys
 }
 
-// fetchHistoricalPricesWithFetcher is like FetchHistoricalPrices but routes through a DataFetcher,
+// fetchHistoricalPricesWithFetcher is like FetchHistoricalPrices but routes through a PriceSource,
 // with multi-pass exponential backoff retries for failed tickers.
-func fetchHistoricalPricesWithFetcher(ctx context.Context, fetcher DataFetcher, rawTickers []string) (map[string]*yfinance.HistoricalData, []string, []string) {
+func fetchHistoricalPricesWithFetcher(ctx context.Context, fetcher PriceSource, rawTickers []string) (map[string]*yfinance.HistoricalData, []string, []string) {
 	slog.InfoContext(ctx, "prices.fetch_start", "range", "1y", "count", len(rawTickers), "source", "router")
 	type fetchJob struct {
 		ticker string
@@ -600,7 +600,7 @@ retryLoop:
 }
 
 // FetchBenchmarkPricesResilient fetches benchmark prices with retry backoff and persistent database fallback.
-func FetchBenchmarkPricesResilient(ctx context.Context, fetcher DataFetcher, benchSym, rangeStr string) ([]float64, error) {
+func FetchBenchmarkPricesResilient(ctx context.Context, fetcher PriceSource, benchSym, rangeStr string) ([]float64, error) {
 	slog.InfoContext(ctx, "pick.benchmark_fetch", "symbol", benchSym, "range", rangeStr)
 	var benchmarkPrices []float64
 	var fetchErr error

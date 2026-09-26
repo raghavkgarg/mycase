@@ -125,7 +125,7 @@ chapter pointers, and its history lives in git. Design detail for shipped subsys
 in `docs/04-architecture.md` (design decisions) and `docs/10-duckdb-migration.md` (storage).
 Only active and planned work remains below.
 
-### Phase 10 — Data Source Resilience  *(shipped; Phase 10d provenance shipped, interface split open)*
+### Phase 10 — Data Source Resilience  *(shipped)*
 
 **Goal**: source each data type from the most authoritative provider that can supply it,
 with deterministic logged fallback, and record provenance. This is **shipped** — US data
@@ -152,13 +152,20 @@ Storage** for how it works.
     each pick with a compact marker, e.g. `… | [source: EDGAR FCF (10-K FY2025), OCF (10-K
     FY2025)]`. Populated only on the merged US path.
 
-- **Open — interface split + fallback chain (optional):** split `DataFetcher` into
-  capability interfaces (`PriceSource`, `FundamentalsSource`, `SectorSource`) and formalize
-  the currently ad-hoc, per-method fallback (historical does not fall back; quotes/
-  fundamentals do) into one explicit ordered chain. The consumer-defined-interface pattern
-  already exists (`stockpicker.DataFetcher`, `server.MarketDataFetcher`,
-  `attribution.PriceFetcher`), so this is largely mechanical. Depends on nothing further;
-  deferred for lack of pressure.
+- **Interface split + fallback chain — shipped.** `stockpicker.DataFetcher` is now a
+  *composed* interface over two capability interfaces — `PriceSource` (historical
+  series) and `FundamentalsSource` (batch fundamentals) — so a caller or test stub can
+  depend on only what it uses; a `*datafetcher.Router` satisfies all three and the
+  existing compile-time assert is unchanged. `SectorSource` is deliberately *not* a
+  router capability: sector is backfilled from the constituents CSV (`InjectSectors`,
+  Phase 10a), a better GICS source than any provider endpoint. The Router's previously
+  ad-hoc per-method fallback is consolidated into one generic ordered chain
+  (`usPrimaryWithYahooFallback`): try Schwab, on error log a single structured event and
+  retry via Yahoo, returning the original Schwab error if Yahoo also fails; batch quotes
+  and the Schwab leg of fundamentals both flow through it identically (fundamentals keeps
+  its EDGAR overlay on the success path). The single-ticker historical methods keep a
+  deliberate no-fallback policy (a price series silently spliced from a second provider
+  mid-run is worse than a clean, retryable failure) — now documented in code.
 
 
 ---
@@ -455,7 +462,7 @@ report-write failure is logged-and-swallowed — it never fails the run.
 
 | Phase | Target | Dependency | Core value delivered | Status |
 |-------|--------|------------|---------------------|--------|
-| 10. Data Source Resilience | Q4 2026 | Schwab API | Authoritative US data (SEC EDGAR), Schwab everywhere, provenance | 🟩 shipped; 10d provenance shipped, interface split open |
+| 10. Data Source Resilience | Q4 2026 | Schwab API | Authoritative US data (SEC EDGAR), Schwab everywhere, provenance | 🟩 shipped (incl. 10d: provenance + capability-interface split) |
 | 11. Data & observability hygiene | Q4 2026 | none | Raw-response capture/triage, market-aware settlement/formatting, mapping-bug fixes | 🟩 shipped; R-store-6/7 + flatten open |
 | 12. Autonomous Scheduler | Q1 2027 | `marketcal` holiday calendar | One Go-native orchestrator for all three cadences (EOD / drift / rebalance); investor-in-the-loop preserved | 🟩 shipped |
 | 6. Options Overlay | H2 2027 | 6mo live data | Income optimization | ⬜ |

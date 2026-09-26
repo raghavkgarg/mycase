@@ -9,13 +9,36 @@ import (
 	"github.com/raghavkgarg/mycase/pkg/yfinance"
 )
 
-// DataFetcher abstracts the data-fetching layer so that the stockpicker does not
-// call yfinance directly. Production callers pass a *datafetcher.Router (which
-// satisfies this interface); tests can provide a stub.
+// The stockpicker consumes three market-data capabilities, each declared as its
+// own interface so a caller (or test stub) can depend on only what it needs and
+// so new data sources can satisfy one capability without implementing all three
+// (Phase 10d capability split). Production callers pass a *datafetcher.Router,
+// which satisfies all three (and thus the composed DataFetcher below).
+type (
+	// PriceSource supplies historical price series for a ticker.
+	PriceSource interface {
+		FetchHistoricalDataWithTimestamps(ctx context.Context, ticker string, rangeStr string) (*yfinance.HistoricalData, error)
+		FetchHistoricalPrices(ctx context.Context, ticker string, rangeStr string) ([]float64, error)
+	}
+
+	// FundamentalsSource supplies fundamental metrics for a batch of tickers.
+	FundamentalsSource interface {
+		FetchFundamentals(ctx context.Context, tickers []string) (map[string]yfinance.Fundamentals, error)
+	}
+)
+
+// DataFetcher is the composed capability the full pipeline needs: prices +
+// fundamentals. It embeds the capability interfaces so existing callers
+// (`Options.DataFetcher`, `eod.Config.Fetcher`) and the compile-time assert in
+// pkg/autopilot are unchanged, while new code can depend on the narrower
+// PriceSource / FundamentalsSource directly. A *datafetcher.Router satisfies it.
+//
+// SectorSource is intentionally NOT part of this set: sector is not fetched
+// through the router — it is backfilled from the constituents CSV by
+// InjectSectors (Phase 10a), a better (GICS) source than any provider endpoint.
 type DataFetcher interface {
-	FetchFundamentals(ctx context.Context, tickers []string) (map[string]yfinance.Fundamentals, error)
-	FetchHistoricalDataWithTimestamps(ctx context.Context, ticker string, rangeStr string) (*yfinance.HistoricalData, error)
-	FetchHistoricalPrices(ctx context.Context, ticker string, rangeStr string) ([]float64, error)
+	PriceSource
+	FundamentalsSource
 }
 
 // Options holds command line configurations.
@@ -37,10 +60,10 @@ type Options struct {
 	SkipScuttlebutt                     bool
 	CooldownDays                        int
 	CooldownBypassRank                  int
-	AsOfDate                            string // Target EOD market date (YYYY-MM-DD); if empty, defaults to Clock.SettlementDate(now)
-	BasedOn                             string // Formatted based-on string e.g. "2026-09-11 EOD (Synced: 2026-09-11 21:15:00 IST)"
-	Force                               bool   // Force execution even if snapshot exists
-	DisableSentryGate                   bool   // if true, skips Sentry technical gate (price >= 0.95*SMA200 and DD <= 20%)
+	AsOfDate                            string         // Target EOD market date (YYYY-MM-DD); if empty, defaults to Clock.SettlementDate(now)
+	BasedOn                             string         // Formatted based-on string e.g. "2026-09-11 EOD (Synced: 2026-09-11 21:15:00 IST)"
+	Force                               bool           // Force execution even if snapshot exists
+	DisableSentryGate                   bool           // if true, skips Sentry technical gate (price >= 0.95*SMA200 and DD <= 20%)
 	SectorMaxStocks                     map[string]int // sector-specific stock count caps (e.g. "Consumer Defensive": 2)
 	MinEntryScore                       float64        // minimum score hurdle for new additions (e.g. 40.0)
 	MinHoldingScore                     float64        // minimum score floor for incumbents (e.g. 35.0)

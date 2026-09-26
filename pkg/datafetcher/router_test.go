@@ -319,3 +319,49 @@ func TestRouterWithEDGARNilSafe(t *testing.T) {
 		t.Error("WithEDGAR(nil) should leave edgarSource nil")
 	}
 }
+
+func TestUSPrimaryWithYahooFallback(t *testing.T) {
+	ctx := context.Background()
+	tickers := []string{"US:AAPL"}
+
+	primaryOK := func(_ context.Context, _ []string) (map[string]float64, error) {
+		return map[string]float64{"US:AAPL": 1}, nil
+	}
+	primaryErr := func(_ context.Context, _ []string) (map[string]float64, error) {
+		return nil, context.DeadlineExceeded
+	}
+	yahooOK := func(_ context.Context, _ []string) (map[string]float64, error) {
+		return map[string]float64{"US:AAPL": 2}, nil
+	}
+	yahooErr := func(_ context.Context, _ []string) (map[string]float64, error) {
+		return nil, http.ErrServerClosed
+	}
+
+	t.Run("primary success", func(t *testing.T) {
+		got, err := usPrimaryWithYahooFallback(ctx, "quotes", tickers, primaryOK, yahooOK)
+		if err != nil || got["US:AAPL"] != 1 {
+			t.Fatalf("want primary value 1, got %v err %v", got, err)
+		}
+	})
+
+	t.Run("primary error falls back to yahoo", func(t *testing.T) {
+		got, err := usPrimaryWithYahooFallback(ctx, "quotes", tickers, primaryErr, yahooOK)
+		if err != nil || got["US:AAPL"] != 2 {
+			t.Fatalf("want yahoo fallback value 2, got %v err %v", got, err)
+		}
+	})
+
+	t.Run("both fail returns original primary error", func(t *testing.T) {
+		_, err := usPrimaryWithYahooFallback(ctx, "quotes", tickers, primaryErr, yahooErr)
+		if err != context.DeadlineExceeded {
+			t.Fatalf("want original primary error, got %v", err)
+		}
+	})
+
+	t.Run("nil primary uses yahoo", func(t *testing.T) {
+		got, err := usPrimaryWithYahooFallback[float64](ctx, "quotes", tickers, nil, yahooOK)
+		if err != nil || got["US:AAPL"] != 2 {
+			t.Fatalf("want yahoo value 2 when no primary, got %v err %v", got, err)
+		}
+	})
+}
