@@ -17,7 +17,7 @@ import (
 )
 
 // RawCommand groups operations over the raw-response archive (data/raw/**),
-// the disposable capture/replay store (docs/24-logging.md §2). It exposes
+// the disposable capture/replay store (docs/book/24-logging.md §2). It exposes
 // retention pruning and schema-blind triage: list the
 // archive, print a capture, or resolve a capture's path for piping to jless/jq.
 var RawCommand = &cli.Command{

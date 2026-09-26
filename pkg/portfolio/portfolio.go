@@ -9,7 +9,7 @@ import (
 // Holding is a type alias kept for backward compatibility with printer and cmd packages.
 // It aliases the leaf broker/types.Holding directly (not pkg/broker) so that portfolio
 // depends only on an L0 leaf, keeping it at L1 below its L2 consumers (optimizer,
-// broker/zerodha). See docs/04-architecture.md + .kiro/steering/architecture.md.
+// broker/zerodha). See docs/book/04-architecture.md + .kiro/steering/architecture.md.
 type Holding = brokertypes.Holding
 
 // KnownSeriesSuffixes lists standard Indian exchange series suffixes (NSE/BSE)

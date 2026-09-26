@@ -10,7 +10,7 @@
 //
 // Go already rejects import cycles at compile time; this guard is about
 // preserving the *direction* and *leaf-ness* the layering rule establishes, which the
-// compiler does not enforce. See docs/04-architecture.md and
+// compiler does not enforce. See docs/book/04-architecture.md and
 // .kiro/steering/architecture.md.
 //
 // The layer map itself lives in devtools/internal/layers — the single source of

@@ -113,8 +113,8 @@ chapter). One line, not a table.
   accept that ranges drift — prefer naming the function/type (`` `Router.Fundamentals` ``)
   over a line number.
 - **Cross-link other chapters by relative filename**: `[Storage](10-storage.md)`,
-  `docs/04-architecture.md`. When a chapter is renamed, every such link is migrated in the
-  same change (grep `docs/NN-*.md`), and no link may point at a file that doesn't exist.
+  `docs/book/04-architecture.md`. When a chapter is renamed, every such link is migrated in the
+  same change (grep `docs/book/NN-*.md`), and no link may point at a file that doesn't exist.
 - **Refer to a chapter by its title or module position, not a stale number**, in running
   prose where practical — filenames carry the number, the prose carries the meaning.
 

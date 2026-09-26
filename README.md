@@ -54,7 +54,7 @@ mycase --version
 its `config/` and `data/` directories by following the symlink back to this project tree, so
 the installed command works from any directory. For a sudo-free user install use
 `make install PREFIX=~/.local`; to point a standalone `go install` binary at the tree, set
-`MYCASE_HOME`. See the [Runbook](docs/18-runbook.md) for the full resolution rules.
+`MYCASE_HOME`. See the [Runbook](docs/book/18-runbook.md) for the full resolution rules.
 
 ---
 
@@ -159,11 +159,11 @@ The full guide lives in [`docs/`](docs/README.md), written as a book grouped int
 Start here:
 
 - [Guide index](docs/README.md) — all chapters, grouped into modules
-- [Architecture](docs/04-architecture.md) — layers, data flow, design decisions
-- [Runbook](docs/18-runbook.md) — every command with realistic workflows
-- [Roadmap](docs/03-roadmap.md) — status and upcoming work
+- [Architecture](docs/book/04-architecture.md) — layers, data flow, design decisions
+- [Runbook](docs/book/18-runbook.md) — every command with realistic workflows
+- [Roadmap](docs/book/03-roadmap.md) — status and upcoming work
 
-Contributing to the docs? Read [Chapter 0 — The Style Guide](docs/00-style-guide.md) first.
+Contributing to the docs? Read [Chapter 0 — The Style Guide](docs/book/00-style-guide.md) first.
 
 ---
 

@@ -13,7 +13,7 @@ import (
 
 // HolidaysCommand is the read-only operator view of the trading-holiday calendar
 // that lives in the `holidays` table of data/mycase.db. Holidays are seeded and
-// refreshed operationally (see docs/18-runbook.md and holiday.sql) — this command
+// refreshed operationally (see docs/book/18-runbook.md and holiday.sql) — this command
 // does not write; it exists so an operator can verify the table is populated
 // (e.g. on a fresh machine or after the yearly refresh) rather than discovering
 // an empty calendar months later when a run fires on a holiday.
@@ -78,7 +78,7 @@ func runHolidaysStatus(ctx context.Context, _ *cli.Command) error {
 
 	if len(unseeded) > 0 {
 		fmt.Printf("\n⚠  Unseeded: %v — trading-day logic is WEEKEND-ONLY for these until seeded.\n", unseeded)
-		fmt.Println("   Seed with:  duckdb data/mycase.db < holiday.sql   (see docs/18-runbook.md)")
+		fmt.Println("   Seed with:  duckdb data/mycase.db < holiday.sql   (see docs/book/18-runbook.md)")
 		return fmt.Errorf("%d exchange(s) have no holiday data", len(unseeded))
 	}
 	fmt.Println("\n✓  All known exchanges seeded.")
@@ -94,7 +94,7 @@ func runHolidaysList(ctx context.Context, c *cli.Command) error {
 	dates := store.Holidays(exchange)
 	if len(dates) == 0 {
 		fmt.Printf("No holidays seeded for %s.\n", exchange)
-		fmt.Println("Seed with:  duckdb data/mycase.db < holiday.sql   (see docs/18-runbook.md)")
+		fmt.Println("Seed with:  duckdb data/mycase.db < holiday.sql   (see docs/book/18-runbook.md)")
 		return fmt.Errorf("no holiday data for %s", exchange)
 	}
 	rows := make([][]string, 0, len(dates))
