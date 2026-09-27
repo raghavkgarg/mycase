@@ -40,6 +40,9 @@ type DriverMetrics struct {
 	Momentum1Y  float64
 	FCFYield    float64
 	ROIC        float64
+	FairPrice   float64
+	UpsidePct   float64
+	MOSVerdict  string
 }
 
 // Run executes the full stock selection pipeline for the given options.
@@ -153,6 +156,16 @@ func RunWithResult(ctx context.Context, opts *Options) (*PickResult, error) {
 	// collapsing to "Unknown" (Phase 10a). No-op when the CSV carries no sector.
 	InjectSectors(fundamentals, tickersSrc.Sectors)
 
+	// Backfill RegularPrice from the latest historical close if unavailable from fundamentals provider
+	for t, f := range fundamentals {
+		if f.RegularPrice <= 0 {
+			if hist, ok := fullHistory[t]; ok && len(hist.Closes) > 0 {
+				f.RegularPrice = hist.Closes[len(hist.Closes)-1]
+				fundamentals[t] = f
+			}
+		}
+	}
+
 	InjectGovernance(fundamentals, cfg.Governance)
 	tracker := selectiontracker.New()
 	tracker.BasedOn = basedOnStr
@@ -180,7 +193,28 @@ func RunWithResult(ctx context.Context, opts *Options) (*PickResult, error) {
 	// For EarlyMB, ensure Stage-1 survivors have full delivery history (>= 25 sessions)
 	// for Pillar 4 institutional accumulation delta scoring and PIT snapshotting.
 	if (opts.Method == "earlymb" || opts.Method == "early_multibagger") && len(activeKeys) > 0 {
-		enrichDeliveryHistory(ctx, activeKeys, fundamentals)
+		asOfTarget := opts.AsOfDate
+		if asOfTarget == "" {
+			asOfTarget = opts.clock().SettlementDate(time.Now()).Format("2006-01-02")
+		}
+		enrichDeliveryHistory(ctx, activeKeys, fundamentals, asOfTarget)
+	}
+
+	// Compute Fair Price ensemble results for all active survivors
+	sectorMedians := yfinance.ComputeCohortSectorMedians(activeKeys, fundamentals)
+	defaultMedian := sectorMedians["Unclassified"]
+	fairPrices := make(map[string]*yfinance.FairPriceResult)
+	for _, t := range activeKeys {
+		f := fundamentals[t]
+		med, ok := sectorMedians[f.Sector]
+		if !ok || (med.PE == 0 && med.PB == 0 && med.EVEBITDA == 0) {
+			med = defaultMedian
+		}
+		if fp, err := yfinance.CalculateFairPrice(&f, med); err == nil {
+			fairPrices[t] = fp
+		} else {
+			slog.DebugContext(ctx, "pick.fairprice_error", "ticker", t, "err", err)
+		}
 	}
 
 	var selectedKeys []string
@@ -206,7 +240,11 @@ func RunWithResult(ctx context.Context, opts *Options) (*PickResult, error) {
 		EnableSentryGate:          !opts.DisableSentryGate,
 	}
 
-	if opts.Method == "value" {
+	if opts.Method == "fairprice" {
+		scores = ScoreFairPrice(ctx, activeKeys, fundamentals, fairPrices, cfg.HardFilters)
+		selectedKeys = SelectTopNFairPriceWithCooldown(activeKeys, scores, fairPrices, fundamentals, cfg.HardFilters, opts.TopN, goldenWeights, opts.HysteresisBuffer, tracker, recentExits, opts.CooldownDays, opts.CooldownBypassRank, smartHysteresis)
+		finalWeights = NormalizeFairPriceWeights(selectedKeys, scores, fundamentals, cfg.HardFilters, goldenWeights, opts.RebalanceTolerance)
+	} else if opts.Method == "value" {
 		scores = ScoreValue(ctx, activeKeys, fundamentals, fullHistory, cfg.HardFilters)
 		selectedKeys = SelectTopNValueWithCooldown(activeKeys, scores, fundamentals, cfg.HardFilters, opts.TopN, goldenWeights, opts.HysteresisBuffer, tracker, recentExits, opts.CooldownDays, opts.CooldownBypassRank, smartHysteresis)
 		finalWeights = NormalizeValueWeights(selectedKeys, scores, fundamentals, cfg.HardFilters, goldenWeights, opts.RebalanceTolerance)
@@ -231,15 +269,20 @@ func RunWithResult(ctx context.Context, opts *Options) (*PickResult, error) {
 		return finalWeights[selectedKeys[i]] > finalWeights[selectedKeys[j]]
 	})
 
-	if opts.Method == "earlymb" || opts.Method == "early_multibagger" {
-		PrintEarlyMultibaggerTable(selectedKeys, finalWeights, scores, fundamentals, fullHistory, displayNameVal, opts.Method)
+	if opts.Method == "fairprice" {
+		PrintFairPriceTable(selectedKeys, finalWeights, scores, fairPrices, fundamentals, fullHistory, displayNameVal, opts.Method)
 		if !opts.SkipScuttlebutt {
-			PrintScuttlebutt(selectedKeys, fundamentals, displayNameVal, opts.Method)
+			PrintScuttlebutt(selectedKeys, fundamentals, fairPrices, displayNameVal, opts.Method)
+		}
+	} else if opts.Method == "earlymb" || opts.Method == "early_multibagger" {
+		PrintEarlyMultibaggerTable(selectedKeys, finalWeights, scores, fairPrices, fundamentals, fullHistory, displayNameVal, opts.Method)
+		if !opts.SkipScuttlebutt {
+			PrintScuttlebutt(selectedKeys, fundamentals, fairPrices, displayNameVal, opts.Method)
 		}
 	} else if opts.Method == "value" || opts.Method == "multibagger" || opts.Method == "us_quality_momentum" {
-		PrintMultibaggerTable(selectedKeys, finalWeights, scores, fundamentals, fullHistory, displayNameVal, opts.Method)
+		PrintMultibaggerTable(selectedKeys, finalWeights, scores, fairPrices, fundamentals, fullHistory, displayNameVal, opts.Method)
 		if !opts.SkipScuttlebutt && opts.Method != "us_quality_momentum" {
-			PrintScuttlebutt(selectedKeys, fundamentals, displayNameVal, opts.Method)
+			PrintScuttlebutt(selectedKeys, fundamentals, fairPrices, displayNameVal, opts.Method)
 		}
 	} else {
 		PrintStandardTable(selectedKeys, finalWeights, fullHistory, displayNameVal, opts.Method)
@@ -315,6 +358,13 @@ func RunWithResult(ctx context.Context, opts *Options) (*PickResult, error) {
 			delivDelta, _, _, dErr = yfinance.GetDeliveryDelta(fundamentals[t].DeliveryHistory, time.Now(), 1)
 			delivInsufficient = (dErr != nil)
 		}
+		var fpVal, upsideVal float64
+		var mosVerdict string
+		if fp, ok := fairPrices[t]; ok && fp != nil {
+			fpVal = fp.EnsembleFairPrice
+			upsideVal = fp.UpsidePct
+			mosVerdict = fp.Verdict
+		}
 		candidateMap[t] = CandidateScoreDetail{
 			Ticker:                     t,
 			PassedStage1:               !isFetchFailed && !isSafetyDrop && hasRaw,
@@ -331,6 +381,9 @@ func RunWithResult(ctx context.Context, opts *Options) (*PickResult, error) {
 			Selected:                   selectedSet[t],
 			FinalWeight:                finalWeights[t],
 			Sector:                     sectors[t],
+			FairPrice:                  fpVal,
+			UpsidePct:                  upsideVal,
+			MOSVerdict:                 mosVerdict,
 		}
 	}
 	pitSnapshot := &PITRunSnapshot{
@@ -348,6 +401,25 @@ func RunWithResult(ctx context.Context, opts *Options) (*PickResult, error) {
 	}
 	if snapPath, sErr := SaveRunSnapshot(pitSnapshot); sErr == nil {
 		slog.InfoContext(ctx, "pick.snapshot_saved", "path", snapPath)
+	}
+
+	// Cross-strategy enrichment of selection drivers with Fair Price
+	for _, k := range selectedKeys {
+		if fp, ok := fairPrices[k]; ok && fp != nil {
+			fpDriver := fmt.Sprintf("Fair Price: ₹%.1f (Upside: %+.1f%%, %s)", fp.EnsembleFairPrice, fp.UpsidePct, fp.Verdict)
+			if curr, has := tracker.AdditionDrivers[k]; has && curr != "" {
+				if !strings.Contains(curr, "Fair Price:") {
+					tracker.AdditionDrivers[k] = curr + ", " + fpDriver
+				}
+			} else {
+				tracker.AdditionDrivers[k] = fpDriver
+			}
+			dm := tracker.DriverValues[k]
+			dm.FairPrice = fp.EnsembleFairPrice
+			dm.UpsidePct = fp.UpsidePct
+			dm.MOSVerdict = fp.Verdict
+			tracker.DriverValues[k] = dm
+		}
 	}
 
 	prevDrivers := loadPreviousDriverStrings(ctx, displayNameVal, opts.Method)
@@ -401,16 +473,25 @@ func RunWithResult(ctx context.Context, opts *Options) (*PickResult, error) {
 		if r, ok := tracker.RawRanks[k]; ok {
 			result.Ranks[k] = r
 		}
-		if dm, ok := tracker.DriverValues[k]; ok {
-			result.Drivers[k] = DriverMetrics{
-				TTMGrowth:   dm.TTMGrowth,
-				RevenueCAGR: dm.RevenueCAGR,
-				DSODelta:    dm.DSODelta,
-				RSI:         dm.RSI,
-				Momentum1Y:  dm.Momentum1Y,
-				FCFYield:    dm.FCFYield,
-				ROIC:        dm.ROIC,
-			}
+		dm := tracker.DriverValues[k]
+		fpVal, upsideVal := 0.0, 0.0
+		mosVerdict := ""
+		if fp, okFP := fairPrices[k]; okFP && fp != nil {
+			fpVal = fp.EnsembleFairPrice
+			upsideVal = fp.UpsidePct
+			mosVerdict = fp.Verdict
+		}
+		result.Drivers[k] = DriverMetrics{
+			TTMGrowth:   dm.TTMGrowth,
+			RevenueCAGR: dm.RevenueCAGR,
+			DSODelta:    dm.DSODelta,
+			RSI:         dm.RSI,
+			Momentum1Y:  dm.Momentum1Y,
+			FCFYield:    dm.FCFYield,
+			ROIC:        dm.ROIC,
+			FairPrice:   fpVal,
+			UpsidePct:   upsideVal,
+			MOSVerdict:  mosVerdict,
 		}
 	}
 	result.PITSnapshot = pitSnapshot
@@ -532,14 +613,21 @@ func getBenchmarkAndSlicedPricesVia(ctx context.Context, fetcher PriceSource, in
 }
 
 // enrichDeliveryHistory checks if any Stage-1 survivor tickers are missing delivery history
-// (less than 25 settled sessions) and batch-fetches the complete series from NSE via Python,
+// (less than 25 settled sessions) or have stale delivery history (latest record < targetDate),
+// and batch-fetches the complete series from NSE via Python,
 // attaching the history to the in-memory fundamentals map and updating the DuckDB cache.
-func enrichDeliveryHistory(ctx context.Context, tickers []string, fundamentals map[string]yfinance.Fundamentals) {
+func enrichDeliveryHistory(ctx context.Context, tickers []string, fundamentals map[string]yfinance.Fundamentals, targetDate ...string) {
+	reqDate := ""
+	if len(targetDate) > 0 {
+		reqDate = targetDate[0]
+	}
 	var missing []string
 	for _, t := range tickers {
 		if strings.HasPrefix(t, "NSE:") || strings.HasPrefix(t, "BSE:") || strings.HasSuffix(t, ".NS") {
-			if f, ok := fundamentals[t]; ok && len(f.DeliveryHistory) < 25 {
-				missing = append(missing, t)
+			if f, ok := fundamentals[t]; ok {
+				if len(f.DeliveryHistory) < 25 || (reqDate != "" && len(f.DeliveryHistory) > 0 && f.DeliveryHistory[0].Date < reqDate) {
+					missing = append(missing, t)
+				}
 			}
 		}
 	}

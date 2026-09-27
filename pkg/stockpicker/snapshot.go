@@ -27,6 +27,9 @@ type CandidateScoreDetail struct {
 	DataFetchFailed            bool    `json:"data_fetch_failed"`
 	Pillar4InsufficientHistory bool    `json:"pillar4_insufficient_history"`
 	Selected                   bool    `json:"selected"`
+	FairPrice                  float64 `json:"fair_price,omitempty"`
+	UpsidePct                  float64 `json:"upside_pct,omitempty"`
+	MOSVerdict                 string  `json:"mos_verdict,omitempty"`
 }
 
 type PITRunSnapshot struct {

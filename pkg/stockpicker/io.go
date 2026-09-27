@@ -111,17 +111,18 @@ func PrintEarlyMultibaggerTable(
 	selectedKeys []string,
 	finalWeights map[string]float64,
 	scores map[string]float64,
+	fairPrices map[string]*yfinance.FairPriceResult,
 	fundamentals map[string]yfinance.Fundamentals,
 	fullHistory map[string]*yfinance.HistoricalData,
 	displayName string,
 	method string,
 ) {
-	fmt.Println("\n===================================================================================================================================")
+	fmt.Println("\n==================================================================================================================================================================")
 	fmt.Printf("                   TOP %d SELECTED %s (PRE-BREAKOUT) STOCKS FROM %s               \n", len(selectedKeys), strings.ToUpper(method), strings.ToUpper(displayName))
-	fmt.Println("===================================================================================================================================")
-	fmt.Printf("%-16s | %-6s | %-8s | %-8s | %-8s | %-10s | %-8s | %-10s | %-8s | %-12s\n",
-		"Ticker", "Score", "1M RS", "3M RS", "Base Wks", "VCP Ratio", "RVOL Z", "Decayed PP", "52W Prox", "Final Weight")
-	fmt.Println("-----------------------------------------------------------------------------------------------------------------------------------")
+	fmt.Println("==================================================================================================================================================================")
+	fmt.Printf("%-16s | %-6s | %-9s | %-10s | %-8s | %-8s | %-8s | %-8s | %-10s | %-8s | %-8s | %-12s\n",
+		"Ticker", "Score", "CMP", "Fair Price", "Upside", "1M RS", "3M RS", "Base Wks", "VCP Ratio", "RVOL Z", "52W Prox", "Final Weight")
+	fmt.Println("------------------------------------------------------------------------------------------------------------------------------------------------------------------")
 
 	var totalNewWeight float64
 	for _, t := range selectedKeys {
@@ -133,39 +134,41 @@ func PrintEarlyMultibaggerTable(
 		var prox52 float64
 		var rs1m, rs3m float64
 		var weeksInBase int
-		var decayedPP float64
 		var rvolZ float64
 
 		if hist != nil && len(hist.Closes) > 0 {
 			vcpRatio, _ = yfinance.CalculateVCPTightness(hist.Closes, hist.Opens)
 			prox52 = yfinance.CalculateProximity52W(hist.Closes)
 			weeksInBase, _ = yfinance.CalculateBaseDurationWeeks(hist.Closes, 0.85)
-			decayedPP, _ = yfinance.CalculateDecayedPocketPivot(hist.Closes, hist.Opens, hist.Volumes, 10, 0.25)
 			rvolZ = yfinance.CalculateRVOLZScore(hist.Volumes, 5, 50)
 			_, rs1m, rs3m, _ = yfinance.CalculateCompositeRS(hist.Closes, nil, t)
 		}
 
-		ppStr := "0.0"
-		if decayedPP > 0 {
-			ppStr = fmt.Sprintf("%.1f", decayedPP)
+		f := fundamentals[t]
+		cmp := f.RegularPrice
+		fpStr := "N/A"
+		upsideStr := "N/A"
+		if fp, ok := fairPrices[t]; ok && fp != nil {
+			fpStr = fmt.Sprintf("₹%.1f", fp.EnsembleFairPrice)
+			upsideStr = fmt.Sprintf("%+.1f%%", fp.UpsidePct)
 		}
 
-		fmt.Printf("%-16s | %-6.1f | %+-7.1f%% | %+-7.1f%% | %-8d | %-10.2f | %+-7.1f | %-10s | %-7.1f%% | %-12.4f\n",
-			t, scores[t], rs1m*100.0, rs3m*100.0, weeksInBase,
-			vcpRatio, rvolZ, ppStr, prox52*100.0, weight,
+		fmt.Printf("%-16s | %-6.1f | ₹%-8.1f | %-10s | %-8s | %+-7.1f%% | %+-7.1f%% | %-8d | %-10.2f | %+-7.1f | %-7.1f%% | %-12.4f\n",
+			t, scores[t], cmp, fpStr, upsideStr, rs1m*100.0, rs3m*100.0, weeksInBase,
+			vcpRatio, rvolZ, prox52*100.0, weight,
 		)
 	}
-	fmt.Println("-----------------------------------------------------------------------------------------------------------------------------------")
+	fmt.Println("------------------------------------------------------------------------------------------------------------------------------------------------------------------")
 	if totalNewWeight < 0.9999 {
 		cashWeight := 1.0 - totalNewWeight
-		fmt.Printf("%-16s | %-6s | %-8s | %-8s | %-8s | %-10s | %-8s | %-10s | %-8s | %-12.4f\n",
-			"CASH_RESERVE", "-", "-", "-", "-", "-", "-", "-", "-", cashWeight)
-		fmt.Println("-----------------------------------------------------------------------------------------------------------------------------------")
-		fmt.Printf("%-16s | %-6s | %-8s | %-8s | %-8s | %-10s | %-8s | %-10s | %-8s | %-12.4f\n", "Total Weight", "", "", "", "", "", "", "", "", 1.0000)
+		fmt.Printf("%-16s | %-6s | %-9s | %-10s | %-8s | %-8s | %-8s | %-8s | %-10s | %-8s | %-8s | %-12.4f\n",
+			"CASH_RESERVE", "-", "-", "-", "-", "-", "-", "-", "-", "-", "-", cashWeight)
+		fmt.Println("------------------------------------------------------------------------------------------------------------------------------------------------------------------")
+		fmt.Printf("%-16s | %-6s | %-9s | %-10s | %-8s | %-8s | %-8s | %-8s | %-10s | %-8s | %-8s | %-12.4f\n", "Total Weight", "", "", "", "", "", "", "", "", "", "", 1.0000)
 	} else {
-		fmt.Printf("%-16s | %-6s | %-8s | %-8s | %-8s | %-10s | %-8s | %-10s | %-8s | %-12.4f\n", "Total Weight", "", "", "", "", "", "", "", "", totalNewWeight)
+		fmt.Printf("%-16s | %-6s | %-9s | %-10s | %-8s | %-8s | %-8s | %-8s | %-10s | %-8s | %-8s | %-12.4f\n", "Total Weight", "", "", "", "", "", "", "", "", "", "", totalNewWeight)
 	}
-	fmt.Println("===================================================================================================================================")
+	fmt.Println("==================================================================================================================================================================")
 }
 
 // PrintMultibaggerTable prints output comparisons formatted for the multibagger and value strategies.
@@ -173,16 +176,18 @@ func PrintMultibaggerTable(
 	selectedKeys []string,
 	finalWeights map[string]float64,
 	scores map[string]float64,
+	fairPrices map[string]*yfinance.FairPriceResult,
 	fundamentals map[string]yfinance.Fundamentals,
 	fullHistory map[string]*yfinance.HistoricalData,
 	displayName string,
 	method string,
 ) {
-	fmt.Println("\n=================================================================================================")
+	fmt.Println("\n=================================================================================================================================")
 	fmt.Printf("             TOP %d SELECTED %s STOCKS FROM %s               \n", len(selectedKeys), strings.ToUpper(method), strings.ToUpper(displayName))
-	fmt.Println("=================================================================================================")
-	fmt.Printf("%-16s | %-10s | %-8s | %-10s | %-5s | %-7s | %-6s | %-12s\n", "Ticker", "TTM Growth", "3Y CAGR", "DSO (L/P)", "RSI", "Inst %", "Score", "Final Weight")
-	fmt.Println("-------------------------------------------------------------------------------------------------")
+	fmt.Println("=================================================================================================================================")
+	fmt.Printf("%-16s | %-9s | %-10s | %-8s | %-18s | %-8s | %-9s | %-6s | %-12s\n",
+		"Ticker", "CMP", "Fair Price", "Upside", "MOS Verdict", "3Y CAGR", "DSO (L/P)", "Score", "Final Weight")
+	fmt.Println("---------------------------------------------------------------------------------------------------------------------------------")
 
 	var totalNewWeight float64
 	for _, t := range selectedKeys {
@@ -191,29 +196,142 @@ func PrintMultibaggerTable(
 
 		f := fundamentals[t]
 
-		_, ttmGrowth, cagr3y := yfinance.CalculateSalesGrowth(&f)
+		_, _, cagr3y := yfinance.CalculateSalesGrowth(&f)
 		_, dsoPrev, dsoLatest := yfinance.CalculateDSO(&f)
 
-		rsiVal := yfinance.CalculateRSI(fullHistory[t].Closes)
-		instPct := f.HeldPercentInstitutions
+		cmp := f.RegularPrice
+		fpStr := "N/A"
+		upsideStr := "N/A"
+		verdictStr := "N/A"
 
-		fmt.Printf("%-16s | %-10.1f%% | %-8.1f%% | %-10s | %-5.1f | %-7.1f%% | %-6.1f | %-12.4f\n",
-			t, ttmGrowth*100.0, cagr3y*100.0,
+		if fp, ok := fairPrices[t]; ok && fp != nil {
+			fpStr = fmt.Sprintf("₹%.1f", fp.EnsembleFairPrice)
+			upsideStr = fmt.Sprintf("%+.1f%%", fp.UpsidePct)
+			verdictStr = fp.Verdict
+			if cmp > 1.75*fp.EnsembleFairPrice {
+				verdictStr = "⚠️ VAL_STRETCHED"
+			}
+		}
+
+		fmt.Printf("%-16s | ₹%-8.1f | %-10s | %-8s | %-18s | %-7.1f%% | %-9s | %-6.1f | %-12.4f\n",
+			t, cmp, fpStr, upsideStr, verdictStr,
+			cagr3y*100.0,
 			fmt.Sprintf("%.0f/%.0f", dsoLatest, dsoPrev),
-			rsiVal, instPct*100.0, scores[t], weight,
+			scores[t], weight,
 		)
 	}
-	fmt.Println("-------------------------------------------------------------------------------------------------")
+	fmt.Println("---------------------------------------------------------------------------------------------------------------------------------")
 	if totalNewWeight < 0.9999 {
 		cashWeight := 1.0 - totalNewWeight
-		fmt.Printf("%-16s | %-10s | %-8s | %-10s | %-5s | %-7s | %-6s | %-12.4f\n",
-			"CASH_RESERVE", "-", "-", "-", "-", "-", "-", cashWeight)
-		fmt.Println("-------------------------------------------------------------------------------------------------")
-		fmt.Printf("%-16s | %-10s | %-8s | %-10s | %-5s | %-7s | %-6s | %-12.4f\n", "Total Weight", "", "", "", "", "", "", 1.0000)
+		fmt.Printf("%-16s | %-9s | %-10s | %-8s | %-18s | %-8s | %-9s | %-6s | %-12.4f\n",
+			"CASH_RESERVE", "-", "-", "-", "-", "-", "-", "-", cashWeight)
+		fmt.Println("---------------------------------------------------------------------------------------------------------------------------------")
+		fmt.Printf("%-16s | %-9s | %-10s | %-8s | %-18s | %-8s | %-9s | %-6s | %-12.4f\n", "Total Weight", "", "", "", "", "", "", "", 1.0000)
 	} else {
-		fmt.Printf("%-16s | %-10s | %-8s | %-10s | %-5s | %-7s | %-6s | %-12.4f\n", "Total Weight", "", "", "", "", "", "", totalNewWeight)
+		fmt.Printf("%-16s | %-9s | %-10s | %-8s | %-18s | %-8s | %-9s | %-6s | %-12.4f\n", "Total Weight", "", "", "", "", "", "", "", totalNewWeight)
 	}
-	fmt.Println("=================================================================================================")
+	fmt.Println("=================================================================================================================================")
+}
+
+// PrintFairPriceTable prints output comparisons formatted for the fairprice strategy.
+func PrintFairPriceTable(
+	selectedKeys []string,
+	finalWeights map[string]float64,
+	scores map[string]float64,
+	fairPrices map[string]*yfinance.FairPriceResult,
+	fundamentals map[string]yfinance.Fundamentals,
+	fullHistory map[string]*yfinance.HistoricalData,
+	displayName string,
+	method string,
+) {
+	fmt.Println("\n==================================================================================================================================================")
+	fmt.Printf("                   FAIR PRICE VALUATION ANALYSIS — TOP %d SELECTED STOCKS FROM %s               \n", len(selectedKeys), strings.ToUpper(displayName))
+	fmt.Println("==================================================================================================================================================")
+	fmt.Printf("%-16s | %-14s | %-9s | %-10s | %-8s | %-21s | %-18s | %-6s | %-6s | %-10s\n",
+		"Ticker", "Sector", "CMP", "Fair Price", "Upside", "MOS Band (Pess/Opt)", "Verdict", "Score", "Models", "Weight")
+	fmt.Println("--------------------------------------------------------------------------------------------------------------------------------------------------")
+
+	var totalNewWeight float64
+	for _, t := range selectedKeys {
+		weight := finalWeights[t]
+		totalNewWeight += weight
+
+		f := fundamentals[t]
+		sec := f.Sector
+		if len(sec) > 14 {
+			sec = sec[:14]
+		}
+		cmp := f.RegularPrice
+
+		fpStr := "N/A"
+		upsideStr := "N/A"
+		mosBandStr := "N/A"
+		verdict := "N/A"
+		modelsCount := "0/5"
+
+		if fp, ok := fairPrices[t]; ok && fp != nil {
+			fpStr = fmt.Sprintf("₹%.1f", fp.EnsembleFairPrice)
+			upsideStr = fmt.Sprintf("%+.1f%%", fp.UpsidePct)
+			mosBandStr = fmt.Sprintf("₹%.0f / ₹%.0f", fp.PessimisticFairPrice, fp.OptimisticFairPrice)
+			verdict = fp.Verdict
+			modelsCount = fmt.Sprintf("%d/5", fp.ValidModelCount)
+		}
+
+		fmt.Printf("%-16s | %-14s | ₹%-8.1f | %-10s | %-8s | %-21s | %-18s | %-6.1f | %-6s | %-10.4f\n",
+			t, sec, cmp, fpStr, upsideStr, mosBandStr, verdict, scores[t], modelsCount, weight,
+		)
+	}
+	fmt.Println("--------------------------------------------------------------------------------------------------------------------------------------------------")
+	if totalNewWeight < 0.9999 {
+		cashWeight := 1.0 - totalNewWeight
+		fmt.Printf("%-16s | %-14s | %-9s | %-10s | %-8s | %-21s | %-18s | %-6s | %-6s | %-10.4f\n",
+			"CASH_RESERVE", "-", "-", "-", "-", "-", "-", "-", "-", cashWeight)
+		fmt.Println("--------------------------------------------------------------------------------------------------------------------------------------------------")
+		fmt.Printf("%-16s | %-14s | %-9s | %-10s | %-8s | %-21s | %-18s | %-6s | %-6s | %-10.4f\n",
+			"Total Weight", "", "", "", "", "", "", "", "", 1.0000)
+	} else {
+		fmt.Printf("%-16s | %-14s | %-9s | %-10s | %-8s | %-21s | %-18s | %-6s | %-6s | %-10.4f\n",
+			"Total Weight", "", "", "", "", "", "", "", "", totalNewWeight)
+	}
+	fmt.Println("==================================================================================================================================================")
+
+	// Model Breakdown Sub-Table
+	fmt.Println("\nModel Breakdown for Top Picks:")
+	fmt.Println("-----------------------------------------------------------------------------------------------------------")
+	fmt.Printf("%-16s | %-11s | %-11s | %-11s | %-11s | %-11s | %-6s | %-10s\n",
+		"Ticker", "DCF (30%)", "EPV (25%)", "Graham(15%)", "RelVal(15%)", "PEG (15%)", "CV", "Confidence")
+	fmt.Println("-----------------------------------------------------------------------------------------------------------")
+	for _, t := range selectedKeys {
+		fp := fairPrices[t]
+		if fp == nil {
+			continue
+		}
+		dcfStr := "N/A"
+		if fp.DCFFairPrice != nil {
+			dcfStr = fmt.Sprintf("₹%.1f", *fp.DCFFairPrice)
+		}
+		epvStr := "N/A"
+		if fp.EPVFairPrice != nil {
+			epvStr = fmt.Sprintf("₹%.1f", *fp.EPVFairPrice)
+		}
+		grahamStr := "N/A"
+		if fp.GrahamNumber != nil {
+			grahamStr = fmt.Sprintf("₹%.1f", *fp.GrahamNumber)
+		}
+		relStr := "N/A"
+		if fp.RelativeFairPrice != nil {
+			relStr = fmt.Sprintf("₹%.1f", *fp.RelativeFairPrice)
+		}
+		pegStr := "N/A"
+		if fp.PEGFairPrice != nil {
+			pegStr = fmt.Sprintf("₹%.1f", *fp.PEGFairPrice)
+		}
+
+		confStr := fmt.Sprintf("%.0f%%", fp.ConfidenceScore)
+		fmt.Printf("%-16s | %-11s | %-11s | %-11s | %-11s | %-11s | %-6.2f | %-10s\n",
+			t, dcfStr, epvStr, grahamStr, relStr, pegStr, fp.ModelCV, confStr)
+	}
+	fmt.Println("-----------------------------------------------------------------------------------------------------------")
 }
 
 // PrintStandardTable prints output comparisons formatted for standard strategies.
@@ -253,7 +371,7 @@ func PrintStandardTable(
 }
 
 // PrintScuttlebutt saves qualitative and automated live NSE scuttlebutt checks to a text file in the report/ folder.
-func PrintScuttlebutt(selectedKeys []string, fundamentals map[string]yfinance.Fundamentals, displayName, strategy string) {
+func PrintScuttlebutt(selectedKeys []string, fundamentals map[string]yfinance.Fundamentals, fairPrices map[string]*yfinance.FairPriceResult, displayName, strategy string) {
 	if len(selectedKeys) == 0 {
 		return
 	}
@@ -337,6 +455,32 @@ func PrintScuttlebutt(selectedKeys []string, fundamentals map[string]yfinance.Fu
 
 		fmt.Fprintf(outFile, "\n%d. %-15s | Sector: %-20s | Market Cap: %.0fCr\n", idx+1, t, sec, f.MarketCap/1e7)
 		fmt.Fprintln(outFile, "   ----------------------------------------------------------------------")
+		if fp, ok := fairPrices[t]; ok && fp != nil {
+			fmt.Fprintf(outFile, "   [Intrinsic Valuation & MOS] : Fair Price: ₹%.1f (CMP: ₹%.1f, Upside: %+.1f%%)\n", fp.EnsembleFairPrice, fp.CMP, fp.UpsidePct)
+			fmt.Fprintf(outFile, "                                 MOS Band: Pessimistic ₹%.1f | Base ₹%.1f | Optimistic ₹%.1f\n", fp.PessimisticFairPrice, fp.EnsembleFairPrice, fp.OptimisticFairPrice)
+			fmt.Fprintf(outFile, "                                 Verdict: %s (Confidence: %.0f%%, Model CV: %.2f)\n", fp.Verdict, fp.ConfidenceScore, fp.ModelCV)
+			dcfStr := "N/A"
+			if fp.DCFFairPrice != nil {
+				dcfStr = fmt.Sprintf("₹%.1f", *fp.DCFFairPrice)
+			}
+			epvStr := "N/A"
+			if fp.EPVFairPrice != nil {
+				epvStr = fmt.Sprintf("₹%.1f", *fp.EPVFairPrice)
+			}
+			grahamStr := "N/A"
+			if fp.GrahamNumber != nil {
+				grahamStr = fmt.Sprintf("₹%.1f", *fp.GrahamNumber)
+			}
+			relStr := "N/A"
+			if fp.RelativeFairPrice != nil {
+				relStr = fmt.Sprintf("₹%.1f", *fp.RelativeFairPrice)
+			}
+			pegStr := "N/A"
+			if fp.PEGFairPrice != nil {
+				pegStr = fmt.Sprintf("₹%.1f", *fp.PEGFairPrice)
+			}
+			fmt.Fprintf(outFile, "   [Valuation Model Breakdown] : DCF: %s | EPV: %s | Graham: %s | Rel: %s | PEG: %s\n", dcfStr, epvStr, grahamStr, relStr, pegStr)
+		}
 		fmt.Fprintf(outFile, "   [Live NSE Result Schedule]  : %s\n", resDates)
 		if delPct > 0 {
 			dLabel := "Last Business Day"

@@ -78,7 +78,8 @@ func TestLoadRecentExits_ArvindCooldown(t *testing.T) {
 	_ = os.Chdir("../..")
 	defer os.Chdir(origWd)
 
-	exits := LoadRecentExits("microsmall", nil, 30, time.Now())
+	refTime := time.Date(2026, 8, 27, 0, 0, 0, 0, time.UTC)
+	exits := LoadRecentExits("microsmall", nil, 30, refTime)
 	exitDate, ok := exits["NSE:ARVIND"]
 	if !ok {
 		t.Fatalf("expected NSE:ARVIND to be identified in recent exits for microsmall")
@@ -88,7 +89,7 @@ func TestLoadRecentExits_ArvindCooldown(t *testing.T) {
 		t.Errorf("expected ARVIND exit date %v, got %v", expectedExitDate, exitDate)
 	}
 
-	onCd, reason := IsOnCooldown("NSE:ARVIND", exits, 19, 5, time.Now(), 30)
+	onCd, reason := IsOnCooldown("NSE:ARVIND", exits, 19, 5, refTime, 30)
 	if !onCd {
 		t.Errorf("expected NSE:ARVIND at rank 19 to be on cooldown, got false")
 	}

@@ -436,7 +436,12 @@ func FetchFundamentals(ctx context.Context, tickers []string) (map[string]Fundam
 					OperatingCashflow:        ocf,
 					FreeCashflow:             fcf,
 					AverageVolume:            sd.AverageVolume.Raw,
-					RegularPrice:             sd.RegularMarketPrice.Raw,
+					RegularPrice:             func() float64 {
+						if sd.RegularMarketPrice.Raw > 0 {
+							return sd.RegularMarketPrice.Raw
+						}
+						return fd.CurrentPrice.Raw
+					}(),
 					NetIncome:                ds.NetIncomeToCommon.Raw,
 					Sector:                   res.AssetProfile.Sector,
 					EarningsHistory:          earningsHistory,

@@ -374,6 +374,16 @@ type HardFilters struct {
 	CheckGrossMargin               bool    `json:"check_gross_margin"`
 	MinEntryScore                  float64 `json:"min_entry_score"`
 	MinHoldingScore                float64 `json:"min_holding_score"`
+
+	// Fair price scoring weights
+	ScoreWeightUpside        float64 `json:"score_weight_upside"`
+	ScoreWeightMOSBand       float64 `json:"score_weight_mos_band"`
+	ScoreWeightAgreement     float64 `json:"score_weight_agreement"`
+	ScoreWeightConvergence   float64 `json:"score_weight_convergence"`
+	ScoreWeightCFOPAT        float64 `json:"score_weight_cfo_pat"`
+	ScoreWeightDebtSafety    float64 `json:"score_weight_debt_safety"`
+	ScoreWeightRevenueCAGR   float64 `json:"score_weight_revenue_cagr"`
+	ScoreWeightEarningsAccel float64 `json:"score_weight_earnings_accel"`
 }
 
 // MFSStrategies wrapper containing the mapping of strategies and filters
