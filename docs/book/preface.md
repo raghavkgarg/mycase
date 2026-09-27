@@ -65,8 +65,18 @@ tuned to a universe or asset class, sharing one scoring-and-selection engine.
   compounders 1–3 weeks before markup.
 - **[14 · Value](1-30-strategy-value.md)** — large-cap value: EPV-based intrinsic valuation
   with dual-path BFSI/industrial filters, avoiding value traps.
+- **[26 · Fair Price](1-35-strategy-fair-price.md)** — a five-model intrinsic-valuation
+  ensemble: fair price in currency terms, upside, and a margin-of-safety verdict, run both
+  standalone and as an overlay on the growth strategies.
 - **[19 · Feature Specs](1-40-strategy-emb-feature-specs.md)** — the deep engineering specification behind
   the Early Multibagger family: detection models, the three-tier lifecycle, and PIT research.
+- **[28 · Golden Triangle](1-45-strategy-golden.md)** — the cross-strategy convergence engine
+  that fuses quality, timing, and valuation into one regime classification and composite rank.
+
+And the reasoning that ties the family together:
+
+- **[27 · Philosophy](1-48-philosophy.md)** — why momentum and deep value select opposite
+  stocks, and how the Golden Triangle reconciles them into a single view.
 
 > The active US strategy, **US Quality-Momentum**, is currently specced inline in
 > [Architecture](2-10-architecture.md); extracting it into its own chapter here is a tracked
@@ -111,6 +121,8 @@ serves:
   runs, per-index picks, proposals, and final selections.
 - **[11 · Data Directory Inventory](2-70-data-inventory.md)** — every file and directory under
   `data/`: what it is, where it comes from, and whether it's safe to delete.
+- **[Configuration Directory Inventory](2-75-config-inventory.md)** — every file under
+  `config/`: the two-file YAML core, Schwab credentials, and the `reference/` tree.
 
 **Execution & output** — turning selections into orders and results into readable output:
 
