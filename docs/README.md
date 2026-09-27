@@ -1,19 +1,8 @@
 # docs/
 
-Two kinds of documentation live here:
+The documentation is a book — **[The Mycase Guide](book/preface.md)**, in
+[`book/`](book/). Start at the [preface](book/preface.md) for what it is and its full
+contents.
 
-- **[The Mycase Guide](book/preface.md)** — in [`book/`](book/). The book: a front-to-back,
-  present-tense description of how the system works, organized into parts (Product,
-  Architecture, Operations) and governed by [the style guide](book/0-10-style-guide.md). Start
-  at [`book/preface.md`](book/preface.md) — its preface and contents.
-
-- **Standalone working documents** — at this top level, outside the book. Operational
-  trackers and issue logs that record process and history rather than how the system works
-  today:
-  - [`emb-bug-tracker.md`](emb-bug-tracker.md) — issue tracker for the Early Multibagger
-    (`earlymb`) engine.
-
-The line between them: if a document describes the system as it is, it's a book chapter in
-`book/`. If it records process, history, or a working log, it's a standalone doc here. When
-a working note yields a durable lesson, that reasoning graduates into the relevant chapter;
-the note keeps the issue-by-issue detail.
+Alongside it, [`emb-bug-tracker.md`](emb-bug-tracker.md) is a standalone issue log for the
+Early Multibagger engine — a working document, not part of the book.
