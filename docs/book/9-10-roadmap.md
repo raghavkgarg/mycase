@@ -639,6 +639,35 @@ Data-source resilience (Phase 10) is higher priority — it improves the correct
 - The golden copy can move to DuckDB (the pipeline migration is done — see `docs/2-60-storage.md`)
 - Swift Charts and DuckDB Swift bindings are mature enough for production use
 
+> **Refined access model (see working design):** the sketch above routes SwiftUI
+> through `pkg/server` HTTP. Subsequent design work — validated against a working
+> sibling app (`~/Projects/gomod/jtm-viewer`, a native macOS app that opens a Go
+> CLI's DuckDB store read-only) — favours a **hybrid**: the native app reads DuckDB
+> **directly, read-only** (proven, no server round-trip, reusing a prebuilt
+> `duckdb-local` SwiftPM package), while the **web** dashboard is served over HTTP
+> from the same query layer. This depends on the DB-backed reporting foundation below.
+
+### DB-Backed Reporting (foundation for all frontends)
+
+**Revisit when**: pursuing any richer reporting or the native app above.
+
+Today's five text reports (`report/*.txt`) are each generated once, at pipeline
+time, from in-memory computation. The plan makes DuckDB the single source of truth
+for reporting: **a report becomes a query plus a renderer, never a stored
+document.** The CLI, web dashboard, and native app then all render the same facts.
+Most of the data already lands in `pit_candidate_scores` / `pit_runs` /
+`pit_fairprice_scores` / `selections` at the right grain
+(`as_of_date, index_name, method, ticker`); the work is to (1) store selection
+*reason codes* + operands instead of English prose, (2) give `pkg/monitoring` its
+own persistence (the one report with no table today), (3) expose a stable **view
+layer** as the shared contract, and (4) add a read-only `report` render command.
+Strictly **additive** — the existing `.txt` writers are left untouched.
+
+> Full design (grain, the Tier 1/2/3 data classification, the reason-code taxonomy,
+> and the resolved frontend access model) lives in the working note
+> `docs/report-db-design.local.md` — deliberately git-ignored until implemented,
+> at which point it graduates into the Architecture chapter.
+
 
 ---
 
