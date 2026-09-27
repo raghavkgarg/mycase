@@ -546,6 +546,7 @@ type UserDefaults struct {
 	Index          string          `json:"index"`
 	Method         string          `json:"method"`
 	Range          string          `json:"range"`
+	GoldenCopy     string          `json:"golden_copy"`
 	PipelineConfig string          `json:"pipeline_config"`
 	Logging        LoggingConfig   `json:"logging"`
 	EDGAR          EDGARConfig     `json:"edgar"`
@@ -639,6 +640,7 @@ func LoadUserDefaults(filename string) UserDefaults {
 			defaults.Broker = mkt.Broker
 			defaults.Index = mkt.DefaultIndex
 			defaults.Method = mkt.DefaultStrategy
+			defaults.GoldenCopy = mkt.DefaultGolden
 			defaults.TopN = mkt.TopN
 			defaults.Range = mkt.Range
 			defaults.PipelineConfig = mkt.PipelineConfig

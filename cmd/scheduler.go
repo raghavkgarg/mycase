@@ -136,7 +136,7 @@ func buildSchedulerConfig(c *cli.Command, live bool) (scheduler.Config, error) {
 		Broker:            b,
 		Alert:             alertCfg,
 		Pipeline:          *pipelineCfg,
-		PortfolioFile:     resolvePortfolioFile(c, alertCfg),
+		PortfolioFile:     resolvePortfolioFile(c, alertCfg, defaults.GoldenCopy),
 		ConfigPath:        c.String("config"),
 		EODIndex:          defaults.Index,
 		EODMethod:         defaults.Method,

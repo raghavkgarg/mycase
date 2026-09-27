@@ -79,12 +79,26 @@ var daemonUninstallCmd = &cli.Command{
 	Action: runDaemonUninstall,
 }
 
-func resolvePortfolioFile(c *cli.Command, alertCfg config.AlertConfig) string {
+// resolvePortfolioFile picks the CSV the drift check compares live holdings
+// against. Precedence: explicit --file flag > alert config's portfolio_file >
+// the active market's default_golden (defaults.yaml). The default_golden
+// fallback is what makes drift market-aware: with active_market: us it resolves
+// to data/us_portfolio.csv, with active_market: india to data/microsmall.csv.
+//
+// Crucially this keys off active_market, NOT the pipeline's default_profile — a
+// US run must not fall through to the India basket. That mismatch is what made
+// the 2026-09-24 US run compute drift against an NSE microsmall basket (zero
+// intersection with the account's US:* holdings → sentinel drift 0.5). Only if
+// the active market supplies no default_golden do we fall back to microsmall.csv.
+func resolvePortfolioFile(c *cli.Command, alertCfg config.AlertConfig, marketGolden string) string {
 	if f := c.String("file"); f != "" {
 		return f
 	}
 	if alertCfg.PortfolioFile != "" {
 		return alertCfg.PortfolioFile
+	}
+	if marketGolden != "" {
+		return marketGolden
 	}
 	return config.DataPath("microsmall.csv")
 }
@@ -94,7 +108,8 @@ func runDaemonStart(ctx context.Context, c *cli.Command) error {
 	if err != nil {
 		return err
 	}
-	portfolioFile := resolvePortfolioFile(c, alertCfg)
+	defaults := config.LoadUserDefaults(defaultsPath())
+	portfolioFile := resolvePortfolioFile(c, alertCfg, defaults.GoldenCopy)
 	b, err := newBroker(c.Bool("live"))
 	if err != nil {
 		return fmt.Errorf("creating broker: %w", err)
@@ -156,7 +171,8 @@ func runDaemonCheck(ctx context.Context, c *cli.Command) error {
 	if err != nil {
 		return err
 	}
-	portfolioFile := resolvePortfolioFile(c, alertCfg)
+	defaults := config.LoadUserDefaults(defaultsPath())
+	portfolioFile := resolvePortfolioFile(c, alertCfg, defaults.GoldenCopy)
 	b, err := newBroker(c.Bool("live"))
 	if err != nil {
 		return fmt.Errorf("creating broker: %w", err)
