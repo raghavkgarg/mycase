@@ -1,5 +1,5 @@
 .PHONY: build build-linux-arm64 build-linux-amd64 build-darwin-arm64 build-darwin-amd64
-.PHONY: install install-gopath uninstall run test test-verbose test-race test-integration test-coverage cleanup analyze clean fetch-echarts check-deps deps-graph arch-graph overview-graph help
+.PHONY: install install-gopath uninstall run test test-verbose test-race test-integration test-coverage test-cover cleanup analyze clean fetch-echarts check-deps deps-graph arch-graph overview-graph help
 .PHONY: use-us use-india scheduler-install scheduler-uninstall scheduler-status reload
 
 SCHED_PLIST  := $(HOME)/Library/LaunchAgents/com.mycase.scheduler.plist
@@ -135,10 +135,16 @@ test-integration:
 
 test-coverage:
 	@echo "Running tests with coverage..."
-	@go test -coverprofile=coverage.out ./...
-	@go tool cover -func=coverage.out | grep -E "^(total|github)" | tail -1
-	@go tool cover -html=coverage.out -o coverage.html
-	@echo "Coverage report: coverage.html"
+	@mkdir -p dist
+	@go test -coverprofile=dist/coverage.out ./...
+	@go tool cover -func=dist/coverage.out | grep -E "^(total|github)" | tail -1
+	@go tool cover -html=dist/coverage.out -o dist/coverage.html
+	@echo "Coverage report: dist/coverage.html"
+
+test-cover:
+	@echo "Running tests with statement coverage..."
+	@go test -cover ./...
+
 
 cleanup:
 	@echo "=== Format ==="
@@ -225,13 +231,13 @@ overview-graph:
 # afterward so the launchd fire time + pipeline pick up the change.
 
 use-us:
-	@cp config/defaults.us.json config/defaults.json
-	@echo "Active path: US (Schwab / NYSE / sp500 / us_quality_momentum / pipeline_us.yaml)"
+	@sed -i '' 's/^active_market: .*/active_market: us/' config/defaults.yaml
+	@echo "Active market set to US in config/defaults.yaml (Schwab / NYSE / sp500 / us_quality_momentum)"
 	@echo "Re-run 'make scheduler-install' to update the installed timer."
 
 use-india:
-	@cp config/defaults.india.json config/defaults.json
-	@echo "Active path: India (Zerodha / NSE / niftytotalmarket / multibagger / pipeline.yaml)"
+	@sed -i '' 's/^active_market: .*/active_market: india/' config/defaults.yaml
+	@echo "Active market set to India in config/defaults.yaml (Zerodha / NSE / niftytotalmarket / multibagger)"
 	@echo "Re-run 'make scheduler-install' to update the installed timer."
 
 # scheduler-install builds, then installs/reloads the one-shot OS timer that fires
@@ -310,8 +316,8 @@ help:
 	@echo "  deps-graph         - Render pkg/ dependency graph to dist/deps.svg (Graphviz, layer-colored)"
 	@echo "  arch-graph         - Render pkg/ architecture diagram to dist/arch.svg (D2/TALA, transitive-reduced; REDUCE=0 for full)"
 	@echo "  overview-graph     - Re-render docs/book/architecture-overview.svg (hand-authored high-level view, D2/TALA)"
-	@echo "  use-us             - Switch active path to US (copies config/defaults.us.json -> defaults.json)"
-	@echo "  use-india          - Switch active path to India (copies config/defaults.india.json -> defaults.json)"
+	@echo "  use-us             - Switch active path to US (sets active_market: us in config/defaults.yaml)"
+	@echo "  use-india          - Switch active path to India (sets active_market: india in config/defaults.yaml)"
 	@echo "  scheduler-install  - Build + install/reload the daily OS timer (mycase scheduler tick)"
 	@echo "  scheduler-uninstall- Remove the installed scheduler timer"
 	@echo "  scheduler-status   - Show last completed EOD / drift / rebalance day"

@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"github.com/urfave/cli/v3"
-	"gopkg.in/yaml.v3"
 
 	"github.com/raghavkgarg/mycase/pkg/cache"
 	"github.com/raghavkgarg/mycase/pkg/config"
@@ -30,10 +29,12 @@ var PipelineCommand = &cli.Command{
 	Usage: "Run the automated selection → report → execution pipeline",
 	Flags: []cli.Flag{
 		&cli.BoolFlag{Name: "exec-only", Usage: "Start directly from execution steps (auth + basket)"},
+		&cli.StringFlag{Name: "profile", Aliases: []string{"p"}, Usage: "Pipeline profile to run (e.g. india-multibagger, india-earlymb, us-momentum)"},
+		&cli.StringFlag{Name: "market", Aliases: []string{"mkt"}, Usage: "Target market: 'india' or 'us' (defaults to config/defaults.yaml)"},
 		&cli.StringFlag{Name: "config", Value: config.Path("pipeline.yaml"), Usage: "Path to pipeline YAML configuration file"},
-		&cli.StringFlag{Name: "index", Aliases: []string{"i"}, Usage: "Index to pick stocks from (e.g. nifty50, smallcap250)"},
+		&cli.StringFlag{Name: "index", Aliases: []string{"index-name", "i"}, Usage: "Index to pick stocks from (e.g. nifty50, smallcap250, sp500)"},
 		&cli.StringFlag{Name: "file", Aliases: []string{"f"}, Usage: "Path to custom CSV/XLSX file"},
-		&cli.StringFlag{Name: "strategy", Aliases: []string{"method", "m"}, Usage: "Scoring strategy (balanced, aggressive, conservative, multibagger, value)"},
+		&cli.StringFlag{Name: "strategy", Aliases: []string{"method", "m"}, Usage: "Scoring strategy (multibagger, earlymb, value, us_quality_momentum)"},
 		&cli.IntFlag{Name: "top", Aliases: []string{"top-n", "n"}, Usage: "Number of top stocks to pick"},
 		&cli.StringFlag{Name: "golden", Aliases: []string{"golden-copy"}, Usage: "Path to golden copy CSV for hysteresis and rebalancing band"},
 		&cli.IntFlag{Name: "capital", Usage: "Initial capital for performance simulation"},
@@ -62,15 +63,24 @@ func runPipeline(ctx context.Context, c *cli.Command) error {
 
 	render.Banner(os.Stdout, "Go Mycase Automated Pipeline Runner")
 
-	var cfg config.PipelineConfig
-	configFile, err := os.Open(configPath)
-	if err == nil {
-		defer configFile.Close()
-		if err := yaml.NewDecoder(configFile).Decode(&cfg); err != nil {
-			return fmt.Errorf("parsing config file %s: %w", configPath, err)
+	// Determine profile to load from flag, strategy, or market
+	profile := c.String("profile")
+	if profile == "" {
+		if c.IsSet("strategy") {
+			profile = c.String("strategy")
+		} else if c.IsSet("market") {
+			profile = c.String("market")
 		}
-	} else if c.IsSet("config") {
+	}
+
+	cfgPtr, err := config.LoadPipelineConfigForProfile(configPath, profile)
+	if err != nil && c.IsSet("config") {
 		return fmt.Errorf("opening config file %s: %w", configPath, err)
+	}
+
+	var cfg config.PipelineConfig
+	if cfgPtr != nil {
+		cfg = *cfgPtr
 	}
 
 	if c.IsSet("index") {
@@ -135,14 +145,23 @@ func runPipeline(ctx context.Context, c *cli.Command) error {
 		cfg.Sentry = false
 	}
 
+	profileDisplay := profile
+	if profileDisplay == "" {
+		profileDisplay = "india-multibagger (default)"
+	}
+	fmt.Printf("✓ Pipeline Profile: %s | Strategy: %s | Golden: %s | Broker: %s\n\n",
+		profileDisplay, cfg.Strategy, cfg.GoldenCopyPath, cfg.Broker)
+
 	reader := bufio.NewReader(os.Stdin)
 
 	// Clean up stale cache files from previous days
-	if files, err := filepath.Glob(config.DataPath(".cache", "*")); err == nil {
-		today := time.Now().Format("2006-01-02")
-		for _, f := range files {
-			if !strings.Contains(f, today) {
-				_ = os.Remove(f)
+	for _, cacheDir := range []string{config.DataPath("cache", "prices", "*"), config.DataPath(".cache", "*")} {
+		if files, err := filepath.Glob(cacheDir); err == nil {
+			today := time.Now().Format("2006-01-02")
+			for _, f := range files {
+				if !strings.Contains(f, today) {
+					_ = os.Remove(f)
+				}
 			}
 		}
 	}

@@ -507,7 +507,9 @@ def fetch_qualitative_data(symbols_raw: list) -> dict:
 
         # Check local overrides / database for KMP alerts
         try:
-            alerts_path = os.path.join("config", "management_alerts.json")
+            alerts_path = os.path.join("config", "reference", "india", "management_alerts.json")
+            if not os.path.exists(alerts_path):
+                alerts_path = os.path.join("config", "management_alerts.json")
             if os.path.exists(alerts_path):
                 with open(alerts_path, "r") as f_alerts:
                     alerts_db = json.load(f_alerts)

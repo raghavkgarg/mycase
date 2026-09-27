@@ -78,7 +78,9 @@ def fetch_latest_cagr(sector):
     return None
 
 def main():
-    config_path = os.path.join("config", "sector_tam.json")
+    config_path = os.path.join("config", "reference", "india", "sector_tam.json")
+    if not os.path.exists(config_path):
+        config_path = os.path.join("config", "sector_tam.json")
     if not os.path.exists(config_path):
         print(f"Error: {config_path} not found.", file=sys.stderr)
         sys.exit(1)

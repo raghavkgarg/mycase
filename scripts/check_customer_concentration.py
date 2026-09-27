@@ -89,9 +89,24 @@ def get_project_root():
         current_dir = os.path.dirname(current_dir)
     return os.getcwd()
 
+def get_db_path(root):
+    # Primary location: data/cache/customer_concentration.json (runtime cache)
+    p = os.path.join(root, "data", "cache", "customer_concentration.json")
+    if os.path.exists(p):
+        return p
+    # Fallback 1: legacy data/ location if exists
+    p_data = os.path.join(root, "data", "customer_concentration.json")
+    if os.path.exists(p_data):
+        return p_data
+    # Fallback 2: legacy config/ location if exists
+    legacy = os.path.join(root, "config", "customer_concentration.json")
+    if os.path.exists(legacy):
+        return legacy
+    return p
+
 def update_db(sym, res):
     root = get_project_root()
-    db_path = os.path.join(root, "config", "customer_concentration.json")
+    db_path = get_db_path(root)
     from datetime import datetime
     today = datetime.now().strftime("%Y-%m-%d")
     db_val = f"{res} (Scanned: {today})"
@@ -114,7 +129,7 @@ def update_db(sym, res):
 def get_customer_concentration(sym):
     root = get_project_root()
     # 1. Check local JSON overrides first (fast path)
-    db_path = os.path.join(root, "config", "customer_concentration.json")
+    db_path = get_db_path(root)
     if os.path.exists(db_path):
         with open(db_path, "r") as f:
             db = json.load(f)
@@ -122,7 +137,11 @@ def get_customer_concentration(sym):
                 return f"{db[sym]} (Offline Database)"
 
     # 2. Check local PDF if exists
-    pdf_dir = os.path.join(root, "data", "annual_reports")
+    pdf_dir = os.path.join(root, "report", "annual_reports")
+    if not os.path.exists(pdf_dir):
+        legacy_dir = os.path.join(root, "data", "annual_reports")
+        if os.path.exists(legacy_dir):
+            pdf_dir = legacy_dir
     pdf_path = os.path.join(pdf_dir, f"{sym}.pdf")
     if os.path.exists(pdf_path):
         res = parse_pdf(pdf_path)
@@ -139,7 +158,7 @@ def get_customer_concentration(sym):
                     update_db(sym, res)
                     return f"{res} (Live PDF Scan)"
 
-    pending_msg = "Metric Coverage Pending (Place the Annual Report PDF in data/annual_reports/)"
+    pending_msg = "Metric Coverage Pending (Place the Annual Report PDF in report/annual_reports/)"
     update_db(sym, pending_msg)
     return f"{pending_msg} (Live PDF Scan)"
 

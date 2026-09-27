@@ -238,6 +238,7 @@ func RunWithResult(ctx context.Context, opts *Options) (*PickResult, error) {
 		RequireGrowthAcceleration: opts.HysteresisRequireGrowthAcceleration,
 		FullHistory:               fullHistory,
 		EnableSentryGate:          !opts.DisableSentryGate,
+		AsOfDate:                  opts.AsOfDate,
 	}
 
 	if opts.Method == "fairprice" {
@@ -253,7 +254,7 @@ func RunWithResult(ctx context.Context, opts *Options) (*PickResult, error) {
 		selectedKeys = SelectTopNMultibaggerWithCooldown(activeKeys, scores, fundamentals, cfg.HardFilters, opts.TopN, goldenWeights, opts.HysteresisBuffer, tracker, recentExits, opts.CooldownDays, opts.CooldownBypassRank, smartHysteresis)
 		finalWeights = NormalizeMultibaggerWeights(selectedKeys, scores, fundamentals, cfg.HardFilters, goldenWeights, opts.RebalanceTolerance)
 	} else if opts.Method == "earlymb" || opts.Method == "early_multibagger" {
-		scores = ScoreEarlyMultibagger(ctx, activeKeys, fundamentals, fullHistory, cfg.HardFilters)
+		scores = ScoreEarlyMultibagger(ctx, activeKeys, fundamentals, fullHistory, cfg.HardFilters, opts.AsOfDate)
 		selectedKeys = SelectTopNEarlyMultibaggerWithCooldown(activeKeys, scores, fundamentals, fullHistory, cfg.HardFilters, opts.TopN, goldenWeights, opts.HysteresisBuffer, tracker, recentExits, opts.CooldownDays, opts.CooldownBypassRank, smartHysteresis)
 		finalWeights = NormalizeEarlyMultibaggerWeights(selectedKeys, scores, fundamentals, cfg.HardFilters, goldenWeights, opts.RebalanceTolerance)
 	} else if opts.Method == "us_quality_momentum" {
@@ -355,7 +356,13 @@ func RunWithResult(ctx context.Context, opts *Options) (*PickResult, error) {
 			rvolZ = yfinance.CalculateWinsorizedRVOLZScore(hist.Volumes, 5, 50, 4.0)
 			ppScore, _ = yfinance.CalculateDecayedPocketPivot(hist.Closes, hist.Opens, hist.Volumes, 10, 0.25)
 			var dErr error
-			delivDelta, _, _, dErr = yfinance.GetDeliveryDelta(fundamentals[t].DeliveryHistory, time.Now(), 1)
+			settledDate := opts.clock().SettlementDate(time.Now())
+			if opts.AsOfDate != "" {
+				if pt, err := time.Parse("2006-01-02", opts.AsOfDate); err == nil {
+					settledDate = pt
+				}
+			}
+			delivDelta, _, _, dErr = yfinance.GetDeliveryDelta(fundamentals[t].DeliveryHistory, settledDate, 0)
 			delivInsufficient = (dErr != nil)
 		}
 		var fpVal, upsideVal float64

@@ -29,14 +29,14 @@ A 5-layer design ensures zero order loss:
 
 1. **Rate Limiting Throttle**: An explicit `200ms` delay (`time.Sleep(200 * time.Millisecond)`) between order placements caps execution at ~5 orders/second, well below Zerodha's 10 req/s limit.
 2. **In-Flight Auto-Retry**: Automatic retry (up to 3 attempts with 500ms backoff) for transient API errors before an order is declared failed.
-3. **Split Logging (`Order/` vs `Error/`)**:
-   - **`Order/Order_<timestamp>.txt`**: ONLY successfully placed orders (Zerodha Order ID, filled price, timestamp).
-   - **`Error/Order_<timestamp>.txt`**: human-readable details of failed orders.
-   - **`Error/Order_<timestamp>.json`**: machine-readable JSON payload storing unfulfilled order specifications.
-4. **Fresh Quote Refresh on Retry**: Retrying orders fetches real-time market prices (`yfinance` or Zerodha API) to avoid stale limit-price slippage.
+3. **Split Logging (`execution/<market>/orders/` vs `execution/<market>/errors/`)**:
+   - **`execution/<market>/orders/Order_<timestamp>.txt`**: ONLY successfully placed orders (Zerodha/Schwab Order ID, filled price, timestamp).
+   - **`execution/<market>/errors/Order_<timestamp>.txt`**: human-readable details of failed orders.
+   - **`execution/<market>/errors/Order_<timestamp>.json`**: machine-readable JSON payload storing unfulfilled order specifications.
+4. **Fresh Quote Refresh on Retry**: Retrying orders fetches real-time market prices (`yfinance` or broker API) to avoid stale limit-price slippage.
 5. **Automated Cleanup & CLI Shortcut**:
-   - `mycase retry --live` automatically targets the latest JSON retry payload in `Error/`.
-   - On 100% successful placement of the remaining orders, `Error/*.json` is deleted and success details are logged to `Order/Order_retry_<timestamp>.txt`.
+   - `mycase retry --live` automatically targets the latest JSON retry payload in `execution/<market>/errors/` (with fallback to legacy paths).
+   - On 100% successful placement of the remaining orders, `execution/<market>/errors/*.json` is deleted and success details are logged to `execution/<market>/orders/Order_retry_<timestamp>.txt`.
 
 ---
 
@@ -47,13 +47,12 @@ flowchart TD
     A["ExecuteBasketOrders / API"] --> B{"In-Flight Retry Loop"}
     B -->|"Order Placed"| C["Success List"]
     B -->|"Fails after 3 retries"| D["Failed Specs List"]
-    C --> E["Save to Order/Order_TIMESTAMP.txt"]
-    D --> F["Save to Error/Order_TIMESTAMP.txt"]
-    D --> G["Save to Error/Order_TIMESTAMP.json"]
+    C --> E["Save to execution/<market>/orders/Order_TIMESTAMP.txt"]
+    D --> F["Save to execution/<market>/errors/Order_TIMESTAMP.txt"]
+    D --> G["Save to execution/<market>/errors/Order_TIMESTAMP.json"]
     G --> H["mycase retry --live"]
     H --> I["Fetch Fresh Real-time Quotes"]
-    I --> J["Re-execute Missing Orders"]
-    J -->|"100% Success"| K["Delete Error JSON & Save to Order/"]
+    J -->|"100% Success"| K["Delete Error JSON & Save to execution/<market>/orders/"]
 ```
 
 ### Component Breakdown

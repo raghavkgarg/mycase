@@ -10,6 +10,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/raghavkgarg/mycase/pkg/marketdata"
 	"github.com/raghavkgarg/mycase/pkg/selectiontracker"
 	"github.com/raghavkgarg/mycase/pkg/yfinance"
 )
@@ -64,7 +65,8 @@ func GenerateIncubatorWatchlist(
 				}
 			}
 		}
-		delivDelta, _, _, _ := yfinance.GetDeliveryDelta(f.DeliveryHistory, time.Now(), 1)
+		settledDate := marketdata.EODSettlementDate(time.Now())
+		delivDelta, _, _, _ := yfinance.GetDeliveryDelta(f.DeliveryHistory, settledDate, 0)
 
 		candidates = append(candidates, IncubatorCandidate{
 			Ticker:         t,

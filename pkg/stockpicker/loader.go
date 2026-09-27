@@ -196,7 +196,8 @@ func loadLocalCSVConstituents(filePath string) ([]string, map[string]string, err
 func downloadConstituents(indexName, url string) ([]string, map[string]string, error) {
 	cleanIdx := strings.ToLower(strings.TrimSpace(indexName))
 	cleanIdx = strings.NewReplacer(",", "_", " ", "_", "^", "").Replace(cleanIdx)
-	cacheDir := filepath.Join("data", "cache", "constituents")
+	cacheDir := filepath.Join("data", "universe")
+	legacyCacheDir := filepath.Join("data", "cache", "constituents")
 	cachePath := filepath.Join(cacheDir, cleanIdx+".csv")
 
 	var records [][]string
@@ -239,7 +240,11 @@ func downloadConstituents(indexName, url string) ([]string, map[string]string, e
 
 	// Fallback to local air-gapped mirror if network fetch failed
 	if fetchErr != nil {
-		if cacheBytes, rErr := os.ReadFile(cachePath); rErr == nil && len(cacheBytes) > 0 {
+		cacheBytes, rErr := os.ReadFile(cachePath)
+		if rErr != nil {
+			cacheBytes, rErr = os.ReadFile(filepath.Join(legacyCacheDir, cleanIdx+".csv"))
+		}
+		if rErr == nil && len(cacheBytes) > 0 {
 			reader := csv.NewReader(bytes.NewReader(cacheBytes))
 			if rec, cErr := reader.ReadAll(); cErr == nil && len(rec) > 1 {
 				slog.Warn("constituents.network_fetch_failed; using cached offline mirror",

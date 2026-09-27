@@ -1,85 +1,87 @@
+# ==============================================================================
+# MyCase Portfolio Pipeline Configuration
+# Profile-Driven Execution Engine
+# ==============================================================================
+
+# Default profile when running `mycase pipeline` with no flags
+default_profile: india-multibagger
+
+profiles:
+  # ============================================================================
+  # INDIA: Multibagger Compounder Profile
+  # ============================================================================
+  india-multibagger:
+    indices:
+      - niftytotalmarket
+    golden_copy_path: data/microsmall.csv
+    strategy: multibagger
+    top_n: 20
+    capital: 100000
+    purchase_date: "2026-01-01"
+    rebalance_tolerance_pct: 0.25
+    hysteresis_rank_buffer: 5
+    hysteresis_min_score_delta: 3.0
+    hysteresis_require_growth_acceleration: true
+    cooldown_days: 30
+    cooldown_bypass_rank: 5
+    sentry: true
+    strict_sector: false
+    sector_max_stocks:
+      Consumer Defensive: 2
+    min_entry_score: 40.0
+    min_holding_score: 35.0
+    max_stock_weight_cap: 0.06
+    allow_cash_reserve: true
+    broker: zerodha
+
+  # ============================================================================
+  # INDIA: Early Multibagger (EBM) Breakout Profile
+  # ============================================================================
+  india-earlymb:
+    indices:
+      - niftytotalmarket
+    golden_copy_path: data/earlymb_live.csv
+    strategy: earlymb
+    top_n: 12
+    capital: 100000
+    purchase_date: "2026-01-01"
+    rebalance_tolerance_pct: 0.25
+    hysteresis_rank_buffer: 5
+    hysteresis_min_score_delta: 3.0
+    hysteresis_require_growth_acceleration: true
+    cooldown_days: 30
+    cooldown_bypass_rank: 5
+    sentry: true
+    strict_sector: false
+    broker: zerodha
+
+  # ============================================================================
+  # USA: Quality Momentum Compounder Profile
+  # ============================================================================
+  us-momentum:
+    indices:
+      - sp500
+    golden_copy_path: data/us_portfolio.csv
+    strategy: us_quality_momentum
+    top_n: 20
+    capital: 100000
+    rebalance_tolerance_pct: 0.25
+    hysteresis_rank_buffer: 5
+    hysteresis_min_score_delta: 3.0
+    sentry: false
+    broker: schwab
+    schwab_config: config/schwab.json
+    schwab_token: config/schwab_token.json
+
+# Top-level fallback settings for legacy backwards compatibility
 indices:
-    - niftytotalmarket
-  # - microcap250
-  # - small250
-  # - midcap150
-  # - nifty50
-  # - nifty200
-  # - sp500
-golden_copy_path:
-   - data/microsmall.csv
-  # - data/earlymb.csv
-  # - data/niftytotalmarket.csv
-  # - data/smallcap250.csv
-  # - data/midcap150.csv
-  # - data/midsmallmicro.csv
-  # - data/nifty50.csv
-  # - data/nifty200.csv
-  # - data/sp500.csv
-  # - data/qtum.csv
-strategy: 
-   - multibagger
-  # - earlymb
-  # - aggresive
-  # - balance
-  # - value
-
-files:
-  # - data/qtum.xlsx
-
-top_n: 
-  - 20
-  # - 50
-  # - 100
-capital: 
-  - 100000
-  # - 500000
-  # - 1000000
-purchase_date: 
-  - "2026-01-01"
-  # - "2026-02-01"
-
-rebalance_tolerance_pct:
-  - 0.25
-
-hysteresis_rank_buffer:
-  - 5
-
-# Smart Hysteresis (Hybrid 3A + 3B)
-hysteresis_min_score_delta: 3.0              # New candidate in top N displaces buffer holding if score advantage >= 3.0 pts
-hysteresis_require_growth_acceleration: true # Buffer grace forfeited if holding has decelerating revenue growth (TTM < 3Y CAGR)
-
-cooldown_days:
-  - 30
-
-cooldown_bypass_rank:
-  - 5
-
-# Tier-3 Sentry Gate & Technical Protection
-sentry: true                                  # Upstream Sentry Gate: filters out falling knives (price < 0.95*SMA200 / >20% DD)
-# staged_path: data/pre_microsmall.csv        # (Optional) Uncomment to swap decaying holdings from staged bullpen instead of in-strategy waterfall
-strict_sector: false                          # Set to true to strictly cap max 3 stocks per sector in substitutions
-
-# Sector-specific stock count caps (e.g. limit liquor / Consumer Defensive to 2)
-sector_max_stocks:
-  Consumer Defensive: 2
-
-# Quality Hurdle & Hybrid Cash Trigger
-min_entry_score: 40.0                         # Hard score hurdle for new candidate additions
-min_holding_score: 35.0                       # Eviction floor for existing holdings in buffer
-max_stock_weight_cap: 0.06                    # Single-stock weight ceiling (6.0%)
-allow_cash_reserve: true                      # Unallocated weight spills into CASH_RESERVE
-
-# Broker configuration
-broker: zerodha                     # "zerodha" (default) or "schwab"
-# schwab_config: config/schwab.json   # Schwab app credentials
-# schwab_token: config/schwab_token.json  # Schwab OAuth tokens (auto-managed)
-
-# Autopilot scheduling
-# schedule:
-#   frequency: quarterly
-#   day: first_trading_day
-#   notify: [telegram]
-#   auto_execute: false
-#   drift_trigger_pct: 15
-#   proposal_ttl_days: 7
+  - niftytotalmarket
+golden_copy_path: data/microsmall.csv
+strategy: multibagger
+top_n: 20
+capital: 100000
+purchase_date: "2026-01-01"
+rebalance_tolerance_pct: 0.25
+hysteresis_rank_buffer: 5
+sentry: true
+broker: zerodha

@@ -18,6 +18,12 @@ import (
 func getCachePath(prefix, key string) string {
 	today := marketdata.EODSettlementDate(time.Now()).Format("2006-01-02")
 	cleanKey := strings.NewReplacer("^", "_", ":", "_", "/", "_").Replace(key)
+	return filepath.Join("data", "cache", "prices", fmt.Sprintf("%s_%s_%s.json", prefix, cleanKey, today))
+}
+
+func getLegacyCachePath(prefix, key string) string {
+	today := marketdata.EODSettlementDate(time.Now()).Format("2006-01-02")
+	cleanKey := strings.NewReplacer("^", "_", ":", "_", "/", "_").Replace(key)
 	return filepath.Join("data", ".cache", fmt.Sprintf("%s_%s_%s.json", prefix, cleanKey, today))
 }
 
@@ -25,7 +31,11 @@ func loadFromCache(prefix, key string, target any) bool {
 	path := getCachePath(prefix, key)
 	info, err := os.Stat(path)
 	if err != nil {
-		return false
+		path = getLegacyCachePath(prefix, key)
+		info, err = os.Stat(path)
+		if err != nil {
+			return false
+		}
 	}
 	if !marketdata.IsFreshEOD(info.ModTime(), time.Now()) {
 		return false

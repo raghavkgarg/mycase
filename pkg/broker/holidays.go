@@ -120,7 +120,7 @@ func (p *DBHolidayProvider) Holidays(exchange string) []string {
 		slog.WarnContext(ctx, "holidays.empty_calendar",
 			"exchange", exchange,
 			"impact", "trading-day logic is WEEKEND-ONLY until seeded",
-			"fix", "seed the holidays table (duckdb data/mycase.db < holiday.sql) — see docs/book/1-80-runbook.md")
+			"fix", "seed the holidays table (duckdb data/mycase.db < scripts/holiday.sql) — see docs/book/1-80-runbook.md")
 	}
 	return dates
 }

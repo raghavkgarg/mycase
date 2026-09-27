@@ -88,7 +88,7 @@ For every selected stock, the scuttlebutt pipeline aggregates and formats the fo
 * **Format**: Verifies if there are excessive or non-arm's length related-party transactions (RPTs) that could pose governance risks.
 
 ### 13. [Customer Concentration Check]
-* **Source**: `scripts/check_customer_concentration.py` and `config/customer_concentration.json`.
+* **Source**: `scripts/check_customer_concentration.py` and `data/cache/customer_concentration.json`.
 * **Logic**: Verifies if the top 3 clients contribute $< 40\%$ of revenue (Ind AS 108 Segment Reporting compliance).
 
 ---
@@ -116,15 +116,15 @@ graph TD
 ```
 
 ### JSON Auto-Updating Cache
-The caching mechanism auto-updates `config/customer_concentration.json` to prevent redundant network and CPU operations:
+The caching mechanism auto-updates `data/cache/customer_concentration.json` to prevent redundant network and CPU operations:
 * **Successful Scans**: Appends the scan date (e.g. `(Scanned: 2026-07-29)`) to the parsed result and saves it.
-* **Pending/Failed Scans**: If the PDF is missing, cannot be downloaded, or segment data is not found, the script saves the `"Metric Coverage Pending (Place the Annual Report PDF in data/annual_reports/) (Scanned: 2026-07-29)"` state into the JSON overrides file.
+* **Pending/Failed Scans**: If the PDF is missing, cannot be downloaded, or segment data is not found, the script saves the `"Metric Coverage Pending (Place the Annual Report PDF in report/annual_reports/) (Scanned: 2026-07-29)"` state into the JSON overrides file.
 * Subsequent runs instantly load this status from the cache without retrying.
 
 ### Manual Cache Eviction
 To force a rerun on a cached ticket:
-1. Manually add the target PDF in `data/annual_reports/<TICKER>.pdf`.
-2. Delete the ticket's cached entry from `config/customer_concentration.json`.
+1. Manually add the target PDF in `report/annual_reports/<TICKER>.pdf`.
+2. Delete the ticket's cached entry from `data/cache/customer_concentration.json`.
 
 ### PDF Parsing Accuracy
 * **Context-Aware Parsing**: To prevent false positives (like picking up tax rates or asset percentages), the parser only extracts percentages from lines containing customer concentration keywords (`customer`, `client`, `major`, `single`, `external`).

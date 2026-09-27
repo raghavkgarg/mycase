@@ -8,8 +8,11 @@ import (
 	"github.com/raghavkgarg/mycase/pkg/config"
 )
 
-// stateFileName is the scheduler's persisted last-run state, under the data dir.
-const stateFileName = "scheduler_state.json"
+// stateFileName is the scheduler's persisted last-run state, under the data/state/ dir.
+const (
+	stateFileName       = "state/scheduler_state.json"
+	legacyStateFileName = "scheduler_state.json"
+)
 
 // State records the last trading day each cadence completed, so the scheduler can
 // detect missed ticks (catch-up) across restarts and avoid double-running a
@@ -86,10 +89,14 @@ func statePath() string {
 }
 
 // LoadState reads the persisted scheduler state. A missing/corrupt file yields an
-// empty State (not an error) so a fresh install starts clean.
+// empty State (not an error) so a fresh install starts clean. It checks
+// data/state/scheduler_state.json first, falling back to legacy data/scheduler_state.json.
 func LoadState() (State, error) {
 	s := emptyState()
 	data, err := os.ReadFile(statePath())
+	if os.IsNotExist(err) {
+		data, err = os.ReadFile(config.DataPath(legacyStateFileName))
+	}
 	if err != nil {
 		return s, nil
 	}

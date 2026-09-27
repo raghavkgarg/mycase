@@ -29,13 +29,17 @@ func CalculateDeliveryDelta(records []marketdata.DeliveryRecord, asOf time.Time,
 		return DeliveryDeltaResult{}, ErrInsufficientDeliveryHistory
 	}
 
-	if lagDays <= 0 {
+	if lagDays < 0 {
 		lagDays = 1 // Default T+1 settlement lag
 	}
 
 	// Cutoff date string in YYYY-MM-DD
-	// E.g. If asOf is 2026-09-10 and lagDays is 1, max allowed settled date is 2026-09-09.
-	cutoffStr := asOf.AddDate(0, 0, -lagDays).Format("2006-01-02")
+	// If lagDays == 0, max allowed settled date is asOf itself (already a settled trading date).
+	// If lagDays > 0, max allowed settled date is asOf - lagDays.
+	cutoffStr := asOf.Format("2006-01-02")
+	if lagDays > 0 {
+		cutoffStr = asOf.AddDate(0, 0, -lagDays).Format("2006-01-02")
+	}
 
 	// Filter confirmed records up to cutoff and deduplicate by date.
 	// The DeliveryPct <= 0 guard catches two failure modes:

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"time"
 
 	"log/slog"
@@ -15,9 +16,14 @@ import (
 	"github.com/raghavkgarg/mycase/pkg/csvloader"
 )
 
+var (
+	PIDFile   = "data/state/daemon.pid"
+	StateFile = "data/state/daemon_state.json"
+)
+
 const (
-	PIDFile   = "data/daemon.pid"
-	StateFile = "data/daemon_state.json"
+	legacyPIDFile   = "data/daemon.pid"
+	legacyStateFile = "data/daemon_state.json"
 )
 
 // State is persisted across daemon restarts.
@@ -29,9 +35,13 @@ type State struct {
 }
 
 // LoadState reads the last persisted daemon state. Returns empty State (not an error)
-// when no state file exists yet.
+// when no state file exists yet. It checks data/state/daemon_state.json first,
+// falling back to legacy data/daemon_state.json if needed.
 func LoadState() (State, error) {
 	data, err := os.ReadFile(StateFile)
+	if os.IsNotExist(err) {
+		data, err = os.ReadFile(legacyStateFile)
+	}
 	if err != nil {
 		return State{}, nil
 	}
@@ -43,7 +53,7 @@ func LoadState() (State, error) {
 }
 
 func saveState(s State) error {
-	_ = os.MkdirAll("data", 0755)
+	_ = os.MkdirAll(filepath.Dir(StateFile), 0755)
 	data, err := json.MarshalIndent(s, "", "  ")
 	if err != nil {
 		return err
@@ -151,7 +161,7 @@ func nextMarketClose(mktCfg broker.MarketConfig) time.Time {
 }
 
 func writePID() error {
-	_ = os.MkdirAll("data", 0755)
+	_ = os.MkdirAll(filepath.Dir(PIDFile), 0755)
 	return os.WriteFile(PIDFile, fmt.Appendf(nil, "%d\n", os.Getpid()), 0644)
 }
 

@@ -251,10 +251,23 @@ type ThemeConfig struct {
 	TargetWeight float64 `json:"target_weight,omitempty"`
 }
 
-// LoadThemes reads the themes configuration from config/themes.json
+func resolveReferenceFile(filename string, baseName string) string {
+	if _, err := os.Stat(filename); err == nil {
+		return filename
+	}
+	if strings.HasSuffix(filename, baseName) {
+		candidate := Path("reference", "india", baseName)
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate
+		}
+	}
+	return filename
+}
+
+// LoadThemes reads the themes configuration from config/reference/india/themes.json (or config/themes.json)
 // If the file does not exist, it returns default hardcoded themes.
 func LoadThemes(filename string) ([]ThemeConfig, error) {
-	file, err := os.Open(filename)
+	file, err := os.Open(resolveReferenceFile(filename, "themes.json"))
 	if err != nil {
 		// Fallback to default configs
 		return []ThemeConfig{
@@ -277,22 +290,22 @@ func LoadThemes(filename string) ([]ThemeConfig, error) {
 
 // MFSConfig represents the weight parameters for Multi-Factor Scoring optimization
 type MFSConfig struct {
-	Sharpe           float64 `json:"sharpe"`
-	Sortino          float64 `json:"sortino"`
-	Return           float64 `json:"return"`
-	Alpha            float64 `json:"alpha"`
-	Volatility       float64 `json:"volatility"`
-	Beta             float64 `json:"beta"`
-	Treynor          float64 `json:"treynor"`
-	Ulcer            float64 `json:"ulcer"`
-	PEGRatio         float64 `json:"peg_ratio"`
-	ROE              float64 `json:"roe"`
-	ForwardPE        float64 `json:"forward_pe"`
-	OperatingMargins float64 `json:"operating_margins"`
-	PBRatio          float64 `json:"pb_ratio"`
-	NetDebtEBITDA    float64 `json:"net_debt_ebitda"`
-	MarketCap        float64 `json:"market_cap"`
-	InsidersPercent  float64 `json:"insiders_percent"`
+	Sharpe           float64 `json:"sharpe" yaml:"sharpe"`
+	Sortino          float64 `json:"sortino" yaml:"sortino"`
+	Return           float64 `json:"return" yaml:"return"`
+	Alpha            float64 `json:"alpha" yaml:"alpha"`
+	Volatility       float64 `json:"volatility" yaml:"volatility"`
+	Beta             float64 `json:"beta" yaml:"beta"`
+	Treynor          float64 `json:"treynor" yaml:"treynor"`
+	Ulcer            float64 `json:"ulcer" yaml:"ulcer"`
+	PEGRatio         float64 `json:"peg_ratio" yaml:"peg_ratio"`
+	ROE              float64 `json:"roe" yaml:"roe"`
+	ForwardPE        float64 `json:"forward_pe" yaml:"forward_pe"`
+	OperatingMargins float64 `json:"operating_margins" yaml:"operating_margins"`
+	PBRatio          float64 `json:"pb_ratio" yaml:"pb_ratio"`
+	NetDebtEBITDA    float64 `json:"net_debt_ebitda" yaml:"net_debt_ebitda"`
+	MarketCap        float64 `json:"market_cap" yaml:"market_cap"`
+	InsidersPercent  float64 `json:"insiders_percent" yaml:"insiders_percent"`
 }
 
 // HardFilters represents criteria constraints for stock picking pre-selection
@@ -392,8 +405,16 @@ type MFSStrategies struct {
 	Filters    map[string]HardFilters `json:"filters"`
 }
 
-// LoadHardFilters reads hard selection filters for a specific strategy from config/mfs.json
+// LoadHardFilters reads hard selection filters for a specific strategy from config/defaults.yaml or legacy config/mfs.json
 func LoadHardFilters(filename string, strategy string) (*HardFilters, error) {
+	if yamlPath := findDefaultsYAMLPath(filename); yamlPath != "" {
+		if doc, err := loadDefaultsYAML(yamlPath); err == nil {
+			if s := doc.findStrategyYAML(strategy); s != nil {
+				return s.ToHardFilters(), nil
+			}
+		}
+	}
+
 	file, err := os.Open(filename)
 	if err != nil {
 		return nil, err
@@ -438,9 +459,9 @@ type GovernanceWrapper struct {
 	PledgedPercentages map[string]float64 `json:"pledged_percentages"`
 }
 
-// LoadGovernance reads promoter pledging percentages from a JSON file
+// LoadGovernance reads promoter pledging percentages from config/reference/india/governance.json (or config/governance.json)
 func LoadGovernance(filename string) (map[string]float64, error) {
-	file, err := os.Open(filename)
+	file, err := os.Open(resolveReferenceFile(filename, "governance.json"))
 	if err != nil {
 		return nil, err
 	}
@@ -454,7 +475,7 @@ func LoadGovernance(filename string) (map[string]float64, error) {
 	return wrapper.PledgedPercentages, nil
 }
 
-// LoadMFSConfig reads factors weights config for a specific strategy from config/mfs.json
+// LoadMFSConfig reads factors weights config for a specific strategy from config/defaults.yaml or legacy config/mfs.json
 // If the file does not exist or strategy is not found, it returns default strategy weights.
 func LoadMFSConfig(filename string, strategy string) (*MFSConfig, error) {
 	defaultConfig := &MFSConfig{
@@ -466,6 +487,14 @@ func LoadMFSConfig(filename string, strategy string) (*MFSConfig, error) {
 		Beta:       0.10,
 		Treynor:    0.05,
 		Ulcer:      0.05,
+	}
+
+	if yamlPath := findDefaultsYAMLPath(filename); yamlPath != "" {
+		if doc, err := loadDefaultsYAML(yamlPath); err == nil {
+			if s := doc.findStrategyYAML(strategy); s != nil && s.MFSWeights != nil {
+				return s.MFSWeights, nil
+			}
+		}
 	}
 
 	file, err := os.Open(filename)
@@ -493,9 +522,9 @@ func LoadMFSConfig(filename string, strategy string) (*MFSConfig, error) {
 	return defaultConfig, nil
 }
 
-// LoadCSVLinks reads the index URL mapping from config/csvlinks.json
+// LoadCSVLinks reads the index URL mapping from config/reference/india/csvlinks.json (or config/csvlinks.json)
 func LoadCSVLinks(filename string) (map[string]string, error) {
-	file, err := os.Open(filename)
+	file, err := os.Open(resolveReferenceFile(filename, "csvlinks.json"))
 	if err != nil {
 		return nil, err
 	}
@@ -534,14 +563,14 @@ type UserDefaults struct {
 // A zero value (block absent) leaves every cadence disabled, so installing the
 // scheduler is an explicit opt-in per cadence.
 type SchedulerConfig struct {
-	EnableEOD       bool   `json:"enable_eod"`       // run the daily EOD cache/snapshot update
-	EnableDrift     bool   `json:"enable_drift"`     // run the daily portfolio drift check (after EOD)
-	EnableRebalance bool   `json:"enable_rebalance"` // run the quarterly/monthly rebalance proposal
-	CloseOffsetMin  int    `json:"close_offset_min"` // minutes after market close to fire daily cadences (default 15)
-	MaxRunMin       int    `json:"max_run_min"`      // overall deadline for one run-now pass (default 20); caps a hung run so it releases the DuckDB lock
-	FailAlertAfter  int    `json:"fail_alert_after"` // consecutive cadence failures before a persistent-failure alert (default 3); auth errors alert immediately
-	EnableReport    bool   `json:"enable_report"`    // append a human-readable run block to the maintenance log
-	ReportPath      string `json:"report_path"`      // maintenance-log path ("" → data/logs/scheduler-runs.log)
+	EnableEOD       bool   `json:"enable_eod" yaml:"enable_eod"`             // run the daily EOD cache/snapshot update
+	EnableDrift     bool   `json:"enable_drift" yaml:"enable_drift"`         // run the daily portfolio drift check (after EOD)
+	EnableRebalance bool   `json:"enable_rebalance" yaml:"enable_rebalance"` // run the quarterly/monthly rebalance proposal
+	CloseOffsetMin  int    `json:"close_offset_min" yaml:"close_offset_min"` // minutes after market close to fire daily cadences (default 15)
+	MaxRunMin       int    `json:"max_run_min" yaml:"max_run_min"`           // overall deadline for one run-now pass (default 20); caps a hung run so it releases the DuckDB lock
+	FailAlertAfter  int    `json:"fail_alert_after" yaml:"fail_alert_after"` // consecutive cadence failures before a persistent-failure alert (default 3); auth errors alert immediately
+	EnableReport    bool   `json:"enable_report" yaml:"enable_report"`       // append a human-readable run block to the maintenance log
+	ReportPath      string `json:"report_path" yaml:"report_path"`           // maintenance-log path ("" → data/logs/scheduler-runs.log)
 }
 
 // RawConfig holds retention settings for the raw-response archive (pkg/rawstore,
@@ -556,8 +585,8 @@ type SchedulerConfig struct {
 // Env overrides (flag > env > config > default): MYCASE_RAW_RETAIN_DAYS,
 // MYCASE_RAW_MAX_SIZE_MB.
 type RawConfig struct {
-	RetainDays int `json:"retain_days"` // days to keep raw captures (default 14)
-	MaxSizeMB  int `json:"max_size_mb"` // total archive size ceiling in MB (default 512)
+	RetainDays int `json:"retain_days" yaml:"retain_days"` // days to keep raw captures (default 14)
+	MaxSizeMB  int `json:"max_size_mb" yaml:"max_size_mb"`   // total archive size ceiling in MB (default 512)
 }
 
 // Raw-archive retention defaults, applied when config/env leave a field unset.
@@ -573,25 +602,61 @@ const (
 // contact (e.g. "mycase/1.0 you@example.com"). The env var
 // MYCASE_EDGAR_USER_AGENT overrides UserAgent (flag > env > config > default).
 type EDGARConfig struct {
-	UserAgent    string `json:"user_agent"`
-	Enabled      bool   `json:"enabled"`
-	FactsTTLDays int    `json:"facts_ttl_days"` // EDGAR companyfacts freshness (default 80 ≈ one quarter with margin)
-	CIKTTLDays   int    `json:"cik_ttl_days"`   // ticker→CIK map freshness (default 7)
+	UserAgent    string `json:"user_agent" yaml:"user_agent"`
+	Enabled      bool   `json:"enabled" yaml:"enabled"`
+	FactsTTLDays int    `json:"facts_ttl_days" yaml:"facts_ttl_days"` // EDGAR companyfacts freshness (default 80 ≈ one quarter with margin)
+	CIKTTLDays   int    `json:"cik_ttl_days" yaml:"cik_ttl_days"`     // ticker→CIK map freshness (default 7)
 }
 
 // LoggingConfig holds structured-logging defaults. CLI flags and env vars
 // (MYCASE_LOG_LEVEL, MYCASE_LOG_DIR) override these; see main.go wiring.
 type LoggingConfig struct {
-	File       *bool  `json:"file"`        // write JSON log file (default: true; pointer so absence != false)
-	Dir        string `json:"dir"`         // directory for JSON log files (default: data/logs)
-	Level      string `json:"level"`       // debug | info | warn | error (default: info)
-	RetainDays int    `json:"retain_days"` // days to keep log files (default: 14)
+	File       *bool  `json:"file" yaml:"file"`               // write JSON log file (default: true; pointer so absence != false)
+	Dir        string `json:"dir" yaml:"dir"`                 // directory for JSON log files (default: data/logs)
+	Level      string `json:"level" yaml:"level"`             // debug | info | warn | error (default: info)
+	RetainDays int    `json:"retain_days" yaml:"retain_days"` // days to keep log files (default: 14)
 }
 
-// LoadUserDefaults reads config/defaults.json and returns user preferences.
-// Returns zero-value defaults if the file doesn't exist or is malformed.
+// LoadUserDefaults reads config/defaults.yaml (falling back to config/defaults.json) and returns user preferences.
+// Returns zero-value defaults if neither file exists or is malformed.
 func LoadUserDefaults(filename string) UserDefaults {
 	var defaults UserDefaults
+
+	if yamlPath := findDefaultsYAMLPath(filename); yamlPath != "" {
+		if doc, err := loadDefaultsYAML(yamlPath); err == nil {
+			defaults.Market = doc.ActiveMarket
+			if defaults.Market == "" {
+				defaults.Market = "india"
+			}
+			defaults.Logging = doc.System.Logging
+			defaults.Raw = doc.System.Raw
+			defaults.Scheduler = doc.System.Scheduler
+
+			mkt, ok := doc.Markets[defaults.Market]
+			if !ok {
+				mkt = doc.Markets["india"]
+			}
+			defaults.Broker = mkt.Broker
+			defaults.Index = mkt.DefaultIndex
+			defaults.Method = mkt.DefaultStrategy
+			defaults.TopN = mkt.TopN
+			defaults.Range = mkt.Range
+			defaults.PipelineConfig = mkt.PipelineConfig
+			if defaults.PipelineConfig == "" {
+				defaults.PipelineConfig = "config/pipeline.yaml"
+			}
+
+			// Extract US EDGAR config if available
+			if usMkt, ok := doc.Markets["us"]; ok && usMkt.EDGAR.UserAgent != "" {
+				defaults.EDGAR = usMkt.EDGAR
+			} else if mkt.EDGAR.UserAgent != "" {
+				defaults.EDGAR = mkt.EDGAR
+			}
+
+			return defaults
+		}
+	}
+
 	file, err := os.Open(filename)
 	if err != nil {
 		return defaults

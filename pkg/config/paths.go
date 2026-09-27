@@ -103,10 +103,20 @@ func DataDir() string {
 	return filepath.Join(Home(), dataDirName)
 }
 
-// Path returns the absolute-or-relative path to a config file under ConfigDir
-// (e.g. Path("csvlinks.json") → "<home>/config/csvlinks.json").
+// Path returns the absolute-or-relative path to a config file under ConfigDir.
+// If the file exists directly under ConfigDir, it is returned.
+// Otherwise, if it exists under ConfigDir/reference/india, that path is returned
+// (e.g. Path("csvlinks.json") → "<home>/config/reference/india/csvlinks.json").
 func Path(elem ...string) string {
-	return filepath.Join(append([]string{ConfigDir()}, elem...)...)
+	target := filepath.Join(append([]string{ConfigDir()}, elem...)...)
+	if _, err := os.Stat(target); err == nil {
+		return target
+	}
+	refIndia := filepath.Join(append([]string{ConfigDir(), "reference", "india"}, elem...)...)
+	if _, err := os.Stat(refIndia); err == nil {
+		return refIndia
+	}
+	return target
 }
 
 // DataPath returns the path to a file/dir under DataDir

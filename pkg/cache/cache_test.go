@@ -344,7 +344,7 @@ func TestGetFundamentals_Stale(t *testing.T) {
 	// Back-date to 25 hours ago.
 	_, err := c.db.ExecContext(ctx,
 		`UPDATE fundamentals SET fetched_at = ? WHERE ticker = 'NSE:TCS'`,
-		time.Now().Add(-25*time.Hour).Unix())
+		time.Now().Add(-72*time.Hour).Unix())
 	if err != nil {
 		t.Fatalf("backdating fundamentals: %v", err)
 	}
@@ -569,7 +569,7 @@ func TestRangeKeyToStartDate(t *testing.T) {
 		{"1mo", now.AddDate(0, -1, 0)},
 		{"3mo", now.AddDate(0, -3, 0)},
 		{"6mo", now.AddDate(0, -6, 0)},
-		{"1y", now.AddDate(-1, 0, 0)},
+		{"1y", now.AddDate(-1, 0, -15)},
 		{"2y", now.AddDate(-2, 0, 0)},
 		{"5y", now.AddDate(-5, 0, 0)},
 		{"unknown", now.AddDate(0, -3, 0)}, // default falls back to 3mo

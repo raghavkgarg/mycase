@@ -145,7 +145,7 @@ The App Key/Secret prove **which application** is asking. Your brokerage login p
    `https://127.0.0.1:8443/callback` and wait until the app status is
    **"Ready For Use"** (a pending app fails with `invalid_client`).
 2. Copy the App Key and App Secret into `config/schwab.json`
-   (see `config/schwab.json.example`):
+   (see `config/reference/schwab.json.example`):
    ```json
    {
      "client_id": "your_schwab_app_key",
@@ -403,7 +403,7 @@ systemctl enable --now mycase
 
 ```bash
 mycase daemon start          # blocking loop, use tmux or background it
-mycase daemon status         # show last check from data/daemon_state.json
+mycase daemon status         # show last check from data/state/daemon_state.json
 mycase daemon stop           # sends SIGTERM to running daemon
 mycase daemon uninstall      # removes launchd plist
 ```
@@ -477,7 +477,7 @@ When running multi-index pipelines (e.g. `microcap250` + `small250` into `micros
 1. **Step 1/11 — Initial Candidate Pick (Primary Source)**:
    - Downloads/loads universe constituents (e.g., `microcap250`).
    - Fetches 1Y price history and Yahoo Finance fundamentals (ROCE, CROIC, DSO, Debt/Equity, Promoter Pledging).
-   - Applies Hard Safety Filters (`mfs.json`) to eliminate non-compliant stocks.
+   - Applies Hard Safety Filters (`config/defaults.yaml`) to eliminate non-compliant stocks.
    - Calculates 100-point Relative Scoring Matrix with Sector Caps and Hysteresis Buffer.
    - Saves index pick results to `data/candidates/index_picks/<source>_<strategy>.csv` and selection reasons report to `report/<universe>/executions/<date>_01_selection_reasons.txt`.
 
@@ -721,17 +721,17 @@ units** — if either is installed, uninstall it to avoid duplicate runs.
 
 ### Choosing a market path (US or India)
 
-The active market path is selected by **one file — `config/defaults.json`** — which drives
+The active market path is selected by **one file — `config/defaults.yaml`** (`active_market: india` or `active_market: us`) — which drives
 the broker, the market clock (NYSE vs NSE), the daily EOD index/method, and which pipeline
-YAML the rebalance/drift cadences use. Two committed presets make switching a one-liner:
+configuration the rebalance/drift cadences use. Two committed presets make switching a one-liner:
 
 ```bash
-make use-us       # Schwab / NYSE / sp500 / us_quality_momentum / pipeline_us.yaml
+make use-us       # Schwab / NYSE / sp500 / us_quality_momentum / pipeline.yaml
 make use-india    # Zerodha / NSE / niftytotalmarket / multibagger / pipeline.yaml
 ```
 
-Each copies `config/defaults.<path>.json` over `config/defaults.json`. After switching,
-re-run the install so the timer's fire time and pipeline pick up the change.
+Each updates `active_market` in `config/defaults.yaml`. After switching,
+re-run `make scheduler-install` so the timer's fire time (16:15 ET for NYSE vs 21:15 IST for NSE) and pipeline pick up the change.
 
 ### Run manually / recover a missed day
 
@@ -744,7 +744,7 @@ mycase scheduler run-now --dry-run    # preview which cadences would run; fetch/
 mycase scheduler run-now --mock       # non-live broker (drift/rebalance become meaningless)
 ```
 
-`run-now` and the OS timer share `data/scheduler_state.json` and guard on it, so running
+`run-now` and the OS timer share `data/state/scheduler_state.json` and guard on it, so running
 manually while the timer is installed is safe — a cadence already completed for the day is
 skipped, not repeated. Use `--dry-run` first if you want to see the plan without side
 effects; it works even without valid live-broker tokens.
@@ -832,7 +832,7 @@ self-heals, so the fix is to re-run `mycase auth --broker schwab` on the host.
 ### Run history — the maintenance log
 
 Each pass appends a human-readable block to `data/logs/scheduler-runs.log` (opt-in via
-`scheduler.enable_report` in `defaults.json`, on by default; override the path with
+`scheduler.enable_report` in `config/defaults.yaml`, on by default; override the path with
 `scheduler.report_path`). This is the fast "did last night's run work?" view — distinct from
 the JSONL slog file (`data/logs/mycase-*.jsonl`), which is the machine-readable diagnostic
 channel. One dated block per pass, one indented line per cadence with counts + duration,
@@ -890,7 +890,7 @@ Every cadence is gated on the holiday-aware market calendar (`marketcal` + the a
 market's clock), so weekends and the exchange holidays in the `holidays` table of
 `mycase.db` are skipped uniformly — no hand-maintained holiday list in a shell script. Each
 `tick` first runs a **catch-up** EOD if a close was missed (machine asleep), guarded by
-`scheduler_state.json` so a cadence never double-runs on the same trading day.
+`data/state/scheduler_state.json` so a cadence never double-runs on the same trading day.
 
 ### Holiday calendar (operator-maintained)
 
@@ -935,15 +935,15 @@ Yearly workflow (per exchange):
    mycase holidays list -e NSE     # dump one exchange's dates
    ```
 
-**Quick local bootstrap.** For a fresh checkout/machine, the committed `holiday.sql` snapshot
+**Quick local bootstrap.** For a fresh checkout/machine, the committed `scripts/holiday.sql` snapshot
 seeds the currently-known NYSE + NSE dates in one command:
 
 ```bash
-duckdb data/mycase.db < holiday.sql
+duckdb data/mycase.db < scripts/holiday.sql
 mycase holidays status            # confirm: NYSE / NSE both show counts, no "NOT SEEDED"
 ```
 
-`holiday.sql` is a **convenience snapshot only** — not authoritative and read by no code. The
+`scripts/holiday.sql` is a **convenience snapshot only** — not authoritative and read by no code. The
 source of truth is the table; the yearly refresh above updates the table from the official
 calendar (refresh the snapshot afterwards if you like). Re-running it is safe.
 
@@ -959,15 +959,15 @@ calendar (refresh the snapshot afterwards if you like). Re-running it is safe.
   skipping only weekends.
 
 > **First run on a fresh machine/checkout:** the `holidays` table starts empty, so seed it
-> (`duckdb data/mycase.db < holiday.sql`) before relying on holiday-aware scheduling. Until
+> (`duckdb data/mycase.db < scripts/holiday.sql`) before relying on holiday-aware scheduling. Until
 > then, only weekends are skipped.
 
 ### Configuration
 
-Cadence toggles live in the `scheduler` block of `config/defaults.json`
+Cadence toggles live in the `scheduler` block of `config/defaults.yaml`
 (`enable_eod` / `enable_drift` / `enable_rebalance` / `close_offset_min`); the rebalance
-schedule (`frequency` / `day` / `auto_execute`) stays in the `schedule:` block of the
-active pipeline YAML. Diagnostics stream to `data/scheduler.log`.
+schedule (`frequency` / `day` / `auto_execute`) stays in the `schedule:` block of
+`config/pipeline.yaml`. Diagnostics stream to `data/logs/scheduler.log`.
 
 ### Quick start (US path on this machine)
 
@@ -1092,7 +1092,7 @@ Features included in the web dashboard:
 |-----------|-------|-------------|
 | `start` | `--live`, `--config`, `--file` | Start blocking drift loop |
 | `stop` | — | SIGTERM the running daemon |
-| `status` | — | Print last state from `data/daemon_state.json` |
+| `status` | — | Print last state from `data/state/daemon_state.json` |
 | `check` | `--live`, `--config`, `--file` | One-shot check |
 | `install` | — | Write launchd plist (macOS) or print systemd unit |
 | `uninstall` | — | Remove launchd plist |

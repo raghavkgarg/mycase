@@ -25,7 +25,7 @@ var CalibrateCommand = &cli.Command{
 		&cli.IntFlag{Name: "step", Value: 21, Usage: "Rolling evaluation step in trading days (e.g. 21 for monthly)"},
 		&cli.IntFlag{Name: "forward", Value: 21, Usage: "Forward return horizon in trading days (e.g. 21 for 21-day forward return)"},
 		&cli.FloatFlag{Name: "train-ratio", Value: 0.70, Usage: "In-sample training split fraction (e.g. 0.70 for 70% train / 30% test)"},
-		&cli.BoolFlag{Name: "save-snapshot", Usage: "Save current constituent snapshot to data/universe_snapshots/"},
+		&cli.BoolFlag{Name: "save-snapshot", Usage: "Save current constituent snapshot to data/universe/"},
 	},
 	Action: runCalibrate,
 }

@@ -596,14 +596,16 @@ func diffPortfolio(oldWeights, newWeights map[string]float64) (entries []StockCh
 
 // cleanStaleCache removes cached files from previous days.
 func cleanStaleCache() {
-	files, err := filepath.Glob(config.DataPath(".cache", "*"))
-	if err != nil {
-		return
-	}
-	today := time.Now().Format("2006-01-02")
-	for _, f := range files {
-		if !strings.Contains(f, today) {
-			_ = os.Remove(f)
+	for _, cacheDir := range []string{config.DataPath("cache", "prices", "*"), config.DataPath(".cache", "*")} {
+		files, err := filepath.Glob(cacheDir)
+		if err != nil {
+			continue
+		}
+		today := time.Now().Format("2006-01-02")
+		for _, f := range files {
+			if !strings.Contains(f, today) {
+				_ = os.Remove(f)
+			}
 		}
 	}
 }
