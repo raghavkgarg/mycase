@@ -10,6 +10,7 @@ import (
 )
 
 func TestSaveSuccessAndErrorLog(t *testing.T) {
+	t.Setenv("MYCASE_EXECUTION_DIR", t.TempDir())
 	tmpNow := "999999_999999"
 	ordersDir := executionOrdersDir()
 	errorsDir := executionErrorsDir()
@@ -47,6 +48,7 @@ func TestSaveSuccessAndErrorLog(t *testing.T) {
 }
 
 func TestExecuteRetryPayloadMock(t *testing.T) {
+	t.Setenv("MYCASE_EXECUTION_DIR", t.TempDir())
 	tmpNow := "999999_888888"
 	errorsDir := executionErrorsDir()
 	ordersDir := executionOrdersDir()
