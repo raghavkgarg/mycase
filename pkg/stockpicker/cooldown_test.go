@@ -74,8 +74,22 @@ func TestLoadRecentExitsMock(t *testing.T) {
 }
 
 func TestLoadRecentExits_ArvindCooldown(t *testing.T) {
+	// LoadRecentExits records a ticker as a recent exit if it appears in any
+	// within-window backup and is NOT a current holding, dated to the most recent
+	// backup it appears in. So place ARVIND in the newest snapshot (2026-08-26)
+	// and pass nil holdings → exit dated 2026-08-26.
+	tempDir := t.TempDir()
+	bkDir := filepath.Join(tempDir, "data", "backups", "microsmall")
+	if err := os.MkdirAll(bkDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	older := filepath.Join(bkDir, "bk_20260820_120000.csv")
+	_ = os.WriteFile(older, []byte("ticker,weight\nNSE:KEEP,1.00\n"), 0644)
+	newer := filepath.Join(bkDir, "bk_20260826_120000.csv")
+	_ = os.WriteFile(newer, []byte("ticker,weight\nNSE:ARVIND,0.30\nNSE:KEEP,0.70\n"), 0644)
+
 	origWd, _ := os.Getwd()
-	_ = os.Chdir("../..")
+	_ = os.Chdir(tempDir)
 	defer os.Chdir(origWd)
 
 	refTime := time.Date(2026, 8, 27, 0, 0, 0, 0, time.UTC)
@@ -97,4 +111,3 @@ func TestLoadRecentExits_ArvindCooldown(t *testing.T) {
 		t.Errorf("expected non-empty cooldown reason")
 	}
 }
-

@@ -310,48 +310,48 @@ type MFSConfig struct {
 
 // HardFilters represents criteria constraints for stock picking pre-selection
 type HardFilters struct {
-	MinFCF                      *float64 `json:"min_fcf"`
-	MinMarketCap                float64  `json:"min_market_cap"`
-	MaxMarketCap                float64  `json:"max_market_cap"`
-	MinADV                      float64  `json:"min_adv"`
-	MinCFOPAT                   float64  `json:"min_cfo_pat"`
-	MinPromoterPercent          float64  `json:"min_promoter_percent"`
-	MaxPledgedPercent           float64  `json:"max_pledged_percent"`
-	MinROCE                     float64  `json:"min_roce"`
-	MaxDebtToEquity             float64  `json:"max_debt_to_equity"`
-	MinInterestCoverage         float64  `json:"min_interest_coverage"`
-	MaxCapExYoYMultiplier       float64  `json:"max_capex_yoy_multiplier"`
-	MaxDSODeteriorationPct      float64  `json:"max_dso_deterioration_pct"`
+	MinFCF                      *float64       `json:"min_fcf"`
+	MinMarketCap                float64        `json:"min_market_cap"`
+	MaxMarketCap                float64        `json:"max_market_cap"`
+	MinADV                      float64        `json:"min_adv"`
+	MinCFOPAT                   float64        `json:"min_cfo_pat"`
+	MinPromoterPercent          float64        `json:"min_promoter_percent"`
+	MaxPledgedPercent           float64        `json:"max_pledged_percent"`
+	MinROCE                     float64        `json:"min_roce"`
+	MaxDebtToEquity             float64        `json:"max_debt_to_equity"`
+	MinInterestCoverage         float64        `json:"min_interest_coverage"`
+	MaxCapExYoYMultiplier       float64        `json:"max_capex_yoy_multiplier"`
+	MaxDSODeteriorationPct      float64        `json:"max_dso_deterioration_pct"`
 	VolumeBreakoutLookbackDays  int            `json:"volume_breakout_lookback_days"`
 	VolumeBreakoutMultiplier    float64        `json:"volume_breakout_multiplier"`
 	MaxStocksPerSector          int            `json:"max_stocks_per_sector"`
 	SectorMaxStocks             map[string]int `json:"sector_max_stocks,omitempty"`
 	MaxSectorWeightCap          float64        `json:"max_sector_weight_cap"`
-	PEGFloor                    float64  `json:"peg_floor"`
-	MaxPEG                      float64  `json:"max_peg"`
-	MinRSPercentile             float64  `json:"min_rs_percentile"`
-	MinCROIC                    float64  `json:"min_croic"`
-	ScoreWeightRevAcc           float64  `json:"score_weight_rev_acc"`
-	ScoreWeightAssetTurnover    float64  `json:"score_weight_asset_turnover"`
-	ScoreWeightPEG              float64  `json:"score_weight_peg"`
-	ScoreWeightROCE             float64  `json:"score_weight_roce"`
-	ScoreWeightVolumeBreakout   float64  `json:"score_weight_volume_breakout"`
-	ScoreWeightRelativeStrength float64  `json:"score_weight_relative_strength"`
-	MinROE                      float64  `json:"min_roe"`
-	MaxNetNPA                   float64  `json:"max_net_npa"`
-	MinCAR                      float64  `json:"min_car"`
-	MinROA                      float64  `json:"min_roa"`
-	Min200DaySMARatio           float64  `json:"min_200day_sma_ratio"`
-	MaxStockWeightCap           float64  `json:"max_stock_weight_cap"`
-	ScoreWeightEPVMOS           float64  `json:"score_weight_epv_mos"`
-	ScoreWeight5YValPercentile  float64  `json:"score_weight_5y_val_percentile"`
-	ScoreWeightSectorZScore     float64  `json:"score_weight_sector_zscore"`
-	ScoreWeightShillerYield     float64  `json:"score_weight_shiller_yield"`
-	ScoreWeightCashRealization  float64  `json:"score_weight_cash_realization"`
-	ScoreWeightFCFYield         float64  `json:"score_weight_fcf_yield"`
-	ScoreWeightShareholderYield float64  `json:"score_weight_shareholder_yield"`
-	ScoreWeightSmartMoneyDelta  float64  `json:"score_weight_smart_money_delta"`
-	ScoreWeightMarginInflection float64  `json:"score_weight_margin_inflection"`
+	PEGFloor                    float64        `json:"peg_floor"`
+	MaxPEG                      float64        `json:"max_peg"`
+	MinRSPercentile             float64        `json:"min_rs_percentile"`
+	MinCROIC                    float64        `json:"min_croic"`
+	ScoreWeightRevAcc           float64        `json:"score_weight_rev_acc"`
+	ScoreWeightAssetTurnover    float64        `json:"score_weight_asset_turnover"`
+	ScoreWeightPEG              float64        `json:"score_weight_peg"`
+	ScoreWeightROCE             float64        `json:"score_weight_roce"`
+	ScoreWeightVolumeBreakout   float64        `json:"score_weight_volume_breakout"`
+	ScoreWeightRelativeStrength float64        `json:"score_weight_relative_strength"`
+	MinROE                      float64        `json:"min_roe"`
+	MaxNetNPA                   float64        `json:"max_net_npa"`
+	MinCAR                      float64        `json:"min_car"`
+	MinROA                      float64        `json:"min_roa"`
+	Min200DaySMARatio           float64        `json:"min_200day_sma_ratio"`
+	MaxStockWeightCap           float64        `json:"max_stock_weight_cap"`
+	ScoreWeightEPVMOS           float64        `json:"score_weight_epv_mos"`
+	ScoreWeight5YValPercentile  float64        `json:"score_weight_5y_val_percentile"`
+	ScoreWeightSectorZScore     float64        `json:"score_weight_sector_zscore"`
+	ScoreWeightShillerYield     float64        `json:"score_weight_shiller_yield"`
+	ScoreWeightCashRealization  float64        `json:"score_weight_cash_realization"`
+	ScoreWeightFCFYield         float64        `json:"score_weight_fcf_yield"`
+	ScoreWeightShareholderYield float64        `json:"score_weight_shareholder_yield"`
+	ScoreWeightSmartMoneyDelta  float64        `json:"score_weight_smart_money_delta"`
+	ScoreWeightMarginInflection float64        `json:"score_weight_margin_inflection"`
 
 	// US Quality-Momentum scoring weights
 	ScoreWeightROIC               float64 `json:"score_weight_roic"`
@@ -587,7 +587,7 @@ type SchedulerConfig struct {
 // MYCASE_RAW_MAX_SIZE_MB.
 type RawConfig struct {
 	RetainDays int `json:"retain_days" yaml:"retain_days"` // days to keep raw captures (default 14)
-	MaxSizeMB  int `json:"max_size_mb" yaml:"max_size_mb"`   // total archive size ceiling in MB (default 512)
+	MaxSizeMB  int `json:"max_size_mb" yaml:"max_size_mb"` // total archive size ceiling in MB (default 512)
 }
 
 // Raw-archive retention defaults, applied when config/env leave a field unset.

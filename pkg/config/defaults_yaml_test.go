@@ -37,7 +37,11 @@ func TestCompareLegacyDefaultsJSONWithDefaultsYAML(t *testing.T) {
 		defer f.Close()
 		_ = json.NewDecoder(f).Decode(&legacyIndia)
 	} else {
-		t.Fatalf("failed to open defaults.india.json: %v", err)
+		// The legacy JSON backups live under data/backups/legacy_config/, which is
+		// gitignored — present only on the machine that ran the migration. This is a
+		// one-time migration-parity check; skip (don't fail) when the fixtures are
+		// absent, as they are in any clean checkout / CI.
+		t.Skipf("legacy fixture absent (%s); skipping migration-parity check", indiaPath)
 	}
 
 	yamlPath := findDefaultsYAMLPath("defaults.yaml")
@@ -223,7 +227,9 @@ func TestCompareLegacyMFSWithDefaultsYAML(t *testing.T) {
 	legacyPath := filepath.Join("..", "..", "data", "backups", "legacy_config", "mfs.json")
 	file, err := os.Open(legacyPath)
 	if err != nil {
-		t.Fatalf("could not open legacy mfs.json: %v", err)
+		// Gitignored migration fixture; skip when absent (clean checkout / CI). See
+		// the note in TestCompareLegacyDefaultsJSONWithDefaultsYAML.
+		t.Skipf("legacy fixture absent (%s); skipping migration-parity check", legacyPath)
 	}
 	defer file.Close()
 

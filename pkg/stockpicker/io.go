@@ -53,7 +53,7 @@ func PrintSafetyFilterSummary(hardFilters *config.HardFilters, stats FilterStats
 	if hardFilters.MaxMarketCap > 0 {
 		maxCapLabel = marketfmt.CompactNum(hardFilters.MaxMarketCap, mkt)
 	}
-	fmt.Printf("\nApplying Hard Filters defined in mfs.json to %d constituents...\n", total)
+	fmt.Printf("\nApplying Hard Filters from strategy config to %d constituents...\n", total)
 	fmt.Printf("Hard Filter Summary:\n")
 	fmt.Printf("- Market Cap (%s - %s) eliminated: %d stocks\n", marketfmt.CompactNum(hardFilters.MinMarketCap, mkt), maxCapLabel, stats.EliminatedSize)
 	fmt.Printf("- ADV (< %s) eliminated:               %d stocks\n", marketfmt.CompactNum(hardFilters.MinADV, mkt), stats.EliminatedLiquidity)
