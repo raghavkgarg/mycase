@@ -145,7 +145,7 @@ The App Key/Secret prove **which application** is asking. Your brokerage login p
    `https://127.0.0.1:8443/callback` and wait until the app status is
    **"Ready For Use"** (a pending app fails with `invalid_client`).
 2. Copy the App Key and App Secret into `config/schwab.json`
-   (see `config/reference/schwab.json.example`):
+   (see `config/reference/us/schwab.json.example`):
    ```json
    {
      "client_id": "your_schwab_app_key",

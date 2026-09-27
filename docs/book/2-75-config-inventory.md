@@ -20,17 +20,17 @@ the current working directory. `$MYCASE_CONFIG_DIR` overrides just the config di
 config/
 ├── defaults.yaml        # master config: markets, strategies, gates, system settings
 ├── pipeline.yaml        # profile-driven end-to-end pipeline definitions
-├── schwab.json          # [SECRET, git-ignored] Schwab app credentials + OAuth tokens
+├── schwab.json          # [SECRET, git-ignored] Schwab app credentials
 ├── schwab_token.json    # [SECRET, git-ignored] cached Schwab OAuth token
-├── configSchwab.json    # committed template for schwab.json (placeholder values)
 └── reference/
     ├── india/           # csvlinks, governance, management_alerts, sector_tam, themes
-    └── us/              # csvlinks
+    └── us/              # csvlinks, schwab.json.example (credential template)
 ```
 
 `config/schwab.json`, `config/schwab_token.json`, and `config/config.json` are listed in
-`.gitignore` and must never be committed; `config/configSchwab.json` is the committed
-template with placeholder keys.
+`.gitignore` and must never be committed; the committed template with placeholder keys lives
+at `config/reference/us/schwab.json.example`, alongside the other checked-in US reference
+data.
 
 ---
 
@@ -81,9 +81,10 @@ backward-compatible fallback.
 The US path authenticates against the Schwab Trader API using two secret files, both
 git-ignored: `config/schwab.json` (app `client_id`, `client_secret`, `callback_url`) and
 `config/schwab_token.json` (the cached OAuth access/refresh tokens written by the auth flow).
-`config/configSchwab.json` is the committed placeholder template — copy it to `schwab.json`
-and fill in real app keys. The `us-momentum` pipeline profile points at both paths explicitly.
-Secrets are referenced by key name and never logged by value.
+The committed placeholder template lives at `config/reference/us/schwab.json.example` — copy
+it to `config/schwab.json` and fill in real app keys. The `us-momentum` pipeline profile
+points at both live paths explicitly. Secrets are referenced by key name and never logged by
+value.
 
 ---
 
@@ -94,4 +95,6 @@ Market-specific reference data that changes rarely and is checked in, split by c
 - **`reference/india/`** — `csvlinks.json` (NSE constituent download URLs), plus the
   Indian-equity domain knowledge that enriches scoring and research: `governance.json`,
   `management_alerts.json`, `sector_tam.json`, and `themes.json`.
-- **`reference/us/`** — `csvlinks.json` for US index constituents.
+- **`reference/us/`** — `csvlinks.json` for US index constituents, and
+  `schwab.json.example`, the committed placeholder template for the git-ignored
+  `config/schwab.json` credentials.
