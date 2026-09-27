@@ -1,12 +1,11 @@
-# Theme Subsystem — Lifecycle DB + Exact Returns (India-Path)
+# Themes
 
-> **Part of the India-Path.** Themes belong to the multi-market design and the
-> Zerodha/`portfolio.db` integration — the India market path, distinct from the active US
-> focus.
-> This is the consolidated reference for the two theme concerns — the lifecycle
-> database (`theme_rebalances`/`theme_history` in `data/mycase.db`) and the
-> exact-return engine (`pkg/themereturn`). Historical implementation-plan detail lives
-> in git history.
+> **Indian-equity subsystem.** Themes are tied to the Zerodha/`portfolio.db` integration and
+> serve the Indian-equity universe.
+>
+> The consolidated reference for the two theme concerns — the lifecycle database
+> (`theme_rebalances`/`theme_history` in `data/mycase.db`) and the exact-return engine
+> (`pkg/themereturn`).
 
 ## 1. Domain separation
 

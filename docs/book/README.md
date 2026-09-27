@@ -1,117 +1,154 @@
 # The Mycase Guide
 
-This is the book-form table of contents for the guide (`docs/book/`). Each document is a
-**chapter**; chapters are grouped into **modules** and ordered so the guide reads
-front-to-back — from *why the system exists* through *how it's built*, *what it does*, and
-*how to run it*, ending with the India-Path material. **Status and plans are not part of the
-reading spine** — they live in the Roadmap ([Appendix A](03-roadmap.md)), the one document
-you consult rather than read straight through.
+Mycase is an automated engine for self-directed investing: it picks holdings by a
+transparent, quantitative strategy, sizes and rebalances them under discipline, executes
+through a broker, and audits the result — all as a single local binary with a human in the
+loop before any order fires.
 
-Standalone working documents (trackers, issue logs) live one level up at the top of `docs/`,
-outside the book — see [`docs/README.md`](../README.md).
+This is its book. Read front-to-back, it takes you from *why the system exists* through
+*what it invests in*, *how it's built*, and *how to run it*. Read as a reference, each
+chapter stands alone. Either way, a chapter describes the system **as it is, in the present
+tense** — how it came to be is in git, what's planned is in the Roadmap.
 
-Filenames are stable numeric IDs (`NN-slug.md`) and the slug matches the chapter title.
-Renaming a chapter is a deliberate, wholesale change (rename + migrate every
-`docs/book/NN-*.md` reference + build), never piecemeal.
+## How the book is organized
 
-> **How the book is written lives in [Chapter 0 — The Style Guide](00-style-guide.md).**
-> Title convention, the present-tense rule, the ban on status/history furniture and
-> absolute-path links, structure and voice — Chapter 0 is the single source of truth and the
-> rubric every chapter is reviewed against. Read it before adding or editing a chapter.
+The chapters are grouped into three parts, by the reader they serve:
 
----
+- **Part I — Product** is for the investor and operator: the strategies the engine can run,
+  the portfolio decisions it makes, and how to drive it.
+- **Part II — Architecture** is for the engineer: how the system is structured, where its
+  data comes from, and how it stores, executes, and renders.
+- **Part III — Operations** is for whoever runs it in anger: logging, testing, and
+  environment setup.
 
-## Module A — Foundations
+Two ideas shape the organization. First, **strategies are an open-ended family of
+investment approaches** — each tuned to a universe or asset class (US quality-momentum,
+India micro-cap multibagger, large-cap value, and more to come). They are peers, not a
+primary path with a legacy annex; a new strategy joins the family as an equal. Second,
+**where markets genuinely differ, the difference lives in the architecture** — SEC EDGAR
+serves US filings, NSE/Screener serves Indian equities — described by the universe it serves
+rather than ranked against the others.
 
-*Why the system exists and the rules it's built on.*
+Ahead of the parts sit the **front matter** (the book's own rules and reasons); after them,
+the **Roadmap** as the one appendix you consult rather than read.
 
-| Ch. | Chapter | What it covers |
-|----:|---------|----------------|
-| 0 | [The Style Guide](00-style-guide.md) | How every chapter is written — the book's voice, structure, and aesthetic; the review rubric |
-| 1 | [Vision](01-vision.md) | Who it's for, the problem, what it sets out to build |
-| 2 | [Principles](02-principles.md) | Durable architectural principles — the review rubric for changes and merges |
-
-> Chapter 0 governs the book itself; Chapters 1–2 are where the front-to-back read begins.
-> The **Roadmap** — the one status-and-plan document — sits outside the numbered spine as
-> [Appendix A](03-roadmap.md).
-
-## Module B — Architecture & Platform
-
-*How the system is structured and the cross-cutting machinery every subsystem uses.*
-
-| Ch. | Chapter | What it covers |
-|----:|---------|----------------|
-| 4 | [Architecture Reference](04-architecture.md) | Layers, `cmd/pkg` breakdown, data flow, design decisions (D-decisions), package layering rule |
-| 6 | [Rendering](06-rendering.md) | CLI output (`pkg/render`) — tables, formatters, TTY-aware color |
-| 24 | [Logging & Observability](24-logging.md) | Two-channel logging (`pkg/logging`, slog) + the raw-response archive (`pkg/rawcapture`/`rawstore`, `mycase raw` triage) |
-
-> Diagrams: `architecture-overview.d2` (source) / `architecture-overview.svg` (rendered)
-> — layer/package overview accompanying Ch. 4.
-
-## Module C — Data & Persistence
-
-*Where the numbers come from and how they're stored.*
-
-| Ch. | Chapter | What it covers |
-|----:|---------|----------------|
-| 7 | [Data Sources](07-datasources.md) | Schwab / EDGAR / Yahoo, provenance, gap analysis |
-| 8 | [EDGAR](08-edgar-design.md) | SEC EDGAR client + XBRL concept mapper |
-| 9 | [EDGAR Facts Reference](09-edgar-facts-reference.md) | The EDGAR XBRL fact universe — what we extract + future-factor candidates |
-| 10 | [Storage & Pipeline Persistence](10-storage.md) | DuckDB-backed pipeline state — schema, run/proposal/selection tables, data flow |
-| 11 | [Data Directory Inventory](11-data-inventory.md) | Every file/dir under `data/`, provenance, keep/delete status |
-
-## Module D — Strategies
-
-*How stocks are scored and selected.*
-
-| Ch. | Chapter | Strategy |
-|----:|---------|----------|
-| 12 | [Multibagger](12-multibagger.md) | India micro/small/mid-cap — 11 hard filters + 100-pt scoring |
-| 13 | [Early Multibagger](13-early-multibagger.md) | `earlymb` regime-gated pre-breakout engine (VCP/RVOL/pocket-pivot/delivery) |
-| 14 | [Value](14-value-strategy.md) | Large-cap Value — EPV-based, dual-path BFSI/industrial filters |
-| 15 | [Exit & Addition Rationale](15-exit-addition-rationale.md) | Portfolio exit vetting & addition-driver tracking |
-| 16 | [Scuttlebutt Research](16-scuttlebutt-research.md) | Qualitative research reporting pipeline |
-| 17 | [Screener / nselib Integration](17-screener-nselib.md) | NSE `nselib` + Screener.in enrichment (India) |
-
-> The active strategy, **US Quality-Momentum**, is specced inline in Ch. 4
-> (Architecture) rather than a standalone chapter. The India strategies above belong to the
-> **India-Path** — the other supported market path, distinct from the current US focus.
-
-## Module E — Execution & Operations
-
-*Turning selections into orders, and running the system.*
-
-| Ch. | Chapter | What it covers |
-|----:|---------|----------------|
-| 18 | [Runbook](18-runbook.md) | Operator manual — every command with realistic examples and workflows |
-| 19 | [Feature Specs](19-feature-specs.md) | Tax-optimized rebalancing (FIFO), options overlay |
-| 20 | [Order Execution & Retry](20-executor-retry.md) | Rate limiting & failure recovery (`pkg/executor`, `cmd/retry`) |
-| 21 | [Testing](21-testing.md) | The test pyramid, conventions, coverage, how to run each tier |
-
-## Module F — India-Path Subsystems
-
-*The India market path: the subsystems that run when the India-Path is used. Distinct from
-the active US-Path focus.*
-
-| Ch. | Chapter | Subsystem |
-|----:|---------|-----------|
-| 22 | [Themes](22-themes.md) | Theme lifecycle DB (`pkg/themedb`) + exact-return engine (`pkg/themereturn`, `mycase returns`) |
-| 23 | [Static IP Setup](23-static-ip-setup.md) | Zerodha Kite static-IP (staticip.in) — the proxy `pkg/yfinance` bypasses for Yahoo |
+> Filenames (`NN-slug.md`) are stable IDs — the number fixes identity, not reading order;
+> this contents defines the order. **[Chapter 0 — The Style Guide](00-style-guide.md)** is
+> how the book is written (voice, present-tense rule, the ban on status furniture and
+> absolute-path links) and the rubric every chapter is reviewed against — read it before
+> adding or editing a chapter.
 
 ---
 
-## Appendices
+## Front matter
 
-*Consulted, not read front-to-back.*
+The book about itself, and the reasons behind everything after it.
 
-| App. | Document | What it covers |
-|----:|----------|----------------|
-| A | [Roadmap](03-roadmap.md) | **Canonical status + plan.** What's shipped (with chapter pointers) + detail for upcoming phases. The one status document; not part of the reading spine. (Filename stays `03-roadmap.md` as a stable ID.) |
+- **[0 · The Style Guide](00-style-guide.md)** — how every chapter is written: the book's
+  voice, structure, and aesthetic, and the checklist a chapter is reviewed against.
+- **[1 · Vision](01-vision.md)** — who the product is for, the problem it solves, and what
+  it sets out to build.
+- **[2 · Principles](02-principles.md)** — the durable architectural principles the system
+  is built on, and the rubric changes are judged against.
+
+## Part I — Product
+
+*What the engine invests in and the decisions it makes — for the investor and operator.*
+
+The **strategies** are the heart of the product: a family of quantitative approaches, each
+tuned to a universe or asset class, sharing one scoring-and-selection engine.
+
+- **[12 · Multibagger](12-multibagger.md)** — India micro/small/mid-cap growth: hard quality
+  filters plus a 100-point multi-factor score.
+- **[13 · Early Multibagger](13-early-multibagger.md)** — the `earlymb` regime-gated
+  pre-breakout engine (VCP tightness, relative strength, delivery accumulation), catching
+  compounders 1–3 weeks before markup.
+- **[14 · Value](14-value-strategy.md)** — large-cap value: EPV-based intrinsic valuation
+  with dual-path BFSI/industrial filters, avoiding value traps.
+- **[19 · Feature Specs](19-feature-specs.md)** — the deep engineering specification behind
+  the Early Multibagger family: detection models, the three-tier lifecycle, and PIT research.
+
+> The active US strategy, **US Quality-Momentum**, is currently specced inline in
+> [Architecture](04-architecture.md); extracting it into its own chapter here is a tracked
+> follow-up, so the family reads complete.
+
+Around the strategies sit the **portfolio decisions and their audit trail**:
+
+- **[15 · Exit & Addition Rationale](15-exit-addition-rationale.md)** — why each holding
+  leaves, enters, or changes weight at a rebalance, recorded for the investor to audit.
+- **[16 · Scuttlebutt Research](16-scuttlebutt-research.md)** — the qualitative research
+  pipeline: governance, stability, and operational indicators compiled per stock.
+- **[22 · Themes](22-themes.md)** — the theme lifecycle database and exact-return engine
+  (`mycase returns`) that track investment themes over time.
+
+And, to drive it all:
+
+- **[18 · Runbook](18-runbook.md)** — the operator's manual: every command with realistic
+  examples and the common workflows end to end.
+
+## Part II — Architecture
+
+*How the system is structured, sourced, and stored — for the engineer.*
+
+- **[4 · Architecture Reference](04-architecture.md)** — the spine: conceptual layers, the
+  `cmd/pkg` breakdown, data flow, and the design decisions (D-decisions) behind them.
+
+**Data & sourcing** — where the numbers come from, each source described by the universe it
+serves:
+
+- **[7 · Data Sources](07-datasources.md)** — sourcing each data type from the most
+  authoritative provider that can supply it; the data model, API shapes, and provenance.
+- **[8 · EDGAR](08-edgar-design.md)** — the SEC EDGAR client and XBRL concept mapper (US
+  fundamentals), merged onto Schwab's TTM ratios.
+- **[9 · EDGAR Facts Reference](09-edgar-facts-reference.md)** — the EDGAR XBRL fact universe:
+  what we extract today and the candidates for future factors.
+- **[17 · Screener / nselib Integration](17-screener-nselib.md)** — NSE `nselib` and
+  Screener.in enrichment for the Indian-equity universe.
+
+**Storage** — how state persists:
+
+- **[10 · Storage & Pipeline Persistence](10-storage.md)** — DuckDB-backed pipeline state:
+  runs, per-index picks, proposals, and final selections.
+- **[11 · Data Directory Inventory](11-data-inventory.md)** — every file and directory under
+  `data/`: what it is, where it comes from, and whether it's safe to delete.
+
+**Execution & output** — turning selections into orders and results into readable output:
+
+- **[20 · Order Execution & Retry](20-executor-retry.md)** — rate-limited, failure-recovering
+  order placement (`pkg/executor`, `mycase retry`).
+- **[6 · Rendering](06-rendering.md)** — the CLI output layer (`pkg/render`): tables,
+  formatters, and TTY-aware color, with a text fallback that never loses data.
+
+> A hand-authored layer/package overview accompanies this part:
+> `architecture-overview.d2` (source) / `architecture-overview.svg` (rendered).
+
+## Part III — Operations
+
+*Running and observing the system — for whoever operates it.*
+
+- **[24 · Logging & Observability](24-logging.md)** — the two-channel logging model
+  (`pkg/logging`, slog) and the raw-response archive (`mycase raw`) that make a
+  mostly-headless system debuggable.
+- **[21 · Testing](21-testing.md)** — the test pyramid, conventions, coverage by tier, and
+  how to run each.
+- **[23 · Static IP Setup](23-static-ip-setup.md)** — configuring the static IP that Zerodha
+  Kite Connect requires (Indian-equity execution).
+
+---
+
+## Appendix A — Roadmap
+
+**[Roadmap](03-roadmap.md)** is the one status-and-plan document — what's shipped (with
+chapter pointers) and the detail for upcoming work. Consult it; don't read it as part of the
+spine. Its filename stays `03-roadmap.md` as a stable ID.
+
+Standalone working documents (issue trackers and the like) live one level up at the top of
+`docs/`, outside the book — see [`docs/README.md`](../README.md).
 
 ---
 
 *Retired: the R-numbered refactor history (formerly `05-refactor.md`) is not a chapter —
 structural-change history lives in git, and the durable rules it once held now live in the
 [Principles](02-principles.md) and [Architecture](04-architecture.md) chapters and
-`.kiro/steering/`. The resolved-bug tracker (formerly `25-Bugs.md`) is likewise gone — a
-ledger of fixed bugs is git history, not a chapter.*
+`.kiro/steering/`. The resolved-bug tracker (formerly `25-Bugs.md`) moved out of the book to
+`docs/emb-bug-tracker.md` — a ledger of fixed bugs is a working document, not a chapter.*

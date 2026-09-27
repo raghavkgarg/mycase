@@ -4,7 +4,7 @@ Market data is sourced per data type from the most authoritative provider that c
 it — the data model, the real API shapes, provenance, and the gap analysis. The design
 principle behind it is recorded as decision **D15** in `docs/04-architecture.md`.
 
-> **Scope**: US equity data. The India/Yahoo paths belong to the India-Path (the earlier multi-market design).
+> **Scope**: US-equity data sourcing. The Yahoo/NSE paths that serve the Indian-equity universe are covered in [Screener / nselib](17-screener-nselib.md).
 
 ---
 

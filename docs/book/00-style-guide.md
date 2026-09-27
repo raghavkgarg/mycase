@@ -41,8 +41,8 @@ project timeline to do so.
   you are tempted to version a title, the version belongs in the prose (or nowhere).
 - **No marketing gloss or parenthetical taglines.** `Value Strategy`, not `Large-Cap Value
   Investment Strategy ("Finding Cheaper Stocks in Big Companies")`.
-- **Terse is fine — the module supplies context.** The book's table of contents groups
-  chapters into modules, so a one-word title (`Themes`, `Rendering`, `Value`) reads
+- **Terse is fine — the part supplies context.** The book's contents groups
+  chapters into parts, so a one-word title (`Themes`, `Rendering`, `Value`) reads
   correctly in place. Don't pad a title to be self-describing in isolation.
 
 ---
@@ -80,7 +80,7 @@ Chapters do **not** carry stacked bold-label headers:
   one or two that matter into the opening prose, drop the rest.
 
 The only structured furniture a chapter may open with is a single blockquote note when a
-chapter needs a genuine caveat (e.g. "> Part of the India-Path." on a market-path-specific
+chapter needs a genuine caveat (e.g. "> Indian-equity subsystem." on a universe-specific
 chapter). One line, not a table.
 
 ---
@@ -115,7 +115,7 @@ chapter). One line, not a table.
 - **Cross-link other chapters by relative filename**: `[Storage](10-storage.md)`,
   `docs/book/04-architecture.md`. When a chapter is renamed, every such link is migrated in the
   same change (grep `docs/book/NN-*.md`), and no link may point at a file that doesn't exist.
-- **Refer to a chapter by its title or module position, not a stale number**, in running
+- **Refer to a chapter by its title or part, not a stale number**, in running
   prose where practical — filenames carry the number, the prose carries the meaning.
 
 ---
@@ -146,7 +146,7 @@ chapter). One line, not a table.
   tense ("single-binary local tool, so minimal dependencies is a constraint — hence stdlib
   `slog` over zap"). Rationale is welcome; history is not.
 - Assume a competent reader. Don't re-teach Go, DuckDB, or finance basics; do define
-  project-specific terms (a "golden copy," the "India-Path") on first use.
+  project-specific terms (a "golden copy," an "investment universe") on first use.
 - Em dashes and terse asides are part of the house voice — used for a beat of emphasis or a
   parenthetical clarification, not as a crutch on every line.
 
@@ -154,8 +154,8 @@ chapter). One line, not a table.
 
 ## 9. The book's shape
 
-The chapters read front-to-back as a book, grouped into modules (see `README.md`, which is
-the module-grouped table of contents). Two structural rules:
+The chapters read front-to-back as a book, grouped into parts (see `README.md`, the book's
+preface and contents). Two structural rules:
 
 - **Filenames are stable numeric IDs (`NN-slug.md`); the slug matches the chapter title.**
   Renaming a chapter is a deliberate, wholesale change (rename + migrate every reference +

@@ -5,10 +5,11 @@ front-to-back.*
 
 **Goal**: An automated US equity system that delivers slight but consistent outperformance over the S&P 500 while eliminating emotional decision-making and manual busy work.
 
-**Target investor**: US-based individual investor using Schwab. The system supports two
-**market paths** — the **US-Path** (Schwab + SEC EDGAR, the active strategy focus) and the
-**India-Path** (Zerodha + NSE/Yahoo, from the earlier multi-market design). The
-market-parameterized design (`marketcal`, `pkg/eod`, the strategy engine) runs either path.
+**Target investor**: an individual investor managing their own portfolio. The system is
+market-parameterized (`marketcal`, `pkg/eod`, the strategy engine) and runs across
+investment universes — **US equities** (Schwab + SEC EDGAR) and **Indian equities** (Zerodha
++ NSE/Yahoo) — with strategies tuned per universe rather than one path ranked above the
+other.
 
 ---
 
@@ -101,7 +102,7 @@ the guide (see `docs/README.md`).
 | Structured logging + raw-response capture/triage | Ch. 24 Logging & Observability |
 | CLI rendering layer (`pkg/render`) | Ch. 6 Rendering |
 | Hysteresis / anti-churn cooldown; market-aware EOD settlement; standardized rate limiting; home-relative config resolution | Ch. 2, Ch. 4 |
-| **India-Path:** Multibagger, Early Multibagger, Value, MFS, Zerodha execution, India cost model, Screener/nselib, Themes | Module D, Module F |
+| **Indian-equity strategies & infra:** Multibagger, Early Multibagger, Value, MFS, Zerodha execution, India cost model, Screener/nselib, Themes | Ch. 12–14, 16, 17, 22 |
 
 ### Specced but not built
 
