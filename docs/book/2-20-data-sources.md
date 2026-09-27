@@ -60,7 +60,7 @@ The struct has ~40 fields. The ones the **US quality-momentum path** (`pkg/stock
 | `MarketCap` | hard filter, FCF yield, shareholder yield | |
 | `FreeCashflow` | FCF-yield factor, earnings-quality proxy, FCF filter | |
 | `AverageVolume` | ADV liquidity filter | |
-| `RegularPrice` | ADV filter (`vol × price`) | |
+| `RegularPrice` | ADV filter (`vol × price`) | If the provider omits it (Yahoo often returns 0), it is backfilled from the latest historical close in `RunWithResult` before filtering. The ADV gate runs only when `RegularPrice > 0`; when price is genuinely unknown the gate is **skipped**, never computed from raw share count. |
 | `DividendYield` | shareholder-yield factor | |
 | `ROE` | ROIC fallback, driver string | |
 | `ReturnOnAssets` | ROIC fallback | |

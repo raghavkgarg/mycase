@@ -357,14 +357,25 @@ func ApplyUSHardFilters(
 			continue
 		}
 
-		// 2. Average Daily Volume filter (min $50M)
-		if hardFilters.MinADV > 0 {
+		// 2. Average Daily Volume filter (min $50M).
+		//
+		// ADV is a *dollar* figure: AverageVolume (shares/day) × RegularPrice
+		// ($/share). RegularPrice comes from the fundamentals provider, or — when
+		// that provider omits it (Yahoo's summaryDetail.regularMarketPrice is
+		// frequently 0 for US tickers) — from the RegularPrice backfill in
+		// RunWithResult, which fills it from the latest historical close before
+		// this filter runs.
+		//
+		// When RegularPrice is still unknown we CANNOT compute a dollar ADV, so we
+		// skip the gate rather than guess. The previous fallback multiplied by 1
+		// (used raw share count as if it were dollars), which is dimensionally
+		// wrong: it deflated ADV ~100–1000× and wrongly eliminated the entire
+		// liquid mega-cap universe (e.g. AMZN reported as "ADV $45M" — its raw
+		// share count — on the 2026-09-24 run). Skipping is the safe default: an
+		// ADV floor is a liquidity *safety* gate, and we don't reject a name on a
+		// number we can't actually compute.
+		if hardFilters.MinADV > 0 && f.RegularPrice > 0 {
 			adv := f.AverageVolume * f.RegularPrice
-			if f.RegularPrice == 0 && f.MarketCap > 0 && f.AverageVolume > 0 {
-				// Estimate price from market cap / shares (vol3m is in shares)
-				// Just use raw volume as a proxy since we lack price in some cases
-				adv = f.AverageVolume
-			}
 			if adv > 0 && adv < hardFilters.MinADV {
 				tracker.RecordSafetyDrop(t, fmt.Sprintf("ADV $%.0fM < $%.0fM min", adv/1e6, hardFilters.MinADV/1e6))
 				eliminated++
