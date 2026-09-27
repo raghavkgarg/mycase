@@ -79,6 +79,8 @@ change-logs. Apply them to every chapter, new or edited:
 | 9 | [EDGAR Facts Reference](09-edgar-facts-reference.md) | The EDGAR XBRL fact universe — what we extract + future-factor candidates |
 | 10 | [Storage & Pipeline Persistence](10-duckdb-migration.md) | DuckDB-backed pipeline state — schema, run/proposal/selection tables, data flow |
 | 11 | [Data Directory Inventory](11-data-inventory.md) | Every file/dir under `data/`, provenance, keep/delete status |
+| 11.1 | [Config Directory Inventory](11.1-config-inventory.md) | Rationalized configuration single source of truth (`config/defaults.yaml`, `pipeline.yaml`) |
+| 11.2 | [Report Directory Inventory](11.2-report-inventory.md) | Qualitative research & human audit hub (`executions/`, `research/`, `simulations/`, `annual_reports/`) |
 
 ## Module D — Strategies
 
