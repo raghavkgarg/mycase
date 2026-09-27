@@ -135,7 +135,7 @@ In production runs across the 750-stock universe, Stage-1 eliminates ~85–88% o
 Every candidate that clears Stage-1 hard gates is evaluated across four mathematical pillars yielding a composite raw score ($0 - 100\text{ pts}$):
 
 > [!NOTE]
-> Pillar formulas below reference the **canonical specification** in [Early Multibagger](13-early-multibagger.md). Reference bounds are the fixed invariant bounds used in production scoring, with empirically calibrated P5/P95 bounds noted for context.
+> Pillar formulas below reference the **canonical specification** in [Early Multibagger](1-20-strategy-early-multibagger.md). Reference bounds are the fixed invariant bounds used in production scoring, with empirically calibrated P5/P95 bounds noted for context.
 
 1. **Pillar 1: Idiosyncratic Momentum (25 Points)**
    $$\text{Composite RS} = 0.40 \times \text{RS}_{1\text{M}} + 0.30 \times \text{RS}_{3\text{M}} + 0.30 \times \text{RS}_{12\text{M}}$$
@@ -168,7 +168,7 @@ Every candidate that clears Stage-1 hard gates is evaluated across four mathemat
 > The out-of-sample calibration figures above ($\text{Mean IC} = +0.017, \text{IR} = +0.16, \text{Hit Rate} = 55.6\%$) were evaluated under the legacy baseline formula $(\text{DeliveryPct} - 35\%)$, which granted an artificial subsidy to ~46% of the universe. In `data/mycase.db`, pre-migration runs are formally tagged `pillar4_uncalibrated = true`. Formal statistical recalibration over the disjoint baseline is pending accumulation of 30+ clean post-fix sessions.
 
 > [!IMPORTANT]
-> **Key Calibration Insight**: Out-of-sample IC results (see [Early Multibagger](13-early-multibagger.md)) show that **VCP Tightness and Composite RS are the dominant predictive pillars**. Delivery Delta is valuable as a timing/confirmation signal but noisy when used as a ranking multiplier. This directly informs the Coiled Spring Index decomposition below.
+> **Key Calibration Insight**: Out-of-sample IC results (see [Early Multibagger](1-20-strategy-early-multibagger.md)) show that **VCP Tightness and Composite RS are the dominant predictive pillars**. Delivery Delta is valuable as a timing/confirmation signal but noisy when used as a ranking multiplier. This directly informs the Coiled Spring Index decomposition below.
 
 ---
 

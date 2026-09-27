@@ -645,7 +645,7 @@ mycase pit analysis --index small250 --method multibagger
 
 ### 1. The Silent Cash Flow Bypass & The 196-Stock Elimination
 
-During the system-wide data integrity audit (see `docs/13-early-multibagger.md` §26, "System-Wide Data Integrity Audit"), a critical vulnerability was identified in how fundamental data was ingested for the multibagger strategy:
+During the system-wide data integrity audit (see `docs/1-20-strategy-early-multibagger.md` §26, "System-Wide Data Integrity Audit"), a critical vulnerability was identified in how fundamental data was ingested for the multibagger strategy:
 
 * **The Core Vulnerability**: Yahoo Finance's `quoteSummary.financialData` card omitted operating and free cash flow for **96.6% of Indian stocks** (625 of 647 stocks). In Go, `OperatingCashflow` and `FreeCashflow` defaulted to `0.0`.
 * **The Dormant Safety Filters**: In `pkg/stockpicker/filters.go`, the Cash Flow Quality Gate was gated by:

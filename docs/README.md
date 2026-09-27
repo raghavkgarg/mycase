@@ -2,10 +2,10 @@
 
 Two kinds of documentation live here:
 
-- **[The Mycase Guide](book/README.md)** — in [`book/`](book/). The book: a front-to-back,
+- **[The Mycase Guide](book/preface.md)** — in [`book/`](book/). The book: a front-to-back,
   present-tense description of how the system works, organized into parts (Product,
-  Architecture, Operations) and governed by [the style guide](book/00-style-guide.md). Start
-  at [`book/README.md`](book/README.md) — its preface and contents.
+  Architecture, Operations) and governed by [the style guide](book/0-10-style-guide.md). Start
+  at [`book/preface.md`](book/preface.md) — its preface and contents.
 
 - **Standalone working documents** — at this top level, outside the book. Operational
   trackers and issue logs that record process and history rather than how the system works

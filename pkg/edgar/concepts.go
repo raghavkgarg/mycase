@@ -10,7 +10,7 @@ import (
 
 // Candidate us-gaap tags per concept, in preference order. Filers use custom
 // taxonomy extensions and tags drift over time, so each concept tries an ordered
-// list and takes the first tag that has usable facts. See docs/book/07-datasources.md §4.3.
+// list and takes the first tag that has usable facts. See docs/book/2-20-data-sources.md §4.3.
 var (
 	tagsOperatingCashflow = []string{
 		"NetCashProvidedByUsedInOperatingActivities",
@@ -38,7 +38,7 @@ var (
 	// PaymentsForCapitalImprovements; oil & gas use the O&G-property tags. Ordered
 	// most-specific-usable first; the first present tag with FY facts wins. Without
 	// this breadth, capex fails to bind → FCF=0 → the FCF hard filter wrongly
-	// eliminates cash-rich quality names (see docs/book/07-datasources.md §4.3).
+	// eliminates cash-rich quality names (see docs/book/2-20-data-sources.md §4.3).
 	tagsCapEx = []string{
 		"PaymentsToAcquirePropertyPlantAndEquipment",
 		"PaymentsToAcquireProductiveAssets",

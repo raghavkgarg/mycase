@@ -2,9 +2,9 @@
 
 Market data is sourced per data type from the most authoritative provider that can supply
 it — the data model, the real API shapes, provenance, and the gap analysis. The design
-principle behind it is recorded as decision **D15** in `docs/04-architecture.md`.
+principle behind it is recorded as decision **D15** in `docs/2-10-architecture.md`.
 
-> **Scope**: US-equity data sourcing. The Yahoo/NSE paths that serve the Indian-equity universe are covered in [Screener / nselib](17-screener-nselib.md).
+> **Scope**: US-equity data sourcing. The Yahoo/NSE paths that serve the Indian-equity universe are covered in [Screener / nselib](2-50-screener-nselib.md).
 
 ---
 
@@ -40,7 +40,7 @@ The architecture **sources each data type from the most authoritative provider t
 
 ## 2. The Data Model We Populate
 
-All sources normalize into two leaf DTOs in `pkg/marketdata/marketdata.go` (zero-import leaf; see `docs/04-architecture.md` layering). These are the shapes every provider must satisfy.
+All sources normalize into two leaf DTOs in `pkg/marketdata/marketdata.go` (zero-import leaf; see `docs/2-10-architecture.md` layering). These are the shapes every provider must satisfy.
 
 ### `HistoricalData` (daily OHLCV series)
 
@@ -235,7 +235,7 @@ The DuckDB cache carries a `source VARCHAR` column on both `prices` and `fundame
 
 ## 7. Architecture Direction & Rollout
 
-> This section keeps the durable design shapes of the data-sourcing architecture. Design decision **D15** in `docs/04-architecture.md` records the rationale.
+> This section keeps the durable design shapes of the data-sourcing architecture. Design decision **D15** in `docs/2-10-architecture.md` records the rationale.
 
 ### Principle: source per data type, not per market
 

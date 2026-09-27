@@ -5,7 +5,7 @@
 > `docs/`, deliberately outside `docs/book/`: the book describes the system as it is in the
 > present tense, while this file records specific issues and their resolutions. Durable
 > design lessons from a fixed bug belong in the relevant chapter
-> (`docs/book/13-early-multibagger.md`, `docs/book/19-feature-specs.md`); this tracker holds
+> (`docs/book/1-20-strategy-early-multibagger.md`, `docs/book/1-40-strategy-emb-feature-specs.md`); this tracker holds
 > the issue-by-issue detail. Entries below are historical and may reference file paths or
 > docs as they existed when the bug was filed.
 

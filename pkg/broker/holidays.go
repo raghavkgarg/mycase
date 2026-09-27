@@ -120,7 +120,7 @@ func (p *DBHolidayProvider) Holidays(exchange string) []string {
 		slog.WarnContext(ctx, "holidays.empty_calendar",
 			"exchange", exchange,
 			"impact", "trading-day logic is WEEKEND-ONLY until seeded",
-			"fix", "seed the holidays table (duckdb data/mycase.db < holiday.sql) — see docs/book/18-runbook.md")
+			"fix", "seed the holidays table (duckdb data/mycase.db < holiday.sql) — see docs/book/1-80-runbook.md")
 	}
 	return dates
 }
@@ -227,7 +227,7 @@ func (p *DBHolidayProvider) UpsertHolidays(ctx context.Context, exchange string,
 
 // selectHolidayProvider returns the holiday source. Holidays live in the
 // `holidays` table of the DuckDB cache (data/mycase.db) — the single source of
-// truth, seeded and maintained operationally (see docs/book/18-runbook.md). When the
+// truth, seeded and maintained operationally (see docs/book/1-80-runbook.md). When the
 // cache singleton is not open (e.g. a lightweight command that never opened the
 // DB) or the table is empty, the DB provider yields no holidays and the clock
 // degrades to weekend-only, so a clock is always assembled and order-placing

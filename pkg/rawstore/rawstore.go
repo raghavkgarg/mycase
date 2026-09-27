@@ -1,7 +1,7 @@
 // Package rawstore is the L4 persistence half of the raw-response archive: it
 // implements rawcapture.Sink, owning everything the zero-import hook cannot —
 // the data directory, the on-disk filename convention, and (for future
-// retention/triage) run identity. See docs/book/24-logging.md §2.
+// retention/triage) run identity. See docs/book/3-10-logging.md §2.
 //
 // The archive is a flat directory of disposable JSON files under <data>/raw:
 //
@@ -194,7 +194,7 @@ func (s *Store) Open(source, endpoint, symbol string) (io.ReadCloser, bool) {
 //     (<= 0 → size pruning disabled).
 //
 // This is deliberately the "keep everything recent, prune only the boring old
-// middle" policy described in docs/book/24-logging.md §2: no run/verdict concept, just
+// middle" policy described in docs/book/3-10-logging.md §2: no run/verdict concept, just
 // age and total size. False-keep is cheap (disk); false-delete is catastrophic
 // (an unreproducible bug), so the ceilings are the only triggers.
 type Retention struct {

@@ -89,7 +89,7 @@ against `portfolio.db` trades, closed lots, dividends, and benchmark quotes:
 
 Post-market theme sync runs as **stage 3 of the daily EOD update** (`mycase db update`,
 aliases `eod`/`daily`), and is scheduled automatically by the autonomous scheduler
-(`mycase scheduler` — see `docs/18-runbook.md` §11), which owns the daily EOD cadence with
+(`mycase scheduler` — see `docs/1-80-runbook.md` §11), which owns the daily EOD cadence with
 holiday-aware skipping. The theme sync itself lives in `pkg/eod` stage 3
 (`SyncThemeFromProposals` per configured theme). The former machine-specific
 `scripts/daily_sync.sh` shell script has been retired — its weekend/holiday guard is now

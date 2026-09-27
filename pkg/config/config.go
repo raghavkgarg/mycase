@@ -535,7 +535,7 @@ type SchedulerConfig struct {
 }
 
 // RawConfig holds retention settings for the raw-response archive (pkg/rawstore,
-// docs/book/24-logging.md §2). Growth is bounded by pruning, not by declining to
+// docs/book/3-10-logging.md §2). Growth is bounded by pruning, not by declining to
 // capture — capture is ON by default. Two independent ceilings apply
 // (a file is pruned if it exceeds either):
 //

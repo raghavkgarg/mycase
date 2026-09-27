@@ -9,7 +9,7 @@ import (
 
 // RebalanceEvent is one point in a portfolio's target-weight history: the target
 // basket the strategy selected at a given time. It is reconstructed from the
-// pipeline_runs + proposals(stage="optimized") tables (see docs/book/04-architecture.md,
+// pipeline_runs + proposals(stage="optimized") tables (see docs/book/2-10-architecture.md,
 // live performance attribution) — one completed pipeline run == one rebalance.
 type RebalanceEvent struct {
 	When    time.Time

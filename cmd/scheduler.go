@@ -309,7 +309,7 @@ func runSchedulerDoctor(_ context.Context, _ *cli.Command) error {
 		warnings++
 	default:
 		fmt.Printf("⚠  Holiday calendar for %s is EMPTY — trading-day gating is weekend-only.\n", clk.Loc)
-		fmt.Println("   Seed it (see docs/book/18-runbook.md) so cadences skip exchange holidays.")
+		fmt.Println("   Seed it (see docs/book/1-80-runbook.md) so cadences skip exchange holidays.")
 		warnings++
 	}
 

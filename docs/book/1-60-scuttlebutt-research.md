@@ -1,5 +1,3 @@
-# Scuttlebutt & Live Qualitative Research Reporting Pipeline
-
 # Scuttlebutt Research
 
 Scuttlebutt research is an automated qualitative pipeline in the stock picker. It extracts,

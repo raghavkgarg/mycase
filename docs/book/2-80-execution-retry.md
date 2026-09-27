@@ -1,5 +1,3 @@
-# Order Execution Rate Limiting & Failure Recovery Architecture
-
 # Order Execution & Retry
 
 Order placement is rate-limited and failure-recovering: it paces requests under the

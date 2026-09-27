@@ -10,7 +10,7 @@
 -- reads this file. The single source of truth is the `holidays` table itself
 -- (data/mycase.db is git-ignored, so each machine seeds its own). The authoritative
 -- calendar is whatever each exchange publishes (NYSE hours-calendars page; the NSE
--- annual trading-holiday circular) — see docs/book/18-runbook.md for the yearly refresh
+-- annual trading-holiday circular) — see docs/book/1-80-runbook.md for the yearly refresh
 -- workflow. Do NOT treat editing this file as "updating the holidays": update the
 -- table (via the duckdb CLI against the official calendar) and, if you like, refresh
 -- this snapshot afterwards. Re-running is safe (ON CONFLICT DO NOTHING).

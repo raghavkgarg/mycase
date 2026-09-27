@@ -83,7 +83,7 @@ Automation eliminates all four. The system runs quarterly, follows its rules, an
 ### Shipped and in production
 
 Each capability below is live; the **Chapter** column points to where it's documented in
-the guide (see `docs/README.md`).
+the guide (see the [preface](preface.md)).
 
 | Capability | Chapter |
 |-----------|---------|
@@ -116,7 +116,7 @@ the guide (see `docs/README.md`).
 
 ## 3. Architecture Vision
 
-The system is a 6-layer responsibility stack (market data → strategy → portfolio construction → execution & tax → autopilot → audit & attribution), US-only via Schwab. For the system design — conceptual layers, the concrete `cmd/pkg/` package breakdown, data flow, ticker routing (`US:`→Schwab, else→Yahoo), and design decisions — see **`docs/04-architecture.md`** §2 (Inputs), §4 (System Design), and §11 (Design Decisions). This roadmap covers only *what* is being built and *when*.
+The system is a 6-layer responsibility stack (market data → strategy → portfolio construction → execution & tax → autopilot → audit & attribution), US-only via Schwab. For the system design — conceptual layers, the concrete `cmd/pkg/` package breakdown, data flow, ticker routing (`US:`→Schwab, else→Yahoo), and design decisions — see **`docs/2-10-architecture.md`** §2 (Inputs), §4 (System Design), and §11 (Design Decisions). This roadmap covers only *what* is being built and *when*.
 
 ---
 
@@ -124,7 +124,7 @@ The system is a 6-layer responsibility stack (market data → strategy → portf
 
 Completed and dropped phases are not narrated here — shipped work is summarized in §2 with
 chapter pointers, and its history lives in git. Design detail for shipped subsystems lives
-in `docs/04-architecture.md` (design decisions) and `docs/10-storage.md` (storage).
+in `docs/2-10-architecture.md` (design decisions) and `docs/2-60-storage.md` (storage).
 Only active and planned work remains below.
 
 ### Phase 10 — Data Source Resilience  *(shipped)*
@@ -636,7 +636,7 @@ This is fragile: wrong column deleted, accidental formatting, no context while e
 
 Data-source resilience (Phase 10) is higher priority — it improves the correctness of inputs the strategy depends on; the UI doesn't. The CSV workflow is ugly but works for quarterly rebalance (4×/year). Defer until:
 - The system is stable enough that UX is the bottleneck, not the strategy
-- The golden copy can move to DuckDB (the pipeline migration is done — see `docs/10-storage.md`)
+- The golden copy can move to DuckDB (the pipeline migration is done — see `docs/2-60-storage.md`)
 - Swift Charts and DuckDB Swift bindings are mature enough for production use
 
 
@@ -644,28 +644,16 @@ Data-source resilience (Phase 10) is higher priority — it improves the correct
 
 ## Appendix C: Docs Restructure (done)
 
-Pass 1 made the guide read as a book: `docs/README.md` is the module-grouped index
-and the source of truth for chapter titles, chapters are written in the present tense, and
-the process-artifact docs were de-ledgered (the refactor ledger removed; the DuckDB
-"migration" doc re-voiced as the Storage chapter). Filenames were deliberately left stable
-so no `docs/NN-*.md` reference in Go source or steering had to move.
+The guide was reshaped over several passes; this records what changed so the structure
+isn't relitigated. Detail lives in git.
 
-**Pass 2 (done)** renamed the terse-but-accurate files to match their chapter titles,
-keeping the stable `NN-` numeric prefix, and migrated every embedded reference in one
-lockstep sweep (verified with a build). The renames applied:
-
-| Old file | New file | Module |
-|---|---|---|
-| `06-render.md` | `06-rendering.md` | B |
-| `10-duckdb-migration.md` | `10-storage.md` | C |
-| `14-value.md` | `14-value-strategy.md` | D |
-| `16-scuttlebutt.md` | `16-scuttlebutt-research.md` | D |
-| `17-screener.md` | `17-screener-nselib.md` | D |
-| `23-staticip.md` | `23-static-ip-setup.md` | F |
-
-`22-themes.md` was left unchanged — its filename already matches its chapter title
-("Themes"). In practice the rename candidates turned out to be referenced almost entirely
-from `docs/README.md` and this appendix; the only cross-reference in prose was one mention
-of the Storage chapter in `docs/02-principles.md`. The heavily hard-referenced docs
-(`04-architecture.md`, `07-datasources.md`, `18-runbook.md`, `24-logging.md`) were never on
-the rename list, so no Go source comment or `.kiro/steering/*` path had to change.
+- **Pass 1** made the guide read as a book: a module-grouped index, present-tense chapters,
+  and the process-artifact docs de-ledgered (the refactor ledger removed; the DuckDB
+  "migration" doc re-voiced as the Storage chapter). Filenames were left stable.
+- **Pass 2** renamed the terse-slug files to match their chapter titles (e.g. `06-render.md`
+  → `10-storage.md`-era names), migrating every embedded reference in one lockstep sweep.
+- **Pass 3** established the [Style Guide](0-10-style-guide.md), normalized every chapter to
+  it, moved the book into `docs/book/`, reorganized the chapters into three parts (Product /
+  Architecture / Operations), and renumbered filenames to the part-prefixed `N-NN-slug.md`
+  scheme (gaps of 10 for growth). The current names are listed in the
+  [preface](preface.md); their history is in git.

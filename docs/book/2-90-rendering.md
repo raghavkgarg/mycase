@@ -1,11 +1,10 @@
-# CLI Rendering Layer — `pkg/render/`
+# Rendering
 
-## Problem
-
-All CLI commands use ad-hoc `fmt.Printf` with hand-crafted column widths and ASCII separators.
-This is fragile, inconsistent across commands, and painful to maintain. However, the fix must
-not introduce new failure modes — a 3rd-party rendering library that panics on edge cases or
-silently produces empty output is worse than ugly-but-present text.
+The CLI output layer (`pkg/render`) gives every command consistent, TTY-aware tables and
+formatters, with one hard guarantee: **if rendering fails for any reason, output falls back
+to plain text and data is never lost**. It replaces the ad-hoc `fmt.Printf` with
+hand-crafted column widths and ASCII separators that were fragile and inconsistent across
+commands.
 
 ## Design Principles
 

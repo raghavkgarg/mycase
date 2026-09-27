@@ -3,8 +3,8 @@
 The SEC EDGAR fundamentals client: a `pkg/edgar` client plus an XBRL concept mapper, whose
 output `datafetcher.FundamentalsMerger` overlays onto Schwab's TTM ratios. EDGAR is parsed
 directly — no commercial vendor — for authoritative, license-clean, quarterly-stable
-fundamentals. Related: `docs/07-datasources.md` (data-source design, D15),
-`docs/04-architecture.md` (layering), `.kiro/steering/api-rules.md` (network discipline).
+fundamentals. Related: `docs/2-20-data-sources.md` (data-source design, D15),
+`docs/2-10-architecture.md` (layering), `.kiro/steering/api-rules.md` (network discipline).
 
 ---
 
@@ -180,6 +180,6 @@ The five decisions below were resolved in review before implementation; kept her
 - [x] `devtools/internal/layers/layers.go` — register `edgar` at L1
 - [x] `config/defaults.json` + `pkg/config` — `edgar` block, UA, TTLs, `enabled`
 - [x] `.kiro/steering/architecture.md` layer table — `edgar` L1 (also synced `themedb`/`portfolio`/`themereturn`)
-- [x] `docs/07-datasources.md` §5/§6/§7 — 10c marked done; `docs/03-roadmap.md` Phase 10c → done
+- [x] `docs/2-20-data-sources.md` §5/§6/§7 — 10c marked done; `docs/9-10-roadmap.md` Phase 10c → done
 - [x] `make cleanup` + `make test` green; `make check-deps` intact
 - [x] wired opt-in into `cmd/broker.go` + `pkg/autopilot` router factories (`MYCASE_EDGAR_USER_AGENT` env override)

@@ -112,9 +112,9 @@ chapter). One line, not a table.
   `` `cmd/pick.go` ``. Add a line range in prose only when it genuinely aids navigation, and
   accept that ranges drift — prefer naming the function/type (`` `Router.Fundamentals` ``)
   over a line number.
-- **Cross-link other chapters by relative filename**: `[Storage](10-storage.md)`,
-  `docs/book/04-architecture.md`. When a chapter is renamed, every such link is migrated in the
-  same change (grep `docs/book/NN-*.md`), and no link may point at a file that doesn't exist.
+- **Cross-link other chapters by relative filename**: `[Storage](2-60-storage.md)`,
+  `docs/book/2-10-architecture.md`. When a chapter is renamed, every such link is migrated in the
+  same change (grep `docs/book/*.md`), and no link may point at a file that doesn't exist.
 - **Refer to a chapter by its title or part, not a stale number**, in running
   prose where practical — filenames carry the number, the prose carries the meaning.
 
@@ -154,14 +154,25 @@ chapter). One line, not a table.
 
 ## 9. The book's shape
 
-The chapters read front-to-back as a book, grouped into parts (see `README.md`, the book's
-preface and contents). Two structural rules:
+The chapters read front-to-back as a book, grouped into parts (see `preface.md`, the book's
+front page and contents). The structural rules:
 
-- **Filenames are stable numeric IDs (`NN-slug.md`); the slug matches the chapter title.**
-  Renaming a chapter is a deliberate, wholesale change (rename + migrate every reference +
-  build), never piecemeal.
+- **Filenames encode part and order: `P-NN-slug.md`.** The first digit is the part
+  (`0` front matter, `1` Product, `2` Architecture, `3` Operations, `9` appendix); the
+  two-digit `NN` orders chapters *within* that part in **gaps of 10** (`2-10`, `2-20`,
+  `2-30`, …). The slug matches the chapter title. The `preface.md` is the unnumbered entry
+  point.
+- **Gaps of 10 are room to grow.** A new chapter slots into a free gap (`2-25`) with no
+  renumbering of its neighbors. If a part's gaps ever fill up, that is the signal to **split
+  the part**, not to widen the gaps — and to renumber only within that part.
+- **The number is an ordering hint within a part, not a global identity.** Reading order is
+  owned by the preface; the filename number just keeps a directory listing in roughly the
+  right shape and says which part a chapter belongs to. Renaming or renumbering a chapter is
+  a deliberate, wholesale change (rename + migrate every reference + build), never piecemeal.
+- **A doc that lands without following this scheme is fixable, not fatal** — renumber it into
+  the right part and gap, migrate its references, and move on.
 - **Status and plans are not part of the reading spine.** The Roadmap is the one
-  consult-don't-read document; it lives as **Appendix A**, not as a numbered chapter in the
+  consult-don't-read document; it lives as the **appendix** (`9-…`), not as a chapter in the
   middle of the narrative. Anything that reads as "what's done / in progress / next" belongs
   there, not in a chapter.
 
@@ -180,4 +191,4 @@ Before adding or editing a chapter, confirm:
 7. Prose carries the argument; tables/lists only carry enumerable facts.
 8. `---` rules and section numbering are minimal and consistent within the chapter.
 9. The chapter documents exactly one subsystem or concept.
-10. It is listed in the `README.md` table of contents under the right module.
+10. It is listed in the `preface.md` contents under the right part.
