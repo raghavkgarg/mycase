@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/raghavkgarg/mycase/pkg/marketdata"
 	"github.com/raghavkgarg/mycase/pkg/yfinance"
 )
 
@@ -90,7 +91,8 @@ func ApplyPITVelocityBoost(
 		if raw <= 0 {
 			continue
 		}
-		delivDelta, _, _, _ := yfinance.GetDeliveryDelta(fundamentals[t].DeliveryHistory, time.Now(), 1)
+		settledDate := marketdata.EODSettlementDate(time.Now())
+		delivDelta, _, _, _ := yfinance.GetDeliveryDelta(fundamentals[t].DeliveryHistory, settledDate, 0)
 		tv, exists := velocities[t]
 		if !exists {
 			continue

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/raghavkgarg/mycase/pkg/config"
+	"github.com/raghavkgarg/mycase/pkg/marketdata"
 	"github.com/raghavkgarg/mycase/pkg/optimizer"
 	"github.com/raghavkgarg/mycase/pkg/selectiontracker"
 	"github.com/raghavkgarg/mycase/pkg/yfinance"
@@ -1035,6 +1036,7 @@ type SmartHysteresisConfig struct {
 	MinScoreDelta             float64 // min score advantage for a top-N candidate to displace a buffer holding (default: 3.0)
 	RequireGrowthAcceleration bool    // if true, buffer grace is forfeited if sales growth decelerates (TTM < 3Y CAGR)
 	EnableSentryGate          bool    // if true, enforces Sentry Level-3 technical health gate (price >= 0.95*SMA200 and DD <= 20%)
+	AsOfDate                  string  // target market settlement date (YYYY-MM-DD)
 }
 
 func resolveSmartHysteresis(scores map[string]float64, fundamentals map[string]yfinance.Fundamentals, smartHysteresis []SmartHysteresisConfig) SmartHysteresisConfig {
@@ -1397,8 +1399,16 @@ func ScoreEarlyMultibagger(
 	fundamentals map[string]yfinance.Fundamentals,
 	fullHistory map[string]*yfinance.HistoricalData,
 	hardFilters *config.HardFilters,
+	asOfDate ...string,
 ) map[string]float64 {
 	slog.InfoContext(ctx, "score.earlymb_start", "candidates", len(activeKeys))
+
+	settledDate := marketdata.EODSettlementDate(time.Now())
+	if len(asOfDate) > 0 && asOfDate[0] != "" {
+		if pt, err := time.Parse("2006-01-02", asOfDate[0]); err == nil {
+			settledDate = pt
+		}
+	}
 
 	// Fetch 1-year benchmark prices for Relative Strength calculation & Regime Sentry
 	benchSym := GetBenchmarkSymbolForIndex("", activeKeys)
@@ -1454,7 +1464,7 @@ func ScoreEarlyMultibagger(
 		p3 := p3a + p3b
 
 		// Pillar 4: Institutional Accumulation Delta (Recent 5D vs Disjoint 20D Baseline)
-		delivDelta, _, _, _ := yfinance.GetDeliveryDelta(f.DeliveryHistory, time.Now(), 1)
+		delivDelta, _, _, _ := yfinance.GetDeliveryDelta(f.DeliveryHistory, settledDate, 0)
 		p4 := NormScore(delivDelta, DeliveryDeltaBounds, wDeliv, false)
 
 		raw := p1 + p2 + p3 + p4
@@ -1595,7 +1605,13 @@ func SelectTopNEarlyMultibaggerWithCooldown(
 			weeksInBase, _ = yfinance.CalculateBaseDurationWeeks(hist.Closes, hardFilters.MinProximity52WHigh)
 			rvolZ = yfinance.CalculateWinsorizedRVOLZScore(hist.Volumes, 5, 50, 4.0)
 		}
-		delivDelta, delivAvg5D, delivBase20D, delivErr := yfinance.GetDeliveryDelta(f.DeliveryHistory, time.Now(), 1)
+		settledDate := marketdata.EODSettlementDate(time.Now())
+		if len(smartHysteresis) > 0 && smartHysteresis[0].AsOfDate != "" {
+			if pt, err := time.Parse("2006-01-02", smartHysteresis[0].AsOfDate); err == nil {
+				settledDate = pt
+			}
+		}
+		delivDelta, delivAvg5D, delivBase20D, delivErr := yfinance.GetDeliveryDelta(f.DeliveryHistory, settledDate, 0)
 		var baseTag string
 		if weeksInBase <= 1 {
 			baseTag = " (0.50x Base Mult)"

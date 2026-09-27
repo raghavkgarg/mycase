@@ -89,9 +89,20 @@ def get_project_root():
         current_dir = os.path.dirname(current_dir)
     return os.getcwd()
 
+def get_db_path(root):
+    # Primary location: data/customer_concentration.json (runtime cache)
+    p = os.path.join(root, "data", "customer_concentration.json")
+    if os.path.exists(p):
+        return p
+    # Fallback to legacy config/ location if exists
+    legacy = os.path.join(root, "config", "customer_concentration.json")
+    if os.path.exists(legacy):
+        return legacy
+    return p
+
 def update_db(sym, res):
     root = get_project_root()
-    db_path = os.path.join(root, "config", "customer_concentration.json")
+    db_path = get_db_path(root)
     from datetime import datetime
     today = datetime.now().strftime("%Y-%m-%d")
     db_val = f"{res} (Scanned: {today})"
@@ -114,7 +125,7 @@ def update_db(sym, res):
 def get_customer_concentration(sym):
     root = get_project_root()
     # 1. Check local JSON overrides first (fast path)
-    db_path = os.path.join(root, "config", "customer_concentration.json")
+    db_path = get_db_path(root)
     if os.path.exists(db_path):
         with open(db_path, "r") as f:
             db = json.load(f)

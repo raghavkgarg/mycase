@@ -1,0 +1,305 @@
+# ==============================================================================
+# MyCase Master Configuration & Market Registry
+# Dual-Country Architecture: India (NSE/BSE) & USA (NYSE/NASDAQ)
+# ==============================================================================
+
+# Currently active market for zero-flag CLI commands ('india' or 'us')
+active_market: india
+
+# ------------------------------------------------------------------------------
+# System & Operational Plumbing
+# ------------------------------------------------------------------------------
+system:
+  logging:
+    dir: data/logs
+    level: info             # debug | info | warn | error
+    file: true              # write JSONL files to dir
+    retain_days: 14         # log cleanup threshold
+
+  raw_capture:
+    retain_days: 14         # raw HTTP bodies retention (pkg/rawstore)
+    max_size_mb: 512        # size limit before oldest-first pruning
+
+  scheduler:
+    enable_eod: true        # daily EOD cache/snapshot update
+    enable_drift: true      # daily portfolio drift check
+    enable_rebalance: true  # periodic rebalance proposal
+    close_offset_min: 15    # minutes after close to trigger runs
+    max_run_min: 20         # run deadline to release DuckDB lock
+    fail_alert_after: 3     # alert threshold for consecutive failures
+    enable_report: true
+    report_path: ""
+
+# ------------------------------------------------------------------------------
+# Country & Market Environments
+# ------------------------------------------------------------------------------
+markets:
+  # ============================================================================
+  # INDIA (NSE / BSE)
+  # ============================================================================
+  india:
+    broker: zerodha
+    currency: "₹"
+    currency_code: INR
+    exchange: NSE
+    benchmark: "^NSEI"
+    timezone: "Asia/Kolkata"
+    close_time: "15:30"
+    default_index: niftytotalmarket
+    default_strategy: multibagger
+    default_golden: data/microsmall.csv
+    top_n: 20
+    range: 3mo
+    pipeline_config: config/pipeline.yaml
+
+    # Strategy models & screening rules for Indian equities
+    strategies:
+      # --- Multibagger: High ROCE, Low Debt, Clean Promoter Holding ---
+      multibagger:
+        description: "Small/Micro growth companies with high ROCE and clean governance"
+        min_market_cap: 5000000000          # ₹500 Cr (5B INR)
+        max_market_cap: 5000000000000       # ₹500,000 Cr (5T INR)
+        min_adv: 10000000                   # ₹1 Cr average daily volume
+        min_cfo_pat: 0.25                   # Cash flow from operations / PAT hurdle
+        min_promoter_percent: 0.25          # Minimum 25% promoter skin in the game
+        check_earnings_trend: false
+        check_200day_sma: true
+        min_200day_sma_ratio: 0.95
+        max_pledged_percent: 0.05           # Maximum 5% shares pledged by promoters
+        min_roce: 0.12                      # Minimum 12% ROCE
+        max_debt_to_equity: 1.5             # Solvency ceiling
+        min_interest_coverage: 3.0          # Debt service capability
+        max_capex_yoy_multiplier: 2.00
+        max_dso_deterioration_pct: 15.0
+        volume_breakout_lookback_days: 60
+        volume_breakout_multiplier: 1.5
+        max_stocks_per_sector: 5
+        sector_max_stocks:
+          Consumer Defensive: 2             # Stricter cap on liquor/defensive
+        max_sector_weight_cap: 0.25
+        max_stock_weight_cap: 0.06          # Max 6.0% allocation per stock
+        min_entry_score: 40.0               # Score hurdle for new additions
+        min_holding_score: 35.0             # Floor to prevent premature ejection
+        allow_cash_on_sector_cap_exhaustion: true
+        allow_cash_reserve: true            # Unallocated spills into CASH_RESERVE
+        peg_floor: 0.1
+        max_peg: 0.0
+        check_gross_margin: false
+        min_rs_percentile: 0.0
+        min_croic: 0.06
+        score_weight_rev_acc: 20.0          # Revenue acceleration (TTM vs 3Y CAGR)
+        score_weight_asset_turnover: 20.0   # Operating efficiency
+        score_weight_peg: 15.0              # Growth at reasonable price
+        score_weight_roce: 15.0             # Core Indian profitability metric
+        score_weight_volume_breakout: 15.0  # Institutional accumulation
+        score_weight_relative_strength: 15.0 # 3M/6M/1Y Price momentum
+        # Legacy MFS optimizer weights
+        mfs_weights:
+          roe: 0.20
+          operating_margins: 0.20
+          peg_ratio: 0.15
+          market_cap: 0.15
+          insiders_percent: 0.10
+          return: 0.10
+          net_debt_ebitda: 0.10
+
+      # --- Early Multibagger (EBM): Volatility Contraction & Volume Delivery ---
+      early_multibagger:
+        description: "Early-stage microcap momentum breakouts (VCP + Delivery %)"
+        min_market_cap: 5000000000          # ₹500 Cr
+        max_market_cap: 5000000000000       # ₹500,000 Cr
+        min_adv: 10000000                   # ₹1 Cr
+        min_cfo_pat: 0.25
+        min_promoter_percent: 0.25
+        check_200day_sma: true
+        min_200day_sma_ratio: 0.95
+        max_pledged_percent: 0.05
+        min_roce: 0.12
+        max_debt_to_equity: 1.5
+        min_interest_coverage: 3.0
+        fundamentals_lag_days: 45
+        shareholding_lag_days: 15
+        delivery_data_lag_days: 1
+        earnings_blackout_days_before: 5
+        regime_benchmark_sma_period: 50
+        regime_min_confidence_floor: 0.20
+        min_effective_score_threshold: 30.0
+        min_proximity_52w_high: 0.85        # Must be within 15% of 52W High
+        min_base_duration_weeks: 4          # Base consolidation window
+        rvol_winsorize_multiplier: 4.0
+        max_stocks_per_sector: 5
+        max_sector_weight_cap: 0.25
+        allow_cash_on_sector_cap_exhaustion: true
+        score_weight_idiosyncratic_rs: 25.0 # Excess return over Nifty
+        score_weight_vcp_tightness: 25.0    # Volatility contraction pattern
+        score_weight_volume_footprint: 25.0 # Quiet volume on pullbacks
+        score_weight_delivery_delta: 25.0   # Surge in delivery % on breakout
+        mfs_weights:
+          return: 0.25
+          alpha: 0.20
+          operating_margins: 0.15
+          roe: 0.15
+          market_cap: 0.15
+          insiders_percent: 0.10
+
+      # Alias for early_multibagger
+      earlymb:
+        alias_of: early_multibagger
+
+      # --- Value: Deep Margin of Safety & Banking Metrics ---
+      value:
+        description: "Valuation discount with cash realization and bank solvency"
+        min_market_cap: 200000000000        # ₹20,000 Cr
+        max_market_cap: 50000000000000
+        min_adv: 100000000                  # ₹10 Cr
+        min_cfo_pat: 0.70
+        max_debt_to_equity: 0.80
+        min_interest_coverage: 4.0
+        min_roce: 0.12
+        min_roe: 0.12
+        max_net_npa: 0.015                  # Max 1.5% Net NPA for banks
+        min_car: 0.15                       # Min 15% Capital Adequacy Ratio
+        min_roa: 0.012                      # Min 1.2% Return on Assets
+        min_200day_sma_ratio: 0.85
+        max_stocks_per_sector: 3
+        max_sector_weight_cap: 0.25
+        allow_cash_on_sector_cap_exhaustion: true
+        max_stock_weight_cap: 0.10
+        score_weight_epv_mos: 15.0
+        score_weight_5y_val_percentile: 10.0
+        score_weight_sector_zscore: 10.0
+        score_weight_shiller_yield: 10.0
+        score_weight_cash_realization: 15.0
+        score_weight_fcf_yield: 10.0
+        score_weight_shareholder_yield: 10.0
+        score_weight_smart_money_delta: 10.0
+        score_weight_margin_inflection: 10.0
+        mfs_weights:
+          pb_ratio: 0.20
+          roe: 0.20
+          operating_margins: 0.20
+          market_cap: 0.15
+          net_debt_ebitda: 0.15
+          return: 0.10
+
+      # --- Fair Price: Intrinsic Valuation Model ---
+      fairprice:
+        description: "Fundamental fair value and margin of safety"
+        min_market_cap: 5000000000
+        max_market_cap: 50000000000000
+        min_adv: 5000000
+        max_stocks_per_sector: 3
+        max_sector_weight_cap: 0.25
+        max_stock_weight_cap: 0.08
+        score_weight_upside: 25.0
+        score_weight_mos_band: 15.0
+        score_weight_agreement: 10.0
+        score_weight_convergence: 10.0
+        score_weight_roce: 10.0
+        score_weight_cfo_pat: 8.0
+        score_weight_debt_safety: 7.0
+        score_weight_revenue_cagr: 8.0
+        score_weight_earnings_accel: 7.0
+        mfs_weights:
+          roe: 0.20
+          operating_margins: 0.20
+          pb_ratio: 0.20
+          market_cap: 0.15
+          net_debt_ebitda: 0.15
+          return: 0.10
+
+      # --- Aggressive: High Return & Alpha Optimization ---
+      aggressive:
+        description: "Aggressive portfolio optimization targeting high return and alpha"
+        mfs_weights:
+          sharpe: 0.15
+          sortino: 0.10
+          return: 0.25
+          alpha: 0.15
+          volatility: 0.05
+          beta: 0.05
+          treynor: 0.00
+          ulcer: 0.00
+          peg_ratio: 0.15
+          roe: 0.10
+
+      # --- Balanced: Balanced Risk-Adjusted Return & Forward Valuation ---
+      balanced:
+        description: "Balanced portfolio optimization with forward PE and margin stability"
+        mfs_weights:
+          sharpe: 0.15
+          sortino: 0.15
+          return: 0.15
+          alpha: 0.10
+          volatility: 0.05
+          beta: 0.05
+          treynor: 0.00
+          ulcer: 0.05
+          forward_pe: 0.20
+          operating_margins: 0.10
+
+      # --- Conservative: Capital Preservation & Low Drawdown ---
+      conservative:
+        description: "Conservative portfolio optimization with low drawdown and downside protection"
+        mfs_weights:
+          sharpe: 0.10
+          sortino: 0.20
+          return: 0.05
+          alpha: 0.05
+          volatility: 0.10
+          beta: 0.10
+          treynor: 0.00
+          ulcer: 0.15
+          pb_ratio: 0.15
+          net_debt_ebitda: 0.10
+
+  # ============================================================================
+  # USA (NYSE / NASDAQ)
+  # ============================================================================
+  us:
+    broker: schwab
+    currency: "$"
+    currency_code: USD
+    exchange: NYSE
+    benchmark: "^GSPC"
+    timezone: "America/New_York"
+    close_time: "16:00"
+    default_index: sp500
+    default_strategy: us_quality_momentum
+    default_golden: data/us_portfolio.csv
+    top_n: 20
+    range: 1y
+    pipeline_config: config/pipeline.yaml
+
+    # SEC EDGAR XBRL Data Integration (authoritative 10-K/10-Q statements)
+    edgar:
+      enabled: true
+      user_agent: "mycase/1.0 (gkgarg24@yahoo.com)"
+      facts_ttl_days: 80                    # Freshness for quarterly statements
+      cik_ttl_days: 7                       # Freshness for ticker-to-CIK mapping
+
+    # Strategy models & screening rules for US equities
+    strategies:
+      # --- US Quality Momentum: ROIC, FCF Yield, Sloan Accruals ---
+      us_quality_momentum:
+        description: "High ROIC compounders with FCF yield and 12M momentum"
+        min_market_cap: 10000000000         # $10 Billion USD (Large Cap)
+        max_market_cap: 0                   # Uncapped
+        min_adv: 50000000                   # $50M USD average daily liquidity
+        min_fcf: 0                          # Positive Free Cash Flow
+        max_stocks_per_sector: 4
+        max_sector_weight_cap: 0.25
+        max_stock_weight_cap: 0.08          # 8.0% max weight per stock
+        score_weight_roic: 20.0             # NOPAT / Invested Capital (authoritative)
+        score_weight_fcf_yield_us: 20.0     # (OCF - Capex) / Market Cap
+        score_weight_momentum_12m: 15.0     # 12M price momentum (minus last 1M)
+        score_weight_earnings_quality: 15.0 # Low accruals (Sloan ratio via 10-K)
+        score_weight_shareholder_yield_us: 15.0 # Dividend yield + net share buybacks
+        score_weight_low_vol: 15.0          # Idiosyncratic volatility penalty
+        mfs_weights:
+          roe: 0.20
+          operating_margins: 0.20
+          return: 0.20
+          sharpe: 0.15
+          sortino: 0.15
+          volatility: 0.10

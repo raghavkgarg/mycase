@@ -818,3 +818,90 @@ In [`pkg/pithistory/analytics.go:1111`](file:///Users/raghavgarg/Projects/myGo/m
 3. **Pre-Breakout Incubator Table Widened**:
    Expanded Section 7 display from `LIMIT 12` to `LIMIT 20` to eliminate visual display bottlenecks for candidates ranked 13–20.
 
+---
+---
+
+## Bug-014: Asymmetric Post-Close Delivery Delta Exclusion (Calendar-Day Lag vs Settlement Date)
+
+- **Status:** Resolved (2026-09-27)
+- **Component:** [`pkg/yfinance/metrics_delivery.go`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/yfinance/metrics_delivery.go), [`pkg/stockpicker/scoring.go`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/stockpicker/scoring.go), [`pkg/stockpicker/run.go`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/stockpicker/run.go), [`pkg/stockpicker/retry.go`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/stockpicker/retry.go), [`pkg/stockpicker/incubator.go`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/stockpicker/incubator.go), [`pkg/stockpicker/velocity.go`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/stockpicker/velocity.go)
+- **Strategy:** Early Multibagger (`earlymb`) & all delivery delta consumers
+- **Reported In:** `mycase --index niftytotalmarket --method earlymb --analysis`
+- **Execution Date:** 2026-09-25 (Friday 21:15 sync) vs 2026-09-27 (Sunday run)
+
+---
+
+### 1. Symptoms & Observed Behavior
+
+Following the Friday evening Bhavcopy sync at 21:15 IST (which pulls settled NSE delivery volume files published at ~18:30–21:00 IST), running `mycase --index niftytotalmarket --method earlymb --analysis` produced differing metrics when executed on Friday/Saturday versus Sunday, even though markets were closed the entire weekend and no new data had arrived:
+
+- **Section 9 (Daily Gainers Delivery Delta)**:
+  - `NSE:WHIRLPOOL`: `-14.1%` on Friday/Saturday vs `-22.8%` on Sunday
+  - `NSE:ENGINERSIN`: `-8.5%` on Friday/Saturday vs `-15.2%` on Sunday
+- **Section 10 (Stage-1 Relief Gate Divergence)**:
+  - `NSE:ENTERO`: `+6.8%` on Friday/Saturday vs `+10.1%` on Sunday
+- **Section 6 (Temporal Recency Check)**:
+  - Consistently reported `2026-09-25 (750/750 aligned | 0 stale) 🟢` on both runs.
+
+This caused confusion: Section 6 correctly reported that data in DuckDB was up to Friday `2026-09-25`, yet candidate factor scores behaved as though Friday's delivery data was missing when evaluated on Friday.
+
+---
+
+### 2. Root Cause Analysis
+
+The root cause was an asymmetry between **database ingestion recency** and **scoring cutoff filtration**:
+
+#### A. Database Presence vs Metric Filtration
+In Section 6 (`AuditDataHealth`), SQL queries directly measure the latest date stamped in DuckDB:
+```sql
+SELECT MAX(json_extract_string(f.raw_json, '$.DeliveryDate')) FROM fundamentals;
+--> Returns "2026-09-25"
+```
+The scheduled pipeline sync at 21:15 had successfully fetched and written Friday's Bhavcopy delivery data into DuckDB. The data was physically present in the database.
+
+#### B. Naive Calendar-Day Subtraction in `CalculateDeliveryDelta`
+In [`pkg/yfinance/metrics_delivery.go`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/yfinance/metrics_delivery.go):
+```go
+cutoffStr := asOf.AddDate(0, 0, -lagDays).Format("2006-01-02")
+```
+All callers passed `time.Now()` with `lagDays = 1`:
+- **When run on Friday evening (`2026-09-25 21:15`)**:
+  `time.Now().AddDate(0, 0, -1)` calculated `cutoffStr = "2026-09-24"` (Thursday).
+  During scoring, the loop executed:
+  ```go
+  if record.Date > cutoffStr {
+      continue // Skipped Friday 2026-09-25!
+  }
+  ```
+  Consequently, Friday's finalized Bhavcopy delivery data was discarded during scoring, forcing Pillar 4 to calculate deltas ending on Thursday.
+- **When run on Sunday (`2026-09-27`)**:
+  `time.Now().AddDate(0, 0, -1)` calculated `cutoffStr = "2026-09-26"` (Saturday).
+  Because Friday `2026-09-25 <= 2026-09-26`, Friday's delivery data was included.
+
+This created temporal drift across non-trading weekend days.
+
+---
+
+### 3. Remediation & Fix Specification
+
+1. **Zero-Lag Support in Delivery Delta Engine**:
+   Updated [`CalculateDeliveryDelta`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/yfinance/metrics_delivery.go) to allow `lagDays = 0` (only defaulting to 1 if `lagDays < 0`). When `lagDays == 0`, `cutoffStr = asOf.Format("2006-01-02")`, anchoring records up to the exact settlement date provided.
+
+2. **NSE Holiday & Weekend Calendar Anchoring**:
+   Instead of passing `time.Now()` with naive calendar subtraction, callers now resolve the authoritative settlement date via `marketcal.NSE.SettlementDate(now)` (or `marketdata.EODSettlementDate(time.Now())`):
+   - **Weekdays before 21:00**: Today's Bhavcopy is not yet finalized; automatically rolls back to prior trading day.
+   - **Weekdays after 21:00**: Today's Bhavcopy is finalized; anchors to today.
+   - **Weekends & NSE Holidays**: Automatically rolls back to the latest completed trading session (e.g. Friday `2026-09-25`).
+
+3. **Unified Call-Site Updates**:
+   Updated all stockpicker call sites to pass `settledDate` with `lagDays = 0`:
+   - [`pkg/stockpicker/scoring.go`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/stockpicker/scoring.go): `ScoreEarlyMultibagger` (Pillar 4) and `SelectTopNEarlyMultibaggerWithCooldown` (Delivery Override Gate).
+   - [`pkg/stockpicker/run.go`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/stockpicker/run.go): Candidate snapshot generation.
+   - [`pkg/stockpicker/retry.go`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/stockpicker/retry.go): Retry candidate re-scoring.
+   - [`pkg/stockpicker/incubator.go`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/stockpicker/incubator.go): Pre-breakout incubator candidate generation.
+   - [`pkg/stockpicker/velocity.go`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/stockpicker/velocity.go): Temporal velocity tracking.
+
+4. **Guaranteed Invariance**:
+   Executing the pipeline or analysis at Friday 21:15, Saturday, Sunday, or Monday before market close evaluates the exact same settlement date (`2026-09-25`) and produces 100% deterministic scores.
+
+

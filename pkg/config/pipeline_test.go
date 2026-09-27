@@ -103,7 +103,51 @@ func TestPipelineConfig_Snapshot(t *testing.T) {
 	if got.TopN != cfg.TopN {
 		t.Errorf("TopN: got %d, want %d", got.TopN, cfg.TopN)
 	}
-	if got.Broker != cfg.Broker {
-		t.Errorf("Broker: got %q, want %q", got.Broker, cfg.Broker)
+}
+
+func TestLoadPipelineConfigForProfile(t *testing.T) {
+	// Test loading the real config/pipeline.yaml
+	path := Path("pipeline.yaml")
+	
+	// Default profile
+	defCfg, err := LoadPipelineConfigForProfile(path, "")
+	if err != nil {
+		t.Fatalf("failed to load default profile: %v", err)
+	}
+	if defCfg.Strategy != "multibagger" {
+		t.Errorf("expected default strategy=multibagger, got %q", defCfg.Strategy)
+	}
+	if defCfg.GoldenCopyPath != "data/microsmall.csv" {
+		t.Errorf("expected default golden=data/microsmall.csv, got %q", defCfg.GoldenCopyPath)
+	}
+
+	// Early multibagger profile
+	embCfg, err := LoadPipelineConfigForProfile(path, "earlymb")
+	if err != nil {
+		t.Fatalf("failed to load earlymb profile: %v", err)
+	}
+	if embCfg.Strategy != "earlymb" {
+		t.Errorf("expected strategy=earlymb, got %q", embCfg.Strategy)
+	}
+	if embCfg.GoldenCopyPath != "data/earlymb_live.csv" {
+		t.Errorf("expected golden=data/earlymb_live.csv, got %q", embCfg.GoldenCopyPath)
+	}
+	if embCfg.TopN != 12 {
+		t.Errorf("expected top_n=12, got %d", embCfg.TopN)
+	}
+
+	// US momentum profile
+	usCfg, err := LoadPipelineConfigForProfile(path, "us-momentum")
+	if err != nil {
+		t.Fatalf("failed to load us-momentum profile: %v", err)
+	}
+	if usCfg.Strategy != "us_quality_momentum" {
+		t.Errorf("expected strategy=us_quality_momentum, got %q", usCfg.Strategy)
+	}
+	if usCfg.Broker != "schwab" {
+		t.Errorf("expected broker=schwab, got %q", usCfg.Broker)
+	}
+	if usCfg.GoldenCopyPath != "data/us_portfolio.csv" {
+		t.Errorf("expected golden=data/us_portfolio.csv, got %q", usCfg.GoldenCopyPath)
 	}
 }

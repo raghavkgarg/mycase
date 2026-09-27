@@ -3,6 +3,8 @@ package config
 import (
 	"encoding/json"
 	"os"
+	"path/filepath"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -235,18 +237,95 @@ func (cfg *PipelineConfig) UnmarshalYAML(value *yaml.Node) error {
 	return nil
 }
 
-// LoadPipelineConfig reads and parses a pipeline YAML config file.
-// Returns an error if the file cannot be opened or parsed.
-func LoadPipelineConfig(path string) (*PipelineConfig, error) {
-	f, err := os.Open(path)
+// PipelineFile represents the root of a pipeline.yaml file which may define
+// named profiles or a legacy single flat pipeline configuration.
+type PipelineFile struct {
+	DefaultProfile string                    `yaml:"default_profile"`
+	Profiles       map[string]PipelineConfig `yaml:"profiles"`
+	Fallback       PipelineConfig            `yaml:"-"`
+}
+
+func (pf *PipelineFile) UnmarshalYAML(value *yaml.Node) error {
+	var aux struct {
+		DefaultProfile string                    `yaml:"default_profile"`
+		Profiles       map[string]PipelineConfig `yaml:"profiles"`
+	}
+	if err := value.Decode(&aux); err == nil {
+		pf.DefaultProfile = aux.DefaultProfile
+		pf.Profiles = aux.Profiles
+	}
+	return value.Decode(&pf.Fallback)
+}
+
+func findPipelinePath(requestedPath string) string {
+	if requestedPath != "" {
+		if _, err := os.Stat(requestedPath); err == nil {
+			return requestedPath
+		}
+	}
+	stdPath := Path("pipeline.yaml")
+	if _, err := os.Stat(stdPath); err == nil {
+		return stdPath
+	}
+	if cwd, err := os.Getwd(); err == nil {
+		dir := cwd
+		for i := 0; i < 5; i++ {
+			candidate := filepath.Join(dir, "config", "pipeline.yaml")
+			if _, err := os.Stat(candidate); err == nil {
+				return candidate
+			}
+			parent := filepath.Dir(dir)
+			if parent == dir {
+				break
+			}
+			dir = parent
+		}
+	}
+	return requestedPath
+}
+
+// LoadPipelineConfigForProfile reads a pipeline config, selecting a specific profile.
+// If profile is empty, it chooses doc.DefaultProfile, or falls back to the inlined root config.
+func LoadPipelineConfigForProfile(path string, profile string) (*PipelineConfig, error) {
+	resolved := findPipelinePath(path)
+	f, err := os.Open(resolved)
 	if err != nil {
 		return nil, err
 	}
 	defer f.Close()
 
-	var cfg PipelineConfig
-	if err := yaml.NewDecoder(f).Decode(&cfg); err != nil {
+	var file PipelineFile
+	if err := yaml.NewDecoder(f).Decode(&file); err != nil {
 		return nil, err
 	}
-	return &cfg, nil
+
+	if len(file.Profiles) > 0 {
+		if profile == "" {
+			profile = file.DefaultProfile
+		}
+		if p, ok := file.Profiles[profile]; ok {
+			return &p, nil
+		}
+		// Match case-insensitively, suffix (e.g. "earlymb" matches "india-earlymb"), or by strategy
+		for k, p := range file.Profiles {
+			if strings.EqualFold(k, profile) ||
+				strings.HasSuffix(strings.ToLower(k), strings.ToLower(profile)) ||
+				strings.EqualFold(p.Strategy, profile) {
+				return &p, nil
+			}
+		}
+		if file.DefaultProfile != "" {
+			if defP, ok := file.Profiles[file.DefaultProfile]; ok {
+				return &defP, nil
+			}
+		}
+	}
+
+	return &file.Fallback, nil
+}
+
+// LoadPipelineConfig reads and parses a pipeline YAML config file.
+// Returns an error if the file cannot be opened or parsed.
+func LoadPipelineConfig(path string) (*PipelineConfig, error) {
+	return LoadPipelineConfigForProfile(path, "")
 }
