@@ -61,7 +61,7 @@ mycase basket data/myportfolio
 | `merge golden` | Update a golden copy CSV from a proposals CSV |
 | `daemon start` | Start the blocking drift monitoring loop (use `install` for launchd/systemd) |
 | `daemon check` | One-shot drift check against live holdings |
-| `daemon status` | Show last drift check result from `data/daemon_state.json` |
+| `daemon status` | Show last drift check result from `data/state/daemon_state.json` |
 | `daemon install` | Write launchd plist (macOS) or print systemd unit (Linux) |
 | `cache status` | Show DuckDB cache row counts and last fetch timestamps |
 | `cache clear` | Evict one ticker or wipe the entire price cache |
@@ -107,11 +107,15 @@ Or run `mycase auth` to generate the access token from your API key and request 
 
 ## Data Files
 
-- `data/*.csv` — golden copy portfolios (never modified programmatically except via `merge golden`)
-- `data/candidates/` — pick output CSVs
-- `data/.cache/` — Yahoo Finance JSON cache (auto-created, date-stamped)
-- `data/cache.db` — DuckDB persistent price and fundamentals cache
-- `data/daemon_state.json` — drift daemon last-check state
+- `data/*.csv` — golden copy portfolios (never modified programmatically except via `merge golden` / rebalance confirmation)
+- `data/mycase.db` — DuckDB analytical master database (prices, fundamentals, PIT runs, themes)
+- `data/state/` — runtime process state (`daemon_state.json`, `scheduler_state.json`, `daemon.pid`)
+- `data/cache/` — unified caches (`prices/`, `delivery/`, `constituents/`, `customer_concentration.json`)
+- `data/candidates/` — strategy outputs (`proposals/`, `index_picks/`, `snapshots/`)
+- `data/universe/` — canonical index constituent rosters (`NIFTY50.csv`, `microcap250.csv`, etc.)
+- `data/raw/` — API wire capture response archive (`mycase raw`)
+- `data/logs/` — operational diagnostics (`mycase-*.jsonl`, `scheduler.log`)
+- `report/annual_reports/` — corporate PDF annual reports for qualitative scuttlebutt research
 
 ---
 

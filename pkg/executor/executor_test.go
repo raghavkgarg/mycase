@@ -11,17 +11,19 @@ import (
 
 func TestSaveSuccessAndErrorLog(t *testing.T) {
 	tmpNow := "999999_999999"
+	ordersDir := executionOrdersDir()
+	errorsDir := executionErrorsDir()
 
 	// Cleanup test artifacts
 	defer func() {
-		_ = os.Remove(filepath.Join("Order", "Order_"+tmpNow+".txt"))
-		_ = os.Remove(filepath.Join("Error", "Order_"+tmpNow+".txt"))
-		_ = os.Remove(filepath.Join("Error", "Order_"+tmpNow+".json"))
+		_ = os.Remove(filepath.Join(ordersDir, "Order_"+tmpNow+".txt"))
+		_ = os.Remove(filepath.Join(errorsDir, "Order_"+tmpNow+".txt"))
+		_ = os.Remove(filepath.Join(errorsDir, "Order_"+tmpNow+".json"))
 	}()
 
 	SaveSuccessLog("SNAPSHOT TEST", "Placed 1 order", tmpNow)
-	if _, err := os.Stat(filepath.Join("Order", "Order_"+tmpNow+".txt")); os.IsNotExist(err) {
-		t.Fatalf("expected Order log to exist")
+	if _, err := os.Stat(filepath.Join(ordersDir, "Order_"+tmpNow+".txt")); os.IsNotExist(err) {
+		t.Fatalf("expected Order log to exist in %s", ordersDir)
 	}
 
 	failedSpecs := []FailedOrderSpec{
@@ -46,12 +48,14 @@ func TestSaveSuccessAndErrorLog(t *testing.T) {
 
 func TestExecuteRetryPayloadMock(t *testing.T) {
 	tmpNow := "999999_888888"
-	jsonPath := filepath.Join("Error", "Order_"+tmpNow+".json")
+	errorsDir := executionErrorsDir()
+	ordersDir := executionOrdersDir()
+	jsonPath := filepath.Join(errorsDir, "Order_"+tmpNow+".json")
 
-	_ = os.MkdirAll("Error", 0755)
+	_ = os.MkdirAll(errorsDir, 0755)
 	defer func() {
 		_ = os.Remove(jsonPath)
-		_ = os.Remove(filepath.Join("Error", "Order_"+tmpNow+".txt"))
+		_ = os.Remove(filepath.Join(errorsDir, "Order_"+tmpNow+".txt"))
 	}()
 
 	failedSpecs := []FailedOrderSpec{
@@ -68,14 +72,14 @@ func TestExecuteRetryPayloadMock(t *testing.T) {
 	}
 
 	// Verify retry success log contains "BUY"
-	orderEntries, _ := os.ReadDir("Order")
+	orderEntries, _ := os.ReadDir(ordersDir)
 	foundBuyLog := false
 	for _, entry := range orderEntries {
 		if strings.HasPrefix(entry.Name(), "Order_") {
-			content, _ := os.ReadFile(filepath.Join("Order", entry.Name()))
+			content, _ := os.ReadFile(filepath.Join(ordersDir, entry.Name()))
 			if strings.Contains(string(content), "Placed REGULAR BUY order") {
 				foundBuyLog = true
-				_ = os.Remove(filepath.Join("Order", entry.Name()))
+				_ = os.Remove(filepath.Join(ordersDir, entry.Name()))
 				break
 			}
 		}

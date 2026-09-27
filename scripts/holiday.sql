@@ -1,10 +1,10 @@
--- holiday.sql — one-time LOCAL bootstrap for the `holidays` table in mycase.db.
+-- scripts/holiday.sql — one-time LOCAL bootstrap for the `holidays` table in mycase.db.
 --
 -- WHAT THIS IS: a convenience snapshot of the currently-known NYSE + NSE full-day
 -- closures (2026–2027), so a fresh checkout/machine can populate its local DB in
 -- one command instead of hand-entering dates. Run it against your local cache DB:
 --
---     duckdb data/mycase.db < holiday.sql
+--     duckdb data/mycase.db < scripts/holiday.sql
 --
 -- WHAT THIS IS NOT: it is NOT the authoritative source, and NO application code
 -- reads this file. The single source of truth is the `holidays` table itself

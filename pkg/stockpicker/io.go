@@ -647,7 +647,7 @@ func PrintScuttlebutt(selectedKeys []string, fundamentals map[string]yfinance.Fu
 		fmt.Fprintf(outFile, "   [Management Stability Check]: %s\n", mgtStability)
 		fmt.Fprintf(outFile, "   [Related Party Trans. Check]: %s\n", rptStatus)
 
-		custConc := "Metric Coverage Pending (Place the Annual Report PDF in data/annual_reports/)"
+		custConc := "Metric Coverage Pending (Place the Annual Report PDF in report/annual_reports/)"
 		if val, ok := custConcMap[t]; ok && val != "" {
 			custConc = val
 		} else if val, ok := custConcMap[cleanSym]; ok && val != "" {

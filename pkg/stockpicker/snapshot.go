@@ -9,7 +9,10 @@ import (
 	"strings"
 )
 
-const PITSnapshotDir = "data/pit_snapshots"
+const (
+	PITSnapshotDir       = "data/candidates/snapshots"
+	legacyPITSnapshotDir = "data/pit_snapshots"
+)
 
 type CandidateScoreDetail struct {
 	Ticker                     string  `json:"ticker"`
@@ -88,7 +91,35 @@ func LoadPreviousSnapshot(indexName, method, currentDateStr string) (*PITRunSnap
 	}
 
 	if len(matchedFiles) == 0 {
-		return nil, nil
+		// Fall back to legacy data/pit_snapshots if present
+		if legacyEntries, err := os.ReadDir(legacyPITSnapshotDir); err == nil {
+			for _, e := range legacyEntries {
+				if e.IsDir() {
+					continue
+				}
+				name := e.Name()
+				if strings.HasPrefix(name, prefix) && strings.HasSuffix(name, ".json") {
+					datePart := strings.TrimSuffix(strings.TrimPrefix(name, prefix), ".json")
+					if datePart < currentDateStr {
+						matchedFiles = append(matchedFiles, filepath.Join(legacyPITSnapshotDir, name))
+					}
+				}
+			}
+		}
+		if len(matchedFiles) == 0 {
+			return nil, nil
+		}
+		sort.Strings(matchedFiles)
+		latestPrevPath := matchedFiles[len(matchedFiles)-1]
+		data, err := os.ReadFile(latestPrevPath)
+		if err != nil {
+			return nil, err
+		}
+		var snap PITRunSnapshot
+		if err := json.Unmarshal(data, &snap); err != nil {
+			return nil, err
+		}
+		return &snap, nil
 	}
 	sort.Strings(matchedFiles)
 	latestPrevFile := matchedFiles[len(matchedFiles)-1]

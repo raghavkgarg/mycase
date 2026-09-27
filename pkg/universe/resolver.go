@@ -11,7 +11,10 @@ import (
 )
 
 // SnapshotDir is the directory where historical constituent CSV snapshots are saved.
-const SnapshotDir = "data/universe_snapshots"
+const (
+	SnapshotDir       = "data/universe"
+	legacySnapshotDir = "data/universe_snapshots"
+)
 
 // SaveSnapshot saves a list of tickers for an index as of a specific date.
 func SaveSnapshot(indexName string, date time.Time, tickers []string) error {
@@ -54,7 +57,15 @@ func GetConstituentsForDate(indexName string, asOfDate time.Time) ([]string, str
 	}
 
 	cleanIndex := strings.ToLower(strings.TrimSpace(indexName))
-	entries, err := os.ReadDir(SnapshotDir)
+	dir := SnapshotDir
+	entries, err := os.ReadDir(dir)
+	if err != nil || len(entries) == 0 {
+		if legacyEntries, lerr := os.ReadDir(legacySnapshotDir); lerr == nil && len(legacyEntries) > 0 {
+			dir = legacySnapshotDir
+			entries = legacyEntries
+			err = nil
+		}
+	}
 	if err != nil {
 		return nil, "", err
 	}
@@ -94,7 +105,7 @@ func GetConstituentsForDate(indexName string, asOfDate time.Time) ([]string, str
 		bestFile = matchedFiles[0]
 	}
 
-	fullPath := filepath.Join(SnapshotDir, bestFile)
+	fullPath := filepath.Join(dir, bestFile)
 	f, err := os.Open(fullPath)
 	if err != nil {
 		return nil, "", fmt.Errorf("failed to open snapshot %s: %w", bestFile, err)

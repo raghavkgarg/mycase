@@ -631,7 +631,7 @@ All date operations use `Asia/Kolkata` (UTC+5:30):
 
 ### D3 — Daemon Uses OS Service Layer
 
-No self-daemonization in Go. `mycase daemon install` writes a launchd plist (macOS) or prints a systemd unit (Linux). Process lifecycle (restart on crash, run at login, log rotation) is handled by the OS. State persists to `data/daemon_state.json` across restarts so `mycase daemon status` can report the last check even after a reboot.
+No self-daemonization in Go. `mycase daemon install` writes a launchd plist (macOS) or prints a systemd unit (Linux). Process lifecycle (restart on crash, run at login, log rotation) is handled by the OS. State persists to `data/state/daemon_state.json` across restarts so `mycase daemon status` can report the last check even after a reboot.
 
 ### D4 — Web Dashboard Without a Framework (R8, implemented in pkg/server)
 

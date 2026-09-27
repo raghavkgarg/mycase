@@ -155,11 +155,13 @@ func runPipeline(ctx context.Context, c *cli.Command) error {
 	reader := bufio.NewReader(os.Stdin)
 
 	// Clean up stale cache files from previous days
-	if files, err := filepath.Glob(config.DataPath(".cache", "*")); err == nil {
-		today := time.Now().Format("2006-01-02")
-		for _, f := range files {
-			if !strings.Contains(f, today) {
-				_ = os.Remove(f)
+	for _, cacheDir := range []string{config.DataPath("cache", "prices", "*"), config.DataPath(".cache", "*")} {
+		if files, err := filepath.Glob(cacheDir); err == nil {
+			today := time.Now().Format("2006-01-02")
+			for _, f := range files {
+				if !strings.Contains(f, today) {
+					_ = os.Remove(f)
+				}
 			}
 		}
 	}

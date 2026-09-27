@@ -536,8 +536,8 @@ After=network.target
 Type=oneshot
 ExecStart=%s scheduler run-now
 WorkingDirectory=%s
-StandardOutput=append:%s/data/scheduler.log
-StandardError=append:%s/data/scheduler.log
+StandardOutput=append:%s/data/logs/scheduler.log
+StandardError=append:%s/data/logs/scheduler.log
 
 # ── mycase-scheduler.timer ──
 [Unit]

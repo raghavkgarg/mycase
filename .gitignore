@@ -3,6 +3,9 @@ mycase
 *.exe
 bin/
 dist/
+coverage.out
+coverage.html
+*.out
 
 # Logs
 logs/
@@ -23,10 +26,8 @@ config/config.json
 config/schwab.json
 config/schwab_token.json
 
-# Execution and logs exports
-Error/
-Order/
-holding/
+# Execution exports
+execution/
 
 # Generated stock picker output CSVs and temporary combined files
 data/stockpicker_*.csv

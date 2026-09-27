@@ -106,6 +106,9 @@ func runDaemonStart(ctx context.Context, c *cli.Command) error {
 
 func runDaemonStop(_ context.Context, _ *cli.Command) error {
 	data, err := os.ReadFile(daemon.PIDFile)
+	if os.IsNotExist(err) {
+		data, err = os.ReadFile("data/daemon.pid")
+	}
 	if err != nil {
 		return fmt.Errorf("no PID file at %s — is the daemon running?", daemon.PIDFile)
 	}

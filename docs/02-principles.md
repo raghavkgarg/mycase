@@ -59,7 +59,7 @@ Two concrete techniques, both now in the tree:
 ### Filesystem layout conventions
 
 - `config/` — human-authored, **read-only at runtime**; the system never writes back to its own config as a side effect.
-- `data/` — machine-generated, mutable state: DuckDB databases (`data/cache.db`, `data/pit_history.db`), CSV proposals/backups, daemon state (`data/daemon_state.json`, `data/daemon.pid`), autopilot proposal JSON (`data/autopilot/pending_proposal.json`), and debug dumps (`data/debug/`). `pkg/pithistory` only ever `os.MkdirAll`s the `data/` dir for its DB.
+- `data/` — machine-generated, mutable state: DuckDB master database (`data/mycase.db`), CSV proposals/backups, daemon and scheduler runtime state (`data/state/daemon_state.json`, `data/state/scheduler_state.json`, `data/state/daemon.pid`), autopilot proposal JSON (`data/autopilot/pending_proposal.json`), and debug dumps (`data/debug/`). `pkg/pithistory` only ever `os.MkdirAll`s the `data/` dir for its DB.
 - No hardcoded machine/user-specific absolute paths in committed code. The lone reference to `SyncAccessTokenToAllConfigs` lives in this doc as a **rejected** pattern — token material is referenced by key name and never synced across configs by side effect.
 
 ### Network IO: rate limits as a budget, cache-first, save-raw-for-debug
@@ -220,7 +220,7 @@ Different grain (selected-only vs. all-candidates), different keys, different DB
 Two models coexist deliberately:
 
 - **Long-interval (quarterly/monthly) → launchd.** `pkg/autopilot/schedule.go` emits macOS `launchd` `StartCalendarInterval` plists (`LaunchdQuarterlyIntervals`, `LaunchdMonthlyInterval`) plus date math (`NextRunDate`, `NextQuarterDates`). The OS owns the lifecycle; there is no in-process multi-month sleep loop.
-- **Short-interval (daily drift) → in-process loop.** `daemon.RunLoop` (`pkg/daemon/daemon.go`) blocks on `time.After(nextMarketClose)` and runs `RunCheck` each close, persisting `data/daemon_state.json` + `data/daemon.pid`.
+- **Short-interval (daily drift) → in-process loop.** `daemon.RunLoop` (`pkg/daemon/daemon.go`) blocks on `time.After(nextMarketClose)` and runs `RunCheck` each close, persisting `data/state/daemon_state.json` + `data/state/daemon.pid`.
 
 ## 7. Testing & Verification
 

@@ -284,7 +284,7 @@ To eliminate lookahead bias in backtests and live execution:
 
 * **The Problem**: In small-cap and micro-cap universes, constituents churn frequently. Backtesting against *current* index constituents creates survivorship bias.
 * **The Solution** ([`pkg/universe/resolver.go`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/universe/resolver.go)):
-  - Periodic constituent snapshots are stored immutably in `data/universe_snapshots/{index}_{YYYYMMDD}.csv`.
+  - Periodic constituent snapshots are stored immutably in `data/universe/{index}_{YYYYMMDD}.csv`.
   - `universe.GetConstituentsForDate(index, dateT)` loads the exact constituent roster active on that date.
 
 ```mermaid
@@ -828,7 +828,7 @@ WHERE s.index_name = 'niftytotalmarket';
 | **Ticker History** | `mycase pit stats --ticker INOXINDIA` | Chronological score trajectory for a specific stock. |
 | **Combined Picker** | `mycase pick --index microcap250_smallcap250 --method earlymb --top 10` | Live 2-stage gating across combined universe. |
 | **Rolling IC Calibration** | `mycase calibrate --index niftytotalmarket --method earlymb --step 21 --forward 21` | Spearman Rank IC, IR, empirical bounds on 70/30 split. |
-| **Save Constituent Snapshot** | `mycase calibrate --index niftytotalmarket --save-snapshot` | Immutable roster to `data/universe_snapshots/`. |
+| **Save Constituent Snapshot** | `mycase calibrate --index niftytotalmarket --save-snapshot` | Immutable roster to `data/universe/`. |
 | **Execution Basket** | `mycase basket --file data/candidates/index_picks/niftytotalmarket_earlymb.csv --capital 100000` | Integer share quantities for broker execution. |
 | **Sentry Monitoring** | `mycase monitor --file data/microsmall.csv --strategy earlymb` | Trailing stop-loss, EMA breakdown, filing health. |
 | **Full Pipeline** | `mycase pipeline --index niftytotalmarket --strategy earlymb` | Screening → optimization → basket → reporting. |

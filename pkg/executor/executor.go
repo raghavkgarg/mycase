@@ -262,12 +262,29 @@ func ExecuteBasketOrders(
 	}
 }
 
+func marketPath() string {
+	mkt := strings.ToLower(broker.LoadMarketConfig().Market)
+	if mkt == "us" {
+		return "us"
+	}
+	return "india"
+}
+
+func executionOrdersDir() string {
+	return config.Path("execution", marketPath(), "orders")
+}
+
+func executionErrorsDir() string {
+	return config.Path("execution", marketPath(), "errors")
+}
+
 func SaveSuccessLog(snapshotText, logContent, nowStr string) {
-	if err := os.MkdirAll("Order", 0755); err != nil {
-		slog.Error("executor.log_dir_failed", "dir", "Order", "err", err)
+	dir := executionOrdersDir()
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		slog.Error("executor.log_dir_failed", "dir", dir, "err", err)
 		return
 	}
-	filename := filepath.Join("Order", "Order_"+nowStr+".txt")
+	filename := filepath.Join(dir, "Order_"+nowStr+".txt")
 	content := snapshotText + "\n\nExecuting orders live...\n" + logContent + "\n"
 	if err := os.WriteFile(filename, []byte(content), 0644); err != nil {
 		slog.Error("executor.log_save_failed", "path", filename, "err", err)
@@ -277,16 +294,17 @@ func SaveSuccessLog(snapshotText, logContent, nowStr string) {
 }
 
 func SaveErrorLog(snapshotText, logContent string, failedSpecs []FailedOrderSpec, nowStr string) string {
-	if err := os.MkdirAll("Error", 0755); err != nil {
-		slog.Error("executor.error_dir_failed", "dir", "Error", "err", err)
+	dir := executionErrorsDir()
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		slog.Error("executor.error_dir_failed", "dir", dir, "err", err)
 		return ""
 	}
 
-	txtFilename := filepath.Join("Error", "Order_"+nowStr+".txt")
+	txtFilename := filepath.Join(dir, "Order_"+nowStr+".txt")
 	txtContent := snapshotText + "\n\nExecuting orders live...\n" + logContent + "\n"
 	_ = os.WriteFile(txtFilename, []byte(txtContent), 0644)
 
-	jsonFilename := filepath.Join("Error", "Order_"+nowStr+".json")
+	jsonFilename := filepath.Join(dir, "Order_"+nowStr+".json")
 	payload := RetryPayload{
 		Timestamp:    nowStr,
 		FailedOrders: failedSpecs,
@@ -300,20 +318,34 @@ func SaveErrorLog(snapshotText, logContent string, failedSpecs []FailedOrderSpec
 	return jsonFilename
 }
 
-// FindLatestErrorPayload returns the path to the newest JSON payload file in Error/
+// FindLatestErrorPayload returns the path to the newest JSON payload file in execution/<market>/errors,
+// falling back to execution/india/errors or legacy Error/ for backward compatibility.
 func FindLatestErrorPayload() (string, error) {
-	entries, err := os.ReadDir("Error")
-	if err != nil {
-		return "", fmt.Errorf("cannot read Error directory: %w", err)
+	searchDirs := []string{
+		executionErrorsDir(),
+		filepath.Join("execution", "india", "errors"),
+		"Error",
 	}
+
 	var jsonFiles []string
-	for _, e := range entries {
-		if !e.IsDir() && strings.HasSuffix(e.Name(), ".json") && strings.HasPrefix(e.Name(), "Order_") {
-			jsonFiles = append(jsonFiles, filepath.Join("Error", e.Name()))
+	seenDirs := make(map[string]bool)
+	for _, dir := range searchDirs {
+		if seenDirs[dir] {
+			continue
+		}
+		seenDirs[dir] = true
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			continue
+		}
+		for _, e := range entries {
+			if !e.IsDir() && strings.HasSuffix(e.Name(), ".json") && strings.HasPrefix(e.Name(), "Order_") {
+				jsonFiles = append(jsonFiles, filepath.Join(dir, e.Name()))
+			}
 		}
 	}
 	if len(jsonFiles) == 0 {
-		return "", fmt.Errorf("no pending JSON retry files found in Error/")
+		return "", fmt.Errorf("no pending JSON retry files found in execution errors")
 	}
 	sort.Strings(jsonFiles)
 	return jsonFiles[len(jsonFiles)-1], nil

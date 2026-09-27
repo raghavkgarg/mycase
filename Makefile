@@ -135,10 +135,11 @@ test-integration:
 
 test-coverage:
 	@echo "Running tests with coverage..."
-	@go test -coverprofile=coverage.out ./...
-	@go tool cover -func=coverage.out | grep -E "^(total|github)" | tail -1
-	@go tool cover -html=coverage.out -o coverage.html
-	@echo "Coverage report: coverage.html"
+	@mkdir -p dist
+	@go test -coverprofile=dist/coverage.out ./...
+	@go tool cover -func=dist/coverage.out | grep -E "^(total|github)" | tail -1
+	@go tool cover -html=dist/coverage.out -o dist/coverage.html
+	@echo "Coverage report: dist/coverage.html"
 
 test-cover:
 	@echo "Running tests with statement coverage..."

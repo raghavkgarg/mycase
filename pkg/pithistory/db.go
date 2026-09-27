@@ -619,11 +619,12 @@ CREATE TABLE IF NOT EXISTS index_constituents (
 	files := []struct {
 		indexName string
 		path      string
+		legacy    string
 	}{
-		{"NIFTY50", "data/universe_snapshots/NIFTY50.csv"},
-		{"microcap250", "data/universe_snapshots/microcap250.csv"},
-		{"smallcap250", "data/universe_snapshots/smallcap250.csv"},
-		{"microcap250_smallcap250", "data/universe_snapshots/microcap250_smallcap250.csv"},
+		{"NIFTY50", "data/universe/NIFTY50.csv", "data/universe_snapshots/NIFTY50.csv"},
+		{"microcap250", "data/universe/microcap250.csv", "data/universe_snapshots/microcap250.csv"},
+		{"smallcap250", "data/universe/smallcap250.csv", "data/universe_snapshots/smallcap250.csv"},
+		{"microcap250_smallcap250", "data/universe/microcap250_smallcap250.csv", "data/universe_snapshots/microcap250_smallcap250.csv"},
 	}
 
 	for _, f := range files {
@@ -631,6 +632,9 @@ CREATE TABLE IF NOT EXISTS index_constituents (
 			f.path,
 			filepath.Join("..", f.path),
 			filepath.Join("..", "..", f.path),
+			f.legacy,
+			filepath.Join("..", f.legacy),
+			filepath.Join("..", "..", f.legacy),
 		}
 		for _, cp := range candidates {
 			if _, err := os.Stat(cp); err == nil {

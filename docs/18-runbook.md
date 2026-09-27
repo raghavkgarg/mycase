@@ -403,7 +403,7 @@ systemctl enable --now mycase
 
 ```bash
 mycase daemon start          # blocking loop, use tmux or background it
-mycase daemon status         # show last check from data/daemon_state.json
+mycase daemon status         # show last check from data/state/daemon_state.json
 mycase daemon stop           # sends SIGTERM to running daemon
 mycase daemon uninstall      # removes launchd plist
 ```
@@ -744,7 +744,7 @@ mycase scheduler run-now --dry-run    # preview which cadences would run; fetch/
 mycase scheduler run-now --mock       # non-live broker (drift/rebalance become meaningless)
 ```
 
-`run-now` and the OS timer share `data/scheduler_state.json` and guard on it, so running
+`run-now` and the OS timer share `data/state/scheduler_state.json` and guard on it, so running
 manually while the timer is installed is safe — a cadence already completed for the day is
 skipped, not repeated. Use `--dry-run` first if you want to see the plan without side
 effects; it works even without valid live-broker tokens.
@@ -890,7 +890,7 @@ Every cadence is gated on the holiday-aware market calendar (`marketcal` + the a
 market's clock), so weekends and the exchange holidays in the `holidays` table of
 `mycase.db` are skipped uniformly — no hand-maintained holiday list in a shell script. Each
 `tick` first runs a **catch-up** EOD if a close was missed (machine asleep), guarded by
-`scheduler_state.json` so a cadence never double-runs on the same trading day.
+`data/state/scheduler_state.json` so a cadence never double-runs on the same trading day.
 
 ### Holiday calendar (operator-maintained)
 
@@ -935,15 +935,15 @@ Yearly workflow (per exchange):
    mycase holidays list -e NSE     # dump one exchange's dates
    ```
 
-**Quick local bootstrap.** For a fresh checkout/machine, the committed `holiday.sql` snapshot
+**Quick local bootstrap.** For a fresh checkout/machine, the committed `scripts/holiday.sql` snapshot
 seeds the currently-known NYSE + NSE dates in one command:
 
 ```bash
-duckdb data/mycase.db < holiday.sql
+duckdb data/mycase.db < scripts/holiday.sql
 mycase holidays status            # confirm: NYSE / NSE both show counts, no "NOT SEEDED"
 ```
 
-`holiday.sql` is a **convenience snapshot only** — not authoritative and read by no code. The
+`scripts/holiday.sql` is a **convenience snapshot only** — not authoritative and read by no code. The
 source of truth is the table; the yearly refresh above updates the table from the official
 calendar (refresh the snapshot afterwards if you like). Re-running it is safe.
 
@@ -959,7 +959,7 @@ calendar (refresh the snapshot afterwards if you like). Re-running it is safe.
   skipping only weekends.
 
 > **First run on a fresh machine/checkout:** the `holidays` table starts empty, so seed it
-> (`duckdb data/mycase.db < holiday.sql`) before relying on holiday-aware scheduling. Until
+> (`duckdb data/mycase.db < scripts/holiday.sql`) before relying on holiday-aware scheduling. Until
 > then, only weekends are skipped.
 
 ### Configuration
@@ -967,7 +967,7 @@ calendar (refresh the snapshot afterwards if you like). Re-running it is safe.
 Cadence toggles live in the `scheduler` block of `config/defaults.yaml`
 (`enable_eod` / `enable_drift` / `enable_rebalance` / `close_offset_min`); the rebalance
 schedule (`frequency` / `day` / `auto_execute`) stays in the `schedule:` block of
-`config/pipeline.yaml`. Diagnostics stream to `data/scheduler.log`.
+`config/pipeline.yaml`. Diagnostics stream to `data/logs/scheduler.log`.
 
 ### Quick start (US path on this machine)
 
@@ -1092,7 +1092,7 @@ Features included in the web dashboard:
 |-----------|-------|-------------|
 | `start` | `--live`, `--config`, `--file` | Start blocking drift loop |
 | `stop` | — | SIGTERM the running daemon |
-| `status` | — | Print last state from `data/daemon_state.json` |
+| `status` | — | Print last state from `data/state/daemon_state.json` |
 | `check` | `--live`, `--config`, `--file` | One-shot check |
 | `install` | — | Write launchd plist (macOS) or print systemd unit |
 | `uninstall` | — | Remove launchd plist |

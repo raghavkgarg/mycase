@@ -271,7 +271,7 @@ func (s *Scheduler) warnIfEmptyCalendar(ctx context.Context, rep *RunReport) {
 	}
 	slog.WarnContext(ctx, "scheduler.empty_holiday_calendar",
 		"impact", "trading-day gating is WEEKEND-ONLY (holidays not skipped)",
-		"fix", "seed the holidays table (duckdb data/mycase.db < holiday.sql) — see docs/18-runbook.md")
+		"fix", "seed the holidays table (duckdb data/mycase.db < scripts/holiday.sql) — see docs/18-runbook.md")
 	rep.warn("holiday calendar is EMPTY — gating is weekend-only; seed the holidays table (see docs/18-runbook.md)")
 }
 
@@ -419,7 +419,7 @@ func (s *Scheduler) failureAlertMessage(c Cadence, cadErr error, count int, auth
 	}
 	return fmt.Sprintf("mycase: %s cadence failing (%d consecutive)", c, count),
 		fmt.Sprintf("The %s cadence has failed %d times in a row.\n"+
-			"It will keep retrying, but check the host — the data/scheduler.log has details.\n\nLast error: %v",
+			"It will keep retrying, but check the host — the data/logs/scheduler.log has details.\n\nLast error: %v",
 			c, count, cadErr),
 		"warn"
 }
