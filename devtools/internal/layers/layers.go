@@ -44,6 +44,7 @@ var Layers = map[string]int{
 	"costs":            0,
 	"csvloader":        0,
 	"excel":            0,
+	"golden":           0,
 	"kiteauth":         0, // (India-Path) Kite auto-login/TOTP — zero internal imports; dormant, wired only via cmd
 	"logging":          0,
 	"market":           0,

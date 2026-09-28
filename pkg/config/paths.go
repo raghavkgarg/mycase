@@ -36,9 +36,12 @@ const (
 	configDirEnv = "MYCASE_CONFIG_DIR"
 	// dataDirEnv overrides just the data directory (absolute or relative).
 	dataDirEnv = "MYCASE_DATA_DIR"
+	// executionDirEnv overrides just the execution directory (absolute or relative).
+	executionDirEnv = "MYCASE_EXECUTION_DIR"
 
-	configDirName = "config"
-	dataDirName   = "data"
+	configDirName    = "config"
+	dataDirName      = "data"
+	executionDirName = "execution"
 )
 
 var (
@@ -123,4 +126,19 @@ func Path(elem ...string) string {
 // (e.g. DataPath("mycase.db"), DataPath("candidates", "proposals")).
 func DataPath(elem ...string) string {
 	return filepath.Join(append([]string{DataDir()}, elem...)...)
+}
+
+// ExecutionDir returns the resolved execution directory: $MYCASE_EXECUTION_DIR if set,
+// otherwise <Home>/execution.
+func ExecutionDir() string {
+	if d := os.Getenv(executionDirEnv); d != "" {
+		return d
+	}
+	return filepath.Join(Home(), executionDirName)
+}
+
+// ExecutionPath returns the path to a file/dir under ExecutionDir
+// (e.g. ExecutionPath("india", "orders")).
+func ExecutionPath(elem ...string) string {
+	return filepath.Join(append([]string{ExecutionDir()}, elem...)...)
 }

@@ -79,6 +79,7 @@ change-logs. Apply them to every chapter, new or edited:
 | 10 | [Storage & Pipeline Persistence](10-duckdb-migration.md) | DuckDB-backed pipeline state — schema, run/proposal/selection tables, data flow |
 | 11 | [Data Directory Inventory](11-data-inventory.md) | Every file/dir under `data/`, provenance, keep/delete status |
 | 11.1 | [Configuration Directory Inventory](book/2-75-config-inventory.md) | Every file under `config/` — the two-file YAML core, Schwab credentials, `reference/` tree |
+| 11.2 | [Report Directory Inventory](11.2-report-inventory.md) | Qualitative research & human audit hub (`executions/`, `research/`, `simulations/`, `annual_reports/`) |
 
 ## Module D — Strategies
 

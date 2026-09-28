@@ -271,11 +271,11 @@ func marketPath() string {
 }
 
 func executionOrdersDir() string {
-	return config.Path("execution", marketPath(), "orders")
+	return config.ExecutionPath(marketPath(), "orders")
 }
 
 func executionErrorsDir() string {
-	return config.Path("execution", marketPath(), "errors")
+	return config.ExecutionPath(marketPath(), "errors")
 }
 
 func SaveSuccessLog(snapshotText, logContent, nowStr string) {

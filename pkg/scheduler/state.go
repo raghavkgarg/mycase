@@ -132,5 +132,9 @@ func SaveState(s State) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(p, data, 0o644)
+	if err := os.WriteFile(p, data, 0o644); err != nil {
+		return err
+	}
+	_ = os.Remove(config.DataPath(legacyStateFileName))
+	return nil
 }

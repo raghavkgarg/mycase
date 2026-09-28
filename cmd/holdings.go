@@ -139,7 +139,7 @@ func runHoldings(ctx context.Context, c *cli.Command) error {
 	if broker.LoadMarketConfig().Market == "us" {
 		mkt = "us"
 	}
-	folder := config.Path("execution", mkt, "holdings")
+	folder := config.ExecutionPath(mkt, "holdings")
 	if err := os.MkdirAll(folder, 0755); err == nil {
 		dateStr := time.Now().Format("20060102")
 		filename := filepath.Join(folder, "holding_"+dateStr+".txt")

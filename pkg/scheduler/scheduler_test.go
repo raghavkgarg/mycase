@@ -48,6 +48,7 @@ func baseConfig() Config {
 }
 
 func TestTick_EODThenDrift_TradingDay(t *testing.T) {
+	isolateState(t)
 	et, err := time.LoadLocation("America/New_York")
 	if err != nil {
 		t.Skipf("tz unavailable: %v", err)
@@ -65,6 +66,7 @@ func TestTick_EODThenDrift_TradingDay(t *testing.T) {
 }
 
 func TestTick_SkipsNonTradingDay(t *testing.T) {
+	isolateState(t)
 	et, _ := time.LoadLocation("America/New_York")
 	// Saturday Sep 12 2026.
 	now := time.Date(2026, 9, 12, 16, 30, 0, 0, et)
@@ -79,6 +81,7 @@ func TestTick_SkipsNonTradingDay(t *testing.T) {
 }
 
 func TestTick_SkipsHoliday(t *testing.T) {
+	isolateState(t)
 	et, _ := time.LoadLocation("America/New_York")
 	cfg := baseConfig()
 	// Christmas 2026 (Fri) as a holiday on the clock.
@@ -97,6 +100,7 @@ func TestTick_SkipsHoliday(t *testing.T) {
 // A rebalance day forces an EOD first even when the EOD cadence is disabled, so
 // the proposal is built on fresh data; order is EOD → drift → rebalance.
 func TestTick_RebalanceForcesEOD(t *testing.T) {
+	isolateState(t)
 	et, _ := time.LoadLocation("America/New_York")
 	cfg := baseConfig()
 	cfg.EnableEOD = false
