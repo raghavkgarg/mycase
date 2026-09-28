@@ -74,7 +74,7 @@ Constituents failing any of these gates are immediately disqualified without sco
 
 ### Stage-1 Hard Gates & Fallback Architecture
 
-Before candidates reach the scoring engine, binary Stage-1 filters eliminate ~85–88% of constituents in [`pkg/stockpicker/filters.go:450-653`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/stockpicker/filters.go#L450-L653):
+Before candidates reach the scoring engine, binary Stage-1 filters eliminate ~85–88% of constituents in `pkg/stockpicker/filters.go:450-653`:
 
 1. **Cash Flow Quality Gate (`min_cfo_pat: 0.25`)**:
    - Requires $\text{OperatingCashflow} > 0$ and $\frac{\text{OperatingCashflow}}{\text{NetIncome}} \ge 0.25$ (with $\text{FreeCashflow} > 0$ check when configured).
@@ -133,10 +133,10 @@ CREATE OR REPLACE MACRO base_duration_multiplier(weeks_in_zone) AS (
 
 | Strategy Rule | Status | Deployment Location | Quantitative Rationale |
 | :--- | :--- | :--- | :--- |
-| **Base Duration Graduated Scoring** | **LIVE IN PRODUCTION** | [`pkg/stockpicker/scoring.go`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/stockpicker/scoring.go), DuckDB macro `base_duration_multiplier` | Validated across 24 empirical samples with a **79.2% win rate** and **+3.22% average excess return**. |
+| **Base Duration Graduated Scoring** | **LIVE IN PRODUCTION** | `pkg/stockpicker/scoring.go`, DuckDB macro `base_duration_multiplier` | Validated across 24 empirical samples with a **79.2% win rate** and **+3.22% average excess return**. |
 | **ROCE Delivery Override** | **RETAINED IN SHADOW** | `stage1_shadow_results` table in `data/mycase.db` only | Empirical evidence (6 samples, 50% win rate, **-0.86% avg return**) is thin and negative. Shadow threshold: $\Delta\text{Deliv} \ge 9.0\%$, $\text{Comp RS} \ge 15.0\%$, $\text{VCP} \le 1.20$. |
 | **BFSI Promoter Exemption** | **SUSPENDED** | Diagnostic SQL query only | Correcting ROE data expanded legacy Financial Services pool naturally from **3 to 12 stocks** without needing an exemption. |
-| **Data Integrity Pre-Flight Check** | **LIVE IN PRODUCTION** | [`pkg/pithistory/analytics.go`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/pithistory/analytics.go) | Permanent sentry preventing bad data feeds from silently producing phantom trading signals. |
+| **Data Integrity Pre-Flight Check** | **LIVE IN PRODUCTION** | `pkg/pithistory/analytics.go` | Permanent sentry preventing bad data feeds from silently producing phantom trading signals. |
 
 ---
 
@@ -277,7 +277,7 @@ $$\text{Pillar 3 Score} = \text{Score}_{\text{RVOL}} + \text{Score}_{\text{PP}} 
 > [!WARNING]
 > **Pillar 4 Bounds Recalibration History**: The reference bounds were originally $[-10\%, +30\%]$ when the legacy formula used a hardcoded 35% flat baseline that artificially inflated deltas. Under the canonical disjoint self-relative formula (deployed Sep 11, 2026), the cross-sectional distribution is centered at $0.0\%$ with $\sigma = 5.36\%$. The upper bound was tightened from $+30\%$ to $+15\%$ ($\approx +2.8\sigma$) to restore the full dynamic scoring range. See [Appendix §A.2](#a2-pillar-4-delivery-delta-design-evolution) for the complete forensic investigation.
 
-**Canonical Metric Implementation** ([`pkg/yfinance/metrics_delivery.go`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/yfinance/metrics_delivery.go)):
+**Canonical Metric Implementation** (`pkg/yfinance/metrics_delivery.go`):
 $$\Delta\text{Delivery} = \overline{\text{Delivery}}_{5\text{D}}\ (t-4 \dots t) - \overline{\text{Delivery}}_{20\text{D Baseline}}\ (t-24 \dots t-5)$$
 
 **Refactored Call Sites (7 total):**
@@ -304,7 +304,7 @@ To eliminate lookahead bias in backtests and live execution:
 ### 5.2. Survivorship-Bias-Free Universe Reconstruction
 
 * **The Problem**: In small-cap and micro-cap universes, constituents churn frequently. Backtesting against *current* index constituents creates survivorship bias.
-* **The Solution** ([`pkg/universe/resolver.go`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/universe/resolver.go)):
+* **The Solution** (`pkg/universe/resolver.go`):
   - Periodic constituent snapshots are stored immutably in `data/universe/{index}_{YYYYMMDD}.csv`.
   - `universe.GetConstituentsForDate(index, dateT)` loads the exact constituent roster active on that date.
 
@@ -323,7 +323,7 @@ graph TD
 
 ### 5.3. Rolling Zero-Lookahead Simulation Mechanics
 
-([`pkg/backtest/calibrate.go`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/backtest/calibrate.go)):
+(`pkg/backtest/calibrate.go`):
 
 1. **Sliding Time Window**: Stepping chronologically by $N$ trading days (default `--step 21`, approximately monthly). At each evaluation date $T$, price and volume data is strictly sliced up to date $T$ ($t \le T$).
 2. **Realized Forward Return Horizon**:
@@ -416,7 +416,7 @@ Prior to September 25, 2026, pre-breakout candidates were evaluated through two 
 * **Type-II Error (Disconnected Conviction)**: High-conviction setups required mentally merging disparate rows across two tables.
 * **Bearish Masking Bug**: Stocks undergoing severe score decay were labeled `COILING` ("Basing; awaiting catalyst") because any stock with VCP ≤ 1.0 that didn't meet strict positive thresholds fell into a catch-all.
 
-The unified **2D Pre-Breakout Launchpad** in [`pkg/pithistory/analytics.go`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/pithistory/analytics.go) and [`pkg/pithistory/bottleneck.go`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/pithistory/bottleneck.go) synthesizes spatial base anatomy and temporal velocity into a single, high-fidelity table.
+The unified **2D Pre-Breakout Launchpad** in `pkg/pithistory/analytics.go` and `pkg/pithistory/bottleneck.go` synthesizes spatial base anatomy and temporal velocity into a single, high-fidelity table.
 
 ```text
                                ┌────────────────────────────────────────────────────────┐
@@ -495,7 +495,7 @@ The unified **2D Pre-Breakout Launchpad** in [`pkg/pithistory/analytics.go`](fil
 
 ### 7.3. Directional Velocity Pattern Dispatch
 
-Implemented in `ClassifyVelocityPattern()` in [`pkg/pithistory/bottleneck.go`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/pithistory/bottleneck.go#L647):
+Implemented in `ClassifyVelocityPattern()` in `pkg/pithistory/bottleneck.go`:
 
 ```text
 Priority 1: Section 5 Decliner OR 1D Δ <= -5.0pt OR 3D Δ <= -8.0pt  ──► FADE-SHARP
@@ -532,7 +532,7 @@ The diagnostic footprint is generated by `FormatDiagnosticFootprint()` via deter
 
 ### 7.5. Single-Pass DuckDB Analytical CTE Query
 
-In [`pkg/pithistory/analytics.go`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/pithistory/analytics.go#L713-L833), the unified launchpad runs as a single-pass relational CTE in DuckDB:
+In `pkg/pithistory/analytics.go`, the unified launchpad runs as a single-pass relational CTE in DuckDB:
 
 ```sql
 WITH date_ranks AS (
@@ -646,7 +646,7 @@ Macro Regime Multiplier: 0.2000 | Current Hurdle: 150.0 pts (Stage-1 Survivors A
 
 ### 7.8. UTF-8 Rune Width Padding (`PadVisible`)
 
-Terminal column shearing was eliminated via `PadVisible()` in [`pkg/pithistory/bottleneck.go`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/pithistory/bottleneck.go#L639). By counting visual runes (`utf8.RuneCountInString`) rather than raw bytes, the 3-byte unicode `⚠` in `NSE:GLAXO ⚠` does not push subsequent columns to the right.
+Terminal column shearing was eliminated via `PadVisible()` in `pkg/pithistory/bottleneck.go`. By counting visual runes (`utf8.RuneCountInString`) rather than raw bytes, the 3-byte unicode `⚠` in `NSE:GLAXO ⚠` does not push subsequent columns to the right.
 
 ---
 
@@ -660,7 +660,7 @@ Terminal column shearing was eliminated via `PadVisible()` in [`pkg/pithistory/b
 
 ### 8.2. Elimination Gate Code Taxonomy
 
-In [`pkg/pithistory/bottleneck.go`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/pithistory/bottleneck.go), every gate is classified into an 11-character, fixed-width machine code:
+In `pkg/pithistory/bottleneck.go`, every gate is classified into an 11-character, fixed-width machine code:
 
 ```text
     ┌──────────────────────────┐         ┌────────────────────────────────────────────────────────┐
@@ -982,14 +982,14 @@ if nowIST.Hour() >= 21 && modIST.Hour() < 21 {
 ```
 
 ### Air-Gapped Mutual Exclusion Engine
-([`pkg/pithistory/staging.go`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/pithistory/staging.go)):
+(`pkg/pithistory/staging.go`):
 ```bash
 mycase pit stage --output data/earlymb_live.csv --exclude data/microsmall.csv --top 12
 ```
 Any ticker with active weight $>0$ in `data/microsmall.csv` is automatically pruned from the satellite candidate pool before ranking.
 
 ### Dedicated Pipeline Automation
-[`config/pipeline_earlymb.yaml`](file:///Users/raghavgarg/Projects/myGo/mycase/config/pipeline_earlymb.yaml):
+`config/pipeline_earlymb.yaml`:
 ```yaml
 indices:
   - niftytotalmarket
@@ -1295,7 +1295,7 @@ Verified in `pkg/yfinance/metrics_earlymb_test.go` and `pkg/stockpicker/bounds_t
 | `TestDeliveryDelta_CrossCallSiteConsistency` | Identical results across all 7 call sites |
 
 ### Launchpad & Bottleneck Test Suite
-24 unit tests in [`pkg/pithistory/bottleneck_test.go`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/pithistory/bottleneck_test.go):
+24 unit tests in `pkg/pithistory/bottleneck_test.go`:
 ```bash
 go test -v ./pkg/pithistory -run "TestClassifyVelocityPattern|TestFormatDiagnosticFootprint|TestColorizeLaunchpadState|TestPadVisible"
 ```

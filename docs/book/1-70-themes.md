@@ -1,12 +1,11 @@
-# Theme Subsystem — Lifecycle DB + Exact Returns (India-Path)
+# Themes
 
-> **Part of the India-Path.** Themes belong to the multi-market design and the
-> Zerodha/`portfolio.db` integration — the India market path, distinct from the active US
-> focus.
-> This is the consolidated reference for the two theme concerns — the lifecycle
-> database (`theme_rebalances`/`theme_history` in `data/mycase.db`) and the
-> exact-return engine (`pkg/themereturn`). Historical implementation-plan detail lives
-> in git history.
+> **Indian-equity subsystem.** Themes are tied to the Zerodha/`portfolio.db` integration and
+> serve the Indian-equity universe.
+>
+> The consolidated reference for the two theme concerns — the lifecycle database
+> (`theme_rebalances`/`theme_history` in `data/mycase.db`) and the exact-return engine
+> (`pkg/themereturn`).
 
 ## 1. Domain separation
 
@@ -90,7 +89,7 @@ against `portfolio.db` trades, closed lots, dividends, and benchmark quotes:
 
 Post-market theme sync runs as **stage 3 of the daily EOD update** (`mycase db update`,
 aliases `eod`/`daily`), and is scheduled automatically by the autonomous scheduler
-(`mycase scheduler` — see `docs/18-runbook.md` §11), which owns the daily EOD cadence with
+(`mycase scheduler` — see `docs/1-80-runbook.md` §11), which owns the daily EOD cadence with
 holiday-aware skipping. The theme sync itself lives in `pkg/eod` stage 3
 (`SyncThemeFromProposals` per configured theme). The former machine-specific
 `scripts/daily_sync.sh` shell script has been retired — its weekend/holiday guard is now

@@ -1,9 +1,18 @@
-# Known System Issues & Bug Tracker For EMB
+# EMB Bug Tracker
+
+> **Standalone working document — not part of the docs book.** This is an operational bug
+> tracker for the Early Multibagger (`earlymb`) engine. It lives at the top level of
+> `docs/`, deliberately outside `docs/book/`: the book describes the system as it is in the
+> present tense, while this file records specific issues and their resolutions. Durable
+> design lessons from a fixed bug belong in the relevant chapter
+> (`docs/book/1-20-strategy-early-multibagger.md`, `docs/book/1-40-strategy-emb-feature-specs.md`); this tracker holds
+> the issue-by-issue detail. Entries below are historical and may reference file paths or
+> docs as they existed when the bug was filed.
 
 ## Bug-001: EarlyMB Section 5 Cross-Run Score Shifts Display Overflow & Calibration Discontinuity
 
 - **Status:** Resolved (2026-09-14)
-- **Component:** [`pkg/pithistory/analytics.go`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/pithistory/analytics.go) (Section 5: `SIGNIFICANT SCORE SHIFTS & TRAJECTORY`)
+- **Component:** `pkg/pithistory/analytics.go` (Section 5: `SIGNIFICANT SCORE SHIFTS & TRAJECTORY`)
 - **Strategy:** Early Multibagger (`earlymb`)
 - **Reported In:** `mycase --index niftytotalmarket --method earlymb --analysis`
 - **Execution Date:** 2026-09-11 (comparing `2026-09-09 -> 2026-09-11`)
@@ -44,7 +53,7 @@ Out of 65 candidates, **55 exhibited severe negative drops (-5.1 pt to -20.4 pt)
 ### 2. Root Cause Analysis
 
 #### A. Presentation / UX Defect (Unbounded Output)
-In [`pkg/pithistory/analytics.go:502-532`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/pithistory/analytics.go#L502-L532), `shiftsQuery` has no `LIMIT` clause:
+In `pkg/pithistory/analytics.go:502-532`, `shiftsQuery` has no `LIMIT` clause:
 ```sql
 WHERE curr.as_of_date = ? 
   AND prev.as_of_date = ?
@@ -60,7 +69,7 @@ ORDER BY diff DESC;
 Because the threshold is a flat `|diff| >= 4.0` on a 100-point composite score, any cross-sectional shift or formula calibration floods the terminal with dozens of rows.
 
 #### B. Statistical & Domain Defect (Methodology Discontinuity)
-The runs being compared span the **Pillar 4 (Delivery Delta) Canonical Migration** (documented in [`docs/earlyMB.md#19`](file:///Users/raghavgarg/Projects/myGo/mycase/docs/earlyMB.md)):
+The runs being compared span the **Pillar 4 (Delivery Delta) Canonical Migration** (documented in `docs/earlyMB.md#19`):
 1. **2026-09-09 Run:** Calculated using legacy arbitrary baseline `(DeliveryPct - 35%)`, granting an artificial **+10 to +20 point subsidy** out of 25 to high-delivery stocks. In the database, these records are marked with `pillar4_uncalibrated = true`.
 2. **2026-09-11 Run:** Calculated using canonical self-relative disjoint window ($\overline{\text{Deliv}}_{5\text{D}} - \overline{\text{Deliv}}_{20\text{D Baseline}}$), which mathematically centers around **`0.0%`**.
 3. **The Discontinuity:** Joining `prev` (uncalibrated) with `curr` (calibrated) produced a one-time artificial universe-wide drop averaging `-8.1 pts` (Pillar 4 alone accounted for 98% of the shift). The table incorrectly presents this methodology recalibration as genuine technical breakdown across 55 stocks.
@@ -71,7 +80,7 @@ The runs being compared span the **Pillar 4 (Delivery Delta) Canonical Migration
 
 > **Note on Timing:** Implementation is deferred until after one more full cycle of `pillar4_uncalibrated = true` / calibrated data is processed and updated in the DuckDB database to verify clean consecutive comparisons.
 
-When ready to implement, apply the following updates in [`pkg/pithistory/analytics.go`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/pithistory/analytics.go):
+When ready to implement, apply the following updates in `pkg/pithistory/analytics.go`:
 
 1. **Partition into Top 10 Gainers & Top 10 Decliners:**
    - Instead of an unbounded dump, show:
@@ -92,7 +101,7 @@ When ready to implement, apply the following updates in [`pkg/pithistory/analyti
 ## Bug-002: Stale Delivery Thresholds in Pre-Breakout Signatures & Accumulation Velocity (Sections 7 & 8)
 
 - **Status:** Resolved (2026-09-14)
-- **Component:** [`pkg/pithistory/analytics.go:630-642`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/pithistory/analytics.go#L630-L642) (Section 7) & [`pkg/pithistory/analytics.go:717-719`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/pithistory/analytics.go#L717-L719) (Section 8)
+- **Component:** `pkg/pithistory/analytics.go:630-642` (Section 7) & `pkg/pithistory/analytics.go:717-719` (Section 8)
 - **Strategy:** Early Multibagger (`earlymb`)
 
 ### 1. Symptoms & Observed Behavior
@@ -156,7 +165,7 @@ Recalibrate the delivery thresholds to match the empirical distribution:
 ## Bug-003: Stage-1 Elimination Bottleneck Blindspot: 205 Stocks (33.3%) Dumped in `Other Hard Filter` (Section 1)
 
 - **Status:** Resolved (2026-09-14)
-- **Component:** [`pkg/pithistory/analytics.go:340-360`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/pithistory/analytics.go#L340-L360) (Section 1: `rejectionQuery`)
+- **Component:** `pkg/pithistory/analytics.go:340-360` (Section 1: `rejectionQuery`)
 - **Strategy:** Early Multibagger (`earlymb`) & All Strategies
 
 ### 1. Symptoms & Observed Behavior
@@ -200,7 +209,7 @@ WHEN rejection_reason LIKE '%Margin%' THEN 'Operating Margin Deterioration'
 ## Bug-004: Daily Top Price Gainers Table Fails to Link Graduated Radar Stocks (Section 10)
 
 - **Status:** Resolved (2026-09-14)
-- **Component:** [`pkg/pithistory/analytics.go:1008-1011`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/pithistory/analytics.go#L1008-L1011) (Section 10)
+- **Component:** `pkg/pithistory/analytics.go:1008-1011` (Section 10)
 - **Strategy:** Early Multibagger (`earlymb`)
 
 ### 1. Symptoms & Observed Behavior
@@ -246,7 +255,7 @@ if graduatedTickers[ticker] {
 ## Bug-005: Float Precision Inversion & Rule Ordering in Multi-Run Accumulation Velocity (Section 8)
 
 - **Status:** Resolved (2026-09-14)
-- **Component:** [`pkg/pithistory/analytics.go:713-719`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/pithistory/analytics.go#L713-L719) (Section 8)
+- **Component:** `pkg/pithistory/analytics.go:713-719` (Section 8)
 - **Strategy:** Early Multibagger (`earlymb`)
 
 ### 1. Symptoms & Observed Behavior
@@ -294,7 +303,7 @@ if sT2 > 0 && sT0 > sT1 && sT1 > sT2 {
 ## Bug-006: Hardcoded `1D Gain` Column Label for Multi-Day or Non-Consecutive Date Spans (Section 10)
 
 - **Status:** Resolved (2026-09-14)
-- **Component:** [`pkg/pithistory/analytics.go:986-987`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/pithistory/analytics.go#L986-L987) (Section 10)
+- **Component:** `pkg/pithistory/analytics.go:986-987` (Section 10)
 - **Strategy:** Early Multibagger (`earlymb`) & All Strategies
 
 ### 1. Symptoms & Observed Behavior
@@ -323,7 +332,7 @@ Dynamically label the column based on date distance:
 ## Bug-007: Radar Graduation `Days` Ambiguity & Legacy Uncalibrated Run Leak (Section 9)
 
 - **Status:** Resolved (2026-09-14)
-- **Component:** [`pkg/pithistory/analytics.go:867-975`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/pithistory/analytics.go#L867-L975) (Section 9) & [`pkg/pithistory/db.go`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/pithistory/db.go)
+- **Component:** `pkg/pithistory/analytics.go:867-975` (Section 9) & `pkg/pithistory/db.go`
 - **Strategy:** Early Multibagger (`earlymb`)
 
 ### 1. Symptoms & Observed Behavior
@@ -356,10 +365,10 @@ NSE:MANORAMA    | Cons Defensive  | base_duration    | 2026-08-28 | 2026-09-11 |
 
 - **Status:** Resolved (2026-09-21)
 - **Component:**
-  - [`cmd/db.go`](file:///Users/raghavgarg/Projects/myGo/mycase/cmd/db.go) (Verified snapshot exists on disk, honest error exit codes, multi-strategy unified `db update`)
-  - [`pkg/stockpicker/run.go`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/stockpicker/run.go) & [`pkg/stockpicker/loader.go`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/stockpicker/loader.go) (Local air-gapped constituent mirror `data/cache/constituents/<index>.csv`, benchmark fetch 3-attempt backoff retry + DuckDB prices fallback)
-  - [`pkg/stockpicker/loader.go`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/stockpicker/loader.go) (Restored exponential backoff retries to `fetchHistoricalPricesWithFetcher`)
-  - [`scripts/daily_sync.sh`](file:///Users/raghavgarg/Projects/myGo/mycase/scripts/daily_sync.sh) (Consolidated Step 6 to `--method earlymb,multibagger`, removed redundant Step 7)
+  - `cmd/db.go` (Verified snapshot exists on disk, honest error exit codes, multi-strategy unified `db update`)
+  - `pkg/stockpicker/run.go` & `pkg/stockpicker/loader.go` (Local air-gapped constituent mirror `data/cache/constituents/<index>.csv`, benchmark fetch 3-attempt backoff retry + DuckDB prices fallback)
+  - `pkg/stockpicker/loader.go` (Restored exponential backoff retries to `fetchHistoricalPricesWithFetcher`)
+  - `scripts/daily_sync.sh` (Consolidated Step 6 to `--method earlymb,multibagger`, removed redundant Step 7)
 - **Strategy:** Early Multibagger (`earlymb`), Multibagger (`multibagger`), and Unified Database Update (`db update`)
 - **Reported In:** `scripts/daily_sync.sh` / `logs/pit_update.log`
 - **Execution Date:** 2026-09-17 21:12:07 -> 22:05:46 IST
@@ -497,10 +506,10 @@ Because `db update` only accepted a single `--method` flag, scoring `multibagger
 
 - **Status:** Resolved (2026-09-21)
 - **Component:**
-  - [`pkg/stockpicker/filters.go`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/stockpicker/filters.go) (`applyHardFilters` flags missing fundamental payload as fetch failure via `RecordFetchFailure`)
-  - [`pkg/stockpicker/run.go`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/stockpicker/run.go) (Propagates fetch failures to candidate `DataFetchFailed = true`)
-  - [`pkg/stockpicker/retry.go`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/stockpicker/retry.go) (Stage 2 self-healing enables retry pass on missing fundamentals and blocks prior-day fallback when target date specified)
-  - [`pkg/pithistory/analytics.go`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/pithistory/analytics.go) (Section 1 explicitly maps missing fundamentals to `Data Fetch Failed`, and `CheckDataIntegrity` counts missing fundamentals)
+  - `pkg/stockpicker/filters.go` (`applyHardFilters` flags missing fundamental payload as fetch failure via `RecordFetchFailure`)
+  - `pkg/stockpicker/run.go` (Propagates fetch failures to candidate `DataFetchFailed = true`)
+  - `pkg/stockpicker/retry.go` (Stage 2 self-healing enables retry pass on missing fundamentals and blocks prior-day fallback when target date specified)
+  - `pkg/pithistory/analytics.go` (Section 1 explicitly maps missing fundamentals to `Data Fetch Failed`, and `CheckDataIntegrity` counts missing fundamentals)
 - **Strategy:** Early Multibagger (`earlymb`) & All Strategies
 - **Reported In:** `mycase --index niftytotalmarket --method earlymb --analysis`
 - **Execution Date:** 2026-09-18
@@ -537,12 +546,12 @@ No data fetch failures found in snapshot niftytotalmarket_earlymb_2026-09-18.jso
 
 ### 2. Root Cause Analysis
 
-A forensic query into [`data/pit_snapshots/niftytotalmarket_earlymb_2026-09-18.json`](file:///Users/raghavgarg/Projects/myGo/mycase/data/pit_snapshots/niftytotalmarket_earlymb_2026-09-18.json) revealed **exactly 78 candidates** with:
+A forensic query into `data/pit_snapshots/niftytotalmarket_earlymb_2026-09-18.json` revealed **exactly 78 candidates** with:
 ```json
 "rejection_reason": "Missing fundamental data"
 ```
 
-During the 2026-09-18 EOD run, Yahoo Finance throttled, timed out, or reset connections on 78 out of 750 tickers during the fundamental fetch phase (`fetchFundamentals`). In [`pkg/stockpicker/filters.go:856-859`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/stockpicker/filters.go#L856-L859), when a ticker's fundamental payload was absent:
+During the 2026-09-18 EOD run, Yahoo Finance throttled, timed out, or reset connections on 78 out of 750 tickers during the fundamental fetch phase (`fetchFundamentals`). In `pkg/stockpicker/filters.go:856-859`, when a ticker's fundamental payload was absent:
 ```go
 for _, t := range activeKeys {
     f, ok := fundamentals[t]
@@ -622,7 +631,7 @@ Unify the detection vocabulary across all three sentries:
 ## Bug-010: Hardcoded 10-Run Lookback Cap in analytics.go:306 Truncates PIT Longitudinal Depth & Masks Historical Runs
 
 - **Status:** Resolved (2026-09-21)
-- **Component:** [`pkg/pithistory/analytics.go`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/pithistory/analytics.go) (`RunDeepAnalysis` & `RunPitAnalysisWithOptions`), [`cmd/pit.go`](file:///Users/raghavgarg/Projects/myGo/mycase/cmd/pit.go) (`--days` CLI flag parameterization)
+- **Component:** `pkg/pithistory/analytics.go` (`RunDeepAnalysis` & `RunPitAnalysisWithOptions`), `cmd/pit.go` (`--days` CLI flag parameterization)
 - **Strategy:** Early Multibagger (`earlymb`)
 - **Execution Evidence:** Verified in live codebase on 2026-09-21; `--days 60` analyzes full multi-month history across all 13 sections.
 
@@ -636,13 +645,13 @@ Total PIT Runs: 10 recorded runs (Latest As-Of: 2026-09-18)
 ```
 Even though daily runs have executed continuously since late August (generating 15–18+ distinct daily runs in `data/mycase.db`), the displayed history in the report header and longitudinal streak computations is hard-capped at exactly 10 runs. 
 
-Furthermore, [`docs/Feature_EMB.md §10`](file:///Users/raghavgarg/Projects/myGo/mycase/docs/Feature_EMB.md) had marked this task `p1a` as `:done, 2026-09-19`, creating an active documentation-vs-reality mismatch.
+Furthermore, `docs/Feature_EMB.md §10` had marked this task `p1a` as `:done, 2026-09-19`, creating an active documentation-vs-reality mismatch.
 
 ---
 
 ### 2. Root Cause Analysis
 
-In [`pkg/pithistory/analytics.go:306`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/pithistory/analytics.go#L306):
+In `pkg/pithistory/analytics.go:306`:
 ```go
 func (p *DB) RunDeepAnalysis(ctx context.Context, indexName, method string, marketOverride ...string) error {
 	indexName = NormalizeIndexName(indexName)
@@ -665,7 +674,7 @@ While `GetRunHistory` has logic defaulting non-positive limits to 30 (`if limit 
 ## Bug-011: Legacy Delivery Delta (Pillar 4) Empirical Calibration Numbers Retained Post-Disjoint Baseline Migration
 
 - **Status:** Open / Documentation Caveat Added (Pending Recalibration Run)
-- **Component:** [`docs/earlyMB.md §6.4`](file:///Users/raghavgarg/Projects/myGo/mycase/docs/earlyMB.md#L237), [`docs/Feature_EMB.md §3B`](file:///Users/raghavgarg/Projects/myGo/mycase/docs/Feature_EMB.md#L127)
+- **Component:** `docs/earlyMB.md §6.4`, `docs/Feature_EMB.md §3B`
 - **Strategy:** Early Multibagger (`earlymb`)
 
 ---
@@ -702,7 +711,7 @@ Importantly, **Component 1 of the Coiled Spring Index (Setup Quality Score)** is
 ## Bug-012: Hysteresis Phase 4 Selection Dead-Zone Leaves Portfolio Under-Allocated on Cooldown Disqualification
 
 - **Status:** Resolved (2026-09-22)
-- **Component:** [`pkg/stockpicker/scoring.go`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/stockpicker/scoring.go#L1155-L1176) (`ApplyHysteresisSelectionSmart`)
+- **Component:** `pkg/stockpicker/scoring.go` (`ApplyHysteresisSelectionSmart`)
 - **Strategy:** Multibagger / Standard / All strategies using Hysteresis Buffer (`--golden`, `--hysteresis-buffer`)
 - **Reported In:** `mycase pipeline --config config/pipeline.yaml --strategy multibagger --golden data/microsmall.csv`
 - **Execution Date:** 2026-09-22
@@ -729,7 +738,7 @@ The selection completed with only **19 stocks** instead of the configured 20:
 
 ### 2. Root Cause Analysis
 
-In [`pkg/stockpicker/scoring.go:1161`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/stockpicker/scoring.go#L1161), Phase 4 of `ApplyHysteresisSelectionSmart` (filling remaining slots with marginal new candidates) contained a rigid termination condition:
+In `pkg/stockpicker/scoring.go:1161`, Phase 4 of `ApplyHysteresisSelectionSmart` (filling remaining slots with marginal new candidates) contained a rigid termination condition:
 ```go
 for rankIdx, ticker := range sortedKeys {
     rank := rankIdx + 1
@@ -768,7 +777,7 @@ Because of `if rank > topN { break }`:
 ## Bug-013: Pseudo-Predictive Attribution Inversion: Same-Day Catalyst Surges Stamped as "DUAL HIT" in Daily Gainers (Section 10)
 
 - **Status:** Resolved (2026-09-23)
-- **Component:** [`pkg/pithistory/analytics.go`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/pithistory/analytics.go) (Section 10: `gainersQuery` & overlap evaluation)
+- **Component:** `pkg/pithistory/analytics.go` (Section 10: `gainersQuery` & overlap evaluation)
 - **Strategy:** Early Multibagger (`earlymb`)
 - **Reported In:** `mycase --index niftytotalmarket --method earlymb --analysis`
 - **Execution Date:** 2026-09-22
@@ -792,7 +801,7 @@ This gave the false impression that `earlymb` had surfaced a predictive pre-brea
 
 ### 2. Root Cause Analysis
 
-In [`pkg/pithistory/analytics.go:1111`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/pithistory/analytics.go#L1111):
+In `pkg/pithistory/analytics.go:1111`:
 ```go
 } else if hasScore && deliv >= 0.08 && rs >= 0.0 {
     overlapStr = "DUAL HIT"

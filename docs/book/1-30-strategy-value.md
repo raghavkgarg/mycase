@@ -1,8 +1,10 @@
-# Large-Cap Value Investment Strategy ("Finding Cheaper Stocks in Big Companies")
+# Value
 
-This document details the quantitative framework, dual-path sector filters, intrinsic valuation models, and relative scoring system implemented in the **Large-Cap Value Strategy**.
-
-The primary objective of this strategy is to systematically identify high-quality, market-leading large-cap companies (Nifty 50, Nifty 100, Nifty LargeMidcap 250) that are trading at **deep discounts to their intrinsic value, historical valuation bands, and sector peers**, without falling into structural **Value Traps**.
+The Large-Cap Value strategy systematically identifies high-quality, market-leading
+large-cap companies (Nifty 50, Nifty 100, Nifty LargeMidcap 250) trading at **deep
+discounts to their intrinsic value, historical valuation bands, and sector peers** —
+without falling into structural **value traps**. It combines dual-path sector filters,
+intrinsic valuation models, and a relative scoring system.
 
 ---
 

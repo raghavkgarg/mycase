@@ -114,6 +114,7 @@ CREATE TABLE selections (
     action          VARCHAR,           -- 'new', 'retained', 'removed'
     prev_rank       INTEGER,           -- rank in previous run (NULL if new)
     prev_weight     DOUBLE,            -- weight in previous run (NULL if new)
+    source          VARCHAR,           -- data provenance tag: 'schwab+edgar'/'schwab'/'edgar'/'yahoo' (Phase 10d)
     PRIMARY KEY (run_id, ticker)
 );
 ```
@@ -126,7 +127,7 @@ here (BIGINT epoch timestamps, DOUBLE money, composite PKs, no FK constraints):
 `realized_gains` (both derived — full-replace projections rebuilt from transactions on each
 import). These tables are **owned by `pkg/tax`** (its `Store` defines the DDL and access
 methods via a `*sql.DB` handle from `cache.Conn()`), keeping the dependency direction
-domain → cache. See `docs/04-architecture.md` D11 and `docs/18-runbook.md` §7b.
+domain → cache. See `docs/2-10-architecture.md` D11 and `docs/1-80-runbook.md` §7b.
 
 ---
 

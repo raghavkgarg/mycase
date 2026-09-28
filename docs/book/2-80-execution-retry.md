@@ -1,39 +1,42 @@
-# Order Execution Rate Limiting & Failure Recovery Architecture
+# Order Execution & Retry
 
-This document outlines the root cause analysis, architecture, implementation details, and operational commands for handling order placement errors, API rate-limiting, split logging, and automated retry management in `mycase`.
+Order placement is rate-limited and failure-recovering: it paces requests under the
+broker's per-second ceiling, retries transient failures, splits success/failure logs, and
+can resume a partially-failed basket without re-placing filled orders. This chapter covers
+that architecture and its operational commands (`pkg/executor`, `cmd/retry`).
 
 ---
 
-## 1. The Incident & Error Analysis
+## 1. The rate-limit constraint
 
-### What Error Occurred?
-During a live basket execution of 18 orders via Zerodha Kite, 10 orders succeeded and 8 orders failed with the error:
+Zerodha Kite Connect enforces a strict **10 order-placement requests per second** ceiling
+(`PlaceOrder` / `PlaceGTT`); Schwab has its own order limits. An un-throttled placement loop
+that fires orders in tight succession (~1ms apart) exhausts the per-second budget after the
+tenth order, and the broker rejects the remainder of the basket with:
+
 ```text
-Error placing order for JAMNAAUTO: Maximum allowed order requests per second exceeded.
-Error placing order for METROPOLIS: Maximum allowed order requests per second exceeded.
-...
+Maximum allowed order requests per second exceeded.
 ```
 
-### Why Did It Happen?
-1. **Zerodha Rate Limits**: Zerodha Kite Connect enforces a strict limit of **10 order placement requests per second** (`PlaceOrder` / `PlaceGTT`).
-2. **Un-throttled Loop Execution**: The initial order execution loop placed orders in tight succession without delay (~1ms between calls). After the 10th order was placed within the same second, Zerodha rejected all subsequent order requests (orders 11–18).
+The execution layer exists to place a full basket without ever tripping that ceiling, and
+to recover cleanly when an individual order still fails.
 
 ---
 
-## 2. What We Implemented
+## 2. The execution & recovery architecture
 
-To solve this issue and ensure zero order loss, we implemented a 5-layer execution & recovery architecture:
+A 5-layer design ensures zero order loss:
 
-1. **Rate Limiting Throttle**: Inserted an explicit `200ms` delay (`time.Sleep(200 * time.Millisecond)`) between order placements, capping execution speed at ~5 orders/second (well below Zerodha's 10 req/s limit).
-2. **In-Flight Auto-Retry**: Built-in automatic retry (up to 3 attempts with 500ms backoff) for transient API errors before declaring an order as failed.
+1. **Rate Limiting Throttle**: An explicit `200ms` delay (`time.Sleep(200 * time.Millisecond)`) between order placements caps execution at ~5 orders/second, well below Zerodha's 10 req/s limit.
+2. **In-Flight Auto-Retry**: Automatic retry (up to 3 attempts with 500ms backoff) for transient API errors before an order is declared failed.
 3. **Split Logging (`execution/<market>/orders/` vs `execution/<market>/errors/`)**:
-   - **`execution/<market>/orders/Order_<timestamp>.txt`**: Contains ONLY successfully placed orders (Zerodha/Schwab Order ID, filled price, timestamp).
-   - **`execution/<market>/errors/Order_<timestamp>.txt`**: Contains human-readable details of failed orders.
-   - **`execution/<market>/errors/Order_<timestamp>.json`**: Temporary machine-readable JSON payload storing unfulfilled order specifications.
-4. **Fresh Quote Refresh on Retry**: When retrying orders, `mycase` fetches real-time market prices (`yfinance` or broker API) to avoid stale limit price slippage.
+   - **`execution/<market>/orders/Order_<timestamp>.txt`**: ONLY successfully placed orders (Zerodha/Schwab Order ID, filled price, timestamp).
+   - **`execution/<market>/errors/Order_<timestamp>.txt`**: human-readable details of failed orders.
+   - **`execution/<market>/errors/Order_<timestamp>.json`**: machine-readable JSON payload storing unfulfilled order specifications.
+4. **Fresh Quote Refresh on Retry**: Retrying orders fetches real-time market prices (`yfinance` or broker API) to avoid stale limit-price slippage.
 5. **Automated Cleanup & CLI Shortcut**:
-   - Running `./dist/mycase retry --live` automatically targets the latest JSON retry payload in `execution/<market>/errors/` (with fallback to legacy paths).
-   - Upon 100% successful placement of remaining orders, `execution/<market>/errors/*.json` is automatically deleted, and success details are logged to `execution/<market>/orders/Order_retry_<timestamp>.txt`.
+   - `mycase retry --live` automatically targets the latest JSON retry payload in `execution/<market>/errors/` (with fallback to legacy paths).
+   - On 100% successful placement of the remaining orders, `execution/<market>/errors/*.json` is deleted and success details are logged to `execution/<market>/orders/Order_retry_<timestamp>.txt`.
 
 ---
 

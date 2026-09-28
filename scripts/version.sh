@@ -1,7 +1,7 @@
 #!/bin/sh
 # Emit the build version string for LDFLAGS injection (main.Version).
 #
-# Project versioning convention (see docs/18-runbook.md "Versioning"):
+# Project versioning convention (see docs/book/1-80-runbook.md "Versioning"):
 #   1. git describe --tags --dirty   → once annotated tags exist:
 #        v1.2.0            (exactly on a tag)
 #        v1.2.0-4-gabc1234 (4 commits past v1.2.0)

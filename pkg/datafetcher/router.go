@@ -21,6 +21,41 @@ type fundamentalsSource interface {
 	FetchFundamentals(ctx context.Context, tickers []string) (map[string]yfinance.Fundamentals, error)
 }
 
+// usPrimaryWithYahooFallback runs the standard US data path as one explicit
+// ordered chain: try the primary (Schwab) first, and on any error log a single
+// structured fallback event and retry the same tickers via Yahoo. If Yahoo also
+// fails, the original primary error is returned (it is the more actionable one —
+// Yahoo is the backstop). When no Schwab client is configured, Yahoo is the
+// primary. This is the one place the "Schwab → Yahoo" degradation is expressed,
+// so every batch capability (quotes, and the Schwab leg of fundamentals) reports
+// it identically. `op` names the capability for the log event
+// (e.g. "quotes", "fundamentals"); `primary` is nil when Schwab is unconfigured.
+func usPrimaryWithYahooFallback[V any](
+	ctx context.Context,
+	op string,
+	tickers []string,
+	primary func(context.Context, []string) (map[string]V, error),
+	yahoo func(context.Context, []string) (map[string]V, error),
+) (map[string]V, error) {
+	if primary == nil {
+		slog.DebugContext(ctx, "datafetcher."+op+"_served",
+			"source", "yahoo", "reason", "no_schwab_client", "count", len(tickers))
+		return yahoo(ctx, tickers)
+	}
+	got, err := primary(ctx, tickers)
+	if err != nil {
+		slog.WarnContext(ctx, "datafetcher."+op+"_schwab_fallback",
+			"source", "yahoo", "reason", "schwab_error", "count", len(tickers), "err", err)
+		yfGot, yfErr := yahoo(ctx, tickers)
+		if yfErr != nil {
+			return nil, err // original Schwab error — the backstop also failed
+		}
+		return yfGot, nil
+	}
+	slog.DebugContext(ctx, "datafetcher."+op+"_served", "source", "schwab", "count", len(tickers))
+	return got, nil
+}
+
 // Router dispatches market data requests to the appropriate provider
 // based on ticker prefix. US-prefixed tickers go to Schwab (if client
 // is available); everything else goes through Yahoo Finance.
@@ -54,6 +89,13 @@ func (r *Router) WithEDGAR(src fundamentalsSource) *Router {
 
 // FetchHistoricalDataWithTimestamps fetches daily OHLCV for a ticker over a range.
 // Routes US tickers to Schwab, others to Yahoo Finance.
+//
+// The single-ticker historical methods intentionally do NOT fall back to Yahoo on
+// a Schwab error (unlike the batch quotes/fundamentals paths): a historical price
+// series silently sourced from a different provider mid-run would splice two
+// price histories with different adjustment conventions, which is worse than a
+// clean failure the caller can retry. The batch paths fall back because a missing
+// quote/fundamental degrades gracefully; a spliced price series does not.
 func (r *Router) FetchHistoricalDataWithTimestamps(ctx context.Context, ticker string, rangeStr string) (*yfinance.HistoricalData, error) {
 	if schwab.IsUSTicker(ticker) && r.schwabClient != nil {
 		symbol := schwab.StripUSPrefix(ticker)
@@ -109,35 +151,17 @@ func (r *Router) FetchQuotes(ctx context.Context, tickers []string) (map[string]
 		maps.Copy(prices, yfPrices)
 	}
 
-	// Fetch US tickers from Schwab (or Yahoo fallback)
+	// Fetch US tickers from Schwab (or Yahoo fallback) via the shared ordered chain.
 	if len(usTickers) > 0 {
+		var primary func(context.Context, []string) (map[string]float64, error)
 		if r.schwabClient != nil {
-			schwabPrices, err := r.schwabClient.FetchQuotes(ctx, usTickers)
-			if err != nil {
-				// Fallback to Yahoo for US tickers
-				slog.WarnContext(ctx, "datafetcher.quotes_schwab_fallback",
-					"source", "yahoo", "reason", "schwab_error",
-					"count", len(usTickers), "err", err)
-				yfPrices, yfErr := yfinance.FetchQuotes(ctx, usTickers)
-				if yfErr != nil {
-					return nil, err // return original Schwab error
-				}
-				maps.Copy(prices, yfPrices)
-			} else {
-				slog.DebugContext(ctx, "datafetcher.quotes_served",
-					"source", "schwab", "count", len(usTickers))
-				maps.Copy(prices, schwabPrices)
-			}
-		} else {
-			// No Schwab client — use Yahoo for US tickers too
-			slog.DebugContext(ctx, "datafetcher.quotes_served",
-				"source", "yahoo", "reason", "no_schwab_client", "count", len(usTickers))
-			yfPrices, err := yfinance.FetchQuotes(ctx, usTickers)
-			if err != nil {
-				return nil, err
-			}
-			maps.Copy(prices, yfPrices)
+			primary = r.schwabClient.FetchQuotes
 		}
+		usPrices, err := usPrimaryWithYahooFallback(ctx, "quotes", usTickers, primary, yfinance.FetchQuotes)
+		if err != nil {
+			return nil, err
+		}
+		maps.Copy(prices, usPrices)
 	}
 
 	return prices, nil
@@ -185,33 +209,27 @@ func (r *Router) FetchFundamentals(ctx context.Context, tickers []string) (map[s
 		}
 
 		if len(toFetch) > 0 {
+			// One ordered chain (Schwab → Yahoo) shared with quotes. On the Schwab
+			// success path we additionally overlay EDGAR statement facts and cache
+			// the merged blob; that enrichment is folded into the primary closure so
+			// the fallback logic stays a single expression. EDGAR failure is
+			// non-fatal inside overlayEDGARAndCache (keeps Schwab values).
+			var primary func(context.Context, []string) (map[string]yfinance.Fundamentals, error)
 			if r.schwabClient != nil {
-				schwabFund, err := r.schwabClient.FetchFundamentals(ctx, toFetch)
-				if err != nil {
-					// Fallback to Yahoo
-					slog.WarnContext(ctx, "datafetcher.fundamentals_schwab_fallback",
-						"source", "yahoo", "reason", "schwab_error",
-						"count", len(toFetch), "err", err)
-					yfFund, yfErr := yfinance.FetchFundamentals(ctx, toFetch)
-					if yfErr != nil {
+				primary = func(ctx context.Context, ts []string) (map[string]yfinance.Fundamentals, error) {
+					schwabFund, err := r.schwabClient.FetchFundamentals(ctx, ts)
+					if err != nil {
 						return nil, err
 					}
-					maps.Copy(result, yfFund)
-				} else {
-					slog.DebugContext(ctx, "datafetcher.fundamentals_served",
-						"source", "schwab", "count", len(toFetch))
-					r.overlayEDGARAndCache(ctx, toFetch, schwabFund)
-					maps.Copy(result, schwabFund)
+					r.overlayEDGARAndCache(ctx, ts, schwabFund)
+					return schwabFund, nil
 				}
-			} else {
-				slog.DebugContext(ctx, "datafetcher.fundamentals_served",
-					"source", "yahoo", "reason", "no_schwab_client", "count", len(toFetch))
-				yfFund, err := yfinance.FetchFundamentals(ctx, toFetch)
-				if err != nil {
-					return nil, err
-				}
-				maps.Copy(result, yfFund)
 			}
+			usFund, err := usPrimaryWithYahooFallback(ctx, "fundamentals", toFetch, primary, yfinance.FetchFundamentals)
+			if err != nil {
+				return nil, err
+			}
+			maps.Copy(result, usFund)
 		}
 	}
 

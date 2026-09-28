@@ -1,4 +1,4 @@
-# Mycase — Product Vision
+# Vision
 
 ---
 
@@ -40,7 +40,7 @@ All of this runs as a single binary with no external services, no subscriptions,
 
 ### Near-term: US Market Access (Schwab Integration)
 
-The system now trades US equity via the Schwab API (OAuth2 auth, market data, order placement), addressing the concentrated geographic and currency risk of an India-only portfolio. See `docs/07-datasources.md` and `docs/04-architecture.md`.
+The system now trades US equity via the Schwab API (OAuth2 auth, market data, order placement), addressing the concentrated geographic and currency risk of an India-only portfolio. See `docs/2-20-data-sources.md` and `docs/2-10-architecture.md`.
 
 ### Medium-term: Multi-Broker Support
 

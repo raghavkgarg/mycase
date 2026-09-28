@@ -1,8 +1,10 @@
-# Mycase — Data Sources Reference
+# Data Sources Reference
 
-**Scope**: US equity data. The India/Yahoo paths belong to the India-Path (the earlier multi-market design).
+Market data is sourced per data type from the most authoritative provider that can supply
+it — the data model, the real API shapes, provenance, and the gap analysis. The design
+principle behind it is recorded as decision **D15** in `docs/2-10-architecture.md`.
 
-This chapter is the reference for how market data is sourced: the data model, the real API shapes, provenance, and the gap analysis. The design principle behind it — *source each data type from the most authoritative provider that can supply it* — is recorded as decision **D15** in `docs/04-architecture.md`.
+> **Scope**: US-equity data sourcing. The Yahoo/NSE paths that serve the Indian-equity universe are covered in [Screener / nselib](2-50-screener-nselib.md).
 
 ---
 
@@ -21,7 +23,7 @@ This chapter is the reference for how market data is sourced: the data model, th
 
 ## 1. Why This Doc Exists
 
-Two questions drove this document:
+Two questions frame the data-sourcing design:
 
 1. **How much do we still depend on Yahoo Finance, and for data we could get from better sources?**
 2. **Where does this data actually come from — exchanges, SEC, Treasury? Is Yahoo just the only *free* source?**
@@ -38,7 +40,7 @@ The architecture **sources each data type from the most authoritative provider t
 
 ## 2. The Data Model We Populate
 
-All sources normalize into two leaf DTOs in `pkg/marketdata/marketdata.go` (zero-import leaf; see `docs/04-architecture.md` layering). These are the shapes every provider must satisfy.
+All sources normalize into two leaf DTOs in `pkg/marketdata/marketdata.go` (zero-import leaf; see `docs/2-10-architecture.md` layering). These are the shapes every provider must satisfy.
 
 ### `HistoricalData` (daily OHLCV series)
 
@@ -58,7 +60,7 @@ The struct has ~40 fields. The ones the **US quality-momentum path** (`pkg/stock
 | `MarketCap` | hard filter, FCF yield, shareholder yield | |
 | `FreeCashflow` | FCF-yield factor, earnings-quality proxy, FCF filter | |
 | `AverageVolume` | ADV liquidity filter | |
-| `RegularPrice` | ADV filter (`vol × price`) | |
+| `RegularPrice` | ADV filter (`vol × price`) | If the provider omits it (Yahoo often returns 0), it is backfilled from the latest historical close in `RunWithResult` before filtering. The ADV gate runs only when `RegularPrice > 0`; when price is genuinely unknown the gate is **skipped**, never computed from raw share count. |
 | `DividendYield` | shareholder-yield factor | |
 | `ROE` | ROIC fallback, driver string | |
 | `ReturnOnAssets` | ROIC fallback | |
@@ -222,15 +224,18 @@ These constructed no Router and called `yfinance.*` directly, so US holdings got
 
 `^GSPC` used to come from Yahoo everywhere. `Router.GetBenchmarkSymbol` now returns `US:SPY` (Schwab-fetchable) for US portfolios when a Schwab client is present, and `Router.NormalizeBenchmarkSymbol` upgrades a configured `^GSPC`/`^SPX` to `US:SPY` — so the benchmark routes through Schwab with `^GSPC`/Yahoo as fallback. This realizes the Phase 5 "honest `US:SPY` baseline" decision.
 
-### Problem 4 — Provenance in the cache 🟧 GROUNDWORK DONE (Phase 10b / R17)
+### Problem 4 — Provenance in the cache ✅ SHIPPED (Phase 10b groundwork → Phase 10d surfacing)
 
-The DuckDB cache now carries a `source VARCHAR` column on both `prices` and `fundamentals` (idempotent `ADD COLUMN IF NOT EXISTS` migration), and the Router emits `slog` "which source served" logging on its Schwab→Yahoo fallback branches. The yfinance write path tags rows `"yahoo"`; Schwab/EDGAR-side tagging and per-source freshness arrive with the Phase 10c merger (Schwab fundamentals don't flow through these cache methods yet).
+The DuckDB cache carries a `source VARCHAR` column on both `prices` and `fundamentals` (idempotent `ADD COLUMN IF NOT EXISTS` migration), and the Router emits `slog` "which source served" logging on its Schwab→Yahoo fallback branches. Provenance is now recorded *and surfaced* end to end (Phase 10d):
+
+- **Per-record** — `marketdata.Fundamentals.Source` carries the merge tag (`schwab+edgar` / `schwab` / `edgar` / `yahoo`), set by the merger (US path) or the Yahoo write path. It rides through the cache blob, is persisted on the `selections` table (new `source` column), and renders as a **Source column** in `mycase pipeline show` and the selection-reasons report.
+- **Per-field** — `marketdata.Fundamentals.FieldSources` records which fields EDGAR authoritatively overlaid (FCF, OCF, net income) **with the originating filing** (e.g. `edgar:10-K FY2025`); the EDGAR concept mapper captures each value's `Form`/`FP`/`FY`, and the selection-reasons report annotates each pick with `… | [source: EDGAR FCF (10-K FY2025), OCF (10-K FY2025)]`.
 
 ---
 
 ## 7. Architecture Direction & Rollout
 
-> This section keeps the durable design shapes of the data-sourcing architecture. Design decision **D15** in `docs/04-architecture.md` records the rationale.
+> This section keeps the durable design shapes of the data-sourcing architecture. Design decision **D15** in `docs/2-10-architecture.md` records the rationale.
 
 ### Principle: source per data type, not per market
 
@@ -267,6 +272,17 @@ type SectorSource interface {
 - new `edgar.Client` implements `FundamentalsSource` (statement fields).
 - `csvloader`/constituents implements `SectorSource`.
 
+> **Shipped (Phase 10d), with one deviation.** `stockpicker.DataFetcher` is now a
+> *composed* interface over `PriceSource` (`FetchHistoricalDataWithTimestamps` +
+> `FetchHistoricalPrices`) and `FundamentalsSource` (`FetchFundamentals`); `*datafetcher.Router`
+> satisfies all of them. `SectorSource` was **not** added as a router capability: in
+> practice sector never flows through the router — it is backfilled from the constituents
+> CSV by `stockpicker.InjectSectors` (Phase 10a), a better GICS source than any provider
+> endpoint — so a router `SectorSource` would be dead surface. The ordered Schwab→Yahoo
+> fallback is consolidated into one generic `usPrimaryWithYahooFallback` helper used by
+> both quotes and the fundamentals Schwab-leg; single-ticker historical keeps a deliberate
+> no-fallback policy (documented in `router.go`).
+
 ### Composite fundamentals (merge, don't just fall back)
 
 The key insight from [§5](#5-capability-matrix--gap-analysis): no single source is complete for US fundamentals. A `FundamentalsMerger` (in `pkg/datafetcher`, composing sources with no upward imports) applies a per-field source-of-record precedence:
@@ -299,7 +315,7 @@ EDGAR facts being quarterly-stable means each company's `companyfacts.json` is f
 | Sector from CSV; derive `NetIncome`/`RegularPrice`; delete dead `GetCache()` | roadmap **Phase 10a** |
 | Wire the 7 bypass paths through the Router; `US:SPY` benchmark; `source` column + slog | roadmap **Phase 10b** / refactor **R17** |
 | `pkg/edgar` client + XBRL mapper + `FundamentalsMerger` | roadmap **Phase 10c** ✅ done |
-| Capability interfaces + provenance surfaced in reports | roadmap **Phase 10d** |
+| Capability interfaces + provenance surfaced in reports | roadmap **Phase 10d** ✅ done (provenance + PriceSource/FundamentalsSource split + consolidated fallback) |
 
 ---
 

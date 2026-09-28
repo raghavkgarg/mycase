@@ -1,4 +1,4 @@
-# Mycase — Runbook
+# Runbook
 
 Practical usage guide: common workflows, every command with realistic examples, and tips for the non-obvious parts.
 
@@ -145,7 +145,7 @@ The App Key/Secret prove **which application** is asking. Your brokerage login p
    `https://127.0.0.1:8443/callback` and wait until the app status is
    **"Ready For Use"** (a pending app fails with `invalid_client`).
 2. Copy the App Key and App Secret into `config/schwab.json`
-   (see `config/reference/schwab.json.example`):
+   (see `config/reference/us/schwab.json.example`):
    ```json
    {
      "client_id": "your_schwab_app_key",
@@ -380,12 +380,24 @@ The daemon checks drift at 15:45 IST daily (post-market close) and sends alerts 
 ### One-shot check (no loop)
 
 ```bash
-# Check drift against mock holdings
-mycase daemon check --file data/microsmall.csv
+# Check drift against mock holdings (uses the active market's default portfolio)
+mycase daemon check
 
-# Check drift against live Zerodha holdings
-mycase daemon check --live --file data/microsmall.csv
+# Check drift against live holdings
+mycase daemon check --live
+
+# Override the portfolio the drift compares against
+mycase daemon check --live --file data/us_portfolio.csv
 ```
+
+**Which portfolio does drift compare against?** Resolution precedence:
+`--file` flag > `alerts.portfolio_file` in `config/pipeline.yaml` > the active market's
+`default_golden` in `config/defaults.yaml`. The `default_golden` fallback keys off
+`active_market`, so a US run (`active_market: us`) compares against `data/us_portfolio.csv`
+and an India run against `data/microsmall.csv` — automatically, without a flag. This is what
+keeps drift market-aware: a US run must never fall through to the India NSE basket (which
+produces a meaningless sentinel `DriftIndex = 0.5` because no `US:*` holding matches an
+`NSE:*` basket key).
 
 ### Install as system service
 

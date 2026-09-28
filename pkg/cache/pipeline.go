@@ -32,6 +32,7 @@ type Proposal struct {
 type Selection struct {
 	Ticker      string
 	Sector      string
+	Source      string // data provenance tag ("schwab+edgar"/"schwab"/"edgar"/"yahoo"); empty if unknown
 	Action      string // "new", "retained", "removed"
 	Weight      float64
 	Score       float64
@@ -248,12 +249,16 @@ func (c *Cache) InsertSelections(ctx context.Context, runID string, selections [
 		if s.PrevWeight != 0 {
 			prevWeight = sql.NullFloat64{Float64: s.PrevWeight, Valid: true}
 		}
+		var source any
+		if s.Source != "" {
+			source = s.Source
+		}
 
 		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO selections (run_id, ticker, weight, score, rank, sector,
 				ttm_growth, revenue_cagr, dso_delta, rsi, momentum_1y, fcf_yield, roic,
-				action, prev_rank, prev_weight)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+				action, prev_rank, prev_weight, source)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			ON CONFLICT (run_id, ticker) DO UPDATE SET
 				weight = EXCLUDED.weight, score = EXCLUDED.score, rank = EXCLUDED.rank,
 				sector = EXCLUDED.sector,
@@ -261,10 +266,11 @@ func (c *Cache) InsertSelections(ctx context.Context, runID string, selections [
 				dso_delta = EXCLUDED.dso_delta, rsi = EXCLUDED.rsi,
 				momentum_1y = EXCLUDED.momentum_1y, fcf_yield = EXCLUDED.fcf_yield,
 				roic = EXCLUDED.roic, action = EXCLUDED.action,
-				prev_rank = EXCLUDED.prev_rank, prev_weight = EXCLUDED.prev_weight`,
+				prev_rank = EXCLUDED.prev_rank, prev_weight = EXCLUDED.prev_weight,
+				source = EXCLUDED.source`,
 			runID, s.Ticker, s.Weight, s.Score, s.Rank, s.Sector,
 			s.TTMGrowth, s.RevenueCagr, s.DSODelta, s.RSI, s.Momentum1Y, s.FCFYield, s.ROIC,
-			s.Action, prevRank, prevWeight,
+			s.Action, prevRank, prevWeight, source,
 		); err != nil {
 			return err
 		}
@@ -277,7 +283,7 @@ func (c *Cache) GetSelections(ctx context.Context, runID string) ([]Selection, e
 	rows, err := c.db.QueryContext(ctx, `
 		SELECT ticker, weight, score, rank, sector,
 			ttm_growth, revenue_cagr, dso_delta, rsi, momentum_1y, fcf_yield, roic,
-			action, prev_rank, prev_weight
+			action, prev_rank, prev_weight, source
 		FROM selections
 		WHERE run_id = ?
 		ORDER BY rank ASC`,
@@ -293,11 +299,11 @@ func (c *Cache) GetSelections(ctx context.Context, runID string) ([]Selection, e
 		var s Selection
 		var score, ttm, rev, dso, rsi, mom, fcf, roic, prevW sql.NullFloat64
 		var rank, prevR sql.NullInt64
-		var action, sector sql.NullString
+		var action, sector, source sql.NullString
 		if err := rows.Scan(
 			&s.Ticker, &s.Weight, &score, &rank, &sector,
 			&ttm, &rev, &dso, &rsi, &mom, &fcf, &roic,
-			&action, &prevR, &prevW,
+			&action, &prevR, &prevW, &source,
 		); err != nil {
 			return nil, err
 		}
@@ -333,6 +339,9 @@ func (c *Cache) GetSelections(ctx context.Context, runID string) ([]Selection, e
 		}
 		if action.Valid {
 			s.Action = action.String
+		}
+		if source.Valid {
+			s.Source = source.String
 		}
 		if prevR.Valid {
 			s.PrevRank = int(prevR.Int64)

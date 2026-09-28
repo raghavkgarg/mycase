@@ -271,8 +271,8 @@ func (s *Scheduler) warnIfEmptyCalendar(ctx context.Context, rep *RunReport) {
 	}
 	slog.WarnContext(ctx, "scheduler.empty_holiday_calendar",
 		"impact", "trading-day gating is WEEKEND-ONLY (holidays not skipped)",
-		"fix", "seed the holidays table (duckdb data/mycase.db < scripts/holiday.sql) — see docs/18-runbook.md")
-	rep.warn("holiday calendar is EMPTY — gating is weekend-only; seed the holidays table (see docs/18-runbook.md)")
+		"fix", "seed the holidays table (duckdb data/mycase.db < scripts/holiday.sql) — see docs/book/1-80-runbook.md")
+	rep.warn("holiday calendar is EMPTY — gating is weekend-only; seed the holidays table (see docs/book/1-80-runbook.md)")
 }
 
 // flushReport appends the maintenance-log block for a completed pass, unless

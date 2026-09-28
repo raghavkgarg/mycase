@@ -1,13 +1,15 @@
-# Mycase — Roadmap
+# Roadmap
+
+*The canonical status-and-plan document — Appendix A, consulted rather than read
+front-to-back.*
 
 **Goal**: An automated US equity system that delivers slight but consistent outperformance over the S&P 500 while eliminating emotional decision-making and manual busy work.
 
-**Updated**: September 2026
-
-**Target investor**: US-based individual investor using Schwab. The system supports two
-**market paths** — the **US-Path** (Schwab + SEC EDGAR, the active strategy focus) and the
-**India-Path** (Zerodha + NSE/Yahoo, from the earlier multi-market design). The
-market-parameterized design (`marketcal`, `pkg/eod`, the strategy engine) runs either path.
+**Target investor**: an individual investor managing their own portfolio. The system is
+market-parameterized (`marketcal`, `pkg/eod`, the strategy engine) and runs across
+investment universes — **US equities** (Schwab + SEC EDGAR) and **Indian equities** (Zerodha
++ NSE/Yahoo) — with strategies tuned per universe rather than one path ranked above the
+other.
 
 ---
 
@@ -81,7 +83,7 @@ Automation eliminates all four. The system runs quarterly, follows its rules, an
 ### Shipped and in production
 
 Each capability below is live; the **Chapter** column points to where it's documented in
-the guide (see `docs/README.md`).
+the guide (see the [preface](preface.md)).
 
 | Capability | Chapter |
 |-----------|---------|
@@ -100,7 +102,7 @@ the guide (see `docs/README.md`).
 | Structured logging + raw-response capture/triage | Ch. 24 Logging & Observability |
 | CLI rendering layer (`pkg/render`) | Ch. 6 Rendering |
 | Hysteresis / anti-churn cooldown; market-aware EOD settlement; standardized rate limiting; home-relative config resolution | Ch. 2, Ch. 4 |
-| **India-Path:** Multibagger, Early Multibagger, Value, MFS, Zerodha execution, India cost model, Screener/nselib, Themes | Module D, Module F |
+| **Indian-equity strategies & infra:** Multibagger, Early Multibagger, Value, MFS, Zerodha execution, India cost model, Screener/nselib, Themes | Ch. 12–14, 16, 17, 22 |
 
 ### Specced but not built
 
@@ -114,7 +116,7 @@ the guide (see `docs/README.md`).
 
 ## 3. Architecture Vision
 
-The system is a 6-layer responsibility stack (market data → strategy → portfolio construction → execution & tax → autopilot → audit & attribution), US-only via Schwab. For the system design — conceptual layers, the concrete `cmd/pkg/` package breakdown, data flow, ticker routing (`US:`→Schwab, else→Yahoo), and design decisions — see **`docs/04-architecture.md`** §2 (Inputs), §4 (System Design), and §11 (Design Decisions). This roadmap covers only *what* is being built and *when*.
+The system is a 6-layer responsibility stack (market data → strategy → portfolio construction → execution & tax → autopilot → audit & attribution), US-only via Schwab. For the system design — conceptual layers, the concrete `cmd/pkg/` package breakdown, data flow, ticker routing (`US:`→Schwab, else→Yahoo), and design decisions — see **`docs/2-10-architecture.md`** §2 (Inputs), §4 (System Design), and §11 (Design Decisions). This roadmap covers only *what* is being built and *when*.
 
 ---
 
@@ -122,10 +124,10 @@ The system is a 6-layer responsibility stack (market data → strategy → portf
 
 Completed and dropped phases are not narrated here — shipped work is summarized in §2 with
 chapter pointers, and its history lives in git. Design detail for shipped subsystems lives
-in `docs/04-architecture.md` (design decisions) and `docs/10-duckdb-migration.md` (storage).
+in `docs/2-10-architecture.md` (design decisions) and `docs/2-60-storage.md` (storage).
 Only active and planned work remains below.
 
-### Phase 10 — Data Source Resilience  *(shipped; Phase 10d optional, open)*
+### Phase 10 — Data Source Resilience  *(shipped)*
 
 **Goal**: source each data type from the most authoritative provider that can supply it,
 with deterministic logged fallback, and record provenance. This is **shipped** — US data
@@ -136,10 +138,37 @@ provenance column. All three API clients (Schwab, EDGAR, Yahoo) are cache-first 
 by a shared rate limiter. See **Ch. 7 Data Sources**, **Ch. 8–9 EDGAR**, and **Ch. 10
 Storage** for how it works.
 
-**Open — Phase 10d (optional):** split `DataFetcher` into capability interfaces
-(`PriceSource`, `FundamentalsSource`, `SectorSource`), formalize the ordered fallback
-chain, and surface provenance in `pipeline show`/reports (e.g. "FCF: $2.1B [source: EDGAR
-10-K 2025-Q4]"). Depends on nothing further; deferred for lack of pressure.
+**Phase 10d (shipped):**
+
+- **Provenance surfacing — shipped.** Data provenance now flows end to end from the
+  fetch/merge layer to the audit surfaces, at two granularities:
+  - *Per-record* — `marketdata.Fundamentals` carries a `Source` tag
+    (`schwab+edgar` / `schwab` / `edgar` / `yahoo`) set by the merger (US Schwab/EDGAR
+    path) or the Yahoo path. It rides through the DuckDB cache blob, is persisted on the
+    `selections` table (new `source` column + migration), and renders as a **Source
+    column** in `mycase pipeline show` and in the selection-reasons report.
+  - *Per-field* — `marketdata.Fundamentals.FieldSources` records which specific fields
+    EDGAR authoritatively overlaid onto the Schwab base (FCF, operating cash flow, net
+    income), **with the originating filing** — e.g. `edgar:10-K FY2025`. The EDGAR concept
+    mapper captures each value's `Form`/`FP`/`FY`; the selection-reasons report annotates
+    each pick with a compact marker, e.g. `… | [source: EDGAR FCF (10-K FY2025), OCF (10-K
+    FY2025)]`. Populated only on the merged US path.
+
+- **Interface split + fallback chain — shipped.** `stockpicker.DataFetcher` is now a
+  *composed* interface over two capability interfaces — `PriceSource` (historical
+  series) and `FundamentalsSource` (batch fundamentals) — so a caller or test stub can
+  depend on only what it uses; a `*datafetcher.Router` satisfies all three and the
+  existing compile-time assert is unchanged. `SectorSource` is deliberately *not* a
+  router capability: sector is backfilled from the constituents CSV (`InjectSectors`,
+  Phase 10a), a better GICS source than any provider endpoint. The Router's previously
+  ad-hoc per-method fallback is consolidated into one generic ordered chain
+  (`usPrimaryWithYahooFallback`): try Schwab, on error log a single structured event and
+  retry via Yahoo, returning the original Schwab error if Yahoo also fails; batch quotes
+  and the Schwab leg of fundamentals both flow through it identically (fundamentals keeps
+  its EDGAR overlay on the success path). The single-ticker historical methods keep a
+  deliberate no-fallback policy (a price series silently spliced from a second provider
+  mid-run is worse than a clean, retryable failure) — now documented in code.
+
 
 ---
 
@@ -435,11 +464,11 @@ report-write failure is logged-and-swallowed — it never fails the run.
 
 | Phase | Target | Dependency | Core value delivered | Status |
 |-------|--------|------------|---------------------|--------|
-| 10. Data Source Resilience | Q4 2026 | Schwab API | Authoritative US data (SEC EDGAR), Schwab everywhere, provenance | 🟩 shipped; 10d optional |
+| 10. Data Source Resilience | Q4 2026 | Schwab API | Authoritative US data (SEC EDGAR), Schwab everywhere, provenance | 🟩 shipped (incl. 10d: provenance + capability-interface split) |
 | 11. Data & observability hygiene | Q4 2026 | none | Raw-response capture/triage, market-aware settlement/formatting, mapping-bug fixes | 🟩 shipped; R-store-6/7 + flatten open |
 | 12. Autonomous Scheduler | Q1 2027 | `marketcal` holiday calendar | One Go-native orchestrator for all three cadences (EOD / drift / rebalance); investor-in-the-loop preserved | 🟩 shipped |
 | 6. Options Overlay | H2 2027 | 6mo live data | Income optimization | ⬜ |
-| Docs restructure — Pass 2 | — | none | Rename doc files to chapter titles + migrate `docs/NN-*.md` references | ⬜ (see Appendix C) |
+| Docs restructure — Pass 2 | — | none | Rename doc files to chapter titles + migrate `docs/NN-*.md` references | 🟩 shipped |
 
 ---
 
@@ -607,35 +636,53 @@ This is fragile: wrong column deleted, accidental formatting, no context while e
 
 Data-source resilience (Phase 10) is higher priority — it improves the correctness of inputs the strategy depends on; the UI doesn't. The CSV workflow is ugly but works for quarterly rebalance (4×/year). Defer until:
 - The system is stable enough that UX is the bottleneck, not the strategy
-- The golden copy can move to DuckDB (the pipeline migration is done — see `docs/10-duckdb-migration.md`)
+- The golden copy can move to DuckDB (the pipeline migration is done — see `docs/2-60-storage.md`)
 - Swift Charts and DuckDB Swift bindings are mature enough for production use
+
+> **Refined access model (see working design):** the sketch above routes SwiftUI
+> through `pkg/server` HTTP. Subsequent design work — validated against a working
+> sibling app (`~/Projects/gomod/jtm-viewer`, a native macOS app that opens a Go
+> CLI's DuckDB store read-only) — favours a **hybrid**: the native app reads DuckDB
+> **directly, read-only** (proven, no server round-trip, reusing a prebuilt
+> `duckdb-local` SwiftPM package), while the **web** dashboard is served over HTTP
+> from the same query layer. This depends on the DB-backed reporting foundation below.
+
+### DB-Backed Reporting (foundation for all frontends)
+
+**Revisit when**: pursuing any richer reporting or the native app above.
+
+Today's five text reports (`report/*.txt`) are each generated once, at pipeline
+time, from in-memory computation. The plan makes DuckDB the single source of truth
+for reporting: **a report becomes a query plus a renderer, never a stored
+document.** The CLI, web dashboard, and native app then all render the same facts.
+Most of the data already lands in `pit_candidate_scores` / `pit_runs` /
+`pit_fairprice_scores` / `selections` at the right grain
+(`as_of_date, index_name, method, ticker`); the work is to (1) store selection
+*reason codes* + operands instead of English prose, (2) give `pkg/monitoring` its
+own persistence (the one report with no table today), (3) expose a stable **view
+layer** as the shared contract, and (4) add a read-only `report` render command.
+Strictly **additive** — the existing `.txt` writers are left untouched.
+
+> Full design (grain, the Tier 1/2/3 data classification, the reason-code taxonomy,
+> and the resolved frontend access model) lives in the working note
+> `docs/report-db-design.local.md` — deliberately git-ignored until implemented,
+> at which point it graduates into the Architecture chapter.
 
 
 ---
 
-## Appendix C: Docs Restructure — Pass 2 (planned)
+## Appendix C: Docs Restructure (done)
 
-Pass 1 (done) made the guide read as a book: `docs/README.md` is the module-grouped index
-and the source of truth for chapter titles, chapters are written in the present tense, and
-the process-artifact docs were de-ledgered (the refactor ledger removed; the DuckDB
-"migration" doc re-voiced as the Storage chapter). Filenames were deliberately left stable
-so no `docs/NN-*.md` reference in Go source or steering had to move.
+The guide was reshaped over several passes; this records what changed so the structure
+isn't relitigated. Detail lives in git.
 
-**Pass 2** does the deferred, higher-churn half: rename the files to match their chapter
-titles and migrate every embedded reference in one deliberate sweep. Rename candidates
-(terse-but-accurate names that only read correctly via their module today):
-
-| Current file | Candidate title / name | Module |
-|---|---|---|
-| `06-render.md` | Rendering | B |
-| `10-duckdb-migration.md` | Storage & Pipeline Persistence | C |
-| `14-value.md` | Value Strategy | D |
-| `16-scuttlebutt.md` | Scuttlebutt Research | D |
-| `17-screener.md` | Screener / nselib Integration | D |
-| `22-themes.md` | Themes | F |
-| `23-staticip.md` | Static IP Setup | F |
-
-The blocker that makes this a dedicated pass: several docs are hard-referenced by
-`docs/…md` path from Go source comments and `.kiro/steering/*`, so renames must be paired
-with a reference migration (grep every `docs/NN-*.md`, update in lockstep) and verified
-with a build + `make check-deps`. Do it wholesale, guided by the module tree, not piecemeal.
+- **Pass 1** made the guide read as a book: a module-grouped index, present-tense chapters,
+  and the process-artifact docs de-ledgered (the refactor ledger removed; the DuckDB
+  "migration" doc re-voiced as the Storage chapter). Filenames were left stable.
+- **Pass 2** renamed the terse-slug files to match their chapter titles (e.g. `06-render.md`
+  → `10-storage.md`-era names), migrating every embedded reference in one lockstep sweep.
+- **Pass 3** established the [Style Guide](0-10-style-guide.md), normalized every chapter to
+  it, moved the book into `docs/book/`, reorganized the chapters into three parts (Product /
+  Architecture / Operations), and renumbered filenames to the part-prefixed `N-NN-slug.md`
+  scheme (gaps of 10 for growth). The current names are listed in the
+  [preface](preface.md); their history is in git.

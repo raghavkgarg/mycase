@@ -4,7 +4,7 @@ import "github.com/raghavkgarg/mycase/pkg/marketdata"
 
 // mergeFundamentals composes a US ticker's fundamentals from a Schwab base and
 // an EDGAR statement overlay, per the Phase 10c source-of-record precedence
-// (docs/08-edgar-design.md §4):
+// (docs/book/2-30-edgar.md §4):
 //
 //  1. Schwab TTM ratios (ROE, ROA, margins, P/E, P/B, beta, market cap, div
 //     yield, shares/volume) are the base — Schwab is fine for these.
@@ -26,17 +26,36 @@ import "github.com/raghavkgarg/mycase/pkg/marketdata"
 func mergeFundamentals(base marketdata.Fundamentals, edgarPartial marketdata.Fundamentals, hasSchwab, hasEDGAR bool) (marketdata.Fundamentals, string) {
 	merged := base
 
+	// Per-field provenance for the EDGAR-overlayable subset. The base for these
+	// fields is whichever provider produced `base` (Schwab on the US path, else
+	// Yahoo); EDGAR marks the fields it authoritatively overrides. Left nil when
+	// there is no EDGAR overlay — the record-level Source then covers every field.
+	var fieldSources map[string]string
+
 	if hasEDGAR {
+		baseTag := marketdata.SourceSchwab
+		if !hasSchwab {
+			baseTag = marketdata.SourceYahoo
+		}
+		fieldSources = map[string]string{
+			marketdata.FieldOperatingCashflow: baseTag,
+			marketdata.FieldNetIncome:         baseTag,
+			marketdata.FieldFreeCashflow:      baseTag,
+		}
+
 		// Point values — overlay only when EDGAR supplied a non-zero value.
 		if edgarPartial.OperatingCashflow != 0 {
 			merged.OperatingCashflow = edgarPartial.OperatingCashflow
+			fieldSources[marketdata.FieldOperatingCashflow] = edgarFieldTag(edgarPartial, marketdata.FieldOperatingCashflow)
 		}
 		if edgarPartial.NetIncome != 0 {
 			merged.NetIncome = edgarPartial.NetIncome
+			fieldSources[marketdata.FieldNetIncome] = edgarFieldTag(edgarPartial, marketdata.FieldNetIncome)
 		}
 		// FreeCashflow: EDGAR (OCF − capex) is authoritative; prefer it when set.
 		if edgarPartial.FreeCashflow != 0 {
 			merged.FreeCashflow = edgarPartial.FreeCashflow
+			fieldSources[marketdata.FieldFreeCashflow] = edgarFieldTag(edgarPartial, marketdata.FieldFreeCashflow)
 		}
 
 		// Annual series — overlay only when EDGAR produced a non-empty series.
@@ -51,7 +70,10 @@ func mergeFundamentals(base marketdata.Fundamentals, edgarPartial marketdata.Fun
 		merged.AnnualInterestExpense = pickSeries(edgarPartial.AnnualInterestExpense, base.AnnualInterestExpense)
 	}
 
-	return merged, provenance(hasSchwab, hasEDGAR)
+	prov := provenance(hasSchwab, hasEDGAR)
+	merged.Source = prov
+	merged.FieldSources = fieldSources
+	return merged, prov
 }
 
 // pickSeries returns the overlay series when it has data, else the base series.
@@ -60,6 +82,19 @@ func pickSeries(overlay, base []marketdata.AnnualMetric) []marketdata.AnnualMetr
 		return overlay
 	}
 	return base
+}
+
+// edgarFieldTag returns the per-field provenance tag EDGAR recorded for a field
+// (e.g. "edgar:10-K FY2025"), falling back to the bare marketdata.SourceEDGAR
+// tag when EDGAR supplied no filing detail for it. This lets the merged record
+// attribute a value to a specific filing when known (Phase 10d, Option B2).
+func edgarFieldTag(edgarPartial marketdata.Fundamentals, field string) string {
+	if edgarPartial.FieldSources != nil {
+		if tag := edgarPartial.FieldSources[field]; tag != "" {
+			return tag
+		}
+	}
+	return marketdata.SourceEDGAR
 }
 
 // provenance describes which sources contributed to a merged record.

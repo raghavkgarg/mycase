@@ -136,7 +136,7 @@ func buildSchedulerConfig(c *cli.Command, live bool) (scheduler.Config, error) {
 		Broker:            b,
 		Alert:             alertCfg,
 		Pipeline:          *pipelineCfg,
-		PortfolioFile:     resolvePortfolioFile(c, alertCfg),
+		PortfolioFile:     resolvePortfolioFile(c, alertCfg, defaults.GoldenCopy),
 		ConfigPath:        c.String("config"),
 		EODIndex:          defaults.Index,
 		EODMethod:         defaults.Method,
@@ -309,7 +309,7 @@ func runSchedulerDoctor(_ context.Context, _ *cli.Command) error {
 		warnings++
 	default:
 		fmt.Printf("⚠  Holiday calendar for %s is EMPTY — trading-day gating is weekend-only.\n", clk.Loc)
-		fmt.Println("   Seed it (see docs/18-runbook.md) so cadences skip exchange holidays.")
+		fmt.Println("   Seed it (see docs/book/1-80-runbook.md) so cadences skip exchange holidays.")
 		warnings++
 	}
 

@@ -1452,6 +1452,50 @@ func TestApplyUSHardFilters_FCFSectorExemption(t *testing.T) {
 	}
 }
 
+// TestApplyUSHardFilters_ADV pins the fix for the 2026-09-24 bug where the ADV
+// gate treated a raw share count as dollars whenever RegularPrice was 0,
+// deflating ADV ~100–1000× and wrongly eliminating the liquid mega-cap universe.
+// The gate must (a) pass liquid names when a real price is present, (b) reject
+// genuinely illiquid names, and (c) SKIP the gate — not guess — when price is 0.
+func TestApplyUSHardFilters_ADV(t *testing.T) {
+	filters := &config.HardFilters{
+		MinMarketCap: 10_000_000_000, // $10B — all names clear this
+		MinADV:       50_000_000,     // $50M/day liquidity floor
+		// MinFCF left nil so the FCF gate is disabled for this test.
+	}
+
+	funds := map[string]yfinance.Fundamentals{
+		// Liquid mega-cap with a real price: 44.87M sh × $246 ≈ $11B ≫ $50M → pass.
+		// (These are the real Schwab fields for AMZN on 2026-09-18.) Positive FCF
+		// so the default positive-FCF gate doesn't mask the ADV behavior.
+		"US:AMZN": {Sector: "Consumer Cyclical", MarketCap: 2.653e12, AverageVolume: 44_869_534, RegularPrice: 245.96, FreeCashflow: 30e9},
+		// Genuinely illiquid: 100k sh × $10 = $1M < $50M → drop (by the ADV gate).
+		"US:THIN": {Sector: "Industrials", MarketCap: 20e9, AverageVolume: 100_000, RegularPrice: 10.0, FreeCashflow: 1e9},
+		// Price unknown (Yahoo returned 0, no history to backfill): gate is
+		// SKIPPED, so the name is NOT dropped on an uncomputable ADV. The old
+		// fallback would have compared 44.87M (raw shares) < $50M and dropped it.
+		"US:NOPX": {Sector: "Technology", MarketCap: 500e9, AverageVolume: 44_869_534, RegularPrice: 0, FreeCashflow: 20e9},
+	}
+
+	tracker := selectiontracker.New()
+	keys := []string{"US:AMZN", "US:THIN", "US:NOPX"}
+	passed := ApplyUSHardFilters(context.Background(), keys, filters, funds, tracker)
+
+	got := map[string]bool{}
+	for _, k := range passed {
+		got[k] = true
+	}
+	if !got["US:AMZN"] {
+		t.Error("US:AMZN (ADV ≈ $11B) must pass the $50M ADV gate, but was eliminated")
+	}
+	if got["US:THIN"] {
+		t.Error("US:THIN (ADV = $1M) must be eliminated by the $50M ADV gate, but passed")
+	}
+	if !got["US:NOPX"] {
+		t.Error("US:NOPX (RegularPrice unknown) must SKIP the ADV gate (not be dropped on an uncomputable ADV), but was eliminated")
+	}
+}
+
 func TestIsFCFExemptSector(t *testing.T) {
 	exempt := []string{"Financials", "Financial Services", "Insurance", "Real Estate", "real estate"}
 	for _, s := range exempt {
@@ -1626,7 +1670,7 @@ func TestNormalizeAndCapWeights_CashSpillover(t *testing.T) {
 	weights := make(map[string]float64)
 	fundamentals := make(map[string]yfinance.Fundamentals)
 	for i, s := range selectedKeys {
-		weights[s] = 10.0 // equal initial scores
+		weights[s] = 10.0                    // equal initial scores
 		sec := fmt.Sprintf("Sector_%d", i%5) // 5 sectors, 3 stocks each -> 3*6% = 18% < 25%
 		fundamentals[s] = yfinance.Fundamentals{Sector: sec}
 	}
@@ -1683,4 +1727,3 @@ func TestApplyHysteresisSelectionSmart_CooldownWhenPoolUnderTopN(t *testing.T) {
 		t.Errorf("expected CD_NEW to be recorded in tracker.CooldownDrops")
 	}
 }
-

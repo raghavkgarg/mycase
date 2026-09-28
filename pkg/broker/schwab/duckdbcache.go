@@ -20,7 +20,7 @@ const sourceSchwab = "schwab"
 
 // SetCache wires a DuckDB cache into the Schwab client for transparent
 // price/fundamentals caching, so US re-runs serve warm instead of re-hitting
-// the Schwab API (the "cache is truth during a session" rule in docs/api-rules.md).
+// the Schwab API (the "cache is truth during a session" rule in .kiro/steering/api-rules.md).
 // Symmetric with yfinance.SetCache; both write into the same singleton so the
 // two providers share one on-disk cache, distinguished by the `source` column
 // and by ticker prefix (US:/NYSE:/NASDAQ: for Schwab, unprefixed for Yahoo).

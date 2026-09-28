@@ -212,15 +212,15 @@ arch-graph:
 	fi
 
 # overview-graph re-renders the hand-authored high-level architecture diagram
-# (docs/architecture-overview.d2 → .svg). Unlike arch-graph (auto-generated
+# (docs/book/architecture-overview.d2 → .svg). Unlike arch-graph (auto-generated
 # package dependency graph in dist/), this is a curated ~12-box conceptual view
 # and its SVG is committed under docs/ so it's viewable without D2 installed.
 overview-graph:
 	@if command -v d2 >/dev/null 2>&1; then \
-		d2 --layout=$(D2_LAYOUT) docs/architecture-overview.d2 docs/architecture-overview.svg >/dev/null; \
-		echo "Overview diagram: docs/architecture-overview.svg (layout=$(D2_LAYOUT))"; \
+		d2 --layout=$(D2_LAYOUT) docs/book/architecture-overview.d2 docs/book/architecture-overview.svg >/dev/null; \
+		echo "Overview diagram: docs/book/architecture-overview.svg (layout=$(D2_LAYOUT))"; \
 	else \
-		echo "Install D2 (https://d2lang.com) to render docs/architecture-overview.d2"; \
+		echo "Install D2 (https://d2lang.com) to render docs/book/architecture-overview.d2"; \
 	fi
 
 # --- Market path & scheduler ---
@@ -315,7 +315,7 @@ help:
 	@echo "  check-deps         - Enforce R16 package layering (leaves + downward imports)"
 	@echo "  deps-graph         - Render pkg/ dependency graph to dist/deps.svg (Graphviz, layer-colored)"
 	@echo "  arch-graph         - Render pkg/ architecture diagram to dist/arch.svg (D2/TALA, transitive-reduced; REDUCE=0 for full)"
-	@echo "  overview-graph     - Re-render docs/architecture-overview.svg (hand-authored high-level view, D2/TALA)"
+	@echo "  overview-graph     - Re-render docs/book/architecture-overview.svg (hand-authored high-level view, D2/TALA)"
 	@echo "  use-us             - Switch active path to US (sets active_market: us in config/defaults.yaml)"
 	@echo "  use-india          - Switch active path to India (sets active_market: india in config/defaults.yaml)"
 	@echo "  scheduler-install  - Build + install/reload the daily OS timer (mycase scheduler tick)"

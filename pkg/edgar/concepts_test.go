@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/raghavkgarg/mycase/pkg/marketdata"
 )
 
 func loadTestFacts(t *testing.T, name string) *companyFacts {
@@ -150,5 +152,56 @@ func TestFreeCashflow_RequiresBothConcepts(t *testing.T) {
 	}
 	if f.OperatingCashflow != 1000 {
 		t.Errorf("OperatingCashflow: want 1000, got %v", f.OperatingCashflow)
+	}
+}
+
+func TestFilingTag(t *testing.T) {
+	cases := []struct {
+		name string
+		r    factValue
+		want string
+	}{
+		{"annual", factValue{Form: "10-K", FP: "FY", FY: 2025}, "edgar:10-K FY2025"},
+		{"quarterly", factValue{Form: "10-Q", FP: "Q2", FY: 2025}, "edgar:10-Q Q2 2025"},
+		{"amended annual", factValue{Form: "10-K/A", FP: "FY", FY: 2024}, "edgar:10-K/A FY2024"},
+		{"no form", factValue{FP: "FY", FY: 2025}, "edgar"},
+		{"form no period", factValue{Form: "10-K"}, "edgar:10-K"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := filingTag(tc.r); got != tc.want {
+				t.Errorf("filingTag(%+v) = %q, want %q", tc.r, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestMapFacts_FieldSourcesFilingDetail(t *testing.T) {
+	// OCF+capex from the FY2025 10-K; net income from a later Q1-2026 10-Q.
+	g := map[string]conceptData{
+		"NetCashProvidedByUsedInOperatingActivities": {Units: map[string][]factValue{"USD": {
+			{End: "2025-12-31", Val: 5000, FP: "FY", FY: 2025, Form: "10-K", Filed: "2026-02-01"},
+		}}},
+		"PaymentsToAcquirePropertyPlantAndEquipment": {Units: map[string][]factValue{"USD": {
+			{End: "2025-12-31", Val: 1000, FP: "FY", FY: 2025, Form: "10-K", Filed: "2026-02-01"},
+		}}},
+		"NetIncomeLoss": {Units: map[string][]factValue{"USD": {
+			{End: "2025-12-31", Val: 800, FP: "FY", FY: 2025, Form: "10-K", Filed: "2026-02-01"},
+			{End: "2026-03-31", Val: 210, FP: "Q1", FY: 2026, Form: "10-Q", Filed: "2026-05-01"},
+		}}},
+	}
+	cf := &companyFacts{}
+	cf.Facts.USGAAP = g
+	f := mapFacts(cf)
+
+	if got := f.FieldSources[marketdata.FieldFreeCashflow]; got != "edgar:10-K FY2025" {
+		t.Errorf("FreeCashflow source: want edgar:10-K FY2025, got %q", got)
+	}
+	if got := f.FieldSources[marketdata.FieldOperatingCashflow]; got != "edgar:10-K FY2025" {
+		t.Errorf("OperatingCashflow source: want edgar:10-K FY2025, got %q", got)
+	}
+	// Net income's latest reported fact is the Q1-2026 10-Q.
+	if got := f.FieldSources[marketdata.FieldNetIncome]; got != "edgar:10-Q Q1 2026" {
+		t.Errorf("NetIncome source: want edgar:10-Q Q1 2026, got %q", got)
 	}
 }

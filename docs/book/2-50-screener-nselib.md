@@ -1,6 +1,8 @@
-# Indian Equity Data Integration Guide & Strategy Roadmap (NSE `nselib` & Screener.in)
+# Screener / nselib Integration
 
-This document outlines the **NSE (`nselib`)** and **Screener.in** data integration in `mycase`, environment setup, CLI tools, implemented features, and strategic roadmap enabled by Indian equity datasets.
+Indian equity data enters `mycase` through two sources — **NSE (`nselib`)** and
+**Screener.in**. This chapter covers the environment setup, the CLI tools that use them, and
+the datasets they make available.
 
 ---
 

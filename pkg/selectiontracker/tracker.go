@@ -333,7 +333,7 @@ func (t *Tracker) RecordResultDates(ticker, dates string) {
 // caller from the structured DuckDB selections history (cache.GetPreviousSelections)
 // rather than by re-parsing the prior text report. It may be nil (e.g. first run),
 // in which case cross-run driver deltas degrade to showing current values only.
-func (t *Tracker) SaveReport(identity, displayName, method string, existingHoldings map[string]float64, sectors map[string]string, weights map[string]float64, resultDates map[string]string, prevDrivers map[string]string) error {
+func (t *Tracker) SaveReport(identity, displayName, method string, existingHoldings map[string]float64, sectors map[string]string, sources map[string]string, fieldSources map[string]map[string]string, weights map[string]float64, resultDates map[string]string, prevDrivers map[string]string) error {
 	reportDir := filepath.Join("report", identity, "executions")
 	if err := os.MkdirAll(reportDir, 0755); err != nil {
 		return fmt.Errorf("failed to create report directory: %w", err)
@@ -427,12 +427,16 @@ func (t *Tracker) SaveReport(identity, displayName, method string, existingHoldi
 			return sRows[i].rank < sRows[j].rank
 		})
 
-		writeLine("%-16s | %-20s | %-9s | %-9s | %-8s | %-14s | %-21s | %s\n", "Ticker", "Sector", "Raw Score", "Eff Score", "Raw Rank", "Weight Decided", "Result Prev -> Coming", "Selection Reason")
+		writeLine("%-16s | %-20s | %-12s | %-9s | %-9s | %-8s | %-14s | %-21s | %s\n", "Ticker", "Sector", "Source", "Raw Score", "Eff Score", "Raw Rank", "Weight Decided", "Result Prev -> Coming", "Selection Reason")
 		writeLine("-------------------------------------------------------------------------------------------------------------------------------------------------------------------\n")
 		for _, r := range sRows {
 			sec := sectors[r.ticker]
 			if sec == "" {
 				sec = "Unknown"
+			}
+			src := sources[r.ticker]
+			if src == "" {
+				src = "unknown"
 			}
 			weightVal := weights[r.ticker]
 			weightStr := fmt.Sprintf("%.2f%%", weightVal*100.0)
@@ -478,7 +482,11 @@ func (t *Tracker) SaveReport(identity, displayName, method string, existingHoldi
 				reasonStr = fmt.Sprintf("No Change (Retained Rank %d <= 25)", r.rank)
 			}
 
-			writeLine("%-16s | %-20s | %9.1f | %9.1f | %-8d | %-14s | %-21s | %s\n", r.ticker, sec, r.rawScore, r.effectiveScore, r.rank, weightStr, resDates, reasonStr)
+			if note := edgarFieldNote(fieldSources[r.ticker]); note != "" {
+				reasonStr = reasonStr + " | " + note
+			}
+
+			writeLine("%-16s | %-20s | %-12s | %9.1f | %9.1f | %-8d | %-14s | %-21s | %s\n", r.ticker, sec, src, r.rawScore, r.effectiveScore, r.rank, weightStr, resDates, reasonStr)
 		}
 	}
 	writeLine("\n")
@@ -691,4 +699,47 @@ func (t *Tracker) SaveReport(identity, displayName, method string, existingHoldi
 	writeLine("Selection explanation report successfully saved to %s\n\n", outPath)
 
 	return nil
+}
+
+// edgarFieldNote formats a compact per-field provenance marker listing the
+// fundamentals fields EDGAR authoritatively supplied for a ticker (Phase 10d,
+// Options B1/B2). fs maps canonical field name → provider tag; only fields whose
+// source is EDGAR are surfaced, since the row-level Source column already conveys
+// the base provider. Returns "" when no field came from EDGAR.
+//
+// The tag value is either the bare "edgar" or the enriched "edgar:<filing>"
+// (e.g. "edgar:10-K FY2025", Option B2). When any field carries filing detail,
+// the note shows each field with its filing — "FCF (10-K FY2025)"; otherwise it
+// lists bare field labels — "FCF, OCF".
+//
+// The field ordering is fixed (FCF, then OCF, then Net Income) so the note is
+// stable across runs and diffable. Field labels are literals here rather than
+// pkg/marketdata constants: selectiontracker is an L0 leaf and must not import
+// another L0 package (the marketdata keys are "FreeCashflow"/"OperatingCashflow"/
+// "NetIncome" — kept in sync by this comment).
+func edgarFieldNote(fs map[string]string) string {
+	if len(fs) == 0 {
+		return ""
+	}
+	order := []struct{ key, label string }{
+		{"FreeCashflow", "FCF"},
+		{"OperatingCashflow", "OCF"},
+		{"NetIncome", "NetIncome"},
+	}
+	var edgarFields []string
+	for _, o := range order {
+		tag := fs[o.key]
+		if tag != "edgar" && !strings.HasPrefix(tag, "edgar:") {
+			continue
+		}
+		if filing := strings.TrimPrefix(tag, "edgar:"); filing != "" && filing != "edgar" {
+			edgarFields = append(edgarFields, fmt.Sprintf("%s (%s)", o.label, filing))
+		} else {
+			edgarFields = append(edgarFields, o.label)
+		}
+	}
+	if len(edgarFields) == 0 {
+		return ""
+	}
+	return "[source: EDGAR " + strings.Join(edgarFields, ", ") + "]"
 }

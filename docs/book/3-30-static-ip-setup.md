@@ -1,6 +1,8 @@
-# Zerodha Kite Connect Static IP Setup Guide (StaticIP.in)
+# Static IP Setup
 
-This document provides step-by-step instructions for configuring and using your static IPv6 address from [staticip.in](https://staticip.in) with Zerodha Kite Connect and `mycase`.
+Zerodha Kite Connect requires a whitelisted static IP. `mycase` reaches it through a static
+IPv6 address from [staticip.in](https://staticip.in); this chapter is the step-by-step
+setup and configuration.
 
 ---
 

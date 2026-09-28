@@ -1,14 +1,16 @@
-# Phase 10c — SEC EDGAR Fundamentals: Design
+# EDGAR
 
-**Status**: ✅ IMPLEMENTED (Phase 10c shipped). This document records the design as built; see `pkg/edgar`, `pkg/datafetcher/merger.go`, and the Router `WithEDGAR` wiring.
-**Scope**: `pkg/edgar` client + XBRL concept mapper + `datafetcher.FundamentalsMerger`
-**References**: `docs/03-roadmap.md` Phase 10c, `docs/07-datasources.md` §4.3/§7, `docs/04-architecture.md` layering (R16), `docs/api-rules.md`
+The SEC EDGAR fundamentals client: a `pkg/edgar` client plus an XBRL concept mapper, whose
+output `datafetcher.FundamentalsMerger` overlays onto Schwab's TTM ratios. EDGAR is parsed
+directly — no commercial vendor — for authoritative, license-clean, quarterly-stable
+fundamentals. Related: `docs/2-20-data-sources.md` (data-source design, D15),
+`docs/2-10-architecture.md` (layering), `.kiro/steering/api-rules.md` (network discipline).
 
 ---
 
-## 1. Decision on the open question (datasources.md §8.1)
+## 1. Why parse EDGAR directly
 
-**Parse EDGAR ourselves. No commercial vendor.** Rationale, grounded in the roadmap's own design constraints (§6 "local-first / no external dependencies beyond broker APIs and market data", "no black boxes / transparency"):
+**Parse EDGAR ourselves. No commercial vendor.** Rationale, grounded in the project's design constraints (local-first / no external dependencies beyond broker APIs and market data; no black boxes / transparency):
 
 - A paid vendor reintroduces exactly the thing Phase 10 exists to remove — trusting someone else's opaque parse of the SEC filing.
 - EDGAR is free + authoritative + no API key. The cost is XBRL tag drift, which is a bounded, well-understood problem (ordered candidate-tag lists per concept).
@@ -161,7 +163,7 @@ The five decisions below were resolved in review before implementation; kept her
 1. **Rate limiter** → **`golang.org/x/time/rate`** token bucket (10 req/s, burst 10). `golang.org/x/*` is effectively first-party and other `x/` modules are already required; token bucket fits the per-second limit better than a minute-window. Schwab-limiter migration noted as a separate follow-up.
 2. **Router wiring** → **option (B)**: Router gains an optional `*edgar.Client` (nil ⇒ exactly current behavior). Merger is an unexported helper invoked on the US-fundamentals path.
 3. **Sector** → **CSV-GICS only; do NOT fetch EDGAR submissions/SIC.** SIC is a coarser, semantically different taxonomy (~10 divisions) that doesn't map cleanly to GICS's 11 sectors; mixing taxonomies would corrupt the sector-cap buckets and require a hand-maintained SIC→GICS crosswalk. The rare CSV-uncovered ticker landing in "Unknown" is already handled gracefully and is the lesser evil. Universal sector coverage, if ever needed, is a proper-GICS-mapping decision, not coarse SIC. One fewer endpoint is a bonus, not the reason.
-4. **First-cut scope** → Schwab+EDGAR merge, `enabled:false` default. Capability-interface split + provenance-in-reports deferred to Phase 10d per roadmap sequencing.
+4. **First-cut scope** → Schwab+EDGAR merge, `enabled:false` default. Capability-interface split + provenance-in-reports were deferred to Phase 10d per roadmap sequencing — **both now shipped** (per-record + per-field/filing provenance surfaced in `pipeline show`/reports; `DataFetcher` split into `PriceSource`/`FundamentalsSource`).
 5. **FreeCashflow** → **EDGAR-preferred, Schwab-TTM fallback, guarded.** Use EDGAR `OperatingCashflow − CapEx` only when *both* concepts are present on a consistent annual basis (authoritative, textbook FCF); otherwise keep Schwab's TTM `FCF/share × shares` (smoother/more current but vendor-derived). Field-level non-destructive: a missing capex concept never zeroes Schwab's value. Record the winner via the `source` provenance tag.
 
 ---
@@ -178,6 +180,6 @@ The five decisions below were resolved in review before implementation; kept her
 - [x] `devtools/internal/layers/layers.go` — register `edgar` at L1
 - [x] `config/defaults.json` + `pkg/config` — `edgar` block, UA, TTLs, `enabled`
 - [x] `.kiro/steering/architecture.md` layer table — `edgar` L1 (also synced `themedb`/`portfolio`/`themereturn`)
-- [x] `docs/07-datasources.md` §5/§6/§7 — 10c marked done; `docs/03-roadmap.md` Phase 10c → done
+- [x] `docs/2-20-data-sources.md` §5/§6/§7 — 10c marked done; `docs/9-10-roadmap.md` Phase 10c → done
 - [x] `make cleanup` + `make test` green; `make check-deps` intact
 - [x] wired opt-in into `cmd/broker.go` + `pkg/autopilot` router factories (`MYCASE_EDGAR_USER_AGENT` env override)

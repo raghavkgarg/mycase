@@ -15,8 +15,11 @@ import (
 // changes. Cached rows written under an older version are treated as a miss and
 // re-derived (from EDGAR — the raw blob is no longer retained in the DB), so a
 // mapper change can't silently serve a stale-shape record. See
-// docs/09-edgar-facts-reference.md.
-const factsSchemaVersion = 1
+// docs/book/2-40-edgar-facts-reference.md.
+//
+// v2: mapFacts now also emits per-field provenance (FieldSources with filing
+// detail, e.g. "edgar:10-K FY2025") for OCF / NetIncome / FreeCashflow.
+const factsSchemaVersion = 2
 
 // factsDDL caches the COMPACT, extracted facts per CIK — the mapped
 // marketdata.Fundamentals subset EDGAR supplies (see mapFacts), not the raw
