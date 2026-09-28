@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"slices"
@@ -13,6 +14,7 @@ import (
 	_ "github.com/duckdb/duckdb-go/v2"
 
 	"github.com/raghavkgarg/mycase/pkg/cache"
+	"github.com/raghavkgarg/mycase/pkg/config"
 	"github.com/raghavkgarg/mycase/pkg/stockpicker"
 )
 
@@ -26,16 +28,16 @@ type DB struct {
 
 // Open opens (or creates) the DuckDB database at path and initializes the schema.
 func Open(path string) (*DB, error) {
-	if (path == "" || path == DefaultDBPath) && cache.GetDB() != nil {
+	if path == "" || path == DefaultDBPath {
+		path = config.DataPath("mycase.db")
+	}
+
+	if cache.GetDB() != nil && (path == config.DataPath("mycase.db")) {
 		p := &DB{db: cache.GetDB().Conn(), ownsDB: false}
 		if err := p.initSchema(context.Background()); err != nil {
 			return nil, fmt.Errorf("init pit schema: %w", err)
 		}
 		return p, nil
-	}
-
-	if path == "" {
-		path = DefaultDBPath
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		return nil, fmt.Errorf("create dir for pit db: %w", err)
@@ -76,15 +78,26 @@ func (p *DB) Conn() *sql.DB {
 
 const schemaDDL = `
 CREATE TABLE IF NOT EXISTS pit_runs (
-    as_of_date         DATE,
-    index_name         VARCHAR,
-    method             VARCHAR,
-    regime_multiplier  DOUBLE,
-    total_constituents INTEGER,
-    stage1_survivors   INTEGER,
-    selected_count     INTEGER,
+    as_of_date           DATE,
+    index_name           VARCHAR,
+    method               VARCHAR,
+    regime_multiplier    DOUBLE,
+    total_constituents   INTEGER,
+    stage1_survivors     INTEGER,
+    selected_count       INTEGER,
     pillar4_uncalibrated BOOLEAN DEFAULT false,
-    created_at         TIMESTAMP,
+    created_at           TIMESTAMP,
+    selection_policy     VARCHAR,
+    engine_commit        VARCHAR,
+    r_raw                DOUBLE,
+    r_eff                DOUBLE,
+    hurdle_raw_pts       DOUBLE,
+    bench_last_bar       DATE,
+    breadth_last_bar     DATE,
+    degraded             BOOLEAN,
+    degraded_inferred    BOOLEAN,
+    equity_weight        DOUBLE,
+    holdings_recorded    BOOLEAN,
     PRIMARY KEY (as_of_date, index_name, method)
 );
 
@@ -109,7 +122,47 @@ CREATE TABLE IF NOT EXISTS pit_candidate_scores (
     forward_return_21d DOUBLE,
     pillar4_uncalibrated BOOLEAN DEFAULT false,
     pillar4_insufficient_history BOOLEAN DEFAULT false,
+    outcome            VARCHAR,
     PRIMARY KEY (as_of_date, index_name, method, ticker)
+);
+
+CREATE TABLE IF NOT EXISTS pit_holdings (
+    as_of_date  DATE,
+    index_name  VARCHAR,
+    method      VARCHAR,
+    ticker      VARCHAR,
+    weight      DOUBLE,
+    PRIMARY KEY (as_of_date, index_name, method, ticker)
+);
+
+CREATE TABLE IF NOT EXISTS radar_episodes (
+    episode_id        VARCHAR PRIMARY KEY,
+    ticker            VARCHAR,
+    sector            VARCHAR,
+    first_seen_date   DATE,
+    index_name        VARCHAR,
+    method            VARCHAR,
+    entry_date        DATE,
+    entry_px_open     DOUBLE,
+    entry_px_close_t0 DOUBLE,
+    criteria_version  VARCHAR,
+    blocker_at_entry  VARCHAR
+);
+
+CREATE TABLE IF NOT EXISTS radar_horizon_returns (
+    episode_id      VARCHAR,
+    horizon         INTEGER,
+    exit_date       DATE,
+    exit_px         DOUBLE,
+    ret             DOUBLE,
+    bench_ew_mean   DOUBLE,
+    bench_ew_median DOUBLE,
+    bench_n         INTEGER,
+    excess          DOUBLE,
+    state_at_h      VARCHAR,
+    last_price_flag BOOLEAN DEFAULT FALSE,
+    computed_at     TIMESTAMP,
+    PRIMARY KEY (episode_id, horizon)
 );
 
 CREATE TABLE IF NOT EXISTS stage1_shadow_results (
@@ -218,12 +271,45 @@ func (p *DB) SaveRunSnapshot(ctx context.Context, snap *stockpicker.PITRunSnapsh
 	}
 	defer tx.Rollback()
 
+	rRaw := snap.RRaw
+	if rRaw <= 0 {
+		rRaw = snap.RegimeMultiplier
+	}
+	rEff := snap.REff
+	if rEff <= 0 {
+		rEff = snap.RegimeMultiplier
+	}
+	hurdleRawPts := snap.HurdleRawPts
+	if hurdleRawPts <= 0 && rEff > 0 {
+		hurdleRawPts = math.Round((30.0/rEff)*10000) / 10000
+	}
+	policy := snap.SelectionPolicy
+	if policy == "" {
+		if snap.AsOfDate >= "2026-09-24" {
+			policy = "BINARY_SENTRY_V1"
+		} else {
+			policy = "LEGACY_LADDER"
+		}
+	}
+	engineCommit := snap.EngineCommit
+	if engineCommit == "" {
+		if snap.AsOfDate >= "2026-09-24" {
+			engineCommit = "f09b9ca"
+		}
+	}
+	benchLastBar := snap.BenchLastBar
+	if benchLastBar == "" {
+		benchLastBar = snap.AsOfDate
+	}
+
 	// 1. Upsert Run Record
 	runQuery := `
 INSERT OR REPLACE INTO pit_runs (
     as_of_date, index_name, method, regime_multiplier, 
-    total_constituents, stage1_survivors, selected_count, created_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?);
+    total_constituents, stage1_survivors, selected_count, created_at,
+    selection_policy, engine_commit, r_raw, r_eff, hurdle_raw_pts,
+    bench_last_bar, degraded, degraded_inferred, equity_weight, holdings_recorded
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 `
 	_, err = tx.ExecContext(ctx, runQuery,
 		snap.AsOfDate,
@@ -234,6 +320,16 @@ INSERT OR REPLACE INTO pit_runs (
 		snap.Stage1Count,
 		snap.SelectedCount,
 		time.Now(),
+		policy,
+		engineCommit,
+		rRaw,
+		rEff,
+		hurdleRawPts,
+		benchLastBar,
+		snap.Degraded,
+		false,
+		snap.EquityWeight,
+		true,
 	)
 	if err != nil {
 		return fmt.Errorf("insert pit_run: %w", err)
@@ -246,8 +342,8 @@ INSERT OR REPLACE INTO pit_candidate_scores (
     passed_stage1, data_fetch_failed, rejection_reason, raw_score, effective_score,
     composite_rs, vcp_ratio, rvol_z_score, decayed_pp, delivery_delta,
     selected, final_weight, forward_return_21d, pillar4_uncalibrated, pillar4_insufficient_history,
-    fair_price, upside_pct, mos_verdict
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+    fair_price, upside_pct, mos_verdict, outcome
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 `
 	stmt, err := tx.PrepareContext(ctx, candidateQuery)
 	if err != nil {
@@ -258,6 +354,29 @@ INSERT OR REPLACE INTO pit_candidate_scores (
 	isUncalibrated := (snap.AsOfDate <= "2026-09-10")
 
 	for _, c := range snap.Candidates {
+		outcome := c.Outcome
+		if outcome == "" {
+			if c.Selected {
+				if policy == "BINARY_SENTRY_V1" {
+					outcome = "SELECTED"
+				} else {
+					outcome = "LEGACY_SELECTED"
+				}
+			} else if c.PassedStage1 {
+				if policy == "BINARY_SENTRY_V1" {
+					if c.EffectiveScore < 30.0 {
+						outcome = "HURDLE_REJECT"
+					} else {
+						outcome = "ALLOC_DROPS"
+					}
+				} else {
+					outcome = "LEGACY_NOT_TOP_N"
+				}
+			} else {
+				outcome = "STAGE1_REJECT"
+			}
+		}
+
 		_, err := stmt.ExecContext(ctx,
 			snap.AsOfDate,
 			canonIndex,
@@ -282,9 +401,18 @@ INSERT OR REPLACE INTO pit_candidate_scores (
 			c.FairPrice,
 			c.UpsidePct,
 			c.MOSVerdict,
+			outcome,
 		)
 		if err != nil {
 			return fmt.Errorf("insert candidate %s: %w", c.Ticker, err)
+		}
+
+		if c.Selected && c.FinalWeight > 0 {
+			_, _ = tx.ExecContext(ctx, `
+INSERT INTO pit_holdings (as_of_date, index_name, method, ticker, weight)
+VALUES (?, ?, ?, ?, ?)
+ON CONFLICT (as_of_date, index_name, method, ticker) DO UPDATE SET weight = EXCLUDED.weight;
+`, snap.AsOfDate, canonIndex, snap.Method, c.Ticker, c.FinalWeight)
 		}
 
 		if c.FairPrice > 0 {
@@ -680,7 +808,8 @@ SELECT
     p.pillar4_insufficient_history,
     p.fair_price,
     p.upside_pct,
-    p.mos_verdict
+    p.mos_verdict,
+    p.outcome
 FROM pit_candidate_scores p
 JOIN index_constituents c ON p.ticker = c.ticker
 WHERE p.index_name = 'niftytotalmarket'
@@ -715,7 +844,8 @@ SELECT
     p.pillar4_insufficient_history,
     p.fair_price,
     p.upside_pct,
-    p.mos_verdict
+    p.mos_verdict,
+    p.outcome
 FROM pit_candidate_scores p
 JOIN index_constituents c ON p.ticker = c.ticker
 WHERE p.index_name = 'niftytotalmarket'
@@ -760,7 +890,18 @@ SELECT
     count(CASE WHEN p.passed_stage1 THEN 1 END)::INT as stage1_survivors,
     count(CASE WHEN p.selected THEN 1 END)::INT as selected_count,
     r.pillar4_uncalibrated,
-    r.created_at
+    r.created_at,
+    r.selection_policy,
+    r.engine_commit,
+    r.r_raw,
+    r.r_eff,
+    r.hurdle_raw_pts,
+    r.bench_last_bar,
+    r.breadth_last_bar,
+    r.degraded,
+    r.degraded_inferred,
+    r.equity_weight,
+    r.holdings_recorded
 FROM pit_candidate_scores p
 JOIN index_constituents c ON p.ticker = c.ticker
 JOIN pit_runs r ON p.as_of_date = r.as_of_date AND r.index_name = 'niftytotalmarket' AND r.method = p.method
@@ -771,7 +912,9 @@ WHERE p.index_name = 'niftytotalmarket'
         AND existing.index_name = c.index_name
         AND existing.method = p.method
   )
-GROUP BY p.as_of_date, c.index_name, p.method, r.regime_multiplier, r.pillar4_uncalibrated, r.created_at
+GROUP BY p.as_of_date, c.index_name, p.method, r.regime_multiplier, r.pillar4_uncalibrated, r.created_at,
+         r.selection_policy, r.engine_commit, r.r_raw, r.r_eff, r.hurdle_raw_pts, r.bench_last_bar, r.breadth_last_bar,
+         r.degraded, r.degraded_inferred, r.equity_weight, r.holdings_recorded
 UNION ALL
 SELECT 
     p.as_of_date,
@@ -782,7 +925,18 @@ SELECT
     count(CASE WHEN p.passed_stage1 THEN 1 END)::INT as stage1_survivors,
     count(CASE WHEN p.selected THEN 1 END)::INT as selected_count,
     r.pillar4_uncalibrated,
-    r.created_at
+    r.created_at,
+    r.selection_policy,
+    r.engine_commit,
+    r.r_raw,
+    r.r_eff,
+    r.hurdle_raw_pts,
+    r.bench_last_bar,
+    r.breadth_last_bar,
+    r.degraded,
+    r.degraded_inferred,
+    r.equity_weight,
+    r.holdings_recorded
 FROM pit_candidate_scores p
 JOIN index_constituents c ON p.ticker = c.ticker
 JOIN pit_runs r ON p.as_of_date = r.as_of_date AND r.index_name = 'niftytotalmarket' AND r.method = p.method
@@ -794,7 +948,9 @@ WHERE p.index_name = 'niftytotalmarket'
         AND existing.index_name = 'small250'
         AND existing.method = p.method
   )
-GROUP BY p.as_of_date, p.method, r.regime_multiplier, r.pillar4_uncalibrated, r.created_at;
+GROUP BY p.as_of_date, p.method, r.regime_multiplier, r.pillar4_uncalibrated, r.created_at,
+         r.selection_policy, r.engine_commit, r.r_raw, r.r_eff, r.hurdle_raw_pts, r.bench_last_bar, r.breadth_last_bar,
+         r.degraded, r.degraded_inferred, r.equity_weight, r.holdings_recorded;
 
 CREATE OR REPLACE MACRO base_duration_multiplier(weeks_in_zone) AS (
     CASE

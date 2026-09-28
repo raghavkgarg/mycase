@@ -76,8 +76,21 @@ func resolveHome() string {
 			}
 		}
 	}
-	// 3. CWD fallback (running from the project root).
+	// 3. CWD or walking up from subpackage (e.g. go test ./pkg/...).
 	if cwd, err := os.Getwd(); err == nil {
+		dir := cwd
+		for {
+			if isDir(filepath.Join(dir, configDirName)) {
+				if info, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil && !info.IsDir() {
+					return dir
+				}
+			}
+			parent := filepath.Dir(dir)
+			if parent == dir {
+				break
+			}
+			dir = parent
+		}
 		return cwd
 	}
 	return "."

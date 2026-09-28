@@ -49,6 +49,7 @@ type Tracker struct {
 	ResultDates         map[string]string        // ticker -> "24-04-26 ->  25-06-26"
 	InitialCount        int
 	RegimeMultiplier    float64
+	RawRegimeMultiplier float64
 	BasedOn             string
 }
 
@@ -69,6 +70,7 @@ func New() *Tracker {
 		DriverValues:        make(map[string]DriverMetrics),
 		ResultDates:         make(map[string]string),
 		RegimeMultiplier:    1.0,
+		RawRegimeMultiplier: 1.0,
 	}
 }
 

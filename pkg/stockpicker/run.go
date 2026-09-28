@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"math"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -365,9 +366,23 @@ func RunWithResult(ctx context.Context, opts *Options) (*PickResult, error) {
 			upsideVal = fp.UpsidePct
 			mosVerdict = fp.Verdict
 		}
+		passedStage1 := !isFetchFailed && !isSafetyDrop && hasRaw
+		var outcome string
+		if selectedSet[t] {
+			outcome = "SELECTED"
+		} else if passedStage1 {
+			if effScore < 30.0 {
+				outcome = "HURDLE_REJECT"
+			} else {
+				outcome = "ALLOC_DROPS"
+			}
+		} else {
+			outcome = "STAGE1_REJECT"
+		}
+
 		candidateMap[t] = CandidateScoreDetail{
 			Ticker:                     t,
-			PassedStage1:               !isFetchFailed && !isSafetyDrop && hasRaw,
+			PassedStage1:               passedStage1,
 			DataFetchFailed:            isFetchFailed,
 			Pillar4InsufficientHistory: delivInsufficient,
 			RejectionReason:            reason,
@@ -384,13 +399,36 @@ func RunWithResult(ctx context.Context, opts *Options) (*PickResult, error) {
 			FairPrice:                  fpVal,
 			UpsidePct:                  upsideVal,
 			MOSVerdict:                 mosVerdict,
+			Outcome:                    outcome,
 		}
 	}
+
+	rRaw := tracker.RawRegimeMultiplier
+	if rRaw <= 0 {
+		rRaw = rRegime
+	}
+	hurdleRawPts := 0.0
+	if rRegime > 0 {
+		hurdleRawPts = math.Round((30.0/rRegime)*10000) / 10000
+	}
+	eqWeight := 0.0
+	for _, w := range finalWeights {
+		eqWeight += w
+	}
+
 	pitSnapshot := &PITRunSnapshot{
 		AsOfDate:          todayStr,
 		IndexName:         displayNameVal,
 		Method:            opts.Method,
 		RegimeMultiplier:  rRegime,
+		RRaw:              rRaw,
+		REff:              rRegime,
+		HurdleRawPts:      hurdleRawPts,
+		SelectionPolicy:   "BINARY_SENTRY_V1",
+		EngineCommit:      "0d069ae",
+		BenchLastBar:      todayStr,
+		Degraded:          false,
+		EquityWeight:      eqWeight,
 		TotalConstituents: len(combinedTickers),
 		Stage1Count:       len(activeKeys),
 		SelectedCount:     len(selectedKeys),

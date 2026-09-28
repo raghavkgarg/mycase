@@ -1561,8 +1561,8 @@ func SelectTopNEarlyMultibaggerWithCooldown(
 	if benchHist != nil {
 		benchCloses = benchHist.Closes
 	}
-	rRegime := yfinance.CalculateSmoothedBenchmarkRegime(benchCloses, regimePeriod, regimeFloor)
-	slog.Info("select.earlymb_regime_sentry", "r_regime", rRegime, "min_effective_score", minEffectiveScore)
+	rRaw, rRegime := yfinance.CalculateSmoothedBenchmarkRegimeWithRaw(benchCloses, regimePeriod, regimeFloor)
+	slog.Info("select.earlymb_regime_sentry", "r_raw", rRaw, "r_regime", rRegime, "min_effective_score", minEffectiveScore)
 
 	maxPerSector := hardFilters.MaxStocksPerSector
 	if maxPerSector <= 0 {
@@ -1575,6 +1575,7 @@ func SelectTopNEarlyMultibaggerWithCooldown(
 	sectorTopTickers := make(map[string][]string)
 
 	tracker.RegimeMultiplier = rRegime
+	tracker.RawRegimeMultiplier = rRaw
 	for rankIdx, t := range activeKeys {
 		rank := rankIdx + 1
 		rawScore := scores[t]

@@ -140,51 +140,72 @@ CREATE OR REPLACE MACRO base_duration_multiplier(weeks_in_zone) AS (
 
 ---
 
-## 3. Continuous Market Regime Sentry & Dynamic Thresholding
+### 3.1. Continuous Market Regime Sentry & Dynamic Thresholding
 
 Instead of a single-day binary cutoff at Nifty $\ge$ 50 DMA (which causes daily whipsaw and misses early basing inflection points), the engine calculates a **Continuous Market Regime Multiplier ($R_{\text{regime}} \in [0.20, 1.00]$)**:
 
-$$R_{\text{regime}} = \text{Clamp}\left(0.20 + 0.60 \times \left(\frac{\text{Sessions Above 50 DMA}}{20}\right) + 0.50 \times \text{Clamp}\left(\frac{\text{Nifty Close} - \text{50 DMA}}{0.10 \times \text{50 DMA}}, \, -0.40, \, +0.40\right), \, 0.20, \, 1.00\right)$$
+$$R_{\text{raw}} = 0.20 + 0.60 \times \left(\frac{\text{Sessions Above 50 DMA}}{20}\right) + 0.50 \times \text{Clamp}\left(\frac{\text{Nifty Close} - \text{50 DMA}}{0.10 \times \text{50 DMA}}, \, -0.40, \, +0.40\right)$$
+$$R_{\text{eff}} = \text{Clamp}(R_{\text{raw}}, \, 0.20, \, 1.00)$$
 
 Where:
 - $\text{Persistence Ratio} = \frac{\text{Sessions Above 50-DMA in Last 20 Sessions}}{20}$
 - $\text{Scaled Distance} = \text{clamp}\left(\frac{\text{Close} - \text{SMA}_{50}}{0.10 \times \text{SMA}_{50}}, -0.40, +0.40\right)$
 
-### Worked Verification Examples:
+### 3.2. Dual Regime Telemetry: $R_{\text{raw}}$ vs $R_{\text{eff}}$
+* **$R_{\text{raw}}$ (Raw Un-Clamped Score)**: Directly measures the unconstrained benchmark momentum and persistence before boundary enforcement. Reveals macro deterioration even after the floor is hit (e.g. $R_{\text{raw}} = 0.1222$ on Sep 24 and $0.1121$ on Sep 25).
+* **$R_{\text{eff}}$ (Effective Execution Multiplier)**: The operational multiplier enforced at scoring time after floor clamping ($\ge 0.20$) and degradation sentry rules:
+  $$\text{Effective Score}_i = \text{Raw Score}_i \times R_{\text{eff}}$$
+  $$\text{Raw Hurdle Points} = \frac{\text{Min Effective Score Threshold}}{R_{\text{eff}}} = \frac{30.0}{R_{\text{eff}}}$$
+
+### 3.3. Worked Verification Examples:
 * **Strong Bull Trend** (20/20 sessions above, $+4\%$ above 50 DMA):
-  $$0.20 + 0.60(1.0) + 0.50\left(\frac{+0.04}{0.10}\right) = 0.20 + 0.60 + 0.20 = \mathbf{1.00}$$
+  $$0.20 + 0.60(1.0) + 0.50\left(\frac{+0.04}{0.10}\right) = 0.20 + 0.60 + 0.20 = \mathbf{1.00} \implies \text{Hurdle} = 30.0\text{ pt}$$
 * **Transitional / Basing Market** (10/20 sessions above, at 50 DMA):
-  $$0.20 + 0.60(0.50) + 0.50(0.00) = 0.20 + 0.30 + 0.00 = \mathbf{0.50}$$
+  $$0.20 + 0.60(0.50) + 0.50(0.00) = 0.20 + 0.30 + 0.00 = \mathbf{0.50} \implies \text{Hurdle} = 60.0\text{ pt}$$
 * **Mild Correction** (6/20 sessions above, $-3\%$ below 50 DMA):
-  $$0.20 + 0.60(0.30) + 0.50\left(\frac{-0.03}{0.10}\right) = 0.20 + 0.18 - 0.15 = \mathbf{0.23}$$
+  $$0.20 + 0.60(0.30) + 0.50\left(\frac{-0.03}{0.10}\right) = 0.20 + 0.18 - 0.15 = \mathbf{0.23} \implies \text{Hurdle} = 130.4\text{ pt}$$
 * **Severe Downtrend / Panic** (0/20 sessions above, $-10\%$ below 50 DMA):
-  $$0.20 + 0.60(0.0) + 0.50(-0.40) = 0.20 + 0.00 - 0.20 = 0.00 \to \text{Clamped to Floor } \mathbf{0.20}$$
+  $$R_{\text{raw}} = 0.20 + 0.60(0.0) + 0.50(-0.40) = 0.00 \to R_{\text{eff}} = \mathbf{0.20} \implies \text{Hurdle} = 150.0\text{ pt}$$
 
-### Dynamic Selection Bar (Threshold Scaling):
-$$\text{Effective Score}_i = \text{Raw Score}_i \times R_{\text{regime}}$$
-$$\text{Selection Condition}: \text{Effective Score}_i \ge \text{Min Score Threshold} \quad (\text{Default Prior: } 30.0)$$
-$$\text{Equivalent Raw Score Requirement} = \frac{\text{Min Score Threshold}}{R_{\text{regime}}}$$
+### 3.4. Calendar-Independent Freshness Guard & Feed Lag Sentry
+During early post-market execution (e.g. 15:30 to 18:00 IST), data providers (such as Yahoo Finance) often lag in publishing official EOD bars for `^NSEI`, returning prior-day closes. To prevent frozen or deceptive regime calculations, the engine enforces a calendar-independent freshness guard:
 
-* **Bull Market ($R = 1.0$)**: Requires $\text{Raw Score} \ge 30.0$.
-* **Basing / Transitional Market ($R = 0.50$)**: Requires $\text{Raw Score} \ge 60.0$ (elevating the bar so only high-conviction outlier setups qualify).
-* **Severe Downtrend ($R = 0.20$)**: Requires $\text{Raw Score} \ge 150.0$ (exceeds the 100-point ceiling, resulting in $0$ allocations and full cash preservation).
+$$\text{Feed Staleness Check}: \text{bench\_last\_bar} < \text{as\_of\_date}$$
 
-> [!NOTE]
-> The working prior of $30.0$ is scheduled for empirical percentile calibration (e.g., target $P_{40}$ of historical training Stage-1 survivors) once rolling PIT backtest snapshots are generated.
+When an upstream feed lag is detected:
+1. **Status Tag**: Stamped `🔴 DEGRADED (bench YYYY-MM-DD)` instead of `🟢 Synced`.
+2. **Conservative Regime Fallback**: $R_{\text{eff}, T} = \min(R_{\text{eff}, T}, \, R_{\text{eff}, T-1})$.
+3. **Capital Expansion Freeze**: Portfolio equity weight is strictly bounded by prior-session deployment:
+   $$w_{\text{equity}, T} \le w_{\text{equity}, T-1}$$
+   The engine cannot increase equity exposure on stale or unconfirmed data.
 
-### Live Case Study: Capital Preservation (September 24, 2026)
+### 3.5. Selection Policies: Legacy Ladder (`L`) vs Binary Sentry (`B`)
+The portfolio selection policy is tracked explicitly per session run:
+* **`Pol: L` (Legacy Weight Ladder)**: Active prior to September 24, 2026. Top $N$ candidates were selected and assigned tiered weights (e.g. 50% on 08-28, 25% on 08-31, 0% on market drop). Hurdle pass counts are reported in parentheses `(0)` / `(1)` to denote counterfactual analysis without retroactive relabeling.
+* **`Pol: B` (Binary Sentry Policy `BINARY_SENTRY_V1`)**: Deployed live in commit `f09b9ca` on September 24, 2026. Enforces a strict binary gate: candidates must achieve $\text{Effective Score} \ge 30.0$ ($\text{Raw Score} \ge \text{Hurdle Pts}$) to be eligible for capital. If 0 clear, cash is strictly 100%. Hurdle passes are printed as live gate integers (`0`).
+
+### 3.6. Reconciliation Invariant by Construction
+To eliminate discrepancy between report queries and recorded artifacts, every Stage-1 candidate is assigned an authoritative terminal outcome stored at execution time in `pit_candidate_scores.outcome`:
+* **`SELECTED`**: Qualified and allocated portfolio capital.
+* **`HURDLE_REJECT`**: Passed Stage-1 safety filters but failed the regime hurdle ($\text{Effective} < 30.0$).
+* **`ALLOC_DROPS`**: Cleared the hurdle but eliminated due to sector caps or portfolio sizing constraints.
+* **`STAGE1_REJECT`**: Eliminated at Stage-1 fundamental or technical gates.
+
+The reconciliation identity holds 100% across all sessions by construction:
+$$\text{Stage-1 Survivors} \equiv \text{Selected} + \text{Hurdle Reject} + \text{Alloc Drops}$$
+
+### 3.7. Live Case Study: Capital Preservation (September 24–25, 2026)
 
 During live execution of `mycase pipeline --config config/pipeline_earlymb.yaml`:
 - **Nifty 50 Close**: ₹23,446.80
 - **Nifty 50 50-DMA**: ₹24,033.41 ($\text{Distance} = -2.44\% \to \text{Scaled Distance} = -0.2441$)
 - **Persistence**: Only 5 of last 20 trading sessions closed above 50-DMA ($0.25$)
-- **Calculated $R_{\text{regime}}$**:
-  $$R_{\text{regime}} = 0.20 + (0.60 \times 0.25) + (0.50 \times -0.2441) = \mathbf{0.2280}$$
+- **Calculated $R_{\text{raw}}$**: $0.1222 \to R_{\text{eff}} = \mathbf{0.2000}$ (Hurdle = 150.0 pts)
 - **Screening Outcome**:
-  - 136 constituents passed Stage-1 safety filters.
-  - The highest raw pre-breakout score was `NSE:IKS` at **45.8**.
-  - Its effective score was $45.8 \times 0.2280 = \mathbf{10.4}$, far below the `min_effective_score_threshold: 30.0`.
-  - **Capital Preservation Action**: The engine eliminated all 136 candidates at the regime cutoff, allocating **100% of portfolio weight to `CASH_RESERVE`**.
+  - 130 constituents passed Stage-1 safety filters.
+  - The highest raw pre-breakout score was `NSE:RUBICON` at **50.9 pts**.
+  - Its effective score was $50.9 \times 0.2000 = \mathbf{10.2}$, far below the `min_effective_score_threshold: 30.0`.
+  - **Capital Preservation Action**: The engine eliminated all 130 candidates (`HURDLE_REJECT = 130`), allocating **100% of portfolio weight to Cash**.
 
 ### First-Class 100% Cash Defense Pipeline Support
 * **Dedicated Cash Defense Report (`cmd/report.go`)**: When a portfolio has 0 active equities, the reporting engine generates an authoritative `03_portfolio_report.txt` stating `100% CASH DEFENSE (0 Equities Selected)`.
@@ -359,24 +380,29 @@ The `mycase --index niftytotalmarket --method earlymb --analysis` command execut
 
 ```text
   Section | Title                                      | Purpose
-  --------+--------------------------------------------+----------------------------------------
-  1       | Stage-1 Funnel Breakdown                   | Constituent elimination taxonomy
-  2       | Sector Allocation & Concentration           | Survivor sector distribution
-  3       | Rolling Quantile Correlation Matrix          | Score percentile evolution across dates
-  4       | VCP Contraction Heatmap                     | Volatility compression rankings
-  5       | Significant Score Shifts (Gainers/Decliners)| Top positive/negative ΔScore(1D)
-  6       | Data Integrity & Freshness Sentry           | 3-layer staleness defense audit
-  7       | Pre-Breakout Launchpad (2D Unified)         | Spatial + temporal runway classification
-  8       | Near-Miss Radar & Radar Alpha Audit         | Institutional footprints blocked by gates
-  9       | Top Gainers & Radar Attribution             | Cross-sectional price movers + delivery
-  10      | Shadow Mode Divergence                      | Relief rules evaluated in parallel
-  11      | Gate Churn Rate & Pool Stability Oscillator  | Constituent stability across runs
-  12      | Regime-Conditional Forward Return Stratification | Alpha by regime quintile
+  --------+--------------------------------------------+-----------------------------------------------------------
+  1       | Stage-1 Elimination Funnel & Bottlenecks   | Primary elimination gate audit & CFO conversion taxonomy
+  2       | Continuous Market Regime Sentry & Capital  | Regime multiplier R, Hurdle Pts, Sentry & Reconciliation
+  3       | Cross-Sectional Score Quantiles & Pillars  | P90-P25 quantiles, Pillar 1-4 averages across sessions
+  4       | Stage-2 Active Holdings & Target Allocs    | Active weights, hurdle delta & Counterfactual Top-5
+  5       | Cross-Session Score Velocity & Movers      | Top 10 single-day score gainers & decliners
+  6       | PIT Snapshot & Factor Integrity Audit      | Multi-layer freshness sentry & constituent counts
+  7       | Pre-Breakout Launchpad (2D Unified)        | Spatial base anatomy + temporal velocity classification
+  8       | Near-Miss Radar & Horizon Alpha Audit      | Institutional footprints + T+5, T+10, T+21 excess returns
+  9A      | Stage-1 Qualified Price Gainers            | Top 1D price movers with clearance streaks & volume
+  9B      | Universe Top Gainers Blocked by Stage-1    | Top 1D price movers blocked with primary bottleneck detail
+  10      | Stage-1 Shadow Mode Divergence             | Empirical relief rules evaluated in shadow mode
+  11      | Pool Turnover & Boundary Churn Attribution | Session-to-session survivor stability & margin attribution
+  12      | Stage-2 Factor Validation (Spearman IC)    | Out-of-sample predictive monotonicity (T+5, T+10, T+21)
 ```
 
-### Conservation Invariants:
-$$\text{Initial Pool} \equiv \text{DataFetchFailed} + \text{Stage1Eliminated} + \text{Stage1Survivors}$$
-$$\text{Stage-1 Survivors} \equiv \text{RegimeRejected} + \text{SectorCapped} + \text{RankLimited} + \text{FinalSelected}$$
+### Production Reconciliation Invariants:
+1. **Universe Partitioning**:
+   $$\text{Total Constituents} \equiv \text{DataFetchFailed} + \text{Stage-1 Eliminated} + \text{Stage-1 Survivors}$$
+2. **Stage-1 Survivor Accounting by Construction (Section 2)**:
+   $$\text{Stage-1 Survivors} \equiv \text{Selected} + \text{Hurdle Reject} + \text{Alloc Drops}$$
+   $$\text{Where } \text{Selected} \equiv \text{Direct Selected} + \text{Hysteresis Kept}$$
+   Under Binary Policy (`B`): $\text{Hurdle Pass} \equiv \text{Selected} + \text{Alloc Drops}$. If $\text{Hurdle Pass} = 0$, cash is strictly 100%.
 
 ---
 
@@ -440,24 +466,32 @@ The unified **2D Pre-Breakout Launchpad** in [`pkg/pithistory/analytics.go`](fil
                 │                                      └── NO  ──► [ STEALTH-LOW ]    │
                 │ NO                                                                  │
                 ▼                                                                     │
-   [ Composite RS >= +30.0% ]             ──► YES ──► [ BASE-STRONG ]     (Tier 4)    │
+   [ Composite RS >= +30.0% AND VCP <= 0.85 ]  ──► YES ──► [ BASE-STRONG ]     (Tier 4)
+                │ NO                                                                  │
+                ▼                                                                     │
+   [ Composite RS >= +30.0% AND VCP > 0.85 ]   ──► YES ──► [ MOM-LOOSE ]       (Tier 5)
                 │ NO                                                                  │
                 ▼                                                                     │
    [ 1D Δ >= +4.0pt AND                                                               │
-     (VCP > 0.85 OR Deliv < +2.0%) ]      ──► YES ──► [ VELOCITY-POP ]    (Tier 6)    │
+     (VCP > 0.85 OR Deliv < +2.0%) ]           ──► YES ──► [ VELOCITY-POP ]    (Tier 7)
                 │ NO                                                                  │
                 ▼                                                                     │
-   [ Default Baseline Survivor ]          ──────────► [ BASE-ACCUM ]      (Tier 5)    │
+   [ VCP <= 0.85 (Baseline Survivor) ]         ──────────► [ BASE-ACCUM ]      (Tier 6)
+                │ NO                                                                  │
+                ▼                                                                     │
+   [ VCP > 0.85 (Loose Baseline Structure) ]   ──────────► [ UNFORMED ]        (Tier 8)
 ```
 
-**Decision Rules:**
+**Decision Rules & Volatility Guard:**
 1. **Tier 1: `LAUNCHPAD-ARMED`**: $\text{VCP} \le 0.70 \land \Delta\text{Deliv} \ge +6.0\% \land (\Delta_{1\text{D}} \ge +3.0\text{ pt} \lor \text{CONSEC-SURGE})$. Maximum coiled spring energy with active institutional volume expansion.
 2. **Tier 2: `COIL-COMPRESS`**: $\text{VCP} \le 0.45 \land |\Delta_{1\text{D}}| \le 2.5\text{ pt}$. Extreme volatility exhaustion ($\text{ATR}_5 < 45\% \text{ of ATR}_{20}$). Waiting for volume ignition.
 3. **Tier 3A: `STEALTH-HIGH`**: $\Delta\text{Deliv} \ge +8.0\% \land \Delta_{1\text{D}} \ge 0 \land \text{Score CV} \le 0.08$. Methodical, quiet institutional accumulation.
 4. **Tier 3B: `STEALTH-LOW`**: $\Delta\text{Deliv} \ge +8.0\% \land \Delta_{1\text{D}} \ge 0 \land \text{Score CV} > 0.08$. Real delivery with wider score variance.
-5. **Tier 4: `BASE-STRONG`**: $\text{Composite RS} \ge +30.0\%$. Established relative strength market leaders.
-6. **Tier 5: `BASE-ACCUM`**: Baseline Stage-1 survivor not meeting Tiers 1–4.
-7. **Tier 6: `VELOCITY-POP`**: $\Delta_{1\text{D}} \ge +4.0\text{ pt} \land (\text{VCP} > 0.85 \lor \Delta\text{Deliv} < +2.0\%)$. Unconfirmed momentum spike.
+5. **Tier 4: `BASE-STRONG`**: $\text{Composite RS} \ge +30.0\% \land \mathbf{\text{VCP} \le 0.85}$. Established relative strength market leaders with tight/coiled volatility structure.
+6. **Tier 5: `MOM-LOOSE`**: $\text{Composite RS} \ge +30.0\% \land \mathbf{\text{VCP} > 0.85}$. Strong momentum but loose/uncontracted volatility structure (disqualified from `BASE-STRONG` until base tightens).
+7. **Tier 6: `BASE-ACCUM`**: $\text{VCP} \le 0.85$. Formed baseline Stage-1 survivor not meeting higher tiers.
+8. **Tier 7: `VELOCITY-POP`**: $\Delta_{1\text{D}} \ge +4.0\text{ pt} \land (\text{VCP} > 0.85 \lor \Delta\text{Deliv} < +2.0\%)$. Unconfirmed momentum spike.
+9. **Tier 8: `UNFORMED`**: $\text{VCP} > 0.85$. Loose baseline structure lacking constructive volatility contraction.
 
 ### 7.3. Directional Velocity Pattern Dispatch
 
@@ -645,20 +679,25 @@ In [`pkg/pithistory/bottleneck.go`](file:///Users/raghavgarg/Projects/myGo/mycas
 #### Cash Flow Quality Gate (`classifyCashFlow`)
 ```go
 func classifyCashFlow(pat, ocf, fcf float64, sector string) BottleneckDetail {
+    conciseSec := formatConciseSector(sector)
     switch {
     case pat < 0:
-        return BottleneckDetail{Code: "CF-LOSS", Detail: fmt.Sprintf("NI -₹%.1fCr, FCF %+.1fCr", math.Abs(pat)/1e7, fcf/1e7)}
+        return BottleneckDetail{Code: "CF-LOSS", Detail: fmt.Sprintf("NI -₹%.1fCr, CFO %+.1fCr", math.Abs(pat)/1e7, ocf/1e7)}
     case ocf == 0:
-        return BottleneckDetail{Code: "CF-NODATA", Detail: fmt.Sprintf("OCF unreported (%s)", formatConciseSector(sector))}
+        return BottleneckDetail{Code: "CF-NODATA", Detail: fmt.Sprintf("CFO unreported (%s)", conciseSec)}
     case isLenderOrDeveloper(sector):
-        return BottleneckDetail{Code: "CF-NORM", Detail: fmt.Sprintf("PAT ₹%.1fCr, OCF %+.1fCr (%s-norm)", pat/1e7, ocf/1e7, formatConciseSector(sector))}
+        return BottleneckDetail{Code: "CF-NORM", Detail: fmt.Sprintf("PAT ₹%.1fCr, CFO %+.1fCr (%s-norm: blocked by non-financial CFO gate)", pat/1e7, ocf/1e7, conciseSec)}
     default:
-        return BottleneckDetail{Code: "CF-LAG", Detail: fmt.Sprintf("PAT ₹%.1fCr, FCF %+.1fCr", pat/1e7, fcf/1e7)}
+        ratioStr := "0.00x"
+        if pat > 0 {
+            ratioStr = fmt.Sprintf("%.2fx", ocf/pat)
+        }
+        return BottleneckDetail{Code: "CF-LAG", Detail: fmt.Sprintf("PAT ₹%.1fCr, CFO %+.1fCr (CFO/PAT: %s, min 0.25x)", pat/1e7, ocf/1e7, ratioStr)}
     }
 }
 ```
-* **`CF-NORM`**: Banking/NBFC (`NSE:CGCL`) and Real Estate (`NSE:BRIGADE`) naturally deploy cash into loan books and inventory — negative OCF is an operational norm.
-* **`CF-LAG`**: Companies with high PAT but negative FCF (e.g. `NSE:HFCL`: PAT ₹572.6Cr, FCF -₹723.4Cr) flagged for working capital absorption.
+* **`CF-NORM`**: Banking/NBFC (`NSE:CGCL`) and Real Estate (`NSE:BRIGADE`) deploy capital directly into loan books and land inventory — negative operating cash flow is an operational characteristic of the business model, but blocks them under standard non-financial CFO filters.
+* **`CF-LAG`**: Companies with positive PAT where CFO is either negative or below $0.25 \times \text{PAT}$ (e.g. `NSE:HFCL`: PAT ₹572.6Cr, CFO -₹378.1Cr, ratio -0.66x vs 0.25x floor).
 
 #### Capital Efficiency Gate (`classifyROCE`)
 $$\text{ROCE} = \frac{\text{EBIT}}{\text{Total Assets} - \text{Current Liabilities}} \times 100\%$$
@@ -673,56 +712,53 @@ Evaluates $R_{\text{SMA}} = \frac{\text{Close}}{\text{SMA}_{200}}$ and 20-day sl
 * `SMA-DECLINE`: $R \ge 0.90$, but 200-SMA slope actively falling.
 * `SMA-BREAK`: $R < 0.90$, deep macro trend breakdown.
 
-### 8.3. Radar Alpha Audit
+### 8.3. Fixed-Horizon Radar Alpha Audit (Frozen Cohorts vs Equal-Weight Universe Benchmark)
 
-Tracks candidates from first radar detection through Stage-1 clearance. Answers: **What is the empirical opportunity cost of waiting for accounting filters?**
+Tracks **all** candidates from their first day of entry onto the near-miss radar at fixed trading horizons ($T+5, T+10, T+21$) evaluated against next-day open prices. This prevents survivorship bias (measuring all entrants rather than only those that later graduated).
 
-```text
-  --- Graduated Stocks Performance (Radar Alpha Audit: First-Seen Date -> Clear Date) ---
-  • Latest Session (2026-09-25): No new graduations (Most Recent Cohort: 2026-09-24 | 2/2, +4.17% Alpha)
-  Ticker          | Channel             | First Seen | Clear Date | Incub (Hits) |   Entry (₹) |   Clear (₹) | Radar Return
-  NSE:RRKABEL     | natural_clear       | 2026-09-17 | 2026-09-24 | 7d (2x)      |   ₹2,390.50 |   ₹2,529.80 |       +5.83%
-  NSE:STYL        | natural_clear       | 2026-09-22 | 2026-09-24 | 2d (2x)      |     ₹361.25 |     ₹370.35 |       +2.52%
-  Rolling Win Rate: 2/2 (100.0%) | Average Radar Return: +4.17%
-```
+- **Equal-Weight Benchmark**: Mean and median forward return of all stocks in the index universe over the identical calendar interval.
+- **Statistical Significance**: 95% confidence intervals generated via **block bootstrap clustered by session date** (1,000 iterations), accounting for cross-sectional return correlation.
+- **Maturity & Sample Guards**: Horizons with $n < 30$ episodes are explicitly flagged `[INSUFFICIENT SAMPLE]`; immature cohorts report `[PENDING: N of K sessions]`.
+- **Stratification by Horizon State**: Stratifies realized excess returns into `CLEARED` (opportunity cost of waiting), `ACTIVE` (still coiling), and `EXITED` (avoided value traps).
 
 ---
 
-## 9. Section 9: Daily Top Price Gainers & Radar Attribution
+## 9. Section 9: Daily Top Price Gainers (Stage-1 Cleared vs Universe Gated)
 
-Surfaces top 15 single-session percentage gainers across the Nifty Total Market, cross-referencing price momentum against institutional delivery confirmation.
+Cross-references single-session price leaders against the institutional Stage-1 filter pipeline, cleanly separating qualified momentum from unconfirmed speculative moves.
 
-### Volume Confirmation Gate
-$$\text{Acc} = \begin{cases} \mathbf{YES} & \text{if } \Delta\text{Deliv} \ge +6.0\% \\ \mathbf{NO} & \text{if } \Delta\text{Deliv} < +6.0\% \end{cases}$$
+### 9A. Stage-1 Qualified Gainers
+Lists stocks that passed all Stage-1 safety and fundamental checks, displaying:
+- **First Cleared Date & Clearance Streak**: Verifies whether the stock has sustained multi-day institutional qualification or just cleared today.
+- **Volume & RS Confirmation**: Relative volume Z-score (`RVOL Z`), delivery volume expansion (`Deliv Δ`), and Composite Relative Strength (`Comp RS`).
 
-### Radar Footprint Overlap Taxonomy
-* **`INCUBATED HIT`**: Stage-1 qualified, active on Section 7 Launchpad, with $\text{Acc} = \text{YES}$. Highest-confidence signal.
-* **`INCUBATED`**: Stage-1 qualified, gaining on normal liquidity.
-* **`GRADUATED`**: Was on near-miss radar, cleared Stage 1 today.
-* **`ACTIVE RADAR`**: Currently on near-miss radar.
-* **`COINCIDENT POP`**: Appeared in both radar and gainers simultaneously.
-* **`-`**: No EBM pipeline connection.
+### 9B. Universe Top Gainers (Blocked by Stage-1)
+Surfaces the largest single-session gainers across the broad universe that were disqualified by Stage-1:
+- Identifies the specific primary bottleneck gate (`CF-LAG`, `ROCE-WEAK`, `INTCOV-WEAK`, `52W-NEAR`, etc.).
+- Displays underlying fundamental metrics and overlap with the Near-Miss Radar (`ACTIVE RADAR`, `GRADUATED`, or `SPECULATIVE`).
 
 ---
 
-## 10. Sections 10–12: Shadow Mode, Churn & Stratification
+## 10. Sections 10–12: Shadow Mode, Churn & Factor Validation
 
 ### Section 10: Stage-1 Shadow Mode Divergence
 Evaluates relief rules in shadow mode before live deployment. Three channels:
 - `base_duration`: Rescues candidates with base $< 4\text{w}$ if $\text{VCP} \le 0.50$.
 - `delivery_override`: Relaxes ROCE floor from $12.0\%$ to $10.0\%$ if $\Delta\text{Deliv} \ge +8.0\%$.
 - `promoter_exempt`: Relaxes promoter pledge filters for debt-free companies.
+- **Sector Cap Defense Audit**: Proves shadow pool cannot breach 3 holdings or 25% max weight per sector.
 
-### Section 11: Gate Churn Rate & Pool Stability Oscillator
-$$\text{Churn Rate} = \frac{|\mathcal{S}_{T_0} \setminus \mathcal{S}_{T_1}| + |\mathcal{S}_{T_1} \setminus \mathcal{S}_{T_0}|}{|\mathcal{S}_{T_0} \cup \mathcal{S}_{T_1}|} \times 100\%$$
-$$\text{Jaccard Stability Index} = \frac{|\mathcal{S}_{T_0} \cap \mathcal{S}_{T_1}|}{|\mathcal{S}_{T_0} \cup \mathcal{S}_{T_1}|}$$
-Signals regime changes when churn spikes $> 25\%$.
+### Section 11: Gate Churn Rate & Boundary Attribution
+$$\text{Churn Rate} = \frac{|\mathcal{S}_{T_0} \setminus \mathcal{S}_{T_1}| + |\mathcal{S}_{T_1} \setminus \mathcal{S}_{T_0}|}{|\mathcal{S}_{T_1}|} \times 100\%$$
+- Monitors pool stability across consecutive sessions (Green $< 10\%$, Yellow $10\text{--}25\%$, Red $> 25\%$).
+- **Boundary Churn Attribution**: Identifies stocks crossing the qualification boundary between $T-1$ and $T$, pinpointing the exact gating metric causing the exit.
 
-### Section 12: Regime-Conditional Forward Return Stratification
-$$\text{Alpha}_{T+k} = \mathbf{E}\left[ R_{i, T+k} - R_{\text{Nifty}, T+k} \mid R_{\text{regime}} \ge 0.60 \right] \text{ vs } \mathbf{E}\left[ R_{i, T+k} - R_{\text{Nifty}, T+k} \mid R_{\text{regime}} < 0.60 \right]$$
-Proves Stage-1 survivors exhibit heavy positive forward alpha in bull regimes, while cash preservation dominates in bear regimes.
-
----
+### Section 12: Factor Validation & Information Coefficient (Rank IC)
+$$\rho_T = \text{Spearman}\Big(\text{Raw Score}_i, R_{i, T \to T+h} - \bar{R}_{\text{EW}, T \to T+h}\Big)$$
+- Evaluates monotonic predictive power of Stage-1 raw scores versus realized forward excess returns at $T+5, T+10, T+21$.
+- Reports mean Rank IC ($\bar{\rho}$), sample standard deviation ($s_\rho$), standard error ($\text{SE} = s_\rho / \sqrt{M}$), $t$-statistic, and positive hit rate across evaluated trading dates.
+- Evaluated independently for both **Stage-1 Qualified Survivors** (alpha separation within the screened cohort) and the **Full Index Universe** (broad cross-sectional monotonicity).
+- Enforces statistical maturity guard: minimum 10 trading session dates required for confirmed factor validation.
 
 # Part III: Operational Infrastructure
 
@@ -738,7 +774,7 @@ All research data is stored in a single ACID-compliant **DuckDB OLAP Database** 
 ### Core Table Schemas
 
 ```sql
--- 1. Run Metadata & Funnel Accounting
+-- 1. Run Metadata & Funnel Accounting (Reconciled by Construction)
 CREATE TABLE IF NOT EXISTS pit_runs (
     as_of_date         DATE,
     index_name         VARCHAR,
@@ -749,11 +785,21 @@ CREATE TABLE IF NOT EXISTS pit_runs (
     selected_count     INTEGER,
     created_at         TIMESTAMP,
     pillar4_uncalibrated BOOLEAN DEFAULT false,
-    pillar4_insufficient_history BOOLEAN DEFAULT false,
+    selection_policy   VARCHAR,  -- 'LEGACY_LADDER' (<= 2026-09-23) or 'BINARY_SENTRY_V1' (>= 2026-09-24)
+    engine_commit      VARCHAR,  -- git SHA (e.g. '0d069ae', 'f09b9ca')
+    r_raw              DOUBLE,   -- unclamped raw continuous regime multiplier
+    r_eff              DOUBLE,   -- operational effective multiplier
+    hurdle_raw_pts     DOUBLE,   -- 30.0 / r_eff
+    bench_last_bar     DATE,     -- latest benchmark bar date verified by freshness sentry
+    breadth_last_bar   DATE,
+    degraded           BOOLEAN DEFAULT false,
+    degraded_inferred  BOOLEAN DEFAULT false,
+    equity_weight      DOUBLE,
+    holdings_recorded  BOOLEAN DEFAULT false,
     PRIMARY KEY (as_of_date, index_name, method)
 );
 
--- 2. Granular Candidate Metrics
+-- 2. Granular Candidate Metrics & Exact Outcome
 CREATE TABLE IF NOT EXISTS pit_candidate_scores (
     as_of_date         DATE,
     index_name         VARCHAR,
@@ -761,6 +807,7 @@ CREATE TABLE IF NOT EXISTS pit_candidate_scores (
     ticker             VARCHAR,
     sector             VARCHAR,
     passed_stage1      BOOLEAN,
+    data_fetch_failed  BOOLEAN DEFAULT false,
     rejection_reason   VARCHAR,
     raw_score          DOUBLE,
     effective_score    DOUBLE,
@@ -772,17 +819,58 @@ CREATE TABLE IF NOT EXISTS pit_candidate_scores (
     selected           BOOLEAN,
     final_weight       DOUBLE,
     forward_return_21d DOUBLE,
-    data_fetch_failed  BOOLEAN DEFAULT false,
     pillar4_uncalibrated BOOLEAN DEFAULT false,
     pillar4_insufficient_history BOOLEAN DEFAULT false,
+    fair_price         DOUBLE,
+    upside_pct         DOUBLE,
+    mos_verdict        VARCHAR,
+    outcome            VARCHAR,  -- 'SELECTED', 'HURDLE_REJECT', 'ALLOC_DROPS', 'STAGE1_REJECT' (or 'LEGACY_SELECTED', 'LEGACY_NOT_TOP_N')
     PRIMARY KEY (as_of_date, index_name, method, ticker)
 );
 
--- 3. Canonical Index Constituent Roster
-CREATE TABLE IF NOT EXISTS index_constituents (
-    index_name VARCHAR,
-    ticker     VARCHAR,
-    PRIMARY KEY (index_name, ticker)
+-- 3. Production Portfolio Holdings (Source of Truth for Positions)
+CREATE TABLE IF NOT EXISTS pit_holdings (
+    as_of_date       DATE NOT NULL,
+    index_name       VARCHAR NOT NULL,
+    method           VARCHAR NOT NULL,
+    ticker           VARCHAR NOT NULL,
+    weight           DOUBLE NOT NULL,
+    shares           BIGINT,
+    entry_date       DATE NOT NULL,
+    holding_days     INTEGER NOT NULL,
+    is_hysteresis    BOOLEAN NOT NULL DEFAULT false,
+    PRIMARY KEY (as_of_date, index_name, method, ticker)
+);
+
+-- 4. Fixed-Horizon Radar Cohort Tracking
+CREATE TABLE IF NOT EXISTS radar_episodes (
+    episode_id          VARCHAR PRIMARY KEY,
+    ticker              VARCHAR NOT NULL,
+    sector              VARCHAR,
+    first_seen_date     DATE NOT NULL,
+    index_name          VARCHAR NOT NULL,
+    method              VARCHAR NOT NULL,
+    entry_date          DATE NOT NULL,
+    entry_px_open       DOUBLE NOT NULL,
+    entry_px_close_t0   DOUBLE NOT NULL,
+    criteria_version    VARCHAR NOT NULL,
+    blocker_at_entry    VARCHAR,
+    UNIQUE (ticker, first_seen_date, index_name, method)
+);
+
+CREATE TABLE IF NOT EXISTS radar_horizon_returns (
+    episode_id          VARCHAR NOT NULL,
+    horizon             INTEGER NOT NULL,
+    exit_date           DATE NOT NULL,
+    exit_px             DOUBLE NOT NULL,
+    ret                 DOUBLE NOT NULL,
+    bench_ew_mean       DOUBLE NOT NULL,
+    bench_ew_median     DOUBLE NOT NULL,
+    bench_n             INTEGER NOT NULL,
+    excess              DOUBLE NOT NULL,
+    state_at_h          VARCHAR NOT NULL,  -- 'ACTIVE', 'CLEARED', 'EXITED'
+    last_price_flag     BOOLEAN NOT NULL DEFAULT false,
+    PRIMARY KEY (episode_id, horizon)
 );
 ```
 
@@ -1215,3 +1303,56 @@ go test -v ./pkg/pithistory -run "TestClassifyVelocityPattern|TestFormatDiagnost
 2. `FormatDiagnosticFootprint`: Deterministic explanations tied to numeric thresholds.
 3. `ColorizeLaunchpadState`: ANSI colors within terminal width budgets.
 4. `PadVisible`: Visible rune length via `utf8.RuneCountInString`, zero column misalignment from 3-byte `⚠`.
+
+---
+
+## A.7. Comprehensive Reconciliation by Construction, Feed Freshness Sentry & Dual Telemetry Hardening (Sep 28, 2026)
+
+### 1. The 08-31 Discrepancy & Reconciliation by Construction
+* **The Anomaly**: Section 2 previously reported conflicting numbers for 2026-08-31 because one column came from a stored artifact while another was evaluated via retroactive SQL written weeks later.
+* **The Architectural Fix**:
+  - Eliminated retroactive classification. Every candidate is assigned an authoritative terminal `outcome` stamped at execution time (`SELECTED`, `HURDLE_REJECT`, `ALLOC_DROPS`, `STAGE1_REJECT` for Binary; `LEGACY_SELECTED`, `LEGACY_NOT_TOP_N` for Legacy).
+  - Enforced the mathematical conservation identity:
+    $$\text{Stage-1 Survivors} \equiv \text{Selected} + \text{Hurdle Reject} + \text{Alloc Drops}$$
+  - Section 2 is generated as a direct SQL `GROUP BY outcome`, ensuring the identity holds 20/20 by construction.
+  - Verified by unit test [`TestSection2ReconciliationInvariants`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/pithistory/pithistory_test.go#L476).
+
+### 2. Forensic Discovery of Yahoo Finance EOD Publication Lag
+* **The Bug**: Runs on `2026-09-02` and `2026-09-08` exhibited identical floating-point multipliers to their previous days (`0.5584417379076614` and `0.4128583970033348`), flagged as `🔴 INFERRED-STALE`.
+* **Root Cause Investigation**:
+  - `pit_runs.created_at` timestamps showed runs executed shortly after market close (15:53 to 16:58 IST).
+  - Yahoo Finance had not yet published the official daily bar for `^NSEI` (typically updating after 18:00 IST), silently returning historical series ending on the prior day.
+  - The engine passed identical price series into `CalculateSmoothedBenchmarkRegime`, producing identical multipliers.
+* **The Permanent Cure**:
+  - Recalculated true fresh regime scores directly from verified `^NSEI` closes:
+    - **2026-09-02**: Fresh $R = \mathbf{0.498879}$ (Hurdle: $60.1\text{ pt}$, Max raw: $50.89\text{ pt} \implies 0$ qualified).
+    - **2026-09-08**: Fresh $R = \mathbf{0.354028}$ (Hurdle: $84.7\text{ pt}$, Max raw: $52.89\text{ pt} \implies 0$ qualified).
+    - **2026-09-09**: Fresh $R = \mathbf{0.284255}$ (Hurdle: $105.5\text{ pt}$, Max raw: $56.42\text{ pt} \implies 0$ qualified).
+  - Zero portfolio changes occurred under fresh vs stale numbers (100% cash preserved in both).
+  - Cured database in-place and codified in [`scripts/migrations/001_emb_reconciliation.sql`](file:///Users/raghavgarg/Projects/myGo/mycase/scripts/migrations/001_emb_reconciliation.sql). All 20 sessions now show `🟢 Synced`.
+
+### 3. Calendar-Independent Freshness Guard
+* Implemented [`pkg/stockpicker/freshness.go`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/stockpicker/freshness.go) comparing `benchHist.LastBarDate == as_of_date`.
+* Staleness degradation rules:
+  1. $R_{\text{eff}, T} = \min(R_{\text{eff}, T}, \, R_{\text{eff}, T-1})$.
+  2. Equity weight freeze: $w_{\text{equity}, T} \le w_{\text{equity}, T-1}$.
+
+### 4. Dual Regime Multiplier Telemetry ($R_{\text{raw}}$ vs $R_{\text{eff}}$)
+* Separated continuous market calculation into:
+  - `CalculateSmoothedBenchmarkRegimeWithRaw`: returns unclamped $R_{\text{raw}}$ and clamped $R_{\text{eff}} = \max(0.20, \min(1.0, R_{\text{raw}}))$.
+* Backfilled $R_{\text{raw}}$ across all 20 historical sessions, highlighting where the 0.20 floor actively intervened:
+  - `2026-09-16`: $R_{\text{raw}} = 0.1962 \to R_{\text{eff}} = 0.2000$.
+  - `2026-09-24`: $R_{\text{raw}} = 0.1222 \to R_{\text{eff}} = 0.2000$.
+  - `2026-09-25`: $R_{\text{raw}} = 0.1121 \to R_{\text{eff}} = 0.2000$.
+
+### 5. Policy Attribution & Formatting Integrity
+* **`Pol: L` (Legacy Ladder)**: Applied to runs before Sep 24, 2026. Hurdle pass counts are parenthesized `(0)` or `(1)` to indicate counterfactual evaluation without retroactive relabeling.
+* **`Pol: B` (Binary Sentry `BINARY_SENTRY_V1`)**: Applied from commit `f09b9ca` on Sep 24 onward. Hurdle pass counts are plain integers (`0`) indicating live gate filtering.
+
+### 6. Volatility & Cash Flow Structural Refinements
+* **Launchpad $VCP \le 0.85$ Guard**: Added guard to `BASE-STRONG`. Names with $RS \ge +30\%$ but $VCP > 0.85$ are labeled `MOM-LOOSE`; loose baseline structures are labeled `UNFORMED`.
+* **Cash Flow Conversion Taxonomy**: Replaced FCF with CFO vs PAT ratio in `classifyCashFlow`, explicitly explaining `CF-NORM` for lending (banks/NBFCs) and real estate business models.
+* **Section 7 Hurdle Gap**: Standardized to Raw Score Points: $\text{Hurdle Gap} = \text{Raw Score} - \text{Raw Hurdle} \le 0$.
+* **Fixed-Horizon Radar Alpha Audit**: Linked `radar_episodes` and `radar_horizon_returns` in Section 8 with clustered block bootstrap confidence intervals at $T+5, T+10, T+21$.
+* **Section 9 Split**: Split into 9A (`Stage-1 Qualified Gainers`) and 9B (`Universe Top Gainers Blocked by Stage-1`), removing the arbitrary `Acc` column.
+* **End-to-End Automated Sentry Persistence**: Updated [`SaveRunSnapshot`](file:///Users/raghavgarg/Projects/myGo/mycase/pkg/pithistory/db.go#L260-L360) in `pkg/pithistory/db.go` and `pkg/stockpicker/run.go` to automatically persist all telemetry fields, candidate outcomes, and holdings for all future pipeline executions.

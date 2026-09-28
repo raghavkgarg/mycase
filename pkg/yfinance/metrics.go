@@ -1039,11 +1039,11 @@ func CalculateBaseDurationWeeks(closes []float64, zoneFloorPct float64) (weeks i
 	return weeks, inBase
 }
 
-// CalculateSmoothedBenchmarkRegime calculates the continuous Market Regime Multiplier R_regime in [minFloor, 1.0].
-func CalculateSmoothedBenchmarkRegime(benchCloses []float64, period int, minFloor float64) (regimeScore float64) {
+// CalculateSmoothedBenchmarkRegimeWithRaw returns both unclamped raw R and clamped effective R in [minFloor, 1.0].
+func CalculateSmoothedBenchmarkRegimeWithRaw(benchCloses []float64, period int, minFloor float64) (rawR float64, effR float64) {
 	n := len(benchCloses)
 	if n < 20 {
-		return 1.0 // fallback if insufficient benchmark history
+		return 1.0, 1.0 // fallback if insufficient benchmark history
 	}
 
 	if period <= 0 {
@@ -1063,14 +1063,13 @@ func CalculateSmoothedBenchmarkRegime(benchCloses []float64, period int, minFloo
 	}
 	sma50 := sumSMA / float64(period)
 	if sma50 <= 0 {
-		return 1.0
+		return 1.0, 1.0
 	}
 
 	// 2. Count sessions above 50-DMA over last 20 sessions
 	sessionsAbove := 0
 	evalWindow := min(n, 20)
 	for i := n - evalWindow; i < n; i++ {
-		// Calculate rolling SMA at index i if possible, or compare to current SMA
 		if benchCloses[i] >= sma50 {
 			sessionsAbove++
 		}
@@ -1089,15 +1088,22 @@ func CalculateSmoothedBenchmarkRegime(benchCloses []float64, period int, minFloo
 	}
 
 	// 4. Combined R_regime formula
-	rawR := 0.20 + (0.60 * persistenceRatio) + (0.50 * scaledDist)
-	if rawR > 1.0 {
-		rawR = 1.0
+	rawR = 0.20 + (0.60 * persistenceRatio) + (0.50 * scaledDist)
+	effR = rawR
+	if effR > 1.0 {
+		effR = 1.0
 	}
-	if rawR < minFloor {
-		rawR = minFloor
+	if effR < minFloor {
+		effR = minFloor
 	}
 
-	return rawR
+	return rawR, effR
+}
+
+// CalculateSmoothedBenchmarkRegime calculates the continuous Market Regime Multiplier R_regime in [minFloor, 1.0].
+func CalculateSmoothedBenchmarkRegime(benchCloses []float64, period int, minFloor float64) (regimeScore float64) {
+	_, effR := CalculateSmoothedBenchmarkRegimeWithRaw(benchCloses, period, minFloor)
+	return effR
 }
 
 // CalculateBenchmarkRegime evaluates if benchmark index is in a bullish regime above its SMA period (e.g. 50-day).

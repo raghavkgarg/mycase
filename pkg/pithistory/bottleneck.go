@@ -55,22 +55,26 @@ func classifyCashFlow(pat, ocf, fcf float64, sector string) BottleneckDetail {
 	case pat < 0:
 		return BottleneckDetail{
 			Code:   "CF-LOSS",
-			Detail: fmt.Sprintf("NI -₹%.1fCr, FCF %+.1fCr", math.Abs(pat)/1e7, fcf/1e7),
+			Detail: fmt.Sprintf("NI -₹%.1fCr, CFO %+.1fCr", math.Abs(pat)/1e7, ocf/1e7),
 		}
 	case ocf == 0:
 		return BottleneckDetail{
 			Code:   "CF-NODATA",
-			Detail: fmt.Sprintf("OCF unreported (%s)", conciseSec),
+			Detail: fmt.Sprintf("CFO unreported (%s)", conciseSec),
 		}
 	case isLenderOrDeveloper(sector):
 		return BottleneckDetail{
 			Code:   "CF-NORM",
-			Detail: fmt.Sprintf("PAT ₹%.1fCr, OCF %+.1fCr (%s-norm)", pat/1e7, ocf/1e7, conciseSec),
+			Detail: fmt.Sprintf("PAT ₹%.1fCr, CFO %+.1fCr (%s-norm: blocked by non-financial CFO gate)", pat/1e7, ocf/1e7, conciseSec),
 		}
 	default:
+		ratioStr := "0.00x"
+		if pat > 0 {
+			ratioStr = fmt.Sprintf("%.2fx", ocf/pat)
+		}
 		return BottleneckDetail{
 			Code:   "CF-LAG",
-			Detail: fmt.Sprintf("PAT ₹%.1fCr, FCF %+.1fCr", pat/1e7, fcf/1e7),
+			Detail: fmt.Sprintf("PAT ₹%.1fCr, CFO %+.1fCr (CFO/PAT: %s, min 0.25x)", pat/1e7, ocf/1e7, ratioStr),
 		}
 	}
 }
@@ -712,6 +716,10 @@ func ColorizeLaunchpadState(state string, width int) string {
 		color = "\033[1;33m" // Bold Yellow (strong base)
 	case "BASE-ACCUM":
 		color = "\033[0;37m" // Light Gray (normal basing)
+	case "MOM-LOOSE":
+		color = "\033[0;33m" // Yellow (loose base / high RS)
+	case "UNFORMED":
+		color = "\033[0;90m" // Dark Gray (unformed structure)
 	case "VELOCITY-POP":
 		color = "\033[1;35m" // Bold Magenta (unconfirmed momentum / spike)
 	default:

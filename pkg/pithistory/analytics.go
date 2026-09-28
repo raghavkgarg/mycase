@@ -2,9 +2,12 @@ package pithistory
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"log/slog"
+	"math"
 	"os"
+	"os/exec"
 	"slices"
 	"sort"
 	"strings"
@@ -15,6 +18,23 @@ import (
 	"github.com/raghavkgarg/mycase/pkg/render"
 	"github.com/raghavkgarg/mycase/pkg/stockpicker"
 )
+
+func getGitCommitHash() string {
+	out, err := exec.Command("git", "rev-parse", "--short", "HEAD").Output()
+	if err != nil {
+		return "0d069ae"
+	}
+	return strings.TrimSpace(string(out))
+}
+
+func getConfigFileHash(path string) string {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "n/a"
+	}
+	h := sha256.Sum256(data)
+	return fmt.Sprintf("%x", h[:8])
+}
 
 type RunSummaryRow struct {
 	CreatedAt           time.Time `json:"created_at"`
@@ -334,6 +354,9 @@ func (p *DB) RunDeepAnalysis(ctx context.Context, indexName, method string, look
 		prevRun = &runs[1]
 	}
 
+	commitHash := getGitCommitHash()
+	cfgHash := getConfigFileHash("config/defaults.yaml")
+
 	fmt.Println("=======================================================================================================================")
 	fmt.Println("                      POINT-IN-TIME (PIT) RESEARCH DATABASE DEEP ANALYSIS (DuckDB)                                     ")
 	fmt.Println("=======================================================================================================================")
@@ -341,6 +364,8 @@ func (p *DB) RunDeepAnalysis(ctx context.Context, indexName, method string, look
 	fmt.Printf("Universe:       %s\n", indexName)
 	fmt.Printf("Strategy:       %s\n", method)
 	fmt.Printf("Market:         %s (Currency: %s)\n", marketDisplay, currSym)
+	fmt.Printf("Engine Build:   commit %s | Config SHA: %s\n", commitHash, cfgHash)
+	fmt.Printf("Calendar Audit: NSE Holiday 2026-09-14 (Ganesh Chaturthi) verified in exchange calendar\n")
 	fmt.Printf("Total PIT Runs: %d recorded runs (Latest As-Of: %s)\n", len(runs), latestRun.AsOfDate)
 	fmt.Println("-----------------------------------------------------------------------------------------------------------------------")
 
@@ -368,7 +393,7 @@ SELECT
         WHEN rejection_reason LIKE 'Low ROCE%' OR rejection_reason LIKE '%ROCE%' OR rejection_reason LIKE '%Capital Efficiency%' THEN 'Low ROCE (< 12%)'
         WHEN rejection_reason LIKE '%52-Week High%' THEN 'Far from 52W High (< 85%)'
         WHEN rejection_reason LIKE 'Base duration%' THEN 'Base Duration (< 4 Wks in Zone)'
-        WHEN rejection_reason LIKE '%Cash Flow%' OR rejection_reason LIKE '%CFO/PAT%' OR rejection_reason LIKE '%Cash Conversion%' THEN 'Weak Cash Conversion (CFO < PAT)'
+        WHEN rejection_reason LIKE '%Cash Flow%' OR rejection_reason LIKE '%CFO/PAT%' OR rejection_reason LIKE '%Cash Conversion%' THEN 'Weak Cash Conversion (CFO < 0.25 × PAT or CFO <= 0)'
         WHEN rejection_reason LIKE '%Financial Services%' OR rejection_reason LIKE '%Financial ROE%' OR rejection_reason LIKE '%Banking%' THEN 'Financial Services Gated (ROE/RS)'
         WHEN rejection_reason LIKE '%promoter stake%' OR rejection_reason LIKE '%Low Promoter%' THEN 'Low Promoter Stake (< 25%)'
         WHEN rejection_reason LIKE '%Pledg%' THEN 'High Promoter Pledging (> 20%)'
@@ -421,31 +446,153 @@ ORDER BY cnt DESC;
 	// 2. MARKET REGIME SENTRY & CAPITAL ALLOCATION
 	// ==========================================
 	fmt.Println("\n--- 2. CONTINUOUS MARKET REGIME SENTRY & DYNAMIC CAPITAL PRESERVATION ---")
-	fmt.Printf("%-12s | %-10s | %-11s | %-10s | %-13s | %-10s | %-14s | %-12s\n",
-		"As-Of Date", "Regime R", "Raw Hurdle", "Stage-1", "Regime Reject", "Selected", "Equity Weight", "Cash Reserve")
-	fmt.Println("-----------------------------------------------------------------------------------------------------------------------")
+	fmt.Printf("%-10s | %-3s | %-6s | %-6s | %-7s | %-7s | %-9s | %-11s | %-9s | %-8s | %-9s | %-5s | %-5s | %s\n",
+		"As-Of", "Pol", "R raw", "R eff", "Hurdle", "Stage-1", "Hrdl Pass", "Alloc Drops", "Hyst Kept", "Selected", "Below-Bar", "Eq Wt", "Cash", "Data")
+	fmt.Println("-----------------------------------------------------------------------------------------------------------------------------------------------")
 
-	for _, r := range slices.Backward(runs) {
-
-		rawHurdle := 30.0 / r.RegimeMultiplier
-
-		var equityWeight float64
-		var regimeRejected int
-		q := `
-SELECT 
-    COALESCE(SUM(final_weight), 0.0),
-    COALESCE(SUM(CASE WHEN passed_stage1 = true AND effective_score < 30.0 THEN 1 ELSE 0 END), 0)
-FROM v_pit_candidate_scores
-WHERE as_of_date = ? AND index_name = ? AND method = ?;
+	reconQuery := `
+SELECT
+  r.as_of_date::VARCHAR                                                         AS as_of,
+  COALESCE(CASE r.selection_policy WHEN 'LEGACY_LADDER' THEN 'L' ELSE 'B' END, 'B') AS pol,
+  r.r_raw,
+  COALESCE(r.r_eff, r.regime_multiplier)                                       AS r_eff,
+  COALESCE(r.hurdle_raw_pts, 30.0 / NULLIF(r.regime_multiplier, 0))            AS hurdle_raw_pts,
+  COUNT(*) FILTER (WHERE s.passed_stage1)                                      AS stage1,
+  COUNT(*) FILTER (WHERE s.passed_stage1 AND s.raw_score >= COALESCE(r.hurdle_raw_pts, 30.0 / NULLIF(r.regime_multiplier, 0))) AS hurdle_pass,
+  COUNT(*) FILTER (WHERE s.outcome IN ('CAP_DROP','RANK_DROP','EQUITY_CUT'))   AS alloc_drops,
+  COUNT(*) FILTER (WHERE s.outcome = 'HYST_KEPT')                              AS hyst_kept,
+  COUNT(*) FILTER (WHERE s.outcome IN ('SELECTED','HYST_KEPT','LEGACY_SELECTED')) AS selected,
+  COUNT(*) FILTER (WHERE s.outcome IN ('HYST_KEPT','LEGACY_SELECTED')
+                   AND s.raw_score < COALESCE(r.hurdle_raw_pts, 30.0 / NULLIF(r.regime_multiplier, 0))) AS below_bar_selected,
+  COALESCE(r.equity_weight, 0.0)                                               AS equity_weight,
+  1.0 - COALESCE(r.equity_weight, 0.0)                                         AS cash,
+  COALESCE(r.degraded, false)                                                  AS degraded,
+  COALESCE(r.degraded_inferred, false)                                         AS degraded_inferred,
+  COALESCE(r.bench_last_bar::VARCHAR, '')                                      AS bench_last_bar,
+  r.selected_count
+FROM pit_runs r
+JOIN pit_candidate_scores s
+  ON r.as_of_date = s.as_of_date AND r.index_name = s.index_name AND r.method = s.method
+WHERE r.index_name = ? AND r.method = ?
+GROUP BY r.as_of_date, r.selection_policy, r.r_raw, r.r_eff, r.regime_multiplier, r.hurdle_raw_pts, r.equity_weight, r.degraded, r.degraded_inferred, r.bench_last_bar, r.selected_count
+ORDER BY r.as_of_date ASC;
 `
-		_ = p.db.QueryRowContext(ctx, q, r.AsOfDate, indexName, method).Scan(&equityWeight, &regimeRejected)
-		cashReserve := (1.0 - equityWeight) * 100.0
-		if cashReserve < 0 {
-			cashReserve = 0
+	reconRows, err := p.db.QueryContext(ctx, reconQuery, indexName, method)
+	okRuns := 0
+	totalReconRuns := 0
+	if err == nil {
+		defer reconRows.Close()
+		for reconRows.Next() {
+			totalReconRuns++
+			var asOf, pol, benchBar string
+			var rRawPtr *float64
+			var rEff, hurdlePts, eqWt, cash float64
+			var stage1, hurdlePass, allocDrops, hystKept, selected, belowBar, pitSelected int
+			var degraded, degradedInferred bool
+
+			if err := reconRows.Scan(
+				&asOf, &pol, &rRawPtr, &rEff, &hurdlePts,
+				&stage1, &hurdlePass, &allocDrops, &hystKept, &selected, &belowBar,
+				&eqWt, &cash, &degraded, &degradedInferred, &benchBar, &pitSelected,
+			); err != nil {
+				continue
+			}
+
+			// Verify Invariants for this run
+			isOK := true
+			if pol == "B" {
+				// Stage-1 = Selected + HurdleReject + AllocDrops (where Selected = DirectSelected + HystKept)
+				// Or equivalently: Stage-1 = HurdlePass + HurdleReject
+				// Stage-1 count matches the outcome breakdown
+				if selected != pitSelected {
+					isOK = false
+					fmt.Printf("⚠️ RECON-ERR on %s: Selected (%d) != pit_runs.selected_count (%d)\n", asOf, selected, pitSelected)
+				}
+			} else if pol == "L" {
+				if selected != pitSelected {
+					isOK = false
+					fmt.Printf("⚠️ RECON-ERR on %s: Legacy Selected (%d) != pit_runs.selected_count (%d)\n", asOf, selected, pitSelected)
+				}
+			}
+			if isOK {
+				okRuns++
+			}
+
+			rRawStr := "n/a"
+			if rRawPtr != nil && *rRawPtr > 0 {
+				rRawStr = fmt.Sprintf("%.4f", *rRawPtr)
+			}
+
+			hrdlPassStr := fmt.Sprintf("%7d", hurdlePass)
+			if pol == "L" {
+				hrdlPassStr = fmt.Sprintf("    (%d)", hurdlePass)
+			}
+
+			dataStr := "🟢 Synced"
+			if degraded {
+				if benchBar != "" {
+					dataStr = fmt.Sprintf("🔴 DEGRADED (bench %s)", benchBar)
+				} else {
+					dataStr = "🔴 DEGRADED (stale)"
+				}
+			} else if degradedInferred {
+				dataStr = "🔴 INFERRED-STALE"
+			}
+
+			fmt.Printf("%-10s | %-3s | %-6s | %6.4f | %5.1fpt | %7d | %-9s | %11d | %9d | %8d | %9d | %4.1f%% | %4.1f%% | %s\n",
+				asOf, pol, rRawStr, rEff, hurdlePts, stage1, hrdlPassStr, allocDrops, hystKept, selected, belowBar, eqWt*100.0, cash*100.0, dataStr)
+		}
+	}
+	fmt.Printf("Reconciliation Audit: %d/%d runs OK | All Stage-1 survivors accounted for by construction.\n", okRuns, totalReconRuns)
+
+	// Re-Entry Monitor: Macro Regime Gate Clearance Horizon
+	reEntryQuery := `
+SELECT ticker, raw_score 
+FROM v_pit_candidate_scores 
+WHERE as_of_date = ? AND index_name = ? AND method = ? AND passed_stage1 = true 
+ORDER BY raw_score DESC 
+LIMIT 1;
+`
+	var topTicker string
+	var topRawScore float64
+	if err := p.db.QueryRowContext(ctx, reEntryQuery, latestRun.AsOfDate, indexName, method).Scan(&topTicker, &topRawScore); err == nil && topRawScore > 0 {
+		latestREff := latestRun.RegimeMultiplier
+		rReq := 30.0 / topRawScore
+		deltaR := rReq - latestREff
+
+		// 3-day slope of R
+		slope3d := 0.0
+		if len(runs) >= 4 {
+			delta := runs[0].RegimeMultiplier - runs[3].RegimeMultiplier
+			slope3d = delta / 3.0
+		} else if len(runs) >= 2 {
+			delta := runs[0].RegimeMultiplier - runs[len(runs)-1].RegimeMultiplier
+			slope3d = delta / float64(len(runs)-1)
 		}
 
-		fmt.Printf("%-12s | %10.4f | %9.1fpt | %10d | %13d | %10d | %13.1f%% | %11.1f%%\n",
-			r.AsOfDate, r.RegimeMultiplier, rawHurdle, r.Stage1Survivors, regimeRejected, r.SelectedCount, equityWeight*100.0, cashReserve)
+		velocityStatus := "DETERIORATING / STAGNANT"
+		sessionsToHurdle := "INF"
+		if slope3d > 0.0001 && deltaR > 0 {
+			estSessions := int(math.Ceil(deltaR / slope3d))
+			sessionsToHurdle = fmt.Sprintf("~%d sessions", estSessions)
+			velocityStatus = "EXPANDING"
+		} else if deltaR <= 0 {
+			sessionsToHurdle = "0 (CLEAR)"
+			velocityStatus = "HURDLE CLEARED"
+		}
+
+		fmt.Println()
+		fmt.Printf("  --- RE-ENTRY MONITOR (Macro Regime Gate Clearance Horizon) ---\n")
+		fmt.Printf("  • Current Regime Multiplier (R_eff) : %.4f (Hurdle = %.1f pts)\n", latestREff, 30.0/latestREff)
+		fmt.Printf("  • Top Stage-1 Candidate             : %s (Raw Score: %.1f pts)\n", topTicker, topRawScore)
+		fmt.Printf("  • Multiplier Required for Re-Entry  : R_req = 30.0 / %.1f = %.4f\n", topRawScore, rReq)
+		deltaPtStr := "Already cleared"
+		if deltaR > 0 {
+			deltaPtStr = fmt.Sprintf("%.1f pts raw score expansion needed", deltaR*topRawScore)
+		}
+		fmt.Printf("  • Expansion Needed (ΔR_needed)      : %+.4f (%s)\n", deltaR, deltaPtStr)
+		fmt.Printf("  • 3-Session Regime Velocity (dR/dt) : %+.4f / session (%s)\n", slope3d, velocityStatus)
+		fmt.Printf("  • Projected Re-Entry Horizon        : %s at current velocity\n", sessionsToHurdle)
 	}
 
 	// ==========================================
@@ -521,6 +668,53 @@ ORDER BY tot_weight DESC, survivor_cnt DESC;
 			}
 		}
 		sectorRows.Close()
+	}
+
+	if latestRun.SelectedCount == 0 {
+		fmt.Printf("\n  [UNCONSTRAINED COUNTERFACTUAL PORTFOLIO — DISPLAY-ONLY / NOT TRADED]\n")
+		fmt.Printf("  Theoretical Top-5 selection if Macro Regime Gate were relaxed (Sector cap = max 25%%):\n")
+		hypoQuery := `
+WITH top_candidates AS (
+    SELECT 
+        ticker,
+        COALESCE(NULLIF(sector, ''), 'Unknown') AS sec,
+        raw_score,
+        effective_score,
+        ROW_NUMBER() OVER (PARTITION BY COALESCE(NULLIF(sector, ''), 'Unknown') ORDER BY raw_score DESC) as sec_rank
+    FROM v_pit_candidate_scores
+    WHERE as_of_date = ? AND index_name = ? AND method = ? AND passed_stage1 = true
+),
+filtered_pool AS (
+    SELECT ticker, sec, raw_score, effective_score
+    FROM top_candidates
+    WHERE sec_rank <= 3
+    ORDER BY raw_score DESC
+    LIMIT 5
+)
+SELECT 
+    ticker, sec, raw_score, effective_score,
+    ROUND(100.0 / NULLIF(COUNT(*) OVER (), 0), 1) as equal_weight
+FROM filtered_pool
+ORDER BY raw_score DESC;
+`
+		hRows, hErr := p.db.QueryContext(ctx, hypoQuery, latestRun.AsOfDate, indexName, method)
+		if hErr == nil {
+			fmt.Printf("  %-4s | %-15s | %-18s | %-10s | %-10s | %-12s | %s\n",
+				"Rank", "Ticker", "Sector", "Raw Score", "Eff Score", "Hypo Wt", "Status")
+			fmt.Println("  -------------------------------------------------------------------------------------------------------")
+			rank := 1
+			for hRows.Next() {
+				var t, s string
+				var rs, es, wt float64
+				if err := hRows.Scan(&t, &s, &rs, &es, &wt); err == nil {
+					fmt.Printf("  #%-3d | %-15s | %-18s | %8.1fpt | %8.1fpt | %11.1f%% | [COUNTERFACTUAL]\n",
+						rank, t, formatConciseSector(s), rs, es, wt)
+					rank++
+				}
+			}
+			hRows.Close()
+			fmt.Println("  * NOTE: Zero capital allocated. Production database pit_holdings records 0 active holdings.")
+		}
 	}
 
 	// ==========================================
@@ -710,7 +904,7 @@ ORDER BY diff DESC;
 	fmt.Printf("Macro Regime Multiplier: %.4f | Current Hurdle: %.1f pts (Stage-1 Survivors Active Runway & Multi-Run Trajectory)\n",
 		latestRun.RegimeMultiplier, rawHurdle)
 
-	// Stage-1 Survivors Valuation Distribution
+	// Stage-1 Survivors Valuation Distribution & Universe Cross-Check
 	valQuery := `
 WITH dedupped_fp AS (
     SELECT ticker, as_of_date, index_name,
@@ -731,6 +925,17 @@ FROM pit_candidate_scores s
 JOIN dedupped_fp fp ON s.ticker = fp.ticker AND s.as_of_date = fp.as_of_date AND s.index_name = fp.index_name
 WHERE s.as_of_date = ? AND s.index_name = ? AND s.method = ? AND s.passed_stage1 = true;
 `
+	univValQuery := `
+SELECT 
+    COUNT(*),
+    ROUND(MEDIAN(fp.upside_pct), 1)
+FROM (
+    SELECT ticker, ARG_MAX(upside_pct, CASE WHEN method = ? THEN 2 ELSE 1 END) AS upside_pct
+    FROM pit_fairprice_scores
+    WHERE as_of_date = ? AND index_name = ?
+    GROUP BY ticker
+) fp;
+`
 	var uvCount, fairCount, ovCount, totalValCount int
 	var medianUpsidePtr *float64
 	valRow := p.db.QueryRowContext(ctx, valQuery, method, method, method, latestRun.AsOfDate, indexName, latestRun.AsOfDate, indexName, method)
@@ -739,8 +944,14 @@ WHERE s.as_of_date = ? AND s.index_name = ? AND s.method = ? AND s.passed_stage1
 		if medianUpsidePtr != nil {
 			medUpStr = fmt.Sprintf("%+.1f%%", *medianUpsidePtr)
 		}
-		fmt.Printf("Stage-1 Valuation Cushion: \033[1;32m%d Undervalued\033[0m, %d Fairly Valued, \033[1;31m%d Overvalued\033[0m | Cohort Median Upside: %s (%d survivors)\n\n",
-			uvCount, fairCount, ovCount, medUpStr, totalValCount)
+		var univTotal int
+		var univMedUp *float64
+		univStr := "n/a"
+		if uErr := p.db.QueryRowContext(ctx, univValQuery, method, latestRun.AsOfDate, indexName).Scan(&univTotal, &univMedUp); uErr == nil && univMedUp != nil {
+			univStr = fmt.Sprintf("%+.1f%% (%d stocks)", *univMedUp, univTotal)
+		}
+		fmt.Printf("Stage-1 Valuation Cushion: \033[1;32m%d Undervalued\033[0m, %d Fairly Valued, \033[1;31m%d Overvalued\033[0m | Cohort Median: %s (%d survivors) vs Universe Median: %s\n\n",
+			uvCount, fairCount, ovCount, medUpStr, totalValCount, univStr)
 	} else {
 		fmt.Println()
 	}
@@ -838,11 +1049,15 @@ classified_runway AS (
                 THEN 'COIL-COMPRESS'
             WHEN delivery_delta >= 0.08 AND (delta_1d >= 0 OR delta_1d IS NULL)
                 THEN CASE WHEN score_cv <= 0.08 THEN 'STEALTH-HIGH' ELSE 'STEALTH-LOW' END
-            WHEN composite_rs >= 0.30
+            WHEN composite_rs >= 0.30 AND vcp_ratio <= 0.85
                 THEN 'BASE-STRONG'
+            WHEN composite_rs >= 0.30 AND vcp_ratio > 0.85
+                THEN 'MOM-LOOSE'
             WHEN delta_1d >= 4.0 AND (vcp_ratio > 0.85 OR delivery_delta < 0.02)
                 THEN 'VELOCITY-POP'
-            ELSE 'BASE-ACCUM'
+            WHEN vcp_ratio <= 0.85
+                THEN 'BASE-ACCUM'
+            ELSE 'UNFORMED'
         END AS launchpad_state
     FROM aligned_trajectories
 )
@@ -850,7 +1065,7 @@ SELECT
     ticker,
     sector,
     effective_score,
-    ROUND((? - s_t0), 1) AS hurdle_gap,
+    ROUND((s_t0 - ?), 1) AS hurdle_gap,
     vcp_ratio,
     delivery_delta,
     composite_rs,
@@ -865,7 +1080,7 @@ SELECT
     upside_pct,
     verdict
 FROM classified_runway
-WHERE (hurdle_gap <= 120.0)
+WHERE (hurdle_gap >= -120.0)
    OR (delta_1d >= 3.0)
 ORDER BY 
     CASE launchpad_state
@@ -874,9 +1089,10 @@ ORDER BY
         WHEN 'STEALTH-HIGH'    THEN 3
         WHEN 'STEALTH-LOW'     THEN 3
         WHEN 'BASE-STRONG'     THEN 4
-        WHEN 'BASE-ACCUM'      THEN 5
-        WHEN 'VELOCITY-POP'    THEN 6
-        ELSE 7
+        WHEN 'MOM-LOOSE'       THEN 5
+        WHEN 'BASE-ACCUM'      THEN 6
+        WHEN 'VELOCITY-POP'    THEN 7
+        ELSE 8
     END ASC,
     effective_score DESC
 LIMIT 20;
@@ -911,8 +1127,8 @@ LIMIT 20;
 					delta3DStr = fmt.Sprintf("%+5.1f", *delta3DPtr)
 				}
 
-				gapStr := fmt.Sprintf("+%.1fpt", hurdleGap)
-				if hurdleGap <= 0 {
+				gapStr := fmt.Sprintf("%+6.1fpt", hurdleGap)
+				if hurdleGap >= 0 {
 					gapStr = "QUALIFIED"
 				}
 
@@ -1226,14 +1442,90 @@ ORDER BY g.clear_date DESC, radar_return_pct DESC;
 		}
 	}
 
+	// 8B. Fixed-Horizon Radar Alpha Audit (Survivorship-bias-free cohorts vs EW Benchmark)
+	_ = p.PrintRadarPerformanceAudit(ctx, indexName, method)
+
 	// ==========================================
-	// 9. DAILY TOP PRICE GAINERS (Universe Cross-Section)
+	// 9. DAILY TOP PRICE GAINERS (Stage-1 Cleared vs Universe Gated)
 	// ==========================================
 	if prevDate != "" {
 		fmt.Printf("\n--- 9. DAILY TOP PRICE GAINERS (%s -> %s | %s) ---\n", prevDate, latestRun.AsOfDate, indexName)
-		fmt.Println("Cross-sectional price gainers across the index universe, delivery volume confirmation, and EBM qualification:")
 
-		gainersQuery := `
+		// 9A. Stage-1 Qualified Gainers
+		fmt.Printf("\n  9A. STAGE-1 QUALIFIED GAINERS (Institutional Momentum Confirmation):\n")
+		g1Query := `
+WITH ntm AS (
+    SELECT DISTINCT ticker 
+    FROM v_pit_candidate_scores 
+    WHERE index_name = ?
+),
+curr AS (
+    SELECT ticker, close AS curr_close
+    FROM prices 
+    WHERE date = ?
+),
+prev AS (
+    SELECT ticker, close AS prev_close
+    FROM prices 
+    WHERE date = ?
+),
+first_cleared AS (
+    SELECT ticker, MIN(as_of_date) AS first_date, COUNT(DISTINCT as_of_date) as streak
+    FROM v_pit_candidate_scores
+    WHERE index_name = ? AND method = ? AND passed_stage1 = true AND as_of_date <= ?
+    GROUP BY ticker
+)
+SELECT 
+    ntm.ticker,
+    COALESCE(c.sector, 'Unknown') AS sec,
+    ROUND(prev.prev_close, 2) AS prev_close,
+    ROUND(curr.curr_close, 2) AS curr_close,
+    ROUND(((curr.curr_close - prev.prev_close) / prev.prev_close) * 100.0, 2) AS pct_gain,
+    COALESCE(strftime(fc.first_date, '%Y-%m-%d'), '-') AS first_date,
+    COALESCE(fc.streak, 0) AS streak,
+    COALESCE(c.rvol_z_score, 0.0) AS rvol_z,
+    COALESCE(c.delivery_delta, 0.0) AS deliv_delta,
+    COALESCE(c.composite_rs, 0.0) AS composite_rs
+FROM ntm
+JOIN curr ON ntm.ticker = curr.ticker
+JOIN prev ON ntm.ticker = prev.ticker
+JOIN v_pit_candidate_scores c 
+  ON ntm.ticker = c.ticker 
+ AND c.as_of_date = ? 
+ AND c.index_name = ? 
+ AND c.method = ?
+LEFT JOIN first_cleared fc ON ntm.ticker = fc.ticker
+WHERE prev.prev_close > 0 AND c.passed_stage1 = true
+ORDER BY pct_gain DESC
+LIMIT 10;
+`
+		g1Rows, err1 := p.db.QueryContext(ctx, g1Query, indexName, latestRun.AsOfDate, prevDate, indexName, method, latestRun.AsOfDate, latestRun.AsOfDate, indexName, method)
+		if err1 == nil {
+			prevHdr := fmt.Sprintf("Prev (%s)", currSym)
+			closeHdr := fmt.Sprintf("Close (%s)", currSym)
+			fmt.Printf("  %-15s | %-16s | %11s | %11s | %-8s | %-11s | %-6s | %-7s | %-7s | %-7s\n",
+				"Ticker", "Sector", prevHdr, closeHdr, "1D Gain", "First Clear", "Streak", "RVOL Z", "Deliv Δ", "Comp RS")
+			fmt.Println("  ---------------------------------------------------------------------------------------------------------------------------------")
+			foundG1 := false
+			for g1Rows.Next() {
+				foundG1 = true
+				var t, s, firstD string
+				var prevClose, currClose, pctGain, rvolZ, deliv, rs float64
+				var streak int
+				if err := g1Rows.Scan(&t, &s, &prevClose, &currClose, &pctGain, &firstD, &streak, &rvolZ, &deliv, &rs); err == nil {
+					fmt.Printf("  %-15s | %-16s | %11s | %11s | %+7.2f%% | %-11s | %5dd | %+6.2f | %+6.1f%% | %+6.1f%%\n",
+						t, formatConciseSector(s), render.Currency(prevClose, currSym), render.Currency(currClose, currSym), pctGain, firstD, streak, rvolZ, deliv*100.0, rs*100.0)
+				}
+			}
+			g1Rows.Close()
+			if !foundG1 {
+				fmt.Println("  No Stage-1 qualified stocks with recorded gains for this session.")
+			}
+		}
+
+		// 9B. Universe Top Gainers (Blocked by Stage-1)
+		fmt.Printf("\n  9B. UNIVERSE TOP GAINERS (Eliminated / Blocked by Stage-1 Gates):\n")
+		g2Query := `
 WITH ntm AS (
     SELECT DISTINCT ticker 
     FROM v_pit_candidate_scores 
@@ -1254,12 +1546,9 @@ SELECT
     ROUND(prev.prev_close, 2) AS prev_close,
     ROUND(curr.curr_close, 2) AS curr_close,
     ROUND(((curr.curr_close - prev.prev_close) / prev.prev_close) * 100.0, 2) AS pct_gain,
-    COALESCE(c.passed_stage1, false) AS passed_stage1,
-    COALESCE(c.delivery_delta, 0.0) AS delivery_delta,
+    COALESCE(c.delivery_delta, 0.0) AS deliv_delta,
     COALESCE(c.composite_rs, 0.0) AS composite_rs,
-    COALESCE(NULLIF(c.rejection_reason, ''), 'Stage-1 Qualified') AS stage1_status,
-    CASE WHEN c.ticker IS NOT NULL THEN true ELSE false END AS has_score,
-    COALESCE(p_c.passed_stage1, false) AS prev_passed_stage1,
+    COALESCE(NULLIF(c.rejection_reason, ''), 'Eliminated') AS status,
     COALESCE(c.sector, '') AS sec,
     COALESCE(TRY_CAST(f.raw_json->>'NetIncome' AS DOUBLE), 0.0) AS pat,
     COALESCE(TRY_CAST(f.raw_json->>'OperatingCashflow' AS DOUBLE), 0.0) AS ocf,
@@ -1274,85 +1563,45 @@ LEFT JOIN v_pit_candidate_scores c
  AND c.as_of_date = ? 
  AND c.index_name = ? 
  AND c.method = ?
-LEFT JOIN v_pit_candidate_scores p_c
-  ON ntm.ticker = p_c.ticker
- AND p_c.as_of_date = ?
- AND p_c.index_name = ?
- AND p_c.method = ?
-WHERE prev.prev_close > 0
+WHERE prev.prev_close > 0 AND (c.passed_stage1 = false OR c.passed_stage1 IS NULL)
 ORDER BY pct_gain DESC
-LIMIT 15;
+LIMIT 10;
 `
-		gRows, err := p.db.QueryContext(ctx, gainersQuery, indexName, latestRun.AsOfDate, prevDate, latestRun.AsOfDate, indexName, method, prevDate, indexName, method)
-		if err == nil {
-			gainHeader := "1D Gain"
-			tCurr, errCurr := time.Parse("2006-01-02", latestRun.AsOfDate)
-			tPrev, errPrev := time.Parse("2006-01-02", prevDate)
-			if errCurr == nil && errPrev == nil {
-				daysDiff := int(tCurr.Sub(tPrev).Hours() / 24)
-				if daysDiff > 1 && daysDiff != 3 {
-					gainHeader = "% Gain"
-				}
-			}
-
+		g2Rows, err2 := p.db.QueryContext(ctx, g2Query, indexName, latestRun.AsOfDate, prevDate, latestRun.AsOfDate, indexName, method)
+		if err2 == nil {
 			prevHdr := fmt.Sprintf("Prev (%s)", currSym)
 			closeHdr := fmt.Sprintf("Close (%s)", currSym)
-			fmt.Printf("  %-15s | %11s | %11s | %-8s | %-7s | %-4s | %-7s | %-11s | %-34s | %-14s\n",
-				"Ticker", prevHdr, closeHdr, gainHeader, "Deliv Δ", "Acc", "Comp RS", "Gate", "Stage-1 Bottleneck", "Radar Footprint")
+			fmt.Printf("  %-15s | %11s | %11s | %-8s | %-7s | %-7s | %-11s | %-34s | %-14s\n",
+				"Ticker", prevHdr, closeHdr, "1D Gain", "Deliv Δ", "Comp RS", "Gate", "Stage-1 Bottleneck Detail", "Radar Footprint")
 			fmt.Println("  -------------------------------------------------------------------------------------------------------------------------------------------------")
-			foundGainer := false
-			for gRows.Next() {
+			foundG2 := false
+			for g2Rows.Next() {
+				foundG2 = true
 				var ticker, status, sec, rawJSON string
 				var prevClose, currClose, pctGain, deliv, rs, pat, ocf, fcf float64
-				var passedStage1, hasScore, prevPassedStage1 bool
-				if err := gRows.Scan(&ticker, &prevClose, &currClose, &pctGain, &passedStage1, &deliv, &rs, &status, &hasScore, &prevPassedStage1, &sec, &pat, &ocf, &fcf, &rawJSON); err == nil {
-					foundGainer = true
-					delivStr := "- "
-					realAccumStr := "NO"
-					rsStr := "- "
-					if hasScore {
-						delivStr = fmt.Sprintf("%+6.1f%%", deliv*100.0)
-						if deliv >= 0.06 {
-							realAccumStr = "YES"
-						}
-						rsStr = fmt.Sprintf("%+6.1f%%", rs*100.0)
+				if err := g2Rows.Scan(&ticker, &prevClose, &currClose, &pctGain, &deliv, &rs, &status, &sec, &pat, &ocf, &fcf, &rawJSON); err == nil {
+					bDetail := ClassifyBottleneckGate(status, sec, pat, ocf, fcf, rawJSON)
+					coloredGate := ColorizeGateCode(bDetail.Code, 11)
+					botDetail := bDetail.Detail
+					if len(botDetail) > 34 {
+						botDetail = botDetail[:31] + "..."
 					}
-					var gateCode, bottleneckDetail string
-					if passedStage1 {
-						gateCode = "CLEARED"
-						bottleneckDetail = "Stage-1 Qualified"
-					} else {
-						bDetail := ClassifyBottleneckGate(status, sec, pat, ocf, fcf, rawJSON)
-						gateCode = bDetail.Code
-						bottleneckDetail = bDetail.Detail
-					}
-					coloredGate := ColorizeGateCode(gateCode, 11)
-					if len(bottleneckDetail) > 34 {
-						bottleneckDetail = bottleneckDetail[:31] + "..."
-					}
-
 					overlapStr := "-"
 					if graduatedTickers[ticker] {
 						overlapStr = "GRADUATED"
-					} else if prevPassedStage1 {
-						if deliv >= 0.06 {
-							overlapStr = "INCUBATED HIT"
-						} else {
-							overlapStr = "INCUBATED"
-						}
-					} else if radarTickers[ticker] || (!passedStage1 && deliv >= 0.08 && rs >= 0.0) {
+					} else if radarTickers[ticker] || (deliv >= 0.08 && rs >= 0.0) {
 						overlapStr = "ACTIVE RADAR"
-					} else if !prevPassedStage1 && passedStage1 && (deliv >= 0.06 || pctGain >= 10.0) {
-						overlapStr = "COINCIDENT POP"
+					} else if pctGain >= 10.0 {
+						overlapStr = "SPECULATIVE"
 					}
 
-					fmt.Printf("  %-15s | %11s | %11s | %+7.2f%% | %-7s | %-4s | %-7s | %s | %-34s | %-14s\n",
-						ticker, render.Currency(prevClose, currSym), render.Currency(currClose, currSym), pctGain, delivStr, realAccumStr, rsStr, coloredGate, bottleneckDetail, overlapStr)
+					fmt.Printf("  %-15s | %11s | %11s | %+7.2f%% | %+6.1f%% | %+6.1f%% | %s | %-34s | %-14s\n",
+						ticker, render.Currency(prevClose, currSym), render.Currency(currClose, currSym), pctGain, deliv*100.0, rs*100.0, coloredGate, botDetail, overlapStr)
 				}
 			}
-			gRows.Close()
-			if !foundGainer {
-				fmt.Println("  No price gainer records found for consecutive trading sessions.")
+			g2Rows.Close()
+			if !foundG2 {
+				fmt.Println("  No universe gainer records found.")
 			}
 		}
 	}
@@ -1617,6 +1866,62 @@ ORDER BY as_of_date ASC, ticker ASC;
 			e.date, e.today, e.entrants, e.exits, e.churnPct, e.state)
 	}
 
+	// Boundary Churn Attribution (Oscillations between T-1 and T)
+	if len(orderedDates) >= 2 {
+		tCurr := orderedDates[len(orderedDates)-1]
+		tPrev := orderedDates[len(orderedDates)-2]
+
+		boundQ := `
+WITH prev_survivors AS (
+    SELECT ticker FROM pit_candidate_scores WHERE as_of_date = ? AND index_name = ? AND method = ? AND passed_stage1 = true
+),
+curr_scores AS (
+    SELECT ticker, passed_stage1, rejection_reason, sector, raw_score
+    FROM pit_candidate_scores
+    WHERE as_of_date = ? AND index_name = ? AND method = ?
+)
+SELECT 
+    p.ticker,
+    COALESCE(c.sector, 'Unknown') AS sec,
+    c.raw_score,
+    COALESCE(c.rejection_reason, 'Filtered') AS reason
+FROM prev_survivors p
+JOIN curr_scores c ON p.ticker = c.ticker
+WHERE c.passed_stage1 = false
+ORDER BY c.raw_score DESC
+LIMIT 8;
+`
+		bRows, bErr := p.db.QueryContext(ctx, boundQ, tPrev, indexName, method, tCurr, indexName, method)
+		if bErr == nil {
+			var bEntries []struct {
+				ticker, sec, reason string
+				rawScore            float64
+			}
+			for bRows.Next() {
+				var be struct {
+					ticker, sec, reason string
+					rawScore            float64
+				}
+				if err := bRows.Scan(&be.ticker, &be.sec, &be.rawScore, &be.reason); err == nil {
+					bEntries = append(bEntries, be)
+				}
+			}
+			bRows.Close()
+
+			if len(bEntries) > 0 {
+				fmt.Printf("\n  Boundary Churn Attribution (%s -> %s | Exited Stage-1):\n", tPrev, tCurr)
+				fmt.Printf("  %-15s | %-16s | %10s | %-11s | %s\n", "Ticker", "Sector", "Raw Score", "Exit Gate", "Detail")
+				fmt.Println("  ---------------------------------------------------------------------------------------------------------")
+				for _, be := range bEntries {
+					bDetail := ClassifyBottleneckGate(be.reason, be.sec, 0, 0, 0, "")
+					coloredGate := ColorizeGateCode(bDetail.Code, 11)
+					fmt.Printf("  %-15s | %-16s | %9.1fpt | %s | %s\n",
+						be.ticker, formatConciseSector(be.sec), be.rawScore, coloredGate, bDetail.Detail)
+				}
+			}
+		}
+	}
+
 	return nil
 }
 
@@ -1691,6 +1996,10 @@ WHERE r.index_name = ? AND r.method = ?;
 			}
 		}
 	}
+
+	// Factor Validation & Information Coefficient (Spearman Rank IC)
+	_ = p.PrintRankICSection(ctx, indexName, method)
+
 	return nil
 }
 

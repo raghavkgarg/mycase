@@ -473,3 +473,144 @@ func TestFormatConciseBottleneck(t *testing.T) {
 		}
 	}
 }
+
+func TestSection2ReconciliationInvariants(t *testing.T) {
+	ctx := context.Background()
+	db, err := Open("")
+	if err != nil {
+		t.Fatalf("failed to open pithistory db: %v", err)
+	}
+	defer db.Close()
+
+	// 1. Invariant: No run may have a NULL selection policy
+	var nullPolicyCount int
+	err = db.Conn().QueryRowContext(ctx, "SELECT COUNT(*) FROM pit_runs WHERE selection_policy IS NULL;").Scan(&nullPolicyCount)
+	if err != nil {
+		t.Fatalf("failed to query null policy count: %v", err)
+	}
+	if nullPolicyCount > 0 {
+		t.Fatalf("MIGRATION INTEGRITY ERROR: %d runs have NULL selection_policy", nullPolicyCount)
+	}
+
+	// 2. Query run-level aggregates and outcome breakdowns
+	query := `
+SELECT 
+    r.as_of_date::VARCHAR,
+    r.selection_policy,
+    r.stage1_survivors,
+    r.selected_count,
+    COALESCE(r.holdings_recorded, false),
+    COUNT(CASE WHEN s.outcome = 'SELECTED' THEN 1 END)          AS cnt_selected,
+    COUNT(CASE WHEN s.outcome = 'HYST_KEPT' THEN 1 END)         AS cnt_hyst_kept,
+    COUNT(CASE WHEN s.outcome = 'HURDLE_REJECT' THEN 1 END)     AS cnt_hurdle_reject,
+    COUNT(CASE WHEN s.outcome = 'CAP_DROP' THEN 1 END)          AS cnt_cap_drop,
+    COUNT(CASE WHEN s.outcome = 'RANK_DROP' THEN 1 END)         AS cnt_rank_drop,
+    COUNT(CASE WHEN s.outcome = 'EQUITY_CUT' THEN 1 END)        AS cnt_equity_cut,
+    COUNT(CASE WHEN s.outcome = 'LEGACY_SELECTED' THEN 1 END)   AS cnt_legacy_selected,
+    COUNT(CASE WHEN s.outcome = 'LEGACY_NOT_TOP_N' THEN 1 END)  AS cnt_legacy_not_top_n
+FROM pit_runs r
+JOIN pit_candidate_scores s 
+  ON r.as_of_date = s.as_of_date AND r.index_name = s.index_name AND r.method = s.method
+WHERE r.index_name = 'niftytotalmarket' AND r.method = 'earlymb'
+GROUP BY r.as_of_date, r.selection_policy, r.stage1_survivors, r.selected_count, r.holdings_recorded
+ORDER BY r.as_of_date;
+`
+	rows, err := db.Conn().QueryContext(ctx, query)
+	if err != nil {
+		t.Fatalf("failed to query reconciliation data: %v", err)
+	}
+	defer rows.Close()
+
+	type runRecon struct {
+		asOfDate         string
+		policy           string
+		stage1           int
+		pitRunsSelected  int
+		holdingsRecorded bool
+		selected         int
+		hystKept         int
+		hurdleReject     int
+		capDrop          int
+		rankDrop         int
+		equityCut        int
+		legacySelected   int
+		legacyNotTopN    int
+	}
+
+	var runs []runRecon
+	for rows.Next() {
+		var r runRecon
+		if err := rows.Scan(
+			&r.asOfDate, &r.policy, &r.stage1, &r.pitRunsSelected, &r.holdingsRecorded,
+			&r.selected, &r.hystKept, &r.hurdleReject, &r.capDrop, &r.rankDrop, &r.equityCut,
+			&r.legacySelected, &r.legacyNotTopN,
+		); err != nil {
+			t.Fatalf("scan error: %v", err)
+		}
+		runs = append(runs, r)
+	}
+
+	for i, r := range runs {
+		switch r.policy {
+		case "BINARY_SENTRY_V1":
+			// Identity 1: All Stage-1 survivors must partition exactly into outcomes
+			sumOutcomes := r.selected + r.hystKept + r.hurdleReject + r.capDrop + r.rankDrop + r.equityCut
+			if r.stage1 != sumOutcomes {
+				t.Fatalf("RECON-ERR [BINARY_SENTRY_V1] on %s: Stage-1 (%d) != Sum of Outcomes (%d) [Sel:%d, Hyst:%d, Rej:%d, Cap:%d, Rank:%d, EqCut:%d]",
+					r.asOfDate, r.stage1, sumOutcomes, r.selected, r.hystKept, r.hurdleReject, r.capDrop, r.rankDrop, r.equityCut)
+			}
+
+			// Identity 2: Selected portfolio must equal SELECTED + HYST_KEPT, matching pit_runs.selected_count
+			totalSelected := r.selected + r.hystKept
+			if totalSelected != r.pitRunsSelected {
+				t.Fatalf("RECON-ERR [SELECTED_COUNT] on %s: Final Selected (%d) != pit_runs.selected_count (%d)",
+					r.asOfDate, totalSelected, r.pitRunsSelected)
+			}
+
+			// Identity 3: Hysteresis subset check against T-1 holdings
+			if r.hystKept > 0 {
+				if i == 0 {
+					t.Fatalf("RECON-ERR [HYST_ON_FIRST_RUN] on %s: First recorded run cannot have HYST_KEPT (%d)", r.asOfDate, r.hystKept)
+				}
+				prevRun := runs[i-1]
+				if prevRun.holdingsRecorded && prevRun.pitRunsSelected == 0 {
+					t.Fatalf("RECON-ERR [HYST_EMPTY_T_MINUS_1] on %s: HYST_KEPT=%d but T-1 (%s) had 0 holdings",
+						r.asOfDate, r.hystKept, prevRun.asOfDate)
+				}
+
+				// Assert all HYST_KEPT tickers exist in pit_holdings for T-1
+				var invalidHystCount int
+				qCheck := `
+SELECT COUNT(*) 
+FROM pit_candidate_scores curr
+WHERE curr.as_of_date = ? AND curr.index_name = 'niftytotalmarket' AND curr.method = 'earlymb' AND curr.outcome = 'HYST_KEPT'
+  AND curr.ticker NOT IN (
+      SELECT h.ticker FROM pit_holdings h 
+      WHERE h.as_of_date = ? AND h.index_name = 'niftytotalmarket' AND h.method = 'earlymb'
+  );
+`
+				_ = db.Conn().QueryRowContext(ctx, qCheck, r.asOfDate, prevRun.asOfDate).Scan(&invalidHystCount)
+				if invalidHystCount > 0 {
+					t.Fatalf("RECON-ERR [HYST_NOT_IN_PREV_HOLDINGS] on %s: %d ticker(s) marked HYST_KEPT were not in T-1 holdings", r.asOfDate, invalidHystCount)
+				}
+			}
+
+		case "LEGACY_LADDER":
+			// Identity 1: All Stage-1 survivors partition into LEGACY_SELECTED and LEGACY_NOT_TOP_N
+			sumLegacy := r.legacySelected + r.legacyNotTopN
+			if r.stage1 != sumLegacy {
+				t.Fatalf("RECON-ERR [LEGACY_LADDER] on %s: Stage-1 (%d) != Legacy Outcomes (%d) [Sel:%d, NotTopN:%d]",
+					r.asOfDate, r.stage1, sumLegacy, r.legacySelected, r.legacyNotTopN)
+			}
+
+			// Identity 2: Selected portfolio must equal LEGACY_SELECTED, matching pit_runs.selected_count
+			if r.legacySelected != r.pitRunsSelected {
+				t.Fatalf("RECON-ERR [LEGACY_SELECTED_COUNT] on %s: Legacy Selected (%d) != pit_runs.selected_count (%d)",
+					r.asOfDate, r.legacySelected, r.pitRunsSelected)
+			}
+
+		default:
+			t.Fatalf("UNKNOWN POLICY on %s: %s", r.asOfDate, r.policy)
+		}
+	}
+}

@@ -33,6 +33,7 @@ type CandidateScoreDetail struct {
 	FairPrice                  float64 `json:"fair_price,omitempty"`
 	UpsidePct                  float64 `json:"upside_pct,omitempty"`
 	MOSVerdict                 string  `json:"mos_verdict,omitempty"`
+	Outcome                    string  `json:"outcome,omitempty"`
 }
 
 type PITRunSnapshot struct {
@@ -41,6 +42,14 @@ type PITRunSnapshot struct {
 	IndexName         string                          `json:"index_name"`
 	Method            string                          `json:"method"`
 	RegimeMultiplier  float64                         `json:"regime_multiplier"`
+	RRaw              float64                         `json:"r_raw,omitempty"`
+	REff              float64                         `json:"r_eff,omitempty"`
+	HurdleRawPts      float64                         `json:"hurdle_raw_pts,omitempty"`
+	SelectionPolicy   string                          `json:"selection_policy,omitempty"`
+	EngineCommit      string                          `json:"engine_commit,omitempty"`
+	BenchLastBar      string                          `json:"bench_last_bar,omitempty"`
+	Degraded          bool                            `json:"degraded,omitempty"`
+	EquityWeight      float64                         `json:"equity_weight,omitempty"`
 	TotalConstituents int                             `json:"total_constituents"`
 	Stage1Count       int                             `json:"stage1_count"`
 	SelectedCount     int                             `json:"selected_count"`
