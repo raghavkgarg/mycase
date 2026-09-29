@@ -48,6 +48,7 @@ type PITRunSnapshot struct {
 	SelectionPolicy   string                          `json:"selection_policy,omitempty"`
 	EngineCommit      string                          `json:"engine_commit,omitempty"`
 	BenchLastBar      string                          `json:"bench_last_bar,omitempty"`
+	BreadthLastBar    string                          `json:"breadth_last_bar,omitempty"`
 	Degraded          bool                            `json:"degraded,omitempty"`
 	EquityWeight      float64                         `json:"equity_weight,omitempty"`
 	TotalConstituents int                             `json:"total_constituents"`

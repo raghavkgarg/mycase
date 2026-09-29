@@ -34,28 +34,25 @@ var BasketCommand = &cli.Command{
 		&cli.StringFlag{Name: "file", Value: "", Usage: "Path to basket CSV file (default: <data>/basket.csv)"},
 		&cli.StringFlag{Name: "broker", Usage: "Broker to use: zerodha, schwab (default from config/defaults.json)"},
 		&cli.BoolFlag{Name: "tax-optimize", Usage: "Sequence orders to maximize tax-loss harvesting (US; requires 'mycase tax import')"},
+		&cli.StringFlag{Name: "shares", Usage: "Shared symbol holding overrides, e.g. 'LIQUIDCASE:0' or 'LIQUIDCASE:318'"},
+		&cli.BoolFlag{Name: "yes", Aliases: []string{"y"}, Usage: "Accept default option for shared holdings without prompting"},
 	},
 	Action: func(ctx context.Context, c *cli.Command) error {
 		filename := c.String("file")
 		if filename == "" {
-			filename = config.DataPath("basket.csv")
-		}
-		// Also accept first positional arg as basket name (backward compat)
-		if arg := c.Args().Get(0); arg != "" {
-			cleaned := cleanBasketArg(arg)
-			if cleaned != "" {
-				if strings.HasSuffix(cleaned, ".csv") {
-					filename = config.DataPath(cleaned)
-				} else {
-					filename = config.DataPath(cleaned + ".csv")
-				}
+			if arg := c.Args().Get(0); arg != "" {
+				filename = resolveBasketFile(arg)
+			} else {
+				filename = config.DataPath("basket.csv")
 			}
+		} else {
+			filename = resolveBasketFile(filename)
 		}
-		return runBasketWithParams(ctx, c.Bool("live"), filename, c.Bool("tax-optimize"), c.String("broker"))
+		return runBasketWithParams(ctx, c.Bool("live"), filename, c.Bool("tax-optimize"), c.String("shares"), c.Bool("yes"), c.String("broker"))
 	},
 }
 
-func runBasketWithParams(ctx context.Context, liveMode bool, basketFilename string, taxOptimize bool, brokerOverride ...string) error {
+func runBasketWithParams(ctx context.Context, liveMode bool, basketFilename string, taxOptimize bool, sharesFlag string, autoYes bool, brokerOverride ...string) error {
 	mktCfg := broker.LoadMarketConfig()
 	if stockpicker.IsUSIndex(basketFilename) {
 		mktCfg = broker.MarketConfigForName("us")
@@ -118,10 +115,18 @@ func runBasketWithParams(ctx context.Context, liveMode bool, basketFilename stri
 		return fmt.Errorf("fetching market data: %w", err)
 	}
 
+	sharedBuyOverrides, currentThemeName, err := reconcileSharedHoldings(
+		ctx, basketFilename, basketKeys, basket, quoteData, currentHoldings, reader, sharesFlag, autoYes,
+	)
+	if err != nil {
+		fmt.Printf("Warning: error reconciling shared holdings: %v\n", err)
+	}
+
 	var basketOrders []broker.Order
 	var finalQuantities []int
 	var printedPreview bool
 	var snapshotText string
+	var totalTargetValue float64
 
 	if choice == "1" {
 		fmt.Printf("Enter total investment amount in %s: ", mktCfg.Currency)
@@ -223,7 +228,7 @@ func runBasketWithParams(ctx context.Context, liveMode bool, basketFilename stri
 			}
 		}
 
-		totalTargetValue := totalCurrentPortfolioValue + freshMoney
+		totalTargetValue = totalCurrentPortfolioValue + freshMoney
 		fmt.Printf("Target Portfolio Value (Current + Fresh Cash): %s%.2f\n", mktCfg.Currency, totalTargetValue)
 
 		for _, inst := range basketKeys {
@@ -236,6 +241,9 @@ func runBasketWithParams(ctx context.Context, liveMode bool, basketFilename stri
 
 			targetAllocation := totalTargetValue * targetWeight
 			targetQty := int(targetAllocation/ltp + 0.5)
+			if buyQty, isShared := sharedBuyOverrides[symbol]; isShared {
+				targetQty = currentQty + buyQty
+			}
 			finalQuantities = append(finalQuantities, targetQty)
 
 			diff := targetQty - currentQty
@@ -274,10 +282,13 @@ func runBasketWithParams(ctx context.Context, liveMode bool, basketFilename stri
 		basketOrders = applyTaxOptimization(ctx, basketOrders, quoteData)
 	}
 
-	executor.ExecuteBasketOrders(
+	executed := executor.ExecuteBasketOrders(
 		basketOrders, quoteData, currentHoldings, finalQuantities,
 		basketKeys, basket, b, printedPreview, snapshotText, reader, holdingDetails,
 	)
+	if executed && currentThemeName != "" && (choice == "1" || choice == "2") {
+		recordPostExecutionState(ctx, currentThemeName, basketKeys, basket, quoteData, currentHoldings, finalQuantities, totalTargetValue)
+	}
 	return nil
 }
 
@@ -466,6 +477,24 @@ func cleanBasketArg(arg string) string {
 		arg = arg[1:]
 	}
 	return strings.TrimSpace(arg)
+}
+
+func resolveBasketFile(arg string) string {
+	cleaned := cleanBasketArg(arg)
+	if cleaned == "" {
+		return ""
+	}
+	if _, err := os.Stat(cleaned); err == nil {
+		return cleaned
+	}
+	trimmed := strings.TrimPrefix(cleaned, "data/")
+	if _, err := os.Stat(config.DataPath(trimmed)); err == nil {
+		return config.DataPath(trimmed)
+	}
+	if strings.HasSuffix(trimmed, ".csv") {
+		return config.DataPath(trimmed)
+	}
+	return config.DataPath(trimmed + ".csv")
 }
 
 // oldestLotBasis returns the acquisition date and cost-per-share of the oldest

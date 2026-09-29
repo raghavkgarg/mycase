@@ -79,6 +79,26 @@ func TestCleanBasketArg_LeadingDashes(t *testing.T) {
 	}
 }
 
+func TestResolveBasketFile(t *testing.T) {
+	// If path directly exists
+	got := resolveBasketFile("data/microsmall.csv")
+	if !strings.HasSuffix(got, "microsmall.csv") || strings.Contains(got, "data/data") {
+		t.Errorf("resolveBasketFile(\"data/microsmall.csv\") = %q, unexpected path", got)
+	}
+
+	// Given bare name
+	gotName := resolveBasketFile("microsmall")
+	if !strings.HasSuffix(gotName, "microsmall.csv") || strings.Contains(gotName, "data/data") {
+		t.Errorf("resolveBasketFile(\"microsmall\") = %q, unexpected path", gotName)
+	}
+
+	// Given aitheme
+	gotAI := resolveBasketFile("data/aitheme.csv")
+	if !strings.HasSuffix(gotAI, "aitheme.csv") || strings.Contains(gotAI, "data/data") {
+		t.Errorf("resolveBasketFile(\"data/aitheme.csv\") = %q, unexpected path", gotAI)
+	}
+}
+
 func unmarshalPipelineConfig(data []byte) (*config.PipelineConfig, error) {
 	var cfg config.PipelineConfig
 	if err := yaml.Unmarshal(data, &cfg); err != nil {

@@ -567,6 +567,7 @@ type SchedulerConfig struct {
 	EnableEOD       bool   `json:"enable_eod" yaml:"enable_eod"`             // run the daily EOD cache/snapshot update
 	EnableDrift     bool   `json:"enable_drift" yaml:"enable_drift"`         // run the daily portfolio drift check (after EOD)
 	EnableRebalance bool   `json:"enable_rebalance" yaml:"enable_rebalance"` // run the quarterly/monthly rebalance proposal
+	EODMethods      string `json:"eod_methods" yaml:"eod_methods"`           // comma-separated methods for daily EOD screening (default from market default_strategy)
 	CloseOffsetMin  int    `json:"close_offset_min" yaml:"close_offset_min"` // minutes after market close to fire daily cadences (default 15)
 	MaxRunMin       int    `json:"max_run_min" yaml:"max_run_min"`           // overall deadline for one run-now pass (default 20); caps a hung run so it releases the DuckDB lock
 	FailAlertAfter  int    `json:"fail_alert_after" yaml:"fail_alert_after"` // consecutive cadence failures before a persistent-failure alert (default 3); auth errors alert immediately

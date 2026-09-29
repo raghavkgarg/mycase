@@ -182,7 +182,11 @@ var themeHistoryCmd = &cli.Command{
 		}
 		defer db.Close()
 
-		themeName := resolveThemeArg(c.String("theme"))
+		themeArg := c.String("theme")
+		if arg := c.Args().First(); arg != "" {
+			themeArg = arg
+		}
+		themeName := resolveThemeArg(themeArg)
 		rebalances, err := db.GetRebalances(ctx, themeName)
 		if err != nil {
 			return fmt.Errorf("fetching rebalances: %w", err)
@@ -234,7 +238,11 @@ var themeShowCmd = &cli.Command{
 		}
 		defer db.Close()
 
-		themeName := resolveThemeArg(c.String("theme"))
+		themeArg := c.String("theme")
+		if arg := c.Args().First(); arg != "" {
+			themeArg = arg
+		}
+		themeName := resolveThemeArg(themeArg)
 		showExited := c.Bool("exited")
 
 		if showExited {

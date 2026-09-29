@@ -822,12 +822,16 @@ func isEligible(
 			}
 		}
 
-		// 2. Proximity to 52-Week High
+		// 2. Proximity to 52-Week High (Hysteresis: Enter at 85.0%, Exit only below 82.0%)
 		if hardFilters.MinProximity52WHigh > 0 && len(closes) > 0 {
 			prox := yfinance.CalculateProximity52W(closes)
-			if prox < hardFilters.MinProximity52WHigh {
+			minProx := hardFilters.MinProximity52WHigh
+			if isExisting {
+				minProx = 0.82
+			}
+			if prox < minProx {
 				stats.EliminatedProximity52W++
-				return false, fmt.Sprintf("Far from 52-Week High (%.1f%% of 52W high < %.1f%% floor)", prox*100.0, hardFilters.MinProximity52WHigh*100.0)
+				return false, fmt.Sprintf("Far from 52-Week High (%.1f%% of 52W high < %.1f%% floor)", prox*100.0, minProx*100.0)
 			}
 		}
 

@@ -64,7 +64,7 @@ func classifyCashFlow(pat, ocf, fcf float64, sector string) BottleneckDetail {
 		}
 	case isLenderOrDeveloper(sector):
 		return BottleneckDetail{
-			Code:   "CF-NORM",
+			Code:   "CF-SECTOR",
 			Detail: fmt.Sprintf("PAT ₹%.1fCr, CFO %+.1fCr (%s-norm: blocked by non-financial CFO gate)", pat/1e7, ocf/1e7, conciseSec),
 		}
 	default:
@@ -123,7 +123,7 @@ func classify52WHigh(pctOfHigh float64) BottleneckDetail {
 	case pctOfHigh >= 80.0:
 		return BottleneckDetail{
 			Code:   "52W-NEAR",
-			Detail: fmt.Sprintf("%.1f%% of high (%.1fpt from clearing)", pctOfHigh, floor-pctOfHigh),
+			Detail: fmt.Sprintf("%.2f%% of high (%.2fpt from clearing)", pctOfHigh, floor-pctOfHigh),
 		}
 	case pctOfHigh >= 65.0:
 		return BottleneckDetail{
@@ -772,6 +772,8 @@ func FormatDiagnosticFootprint(state, pattern string, vcp, deliv, compRS, scoreC
 	if pattern == "FADE-MILD" {
 		if state == "BASE-STRONG" {
 			return "Base holds; score fading"
+		} else if state == "MOM-LOOSE" {
+			return "Momentum fading; base loose"
 		}
 		return "Fatigued base; fading"
 	}
@@ -824,6 +826,14 @@ func FormatDiagnosticFootprint(state, pattern string, vcp, deliv, compRS, scoreC
 			return "Transient spike; unconfirmed"
 		}
 		return "Score surge; modest volume"
+	}
+
+	// 8. Loose momentum or unformed bases
+	if state == "MOM-LOOSE" {
+		return "Loose momentum; ATR expanding (VCP > 1.0)"
+	}
+	if state == "UNFORMED" {
+		return "Base unformed; high volatility"
 	}
 
 	return "Basing; awaiting catalyst"

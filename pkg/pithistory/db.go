@@ -302,14 +302,19 @@ func (p *DB) SaveRunSnapshot(ctx context.Context, snap *stockpicker.PITRunSnapsh
 		benchLastBar = snap.AsOfDate
 	}
 
+	breadthLastBar := snap.BreadthLastBar
+	if breadthLastBar == "" {
+		breadthLastBar = benchLastBar
+	}
+
 	// 1. Upsert Run Record
 	runQuery := `
 INSERT OR REPLACE INTO pit_runs (
     as_of_date, index_name, method, regime_multiplier, 
     total_constituents, stage1_survivors, selected_count, created_at,
     selection_policy, engine_commit, r_raw, r_eff, hurdle_raw_pts,
-    bench_last_bar, degraded, degraded_inferred, equity_weight, holdings_recorded
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+    bench_last_bar, breadth_last_bar, degraded, degraded_inferred, equity_weight, holdings_recorded
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 `
 	_, err = tx.ExecContext(ctx, runQuery,
 		snap.AsOfDate,
@@ -326,6 +331,7 @@ INSERT OR REPLACE INTO pit_runs (
 		rEff,
 		hurdleRawPts,
 		benchLastBar,
+		breadthLastBar,
 		snap.Degraded,
 		false,
 		snap.EquityWeight,
@@ -472,12 +478,28 @@ SELECT
         WHEN c.passed_stage1 THEN TRUE
         WHEN (c.rejection_reason LIKE '%ROCE%' OR c.rejection_reason LIKE '%Capital Efficiency%')
              AND c.delivery_delta >= 0.09 AND c.composite_rs >= 0.15 AND c.vcp_ratio <= 1.20 THEN TRUE
+        WHEN (c.rejection_reason LIKE '%Cash Flow%' OR c.rejection_reason LIKE '%CFO%')
+             AND c.sector IN ('Financial Services', 'Real Estate')
+             AND c.composite_rs >= 0.0 AND c.vcp_ratio <= 1.25
+             AND (c.sector != 'Financial Services' OR (
+                 COALESCE(TRY_CAST(json_extract_string(f.raw_json, '$.ROE') AS DOUBLE), 0.0) >= 0.12
+                 OR (TRY_CAST(json_extract_string(f.raw_json, '$.NetIncome') AS DOUBLE) > 0 
+                     AND (TRY_CAST(json_extract_string(f.raw_json, '$.NetIncome') AS DOUBLE) / NULLIF(TRY_CAST(json_extract_string(f.raw_json, '$.MarketCap') AS DOUBLE) / NULLIF(TRY_CAST(json_extract_string(f.raw_json, '$.PBRatio') AS DOUBLE), 0), 0)) >= 0.12)
+             )) THEN TRUE
         ELSE FALSE
     END AS shadow_stage1_pass,
     CASE 
         WHEN c.passed_stage1 THEN 'legacy_pass'
         WHEN (c.rejection_reason LIKE '%ROCE%' OR c.rejection_reason LIKE '%Capital Efficiency%')
              AND c.delivery_delta >= 0.09 AND c.composite_rs >= 0.15 AND c.vcp_ratio <= 1.20 THEN 'delivery_override'
+        WHEN (c.rejection_reason LIKE '%Cash Flow%' OR c.rejection_reason LIKE '%CFO%')
+             AND c.sector IN ('Financial Services', 'Real Estate')
+             AND c.composite_rs >= 0.0 AND c.vcp_ratio <= 1.25
+             AND (c.sector != 'Financial Services' OR (
+                 COALESCE(TRY_CAST(json_extract_string(f.raw_json, '$.ROE') AS DOUBLE), 0.0) >= 0.12
+                 OR (TRY_CAST(json_extract_string(f.raw_json, '$.NetIncome') AS DOUBLE) > 0 
+                     AND (TRY_CAST(json_extract_string(f.raw_json, '$.NetIncome') AS DOUBLE) / NULLIF(TRY_CAST(json_extract_string(f.raw_json, '$.MarketCap') AS DOUBLE) / NULLIF(TRY_CAST(json_extract_string(f.raw_json, '$.PBRatio') AS DOUBLE), 0), 0)) >= 0.12)
+             )) THEN 'sector_cfo_relief'
         ELSE 'blocked'
     END AS shadow_relief_channel,
     CASE 
@@ -493,10 +515,20 @@ SELECT
         WHEN (c.rejection_reason LIKE '%ROCE%' OR c.rejection_reason LIKE '%Capital Efficiency%')
              AND c.delivery_delta >= 0.09 AND c.composite_rs >= 0.15 AND c.vcp_ratio <= 1.20
         THEN 'RESCUED'
+        WHEN (c.rejection_reason LIKE '%Cash Flow%' OR c.rejection_reason LIKE '%CFO%')
+             AND c.sector IN ('Financial Services', 'Real Estate')
+             AND c.composite_rs >= 0.0 AND c.vcp_ratio <= 1.25
+             AND (c.sector != 'Financial Services' OR (
+                 COALESCE(TRY_CAST(json_extract_string(f.raw_json, '$.ROE') AS DOUBLE), 0.0) >= 0.12
+                 OR (TRY_CAST(json_extract_string(f.raw_json, '$.NetIncome') AS DOUBLE) > 0 
+                     AND (TRY_CAST(json_extract_string(f.raw_json, '$.NetIncome') AS DOUBLE) / NULLIF(TRY_CAST(json_extract_string(f.raw_json, '$.MarketCap') AS DOUBLE) / NULLIF(TRY_CAST(json_extract_string(f.raw_json, '$.PBRatio') AS DOUBLE), 0), 0)) >= 0.12)
+             ))
+        THEN 'RESCUED'
         ELSE 'ALIGNED_FAIL'
     END AS divergence_type,
     CURRENT_TIMESTAMP
 FROM v_pit_candidate_scores c
+LEFT JOIN fundamentals f ON c.ticker = f.ticker
 WHERE (? = '' OR c.as_of_date = ?)
   AND c.index_name = ?
   AND c.method = ?;
@@ -506,19 +538,26 @@ WHERE (? = '' OR c.as_of_date = ?)
 }
 
 // BackfillForwardReturns backfills realized 21-trading-session forward returns
-// for historical candidates from the prices table.
+// for historical candidates from the prices table using the canonical trading_days calendar.
 func (p *DB) BackfillForwardReturns(ctx context.Context) (int64, error) {
 	query := `
-WITH ranked_prices AS (
-    SELECT ticker, date, close,
-           ROW_NUMBER() OVER (PARTITION BY ticker ORDER BY date ASC) as rn
-    FROM prices
+WITH calendar_pairs AS (
+    SELECT 
+        d0.d AS start_date,
+        dh.d AS exit_date
+    FROM trading_days d0
+    JOIN trading_days dh ON dh.seq = d0.seq + 21
 ),
 fwd_returns AS (
-    SELECT p0.ticker, p0.date as as_of_date,
-           (p21.close - p0.close) / NULLIF(p0.close, 0) as fwd_ret
-    FROM ranked_prices p0
-    JOIN ranked_prices p21 ON p0.ticker = p21.ticker AND p21.rn = p0.rn + 21
+    SELECT 
+        s.ticker, 
+        s.as_of_date,
+        (ph.close - p0.close) / NULLIF(p0.close, 0) AS fwd_ret
+    FROM pit_candidate_scores s
+    JOIN calendar_pairs cp ON s.as_of_date = cp.start_date
+    JOIN prices p0 ON s.ticker = p0.ticker AND p0.date = cp.start_date
+    JOIN prices ph ON s.ticker = ph.ticker AND ph.date = cp.exit_date
+    WHERE p0.close > 0 AND ph.close > 0
 )
 UPDATE pit_candidate_scores
 SET forward_return_21d = f.fwd_ret

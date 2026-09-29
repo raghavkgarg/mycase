@@ -212,6 +212,11 @@ INSERT OR REPLACE INTO theme_rebalances (
 		return fmt.Errorf("insert theme_rebalance header: %w", err)
 	}
 
+	// Clear any previous records for this version before writing items
+	if _, err := tx.ExecContext(ctx, "DELETE FROM theme_history WHERE theme_name = ? AND version = ?;", r.ThemeName, r.Version); err != nil {
+		return fmt.Errorf("clearing previous theme_history items: %w", err)
+	}
+
 	// Insert or replace each line item
 	itemQuery := `
 INSERT OR REPLACE INTO theme_history (
@@ -483,7 +488,7 @@ func (d *DB) RecordPipelineRebalance(ctx context.Context, themeName, sourceCSV, 
 			Action:          action,
 			TargetWeight:    cW,
 			PrevWeight:      pW,
-			ExecutionStatus: "FILLED",
+			ExecutionStatus: "PROPOSED",
 		})
 	}
 
@@ -493,10 +498,148 @@ func (d *DB) RecordPipelineRebalance(ctx context.Context, themeName, sourceCSV, 
 		EffectiveDate: now,
 		CreatedAt:     now,
 		RunID:         runID,
-		Status:        "COMMITTED",
+		Status:        "PROPOSED",
 		TurnoverPct:   turnover * 100.0,
-		Notes:         fmt.Sprintf("Pipeline rebalance via %s", filepath.Base(sourceCSV)),
+		Notes:         fmt.Sprintf("Pipeline proposal via %s", filepath.Base(sourceCSV)),
 	}
 
 	return d.RecordRebalance(ctx, rebalance, items)
 }
+
+// GetActiveConstituentShares returns a map of cleanSymbol -> map[theme_name]shares
+// for all active theme constituents recorded in theme_history.
+func (d *DB) GetActiveConstituentShares(ctx context.Context, symbols []string) (map[string]map[string]int, error) {
+	query := `
+WITH latest AS (
+    SELECT theme_name, MAX(version) AS max_v
+    FROM theme_rebalances
+    WHERE status = 'COMMITTED'
+    GROUP BY theme_name
+)
+SELECT th.theme_name, th.symbol, COALESCE(th.target_shares, 0), COALESCE(th.executed_shares, 0)
+FROM theme_history th
+JOIN latest ON th.theme_name = latest.theme_name AND th.version = latest.max_v
+WHERE th.target_weight > 0;
+`
+	rows, err := d.db.QueryContext(ctx, query)
+	if err != nil {
+		return nil, fmt.Errorf("querying constituent shares: %w", err)
+	}
+	defer rows.Close()
+
+	result := make(map[string]map[string]int)
+	for rows.Next() {
+		var theme, sym string
+		var targetShares, execShares int
+		if err := rows.Scan(&theme, &sym, &targetShares, &execShares); err != nil {
+			return nil, fmt.Errorf("scanning constituent shares: %w", err)
+		}
+		cleanSym := CleanTicker(sym)
+		shares := execShares
+		if shares <= 0 {
+			shares = targetShares
+		}
+		if shares > 0 {
+			if result[cleanSym] == nil {
+				result[cleanSym] = make(map[string]int)
+			}
+			result[cleanSym][theme] = shares
+			if result[sym] == nil {
+				result[sym] = make(map[string]int)
+			}
+			result[sym][theme] = shares
+		}
+	}
+	return result, rows.Err()
+}
+
+// RecordBasketRebalance saves the final quantities of a basket execution into theme_rebalances and theme_history.
+func (d *DB) RecordBasketRebalance(
+	ctx context.Context,
+	themeName string,
+	basketKeys []string,
+	basketWeights map[string]float64,
+	quoteData map[string]float64,
+	currentHoldings map[string]int,
+	finalQuantities []int,
+	totalNAV float64,
+) error {
+	latestV, _ := d.GetLatestVersion(ctx, themeName)
+	newV := latestV + 1
+	now := time.Now()
+
+	reb := ThemeRebalance{
+		ThemeName:     themeName,
+		Version:       newV,
+		EffectiveDate: now,
+		CreatedAt:     now,
+		ExecutedAt:    &now,
+		TotalNAV:      totalNAV,
+		Status:        "COMMITTED",
+		Notes:         "Executed via mycase basket",
+	}
+
+	var items []ThemeHistoryItem
+	covered := make(map[string]bool)
+	for i, inst := range basketKeys {
+		sym := CleanTicker(inst)
+		covered[sym] = true
+		ltp := quoteData[inst]
+		w := basketWeights[inst]
+		finalQty := 0
+		if i < len(finalQuantities) {
+			finalQty = finalQuantities[i]
+		}
+		currQty := currentHoldings[sym]
+
+		action := "UNCHANGED"
+		if currQty == 0 && finalQty > 0 {
+			action = "NEW_ENTRY"
+		} else if currQty > 0 && finalQty == 0 {
+			action = "EXITED"
+		} else if currQty != finalQty {
+			action = "REWEIGHT"
+		}
+
+		items = append(items, ThemeHistoryItem{
+			ThemeName:         themeName,
+			Version:           newV,
+			Symbol:            sym,
+			Action:            action,
+			TargetWeight:      w,
+			TargetShares:      finalQty,
+			ExecutedShares:    finalQty,
+			DeltaShares:       finalQty - currQty,
+			DecisionPrice:     ltp,
+			ExecutionAvgPrice: ltp,
+			ExecutionStatus:   "FILLED",
+		})
+	}
+
+	// Also record any previously active symbols that were completely removed from the basket as EXITED
+	if latestV > 0 {
+		if activeItems, err := d.GetActiveHoldings(ctx, themeName); err == nil {
+			for _, it := range activeItems {
+				prevSym := CleanTicker(it.Symbol)
+				if !covered[prevSym] && it.TargetWeight > 0 {
+					currQty := currentHoldings[prevSym]
+					items = append(items, ThemeHistoryItem{
+						ThemeName:       themeName,
+						Version:         newV,
+						Symbol:          prevSym,
+						Action:          "EXITED",
+						TargetWeight:    0.0,
+						PrevWeight:      it.TargetWeight,
+						TargetShares:    0,
+						ExecutedShares:  0,
+						DeltaShares:     -currQty,
+						ExecutionStatus: "FILLED",
+					})
+				}
+			}
+		}
+	}
+
+	return d.RecordRebalance(ctx, reb, items)
+}
+

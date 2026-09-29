@@ -434,6 +434,7 @@ func RunWithResult(ctx context.Context, opts *Options) (*PickResult, error) {
 		SelectionPolicy:   "BINARY_SENTRY_V1",
 		EngineCommit:      "0d069ae",
 		BenchLastBar:      todayStr,
+		BreadthLastBar:    todayStr,
 		Degraded:          false,
 		EquityWeight:      eqWeight,
 		TotalConstituents: len(combinedTickers),

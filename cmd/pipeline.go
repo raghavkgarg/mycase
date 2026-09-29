@@ -562,7 +562,7 @@ func runPipeline(ctx context.Context, c *cli.Command) error {
 				if rErr := tdb.RecordPipelineRebalance(ctx, goldenBase, sourceCSV, runID); rErr != nil {
 					fmt.Printf("[pipeline] Warning: failed to record theme history in mycase.db: %v\n", rErr)
 				} else {
-					fmt.Printf("Recorded theme rebalance history for '%s' in data/mycase.db\n", goldenBase)
+					fmt.Printf("Recorded proposed theme rebalance for '%s' in data/mycase.db (status: PROPOSED)\n", goldenBase)
 				}
 				tdb.Close()
 			}
@@ -697,7 +697,7 @@ func runPipeline(ctx context.Context, c *cli.Command) error {
 		if execChoice == "" || execChoice == "y" || execChoice == "yes" {
 			goldenBase := csvloader.GetUniverseName(cfg.GoldenCopyPath)
 			basketFile := config.DataPath(goldenBase + ".csv")
-			if err := runBasketWithParams(ctx, true, basketFile, false, cfg.Broker); err != nil {
+			if err := runBasketWithParams(ctx, true, basketFile, false, "", false, cfg.Broker); err != nil {
 				return fmt.Errorf("step %d (basket): %w", stepCounter, err)
 			}
 		} else {

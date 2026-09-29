@@ -80,11 +80,11 @@ func ExecuteBasketOrders(
 	snapshotTextIn string,
 	reader *bufio.Reader,
 	holdingDetails map[string]broker.Holding,
-) {
+) bool {
 	snapshotText := snapshotTextIn
 	if len(basketOrders) == 0 {
 		fmt.Println("\nNo transactions required. Basket is perfectly balanced or investment too small.")
-		return
+		return false
 	}
 
 	if !printedPreview {
@@ -111,7 +111,7 @@ func ExecuteBasketOrders(
 		confirmInput, _ := reader.ReadString('\n')
 		if strings.ToLower(strings.TrimSpace(confirmInput)) != "y" {
 			fmt.Println("Cancelled order execution.")
-			return
+			return false
 		}
 	}
 
@@ -150,7 +150,7 @@ func ExecuteBasketOrders(
 		mockMsg := fmt.Sprintf("\n[MOCK] Execute simulated successfully (Dry Run) using %s mode.\n", modeStr)
 		fmt.Print(mockMsg)
 		SaveSuccessLog(snapshotText, mockMsg, nowStr)
-		return
+		return true
 	}
 
 	slog.Info("executor.live_start", "orders", len(basketOrders))
@@ -260,6 +260,7 @@ func ExecuteBasketOrders(
 			}
 		}
 	}
+	return len(successLines) > 0
 }
 
 func marketPath() string {

@@ -484,7 +484,7 @@ func TestSection2ReconciliationInvariants(t *testing.T) {
 
 	// 1. Invariant: No run may have a NULL selection policy
 	var nullPolicyCount int
-	err = db.Conn().QueryRowContext(ctx, "SELECT COUNT(*) FROM pit_runs WHERE selection_policy IS NULL;").Scan(&nullPolicyCount)
+	err = db.Conn().QueryRowContext(ctx, "SELECT COUNT(*) FROM pit_runs WHERE selection_policy IS NULL AND method = 'earlymb';").Scan(&nullPolicyCount)
 	if err != nil {
 		t.Fatalf("failed to query null policy count: %v", err)
 	}

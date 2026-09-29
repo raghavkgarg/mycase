@@ -363,7 +363,7 @@ The `report/` tree is not an isolated output sink; several core Go packages and 
 ### 5.3 Golden Copy Rebalance Verification
 1. [`cmd/pipeline.go`](file:///Users/raghavgarg/Projects/myGo/mycase/cmd/pipeline.go#L532) generates `YYYYMMDD_02_comparison.txt` by evaluating the delta between active golden holdings ([`data/microsmall.csv`](file:///Users/raghavgarg/Projects/myGo/mycase/data/microsmall.csv)) and the optimized proposal ([`data/candidates/proposals/*_optim.csv`](file:///Users/raghavgarg/Projects/myGo/mycase/data/candidates/proposals)).
 2. The user is prompted to inspect the comparison report before approving the update.
-3. Upon approval, a backup is archived in [`data/backups/microsmall/`](file:///Users/raghavgarg/Projects/myGo/mycase/data/backups/microsmall), the golden CSV is updated, and the transition is committed to DuckDB table `theme_rebalances`.
+3. Upon approval, a backup is archived in [`data/backups/microsmall/`](file:///Users/raghavgarg/Projects/myGo/mycase/data/backups/microsmall), the golden CSV is updated, and the transition is recorded as `PROPOSED` in DuckDB table `theme_rebalances` (and promoted to `COMMITTED` upon confirmed broker basket execution).
 
 ---
 

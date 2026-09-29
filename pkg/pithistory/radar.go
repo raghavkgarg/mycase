@@ -397,7 +397,7 @@ func (p *DB) PrintRadarPerformanceAudit(ctx context.Context, indexName, method s
 	_, _ = p.SyncRadarEpisodes(ctx, indexName, method)
 	_, _ = p.EvaluateRadarHorizonReturns(ctx, indexName, method)
 
-	fmt.Printf("\n--- 8. FIXED-HORIZON RADAR ALPHA AUDIT (Frozen Cohorts vs Equal-Weight Benchmark) ---\n")
+	fmt.Printf("\n--- 8B. FIXED-HORIZON RADAR ALPHA AUDIT (Frozen Cohorts vs Equal-Weight Benchmark) ---\n")
 	fmt.Println("Tracking all radar entrants at fixed horizons (T+5, T+10, T+21) from next-day open:")
 
 	horizons := []int{5, 10, 21}
@@ -483,7 +483,7 @@ WHERE seq = (SELECT MIN(t.seq) FROM radar_episodes e JOIN trading_days t ON e.fi
 			hdr, nEpisodes, nDates, meanExcess*100.0, medianExcess*100.0, hitRate, ciStr, statusStr)
 	}
 
-	// Stratification by state at horizon for matured horizons
+	// Stratification by entry blocker for matured horizons
 	p.printRadarStratification(ctx, indexName, method)
 	return nil
 }
@@ -492,7 +492,17 @@ func (p *DB) printRadarStratification(ctx context.Context, indexName, method str
 	q := `
 SELECT 
     r.horizon,
-    r.state_at_h,
+    CASE
+        WHEN e.blocker_at_entry LIKE '%52-Week High%' THEN '52W-HIGH'
+        WHEN e.blocker_at_entry LIKE '%Base duration%' THEN 'BASE-SHORT'
+        WHEN e.blocker_at_entry LIKE '%DSO%' THEN 'DSO-SPIKE'
+        WHEN e.blocker_at_entry LIKE '%200-Day SMA%' THEN 'SMA200-SUB'
+        WHEN e.blocker_at_entry LIKE '%promoter%' THEN 'PROMOTER-LOW'
+        WHEN e.blocker_at_entry LIKE '%Cash Flow%' OR e.blocker_at_entry LIKE '%CFO%' THEN 'CF-QUALITY'
+        WHEN e.blocker_at_entry LIKE '%ROCE%' OR e.blocker_at_entry LIKE '%Capital Efficiency%' THEN 'ROCE-WEAK'
+        WHEN e.blocker_at_entry LIKE '%Debt/Equity%' THEN 'DE-HIGH'
+        ELSE 'OTHER'
+    END AS entry_gate,
     COUNT(*) AS n,
     ROUND(AVG(r.excess) * 100.0, 2) AS mean_excess,
     ROUND(MEDIAN(r.excess) * 100.0, 2) AS median_excess,
@@ -500,8 +510,8 @@ SELECT
 FROM radar_horizon_returns r
 JOIN radar_episodes e ON r.episode_id = e.episode_id
 WHERE e.index_name = ? AND e.method = ?
-GROUP BY r.horizon, r.state_at_h
-ORDER BY r.horizon, r.state_at_h;
+GROUP BY r.horizon, entry_gate
+ORDER BY r.horizon, n DESC;
 `
 	rows, err := p.db.QueryContext(ctx, q, indexName, method)
 	if err != nil {
@@ -509,20 +519,20 @@ ORDER BY r.horizon, r.state_at_h;
 	}
 	defer rows.Close()
 
-	fmt.Println("\n  ▶ Stratification by Horizon State (Answering Opportunity Cost of Waiting):")
-	fmt.Printf("  %-7s | %-10s | %-7s | %-12s | %-10s | %s\n",
-		"Horizon", "State", "Count", "Mean Excess", "Median", "Hit Rate")
-	fmt.Println("  ------------------------------------------------------------------------")
+	fmt.Println("\n  ▶ Stratification by Entry Blocker (Evaluating Opportunity Cost of Waiting by Gate):")
+	fmt.Printf("  %-7s | %-14s | %-7s | %-12s | %-10s | %s\n",
+		"Horizon", "Entry Blocker", "Count", "Mean Excess", "Median", "Hit Rate")
+	fmt.Println("  -------------------------------------------------------------------------------")
 	found := false
 	for rows.Next() {
 		found = true
 		var h int
-		var state string
+		var gate string
 		var count int
 		var meanEx, medEx, hitRate float64
-		if err := rows.Scan(&h, &state, &count, &meanEx, &medEx, &hitRate); err == nil {
-			fmt.Printf("  T+%-5d | %-10s | %7d | %+11.2f%% | %+9.2f%% | %6.1f%%\n",
-				h, state, count, meanEx, medEx, hitRate)
+		if err := rows.Scan(&h, &gate, &count, &meanEx, &medEx, &hitRate); err == nil {
+			fmt.Printf("  T+%-5d | %-14s | %7d | %+11.2f%% | %+9.2f%% | %6.1f%%\n",
+				h, gate, count, meanEx, medEx, hitRate)
 		}
 	}
 	if !found {

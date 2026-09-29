@@ -153,7 +153,7 @@ ORDER BY dt ASC;
 	}
 
 	if len(pairs) == 0 {
-		summary.Status = fmt.Sprintf("[PENDING: 0 of %d sessions matured]", horizon)
+		summary.Status = fmt.Sprintf("[PENDING: requires %d forward sessions; 0 cohorts matured]", horizon)
 		return summary, nil
 	}
 
@@ -162,6 +162,8 @@ ORDER BY dt ASC;
 
 	for _, dp := range pairs {
 		// Fetch scores and prices for this date pair
+		// Panel A (stage1Only=true): only Stage-1 survivors with raw_score > 0
+		// Panel B (stage1Only=false): full universe including zero-score tied rejects
 		candQuery := `
 SELECT 
     s.ticker,
@@ -176,9 +178,10 @@ WHERE s.as_of_date = ?
   AND s.method = ?
   AND (? = false OR s.passed_stage1 = true)
   AND (s.data_fetch_failed = false OR s.data_fetch_failed IS NULL)
+  AND (? = false OR s.raw_score > 0.0)
   AND p0.close > 0 AND ph.close > 0;
 `
-		candRows, cErr := p.db.QueryContext(ctx, candQuery, dp.startDate, dp.exitDate, dp.startDate, indexName, method, stage1Only)
+		candRows, cErr := p.db.QueryContext(ctx, candQuery, dp.startDate, dp.exitDate, dp.startDate, indexName, method, stage1Only, stage1Only)
 		if cErr != nil {
 			continue
 		}
@@ -227,7 +230,7 @@ WHERE s.as_of_date = ?
 
 	summary.DatesEvaluated = len(rhos)
 	if len(rhos) == 0 {
-		summary.Status = fmt.Sprintf("[PENDING: 0 of %d sessions matured]", horizon)
+		summary.Status = fmt.Sprintf("[PENDING: requires %d forward sessions; 0 cohorts matured]", horizon)
 		return summary, nil
 	}
 
@@ -238,15 +241,43 @@ WHERE s.as_of_date = ?
 	}
 	summary.MeanRho = sumRho / float64(len(rhos))
 
-	// Compute Sample Standard Deviation
-	if len(rhos) > 1 {
-		var sumSqDiff float64
+	T := len(rhos)
+	if T > 1 {
+		// Newey-West variance estimator for overlapping return horizons:
+		// Lag truncation L = horizon - 1
+		L := horizon - 1
+		if L >= T {
+			L = T - 1
+		}
+
+		// gamma_0 (sample variance)
+		var gamma0 float64
 		for _, r := range rhos {
 			diff := r - summary.MeanRho
-			sumSqDiff += diff * diff
+			gamma0 += diff * diff
 		}
-		summary.StdDevRho = math.Sqrt(sumSqDiff / float64(len(rhos)-1))
-		summary.StandardError = summary.StdDevRho / math.Sqrt(float64(len(rhos)))
+		gamma0 /= float64(T)
+
+		omega := gamma0
+		for l := 1; l <= L; l++ {
+			var gammaL float64
+			for t := l; t < T; t++ {
+				gammaL += (rhos[t] - summary.MeanRho) * (rhos[t-l] - summary.MeanRho)
+			}
+			gammaL /= float64(T)
+
+			// Bartlett kernel weight
+			wL := 1.0 - float64(l)/float64(L+1)
+			omega += 2.0 * wL * gammaL
+		}
+
+		if omega <= 0 {
+			omega = gamma0
+		}
+
+		// Newey-West standard error of the mean
+		summary.StandardError = math.Sqrt(omega / float64(T))
+		summary.StdDevRho = math.Sqrt(gamma0 * float64(T) / float64(T-1))
 		if summary.StandardError > 1e-9 {
 			summary.TStatistic = summary.MeanRho / summary.StandardError
 		}
@@ -254,18 +285,21 @@ WHERE s.as_of_date = ?
 
 	summary.PositiveHitPct = float64(positiveCount) * 100.0 / float64(len(rhos))
 
-	if summary.DatesEvaluated < 10 {
-		summary.Status = fmt.Sprintf("n = %d dates [INSUFFICIENT SAMPLE: 10 dates required]", summary.DatesEvaluated)
+	effSamples := float64(summary.DatesEvaluated) / float64(horizon)
+	if summary.DatesEvaluated < 10 || effSamples < 2.0 {
+		summary.Status = fmt.Sprintf("n = %d dates (eff indep = %.1f) [INSUFFICIENT SAMPLE]", summary.DatesEvaluated, effSamples)
+	} else if math.Abs(summary.TStatistic) < 1.96 {
+		summary.Status = fmt.Sprintf("UNCONFIRMED / NOISY (|t_NW| = %.2f < 1.96)", math.Abs(summary.TStatistic))
 	} else {
-		summary.Status = "CONFIRMED"
+		summary.Status = "CONFIRMED (p < 0.05, NW-adj)"
 	}
 
 	return summary, nil
 }
 
-// PrintRankICSection outputs Section 12 Factor Predictive Efficacy (Spearman Rank IC).
+// PrintRankICSection outputs Section 13 Factor Predictive Efficacy (Spearman Rank IC).
 func (p *DB) PrintRankICSection(ctx context.Context, indexName, method string) error {
-	fmt.Printf("\n--- 12. FACTOR VALIDATION & INFORMATION COEFFICIENT (Rank IC by Session Date) ---\n")
+	fmt.Printf("\n--- 13. FACTOR VALIDATION & INFORMATION COEFFICIENT (Rank IC by Session Date) ---\n")
 	fmt.Println("Evaluating monotonic predictive power of Stage-1 raw scores versus forward excess returns:")
 	fmt.Println("Formula: Daily Spearman ρ(Raw Score, Forward Excess Return) across matured trading sessions.")
 
@@ -310,6 +344,10 @@ func (p *DB) PrintRankICSection(ctx context.Context, indexName, method string) e
 		fmt.Printf("  T+%-5d | %12d | %+10.4f | %10.4f | %+8.2f | %8.1f%% | %s\n",
 			h, sum.DatesEvaluated, sum.MeanRho, sum.StdDevRho, sum.TStatistic, sum.PositiveHitPct, sum.Status)
 	}
+
+	fmt.Println("\n  * Methodological Notes on Factor Efficacy Validation:")
+	fmt.Println("    - Overlapping Multi-Day Windows: Daily cohorts (T+5, T+10) share forward price returns; unadjusted t-statistics inflate statistical confidence due to serial correlation.")
+	fmt.Println("    - Score Ties in Full Universe: Candidates dropped by Stage-1 gates receive a raw score of 0.0; universe rank correlation captures the binary gate barrier alongside score monotonicity.")
 
 	return nil
 }

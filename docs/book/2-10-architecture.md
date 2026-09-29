@@ -127,6 +127,8 @@ Prints an order table (ticker, action, qty, estimated price, value), a cost summ
 
 Answers: "If I rebalance today, exactly what orders would I place, what would it cost in charges, and what are the tax consequences?" The micro-transaction filter silently drops orders where transaction costs exceed 0.5% of trade value — this is the primary guard against paying more in CDSL DP charges than the trade is worth.
 
+For multi-theme portfolios sharing a single Demat account, the basket command runs a cross-theme audit (`cmd/basket_shared.go`). It deducts other themes' claimed holdings from broker totals to establish an isolated theme baseline (preventing capital inflation from shared cash proxies like `LIQUIDCASE`), and protects other themes' active holdings from accidental liquidation when the rebalancing theme exits an overlapping stock (`NETWEB`). Executed snapshots commit to `theme_rebalances` and `theme_history` in `data/mycase.db`.
+
 For US portfolios, `--tax-optimize` reorders the batch to execute loss-harvesting sells first (so the harvest is captured even if a later order fails), then gain sells, then buys, and flags any buy that would repurchase a loss-sold security (wash sale). It uses the FIFO lots from `tax import` to classify holding period and cost basis — so US sell warnings show real short/long-term status instead of "Unknown".
 
 ### `tax` — Track lots and harvest losses (US)

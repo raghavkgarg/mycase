@@ -64,15 +64,30 @@ func TestHorizonRankICExecution(t *testing.T) {
 			sumT5.DatesEvaluated, sumT5.MeanRho, sumT5.TStatistic, sumT5.Status)
 	}
 
-	// T+21 should be PENDING since 21 sessions haven't elapsed
+	// T+21: verify execution without asserting exact date count (cohorts may have matured)
 	sumT21, err := db.ComputeHorizonRankIC(ctx, "niftytotalmarket", "earlymb", 21, true)
 	if err != nil {
 		t.Fatalf("ComputeHorizonRankIC T+21: %v", err)
 	}
-	if sumT21.DatesEvaluated != 0 {
-		t.Errorf("expected 0 dates for T+21, got %d", sumT21.DatesEvaluated)
-	}
+	t.Logf("T+21 Rank IC: Dates=%d, MeanRho=%.4f, Status=%s",
+		sumT21.DatesEvaluated, sumT21.MeanRho, sumT21.Status)
 	if sumT21.Status == "" {
-		t.Errorf("expected status string for pending T+21")
+		t.Errorf("expected non-empty status string for T+21")
+	}
+
+	// Panel B (Full Universe): verify it runs and produces distinct results from Panel A
+	sumT5Univ, err := db.ComputeHorizonRankIC(ctx, "niftytotalmarket", "earlymb", 5, false)
+	if err != nil {
+		t.Fatalf("ComputeHorizonRankIC T+5 Universe: %v", err)
+	}
+	if sumT5Univ.DatesEvaluated > 0 && sumT5.DatesEvaluated > 0 {
+		if len(sumT5Univ.DailyICs) > 0 && len(sumT5.DailyICs) > 0 {
+			if sumT5Univ.DailyICs[0].SampleN == sumT5.DailyICs[0].SampleN {
+				t.Errorf("Panel B sample size (%d) should differ from Panel A (%d) — universe must include zero-score rejects",
+					sumT5Univ.DailyICs[0].SampleN, sumT5.DailyICs[0].SampleN)
+			}
+			t.Logf("Panel A sample N=%d, Panel B sample N=%d (universe includes zero-score rejects)",
+				sumT5.DailyICs[0].SampleN, sumT5Univ.DailyICs[0].SampleN)
+		}
 	}
 }

@@ -46,7 +46,7 @@ func (p *DB) AuditDataHealth(ctx context.Context, asOfDate, prevDate, indexName,
 WITH t_prices AS (
     SELECT c.ticker, MAX(p.date) as max_d
     FROM v_pit_candidate_scores c
-    LEFT JOIN prices p ON c.ticker = p.ticker
+    LEFT JOIN prices p ON c.ticker = p.ticker AND p.date <= ?
     WHERE c.as_of_date = ? AND c.index_name = ? AND c.method = ?
     GROUP BY c.ticker
 )
@@ -56,7 +56,7 @@ SELECT
     COUNT(CASE WHEN max_d IS NULL OR max_d < ? THEN 1 END)
 FROM t_prices;
 `
-	err := p.db.QueryRowContext(ctx, priceQuery, asOfDate, indexName, method, asOfDate).Scan(
+	err := p.db.QueryRowContext(ctx, priceQuery, asOfDate, asOfDate, indexName, method, asOfDate).Scan(
 		&rep.TotalCandidates,
 		&rep.PricesMaxDate,
 		&rep.PricesStaleCount,

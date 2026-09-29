@@ -131,6 +131,11 @@ func buildSchedulerConfig(c *cli.Command, live bool) (scheduler.Config, error) {
 		topN = 20
 	}
 
+	eodMethod := defaults.Method
+	if sc.EODMethods != "" {
+		eodMethod = sc.EODMethods
+	}
+
 	return scheduler.Config{
 		Clock:             broker.TradingClock(),
 		Broker:            b,
@@ -139,7 +144,7 @@ func buildSchedulerConfig(c *cli.Command, live bool) (scheduler.Config, error) {
 		PortfolioFile:     resolvePortfolioFile(c, alertCfg, defaults.GoldenCopy),
 		ConfigPath:        c.String("config"),
 		EODIndex:          defaults.Index,
-		EODMethod:         defaults.Method,
+		EODMethod:         eodMethod,
 		EODTopN:           topN,
 		CloseOffsetMin:    sc.CloseOffsetMin,
 		MaxRunMin:         sc.MaxRunMin,

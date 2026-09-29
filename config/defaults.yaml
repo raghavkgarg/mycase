@@ -24,6 +24,7 @@ system:
     enable_eod: true        # daily EOD cache/snapshot update
     enable_drift: true      # daily portfolio drift check
     enable_rebalance: true  # periodic rebalance proposal
+    eod_methods: "earlymb,multibagger" # strategies for daily EOD screening
     close_offset_min: 15    # minutes after close to trigger runs
     max_run_min: 20         # run deadline to release DuckDB lock
     fail_alert_after: 3     # alert threshold for consecutive failures

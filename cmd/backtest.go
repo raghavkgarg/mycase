@@ -11,7 +11,6 @@ import (
 
 	"github.com/raghavkgarg/mycase/pkg/backtest"
 	"github.com/raghavkgarg/mycase/pkg/broker"
-	"github.com/raghavkgarg/mycase/pkg/config"
 	"github.com/raghavkgarg/mycase/pkg/csvloader"
 	"github.com/raghavkgarg/mycase/pkg/render"
 	"github.com/raghavkgarg/mycase/pkg/stockpicker"
@@ -40,13 +39,10 @@ func runBacktest(ctx context.Context, c *cli.Command) error {
 	filename := c.String("file")
 	if filename == "" {
 		if arg := c.Args().Get(0); arg != "" {
-			cleaned := cleanBasketArg(arg)
-			if strings.HasSuffix(cleaned, ".csv") {
-				filename = config.DataPath(cleaned)
-			} else {
-				filename = config.DataPath(cleaned + ".csv")
-			}
+			filename = resolveBasketFile(arg)
 		}
+	} else {
+		filename = resolveBasketFile(filename)
 	}
 	if filename == "" {
 		return fmt.Errorf("--file or a portfolio name argument is required")

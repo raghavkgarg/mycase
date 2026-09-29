@@ -24,10 +24,10 @@ func TestClassifyCashFlow(t *testing.T) {
 		t.Errorf("expected PAT in detail, got %s", b2.Detail)
 	}
 
-	// 3. Normal for Lender/Developer
+	// 3. Sector normal for Lender/Developer
 	b3 := classifyCashFlow(1127.6e7, -8727.8e7, -8787.4e7, "Financial Services")
-	if b3.Code != "CF-NORM" {
-		t.Errorf("expected CF-NORM, got %s", b3.Code)
+	if b3.Code != "CF-SECTOR" {
+		t.Errorf("expected CF-SECTOR, got %s", b3.Code)
 	}
 	if !strings.Contains(b3.Detail, "Financial Serv-norm") {
 		t.Errorf("expected norm tag in detail, got %s", b3.Detail)

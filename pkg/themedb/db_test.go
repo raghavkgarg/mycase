@@ -2,6 +2,7 @@ package themedb
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -177,3 +178,108 @@ func TestThemeDB_Lifecycle(t *testing.T) {
 		t.Fatalf("expected 3 active holdings after idempotent update, got %d", len(active))
 	}
 }
+
+func TestPipelineProposalAndBasketExecutionGuard(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "mycase.db")
+
+	db, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("Open failed: %v", err)
+	}
+	defer db.Close()
+
+	ctx := context.Background()
+
+	// 1. Initial committed v1: STOCKA and STOCKB
+	t1 := time.Date(2026, 9, 20, 10, 0, 0, 0, time.UTC)
+	v1Rebalance := ThemeRebalance{
+		ThemeName:     "microsmall",
+		Version:       1,
+		EffectiveDate: t1,
+		CreatedAt:     t1,
+		Status:        "COMMITTED",
+		Notes:         "Initial basket launch",
+	}
+	v1Items := []ThemeHistoryItem{
+		{Symbol: "STOCKA", Action: "NEW_ENTRY", TargetWeight: 0.50, TargetShares: 10, ExecutedShares: 10},
+		{Symbol: "STOCKB", Action: "NEW_ENTRY", TargetWeight: 0.50, TargetShares: 20, ExecutedShares: 20},
+	}
+	if err := db.RecordRebalance(ctx, v1Rebalance, v1Items); err != nil {
+		t.Fatalf("RecordRebalance v1 failed: %v", err)
+	}
+
+	// 2. Simulate pipeline proposal (STOCKB exited, STOCKC new entry)
+	propCSV := filepath.Join(tmpDir, "proposal.csv")
+	csvContent := "ticker,weight\nNSE:STOCKA,0.50\nNSE:STOCKC,0.50\n"
+	if err := os.WriteFile(propCSV, []byte(csvContent), 0644); err != nil {
+		t.Fatalf("WriteFile failed: %v", err)
+	}
+
+	if err := db.RecordPipelineRebalance(ctx, "microsmall", propCSV, "run_123"); err != nil {
+		t.Fatalf("RecordPipelineRebalance failed: %v", err)
+	}
+
+	// Verification 1: latest committed version is still 1
+	v, err := db.GetLatestVersion(ctx, "microsmall")
+	if err != nil || v != 1 {
+		t.Fatalf("expected latest committed version 1, got %d, err: %v", v, err)
+	}
+
+	// Verification 2: active holdings are still STOCKA and STOCKB
+	active, err := db.GetActiveHoldings(ctx, "microsmall")
+	if err != nil || len(active) != 2 {
+		t.Fatalf("expected 2 active holdings from committed v1, got %d", len(active))
+	}
+	for _, it := range active {
+		if it.Symbol != "STOCKA" && it.Symbol != "STOCKB" {
+			t.Fatalf("unexpected active symbol in v1: %s", it.Symbol)
+		}
+	}
+
+	// Verification 3: rebalance timeline shows v2 as PROPOSED
+	rebalances, err := db.GetRebalances(ctx, "microsmall")
+	if err != nil || len(rebalances) != 2 {
+		t.Fatalf("expected 2 rebalance entries in history, got %d", len(rebalances))
+	}
+	if rebalances[1].Status != "PROPOSED" {
+		t.Fatalf("expected latest rebalance status PROPOSED, got %s", rebalances[1].Status)
+	}
+
+	// 3. Simulate subsequent basket execution committing v2
+	basketKeys := []string{"NSE:STOCKA", "NSE:STOCKC"}
+	basketWeights := map[string]float64{"NSE:STOCKA": 0.50, "NSE:STOCKC": 0.50}
+	quoteData := map[string]float64{"NSE:STOCKA": 100.0, "NSE:STOCKC": 200.0}
+	currentHoldings := map[string]int{"STOCKA": 10, "STOCKB": 20, "STOCKC": 0}
+	finalQuantities := []int{10, 5}
+
+	if err := db.RecordBasketRebalance(ctx, "microsmall", basketKeys, basketWeights, quoteData, currentHoldings, finalQuantities, 2000.0); err != nil {
+		t.Fatalf("RecordBasketRebalance failed: %v", err)
+	}
+
+	// Verification 4: latest committed version is now 2
+	v, err = db.GetLatestVersion(ctx, "microsmall")
+	if err != nil || v != 2 {
+		t.Fatalf("expected latest committed version 2, got %d", v)
+	}
+
+	// Verification 5: active holdings are now STOCKA and STOCKC
+	active, err = db.GetActiveHoldings(ctx, "microsmall")
+	if err != nil || len(active) != 2 {
+		t.Fatalf("expected 2 active holdings from committed v2, got %d", len(active))
+	}
+	activeMap := make(map[string]bool)
+	for _, it := range active {
+		activeMap[it.Symbol] = true
+	}
+	if !activeMap["STOCKA"] || !activeMap["STOCKC"] {
+		t.Fatalf("expected active holdings STOCKA and STOCKC, got %+v", activeMap)
+	}
+
+	// Verification 6: STOCKB is recorded as EXITED
+	exited, err := db.GetExitedHoldings(ctx, "microsmall")
+	if err != nil || len(exited) != 1 || exited[0].Symbol != "STOCKB" {
+		t.Fatalf("expected STOCKB to be in exited holdings, got %+v", exited)
+	}
+}
+
